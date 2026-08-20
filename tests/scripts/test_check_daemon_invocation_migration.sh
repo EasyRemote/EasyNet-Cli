@@ -375,7 +375,7 @@ pub fn invoke_local_ability_with_subject(
 local_invoke.write_text(text.replace(needle, insertion + needle, 1), encoding="utf-8")
 
 text = local_daemon.read_text(encoding="utf-8")
-needle = "#[cfg(feature = \"axon-pb\")]\npub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout("
+needle = "#[cfg(feature = \"axon-pb\")]\npub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout("
 insertion = '''
 pub(crate) struct LocalDaemonAbilityClient;
 
@@ -385,9 +385,10 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
     payload_json: serde_json::Value,
     subject_ura: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonSystemTuplePlan::local_root_for_subject(
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
         function_name,
         payload_json,
+        &local_daemon_identity_ura()?,
         subject_ura,
         std::time::Duration::from_secs(30),
     )?;

@@ -56,11 +56,13 @@
 
 use std::path::Path;
 
+use axon_sdk::pb::axon::v1::Envelope;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Deserialize;
 use tonic::Status;
 
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrust;
-use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
+use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedPrincipalOwner};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// Canonical daemon identity/trust ability name.
@@ -68,7 +70,7 @@ pub const ABILITY_IDENTITY_REGISTER_PUBKEY: &str =
     crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY;
 
 /// JSON-shaped argument tuple. `role` is a free string here (rather
-/// than `TrustedAgentRole` directly) so that an unknown role from a
+/// than `TrustAnchorRole` directly) so that an unknown trust-anchor role from a
 /// future protocol version surfaces as a clean `invalid_argument`
 /// rather than a serde decoder error.
 #[derive(Debug, Deserialize)]
@@ -89,7 +91,7 @@ struct RegisterArgs {
 pub(crate) struct RegisterPubkeyRequest {
     principal_ura: String,
     public_key_b64: String,
-    role: TrustedAgentRole,
+    role: TrustAnchorRole,
     principal_owner_ura: Option<String>,
 }
 
@@ -97,7 +99,7 @@ impl RegisterPubkeyRequest {
     pub(crate) fn new(
         principal_ura: impl Into<String>,
         public_key_b64: impl Into<String>,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
     ) -> Self {
         Self {
             principal_ura: principal_ura.into(),
@@ -140,7 +142,8 @@ impl RegisterPubkeyRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RegisterPubkeyIntent {
     principal_ura: String,
-    role: TrustedAgentRole,
+    role: TrustAnchorRole,
+    principal_owner_ura: Option<String>,
 }
 
 impl RegisterPubkeyIntent {
@@ -148,16 +151,133 @@ impl RegisterPubkeyIntent {
         &self.principal_ura
     }
 
-    pub(crate) fn role(&self) -> TrustedAgentRole {
+    pub(crate) fn role(&self) -> TrustAnchorRole {
         self.role
     }
 
+    pub(crate) fn principal_owner_ura(&self) -> Option<&str> {
+        self.principal_owner_ura.as_deref()
+    }
+
     #[cfg(test)]
-    pub(crate) fn for_test(principal_ura: String, role: TrustedAgentRole) -> Self {
+    pub(crate) fn for_test(principal_ura: String, role: TrustAnchorRole) -> Self {
         Self {
             principal_ura,
             role,
+            principal_owner_ura: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_with_owner(
+        principal_ura: String,
+        role: TrustAnchorRole,
+        principal_owner_ura: String,
+    ) -> Self {
+        Self {
+            principal_ura,
+            role,
+            principal_owner_ura: Some(principal_owner_ura),
+        }
+    }
+}
+
+/// Verified first-key bootstrap claim for user self-registration.
+///
+/// This is the only `identity.register_pubkey` form that may be admitted with
+/// a request-scoped bootstrap candidate key. It covers the cold-start case
+/// where the user key is necessarily presented by the request being admitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegisterPubkeyBootstrapClaim {
+    principal_ura: String,
+    public_key: [u8; 32],
+}
+
+impl RegisterPubkeyBootstrapClaim {
+    pub(crate) fn principal_ura(&self) -> &str {
+        &self.principal_ura
+    }
+
+    pub(crate) fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegisterPubkeyBootstrapTuple {
+    caller_ura: String,
+}
+
+impl RegisterPubkeyBootstrapTuple {
+    pub(crate) fn from_envelope(envelope: &Envelope) -> Result<Self, Status> {
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| Status::invalid_argument("identity.register_pubkey missing caller"))?;
+        let callee_ura = envelope
+            .callee
+            .as_ref()
+            .map(|callee| callee.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument("identity.register_pubkey missing authority callee")
+            })?;
+        let subject_ura = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| Status::invalid_argument("identity.register_pubkey missing subject"))?;
+
+        let caller = crate::core::ura::parse_ura(caller_ura).map_err(|err| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey caller is not a user URA: {err}"
+            ))
+        })?;
+        if caller.kind != crate::core::ura::URAKind::User {
+            return Err(Status::invalid_argument(format!(
+                "identity.register_pubkey bootstrap caller must identify a user, got {:?}",
+                caller.kind
+            )));
+        }
+        let callee = crate::core::ura::parse_ura(callee_ura).map_err(|err| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey callee is not an authority URA: {err}"
+            ))
+        })?;
+        if callee.kind != crate::core::ura::URAKind::Authority {
+            return Err(Status::invalid_argument(format!(
+                "identity.register_pubkey bootstrap callee must identify an authority, got {:?}",
+                callee.kind
+            )));
+        }
+        if caller.realm != callee.realm {
+            return Err(Status::invalid_argument(format!(
+                "identity.register_pubkey bootstrap realm mismatch: caller={}, callee={}",
+                caller.realm, callee.realm
+            )));
+        }
+        let descriptor_subject =
+            crate::core::ura::owner_ability_ura(callee_ura, ABILITY_IDENTITY_REGISTER_PUBKEY);
+        if subject_ura != caller_ura && descriptor_subject.as_deref() != Some(subject_ura) {
+            return Err(Status::invalid_argument(
+                "identity.register_pubkey bootstrap subject must be the user principal or the authority-owned ability URA",
+            ));
+        }
+
+        Ok(Self {
+            caller_ura: caller_ura.to_string(),
+        })
+    }
+
+    pub(crate) fn matches(envelope: &Envelope) -> bool {
+        Self::from_envelope(envelope).is_ok()
+    }
+
+    pub(crate) fn caller_ura(&self) -> &str {
+        &self.caller_ura
     }
 }
 
@@ -197,14 +317,29 @@ pub fn handle(
     trust_anchor_path: &Path,
     cell: &SharedTrustAnchor,
 ) -> Result<Vec<u8>, Status> {
+    handle_protecting(arguments, daemon_realm, trust_anchor_path, cell, None)
+}
+
+/// `handle`, plus one public key the user-key cap's LRU eviction must not
+/// select while making room for this registration. See
+/// `RuntimeTrust::register_pubkey_protecting` for why a multi-key import
+/// loop needs this.
+pub fn handle_protecting(
+    arguments: &[u8],
+    daemon_realm: &str,
+    trust_anchor_path: &Path,
+    cell: &SharedTrustAnchor,
+    protected_public_key_b64: Option<&str>,
+) -> Result<Vec<u8>, Status> {
     let (args, role) = decode_register_args(arguments)?;
 
     let owner = trusted_principal_owner_from_args(&args)?;
-    RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_with_owner(
+    RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_protecting(
         args.principal_ura,
         args.public_key_b64,
         role,
         owner,
+        protected_public_key_b64,
     )?;
 
     serde_json::to_vec(&RegisterResponse { ok: true }).map_err(|err| {
@@ -221,10 +356,55 @@ pub(crate) fn parse_register_pubkey_intent(
     Ok(RegisterPubkeyIntent {
         principal_ura: args.principal_ura,
         role,
+        principal_owner_ura: args.principal_owner_ura,
     })
 }
 
-fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustedAgentRole), Status> {
+pub(crate) fn verify_user_register_pubkey_bootstrap_claim(
+    envelope: &Envelope,
+    arguments: &[u8],
+) -> Result<RegisterPubkeyBootstrapClaim, Status> {
+    let (args, role) = decode_register_args(arguments)?;
+    if role != TrustAnchorRole::User {
+        return Err(Status::permission_denied(
+            "identity.register_pubkey bootstrap is restricted to user role",
+        ));
+    }
+    if args.principal_owner_ura.is_some() {
+        return Err(Status::permission_denied(
+            "identity.register_pubkey bootstrap user self-registration must not bind a separate owner",
+        ));
+    }
+
+    let tuple = RegisterPubkeyBootstrapTuple::from_envelope(envelope)?;
+
+    if args.principal_ura != tuple.caller_ura() {
+        return Err(Status::invalid_argument(
+            "identity.register_pubkey bootstrap principal_ura must match envelope caller",
+        ));
+    }
+
+    let public_key_bytes = BASE64_STANDARD
+        .decode(args.public_key_b64.trim())
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey public_key_b64 is not base64: {err}"
+            ))
+        })?;
+    let public_key: [u8; 32] = public_key_bytes.try_into().map_err(|bytes: Vec<u8>| {
+        Status::invalid_argument(format!(
+            "identity.register_pubkey public_key_b64 must decode to 32 bytes, got {}",
+            bytes.len()
+        ))
+    })?;
+
+    Ok(RegisterPubkeyBootstrapClaim {
+        principal_ura: args.principal_ura,
+        public_key,
+    })
+}
+
+fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustAnchorRole), Status> {
     let args: RegisterArgs = serde_json::from_slice(arguments).map_err(|err| {
         Status::invalid_argument(format!(
             "identity.register_pubkey: arguments JSON decode failed: {err}"
@@ -279,18 +459,18 @@ fn trusted_principal_owner_from_args(
     }))
 }
 
-/// Parse a `TrustedAgentRole` from a wire-string. The wire shape
+/// Parse a `TrustAnchorRole` from a wire-string. The wire shape
 /// uses lowercase strings (`device` / `backend` / `hub`) per
-/// `TrustedAgentRole`'s `serde(rename_all = "lowercase")`. We do
+/// `TrustAnchorRole`'s `serde(rename_all = "lowercase")`. We do
 /// not just `serde_json::from_value` here because the surrounding
 /// argument struct is already deserialised — a per-field hand
 /// match keeps error messages aimed at the caller.
-fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
+fn parse_role(raw: &str) -> Result<TrustAnchorRole, Status> {
     match raw {
-        "device" => Ok(TrustedAgentRole::Device),
-        "backend" => Ok(TrustedAgentRole::Backend),
-        "hub" => Ok(TrustedAgentRole::Hub),
-        "user" => Ok(TrustedAgentRole::User),
+        "device" => Ok(TrustAnchorRole::Device),
+        "backend" => Ok(TrustAnchorRole::Backend),
+        "hub" => Ok(TrustAnchorRole::Hub),
+        "user" => Ok(TrustAnchorRole::User),
         other => Err(Status::invalid_argument(format!(
             "identity.register_pubkey: role `{other}` is not one of \
              device|backend|hub|user",
@@ -298,12 +478,12 @@ fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
     }
 }
 
-fn role_wire(role: TrustedAgentRole) -> &'static str {
+fn role_wire(role: TrustAnchorRole) -> &'static str {
     match role {
-        TrustedAgentRole::Device => "device",
-        TrustedAgentRole::Backend => "backend",
-        TrustedAgentRole::Hub => "hub",
-        TrustedAgentRole::User => "user",
+        TrustAnchorRole::Device => "device",
+        TrustAnchorRole::Backend => "backend",
+        TrustAnchorRole::Hub => "hub",
+        TrustAnchorRole::User => "user",
     }
 }
 
@@ -311,7 +491,6 @@ fn role_wire(role: TrustedAgentRole) -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent};
-    use base64::prelude::*;
     use ed25519_dalek::SigningKey;
     use serde_json::json;
     use std::sync::Arc;
@@ -365,7 +544,7 @@ mod tests {
         let args = RegisterPubkeyRequest::new(
             "easynet:///r/r1/device/alpha",
             test_pub_b64(),
-            TrustedAgentRole::Device,
+            TrustAnchorRole::Device,
         )
         .with_principal_owner("easynet:///r/r1/user/user-1")
         .to_arguments_bytes()
@@ -402,7 +581,7 @@ mod tests {
             .lookup("easynet:///r/r1/device/alpha")
             .expect("present");
         assert_eq!(entry.public_key_b64, test_pub_b64);
-        assert!(matches!(entry.role, TrustedAgentRole::Device));
+        assert!(matches!(entry.role, TrustAnchorRole::Device));
 
         // File on disk reflects the entry.
         let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
@@ -557,7 +736,7 @@ mod tests {
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
                 agent_ura: r1_hub.clone(),
                 public_key_b64: old_key,
-                role: TrustedAgentRole::Hub,
+                role: TrustAnchorRole::Hub,
                 added_at_unix_ms: 1,
                 origin_realm: Some("r1".to_string()),
                 hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
@@ -576,7 +755,7 @@ mod tests {
         let snap = cell.snapshot();
         let entry = snap.lookup(&r1_hub).expect("backend present");
         assert_eq!(entry.public_key_b64, new_key);
-        assert_eq!(entry.role, TrustedAgentRole::Hub);
+        assert_eq!(entry.role, TrustAnchorRole::Hub);
         assert_eq!(
             entry.hub_endpoint.as_deref(),
             Some("https://127.0.0.1:50443")
@@ -590,7 +769,7 @@ mod tests {
         let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
         let disk_entry = from_disk.lookup(&r1_hub).expect("backend present on disk");
         assert_eq!(disk_entry.public_key_b64, new_key);
-        assert_eq!(disk_entry.role, TrustedAgentRole::Hub);
+        assert_eq!(disk_entry.role, TrustAnchorRole::Hub);
         assert_eq!(
             disk_entry.hub_endpoint.as_deref(),
             Some("https://127.0.0.1:50443")

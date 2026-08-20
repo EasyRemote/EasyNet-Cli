@@ -50,7 +50,7 @@ public final class RuntimeAbilityClient {
           "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider");
     }
     String mode = required(callMode, "call_mode");
-    String subjectURA = policy.subjectURA(call);
+    String subjectURA = policy.subjectURA(call, ability);
     String descriptorRef =
         runtime.resolveDescriptorRef(
             new RuntimeDescriptorRefRequest(
@@ -131,24 +131,24 @@ public final class RuntimeAbilityClient {
 
     static RuntimeAbilityDispatchPolicy catalogueRead() {
       return new RuntimeAbilityDispatchPolicy(
-          true, "runtime_owner", RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
+          true, "runtime_state_read", RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
     }
 
-    String subjectURA(RuntimeCallContext call) {
-      if ("runtime_owner".equals(subjectPolicy)) {
-        return call.calleeURA();
+    String subjectURA(RuntimeCallContext call, String abilityName) {
+      if ("runtime_state_read".equals(subjectPolicy)) {
+        return RuntimeSubjects.runtimeGovernanceReadSubjectURA(call.subjectURA());
       }
       if ("descriptor_bound".equals(subjectPolicy)) {
-        return call.subjectURA();
+        return RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA(), abilityName);
       }
       throw SDKError.validation("runtime", "runtime ability subject policy is unsupported");
     }
 
     String descriptorResolutionSubjectURA(RuntimeCallContext call, String selectedSubjectURA) {
       if (RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER.equals(descriptorProvider)) {
-        return RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA());
+        return selectedSubjectURA;
       }
-      if ("runtime_owner".equals(subjectPolicy)) {
+      if ("runtime_state_read".equals(subjectPolicy)) {
         return selectedSubjectURA;
       }
       return call.subjectURA();

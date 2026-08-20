@@ -5,6 +5,7 @@ import {
   TEST_CALLEE as callee,
   TEST_CALLER as caller,
   TEST_DESCRIPTOR as descriptor,
+  TEST_DEVICE_SUBJECT as deviceSubject,
   TEST_NONCE as nonce,
   canonicalRuntimeReceipt,
 } from "../test-support/runtime-fixtures.mjs";
@@ -14,7 +15,7 @@ function builder() {
     .withCallerURA(caller)
     .withCalleeURA(callee)
     .withDescriptorRef(descriptor)
-    .withSubjectURA(callee)
+    .withSubjectURA(deviceSubject)
     .withNonceBase64(nonce)
     .withCausalContext({ form: "none" })
     .withJSONArgs({ probe: true })
@@ -95,7 +96,7 @@ test("conformance builder handle is consumed by build", () => {
 });
 
 test("conformance complete tuple rejects a missing field", () => {
-  assert.throws(() => new sdk.InvocationBuilder().withCalleeURA(callee).withDescriptorRef(descriptor).withSubjectURA(callee).withNonceBase64(nonce).withCausalContext({ form: "none" }).withJSONArgs({}).withContentType("application/json").build(), (error) => error.code === sdk.ErrorCode.INVALID_ARGUMENT);
+  assert.throws(() => new sdk.InvocationBuilder().withCalleeURA(callee).withDescriptorRef(descriptor).withSubjectURA(deviceSubject).withNonceBase64(nonce).withCausalContext({ form: "none" }).withJSONArgs({}).withContentType("application/json").build(), (error) => error.code === sdk.ErrorCode.INVALID_ARGUMENT);
 });
 
 test("conformance complete tuple rejects all-zero principals", () => {

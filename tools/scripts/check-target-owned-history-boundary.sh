@@ -38,21 +38,21 @@ from pathlib import Path
 
 body = Path(sys.argv[1]).read_text()
 
-selector = re.search(
-    r"pub\(crate\) fn for_target_owned_selector\([\s\S]*?\n    \}",
-    body,
-)
-if not selector or "RemoteRootAbilityAdmission::evaluate(&public_ability)" not in selector.group(0):
+selector_start = body.find("pub(crate) fn for_target_owned_selector_for_mode(")
+selector_end = body.find("\n    pub(crate) fn ", selector_start + 1)
+if selector_end < 0:
+    selector_end = body.find("\n}\n", selector_start)
+selector = body[selector_start:selector_end] if selector_start >= 0 and selector_end >= 0 else ""
+if "RemoteRootAbilityAdmission::evaluate(&public_ability)" not in selector:
     raise SystemExit("selector_factory_missing_target_owned_admission")
 
-subject = re.search(
-    r"fn target_owned_remote_system_subject\([\s\S]*?\n\}",
-    body,
-)
-if not subject or "RemoteRootAbilityAdmission::evaluate(target.public_ability())" not in subject.group(0):
+subject_start = body.find("fn target_owned_remote_system_subject(")
+subject_end = body.find("\nfn ", subject_start + 1)
+subject = body[subject_start:subject_end] if subject_start >= 0 and subject_end >= 0 else ""
+if "RemoteRootAbilityAdmission::evaluate(target.public_ability())" not in subject:
     raise SystemExit("issuer_subject_missing_target_owned_admission")
 
-if "is_receipt_history_ability" in subject.group(0):
+if "is_receipt_history_ability" in subject:
     raise SystemExit("issuer_reintroduced_receipt_history_local_guard")
 PY
 then

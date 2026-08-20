@@ -1,3 +1,10 @@
+/// Device-sponsored SystemAgent id for daemon-native automation and
+/// orchestration abilities. The canonical callee shape is
+/// `easynet:///r/<realm>/agent/device.<device-id>.automation`.
+/// Mission/EAL remains an implementation strategy for composite abilities; this
+/// SystemAgent owns the public control surface.
+pub const AUTOMATION_SYSTEM_AGENT_ID: &str = "automation";
+
 pub const DISCUSS_CREATE: &str = "discuss.create";
 pub const DISCUSS_POST: &str = "discuss.post";
 pub const DISCUSS_SUBSCRIBE: &str = "discuss.subscribe";

@@ -29,6 +29,8 @@ pub(crate) mod remote_failure;
 #[cfg(feature = "axon-pb")]
 mod request;
 #[cfg(feature = "axon-pb")]
+pub(crate) mod transport_stream;
+#[cfg(feature = "axon-pb")]
 pub(crate) mod unary_dispatcher;
 
 #[cfg(feature = "axon-pb")]

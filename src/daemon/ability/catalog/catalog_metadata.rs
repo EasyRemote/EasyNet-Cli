@@ -45,9 +45,10 @@ use crate::daemon::ability::builtins::{
     },
     resources::{
         context::ability as context_ability,
-        list as list_resources_ability, media,
+        files_store as files_store_ability, list as list_resources_ability, media,
+        pages as pages_ability, refresh_remote_targets as refresh_remote_targets_ability,
         skills::{install as skill_install_ability, publish as skill_publish_ability},
-        voice as voice_call_ability,
+        voice as voice_call_ability, watch_remote_targets as watch_remote_targets_ability,
     },
 };
 use crate::daemon::ability::catalog::system_ability_descriptor_path;
@@ -71,6 +72,10 @@ pub struct SystemAbilityContract {
     pub name: String,
     pub descriptor_version: String,
     pub description: String,
+    pub exposure: crate::daemon::ability::manifest::AbilityExposure,
+    pub dedicated_surface: crate::daemon::ability::manifest::AbilityDedicatedSurface,
+    pub subject_contract_kind: crate::daemon::ability::manifest::AbilitySubjectContractKind,
+    pub subject_contract_ura: Option<String>,
     pub input_schema: serde_json::Value,
     pub output_receipt_schema: serde_json::Value,
     pub call_mode: DescriptorCallMode,
@@ -208,7 +213,7 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
         if voice_contracts.contains_key(&contract.name) {
             continue;
         }
-        insert_descriptor_contract(&mut contracts, contract);
+        insert_descriptor_contract(&mut contracts, with_canonical_hints(contract));
     }
     for descriptor in published_system_abilities() {
         let name = descriptor.name.clone();
@@ -218,6 +223,24 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
             name: name.clone(),
             descriptor_version: descriptor.version.clone(),
             description: descriptor.description.clone(),
+            exposure: descriptor
+                .metadata
+                .get("exposure")
+                .and_then(|value| parse_descriptor_exposure(value))
+                .unwrap_or(crate::daemon::ability::manifest::AbilityExposure::Internal),
+            dedicated_surface: descriptor
+                .metadata
+                .get("dedicated_surface")
+                .and_then(|value| parse_descriptor_dedicated_surface(value))
+                .unwrap_or(crate::daemon::ability::manifest::AbilityDedicatedSurface::None),
+            subject_contract_kind: descriptor
+                .metadata
+                .get("subject_contract_kind")
+                .and_then(|value| parse_descriptor_subject_contract_kind(value))
+                .unwrap_or(
+                    crate::daemon::ability::manifest::AbilitySubjectContractKind::RouteTarget,
+                ),
+            subject_contract_ura: descriptor.metadata.get("subject_contract_ura").cloned(),
             input_schema,
             output_receipt_schema: match descriptor.output_receipt_schema() {
                 serde_json::Value::Null => serde_json::json!({}),
@@ -237,10 +260,28 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
     }
 
     for contract in voice_contracts.into_values() {
-        insert_descriptor_contract(&mut contracts, contract);
+        insert_descriptor_contract(&mut contracts, with_canonical_hints(contract));
     }
 
     contracts.into_values().collect()
+}
+
+fn parse_descriptor_exposure(
+    value: &str,
+) -> Option<crate::daemon::ability::manifest::AbilityExposure> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+}
+
+fn parse_descriptor_dedicated_surface(
+    value: &str,
+) -> Option<crate::daemon::ability::manifest::AbilityDedicatedSurface> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+}
+
+fn parse_descriptor_subject_contract_kind(
+    value: &str,
+) -> Option<crate::daemon::ability::manifest::AbilitySubjectContractKind> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
 }
 
 /// Voice static contracts derived only from typed capability-state evidence.
@@ -301,6 +342,17 @@ fn insert_descriptor_contract(
     }
 }
 
+fn with_canonical_hints(mut contract: SystemAbilityContract) -> SystemAbilityContract {
+    // Contract-only descriptors are parsed from their TOML so unsupported/seam
+    // surfaces can remain on disk without becoming live runtime rows. Hints are
+    // not a second TOML-owned truth, though: they are UI/admission policy
+    // projection derived from the same semantic classifier used by live
+    // registration. Normalizing here keeps generated static descriptor TOMLs,
+    // metadata-only catalogues, and runtime control-plane rows aligned.
+    contract.hints = registration_hints("", &contract.name);
+    contract
+}
+
 fn upsert_operational_contract(
     contracts: &mut BTreeMap<String, SystemAbilityContract>,
     contract: SystemAbilityContract,
@@ -315,8 +367,8 @@ fn upsert_operational_contract(
 /// Projection membership comes from `AxonAbilityCatalog::lookup_owner`, not
 /// from ability name prefixes. That keeps the profile catalogue aligned with
 /// the handler registration truth table and prevents broad namespaces such as
-/// `device.*` from accidentally stealing abilities advertised by the
-/// device-profile Agent or any hosted sub-profile Agent.
+/// `device.*` from accidentally stealing abilities advertised by the remaining
+/// direct Device-owner projection or any hosted sub-profile Agent.
 pub fn published_system_abilities_for_owner(
     owner: crate::daemon::ability::dispatch::OwnerKind,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
@@ -338,6 +390,43 @@ pub fn system_ability_owner(
     // record, not the legacy `owner` side table (equivalence pinned by
     // `control_plane_owner_matches_legacy_lookup_for_static_ability`).
     registry.control_plane_owner(ability_name)
+}
+
+/// Unique device-sponsored SystemAgent owner for one public system ability.
+///
+/// Public names can legitimately exist on more than one owner plane (for
+/// example, runtime introspection is published by both a realm Authority and a
+/// device-sponsored SystemAgent). Routing to a Device therefore cannot use the
+/// name-only `control_plane_owner` lookup, which is intentionally ambiguous in
+/// that case. This projection reads every committed control-plane row, filters
+/// to SystemAgent owners, de-duplicates call modes, and fails closed unless one
+/// SystemAgent owner remains.
+pub(crate) fn unique_system_agent_owner_for_public_ability(
+    public_ability: &str,
+) -> Option<crate::daemon::ability::dispatch::OwnerKind> {
+    let public_ability = public_ability.trim();
+    if public_ability.is_empty() {
+        return None;
+    }
+    let registry = build_system_registry();
+    let mut owners = Vec::new();
+    for row in registry.authority_ability_catalog_snapshot() {
+        if row.descriptor.name != public_ability
+            || !matches!(
+                &row.owner,
+                crate::daemon::ability::dispatch::OwnerKind::SystemAgent(_)
+            )
+        {
+            continue;
+        }
+        if !owners.contains(&row.owner) {
+            owners.push(row.owner);
+        }
+    }
+    match owners.as_slice() {
+        [owner] => Some(owner.clone()),
+        _ => None,
+    }
 }
 
 fn published_abilities_from_registry(
@@ -366,12 +455,6 @@ fn published_abilities_from_registry_for_owner(
         .filter(|row| !contract_only_names.contains(row.name.as_str()))
         .filter(|row| owner.map(|expected| &row.owner == expected).unwrap_or(true))
         .filter(|row| !row.name.ends_with(".chat"))
-        // RFC-002 §3.3 keyring abilities are owner-namespaced under
-        // `device` and self-described by `keyring::abilities` — they
-        // don't go through the system descriptor table. Filter them
-        // for the same reason `<agent>.chat` is filtered: their
-        // schema lives inside the registering module, not here.
-        .filter(|row| !row.name.starts_with("device.keyring."))
         .map(|row| row.descriptor)
         .collect()
 }
@@ -424,9 +507,38 @@ pub(crate) fn registration_hints(owner_ura: &str, registry_name: &str) -> Abilit
     };
     AbilityHints {
         read_only,
-        destructive: public_name == agent_names::AGENT_PURGE,
+        destructive: is_destructive_public_ability(&public_name),
         idempotent,
     }
+}
+
+/// Public-contract destructive risk.
+///
+/// This is deliberately separate from `classify_ability`: the semantic layer
+/// answers purity/coalescing ("does this invoke mutate state?"), while this
+/// policy answers UI and consent risk ("does this invoke remove, revoke, or
+/// purge durable authority/data?"). Most Operational verbs are not
+/// destructive: `ability.deploy`, `ability.publish`, `terminal.input`, and
+/// `mission.run` all mutate state, but their contract is not deletion.
+pub(crate) fn is_destructive_public_ability(public_name: &str) -> bool {
+    matches!(
+        public_name,
+        // Principal / trust material removal.
+        governance_names::PRINCIPAL_DELETE
+            | governance_names::PRINCIPAL_REVOKE_KEY
+            | governance_names::PRINCIPAL_REVOKE_ENROLLMENT
+            | governance_names::PRINCIPAL_REVOKE_GRANT
+            | governance_names::AUTHORITY_BINDING_REVOKE
+            | federation_names::IDENTITY_REVOKE_USER_PUBKEY
+            | federation_names::REVOKE
+            // Device, agent, and package lifecycle deletion.
+            | device_names::NODE_REMOVE
+            | federation_names::ABILITY_UNINSTALL
+            | federation_names::ABILITY_UNPUBLISH
+            | agent_names::AGENT_PURGE
+            | resource_names::SKILL_REMOVE
+            | resource_names::SKILL_UNPUBLISH
+    )
 }
 
 /// Human-readable description for a published system ability name.
@@ -443,6 +555,9 @@ pub fn description_for(name: &str) -> &'static str {
         return description;
     }
     if let Some(description) = daemon_invocation_contracts::description_for(name) {
+        return description;
+    }
+    if let Some(description) = keyring_management_description_for(name) {
         return description;
     }
 
@@ -545,7 +660,6 @@ pub fn description_for(name: &str) -> &'static str {
         }
         agent_names::AGENT_REFRESH => agent_lifecycle_ability::refresh_agents_description(),
         agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => agent_authoring_ability::DESCRIPTION,
-        device_names::NODE_LIST => device_ops_ability::list_nodes_description(),
         device_names::NODE_DESCRIBE => device_ops_ability::describe_node_description(),
         device_names::NODE_REMOVE => device_ops_ability::remove_node_description(),
         federation_names::ABILITY_DEPLOY => device_ops_ability::deploy_ability_description(),
@@ -581,6 +695,25 @@ pub fn description_for(name: &str) -> &'static str {
         // module because the handler is fully real (not a stub).
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::description()
+        }
+        n if files_store_ability::description_for(n).is_some() => {
+            files_store_ability::description_for(n).unwrap()
+        }
+        n if pages_ability::management_ability_specs()
+            .iter()
+            .any(|spec| spec.relative_name == n) =>
+        {
+            pages_ability::management_ability_specs()
+                .into_iter()
+                .find(|spec| spec.relative_name == n)
+                .expect("pages spec checked above")
+                .description
+        }
+        refresh_remote_targets_ability::ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS => {
+            refresh_remote_targets_ability::description()
+        }
+        watch_remote_targets_ability::ABILITY_RESOURCE_WATCH_REMOTE_TARGETS => {
+            watch_remote_targets_ability::description()
         }
         // RFC-006-C v0.1 — device-local OpenAI protocol shim. The
         // handler runs on this host and only sees host-local
@@ -643,7 +776,52 @@ pub fn description_for(name: &str) -> &'static str {
     }
 }
 
+fn keyring_management_description_for(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "device.keyring.create" => {
+            "Create a managed Ed25519 signing key in the local keyring-management SystemAgent vault and return its public projection."
+        }
+        "device.keyring.list" => {
+            "List managed signing keys from the local keyring-management SystemAgent vault, optionally filtered by purpose or status."
+        }
+        "device.keyring.get_public" => {
+            "Return the public key and fingerprint for one managed signing key without exposing private key material."
+        }
+        "device.keyring.rotate" => {
+            "Retire an active managed signing key and mint its next epoch successor in the keyring vault."
+        }
+        "device.keyring.revoke" => {
+            "Revoke a managed signing key so it cannot be used for subsequent signing operations."
+        }
+        "device.keyring.expire_set" => {
+            "Set or update the expiry timestamp for a managed signing key."
+        }
+        "device.keyring.bind_subject" => {
+            "Bind a managed signing key to the canonical subject URA it is allowed to sign for."
+        }
+        "device.keyring.peer_add" => {
+            "Record a peer public key by trust-on-first-use metadata for later key resolution."
+        }
+        "device.keyring.peer_list" => {
+            "List peer public-key records known to the local keyring-management SystemAgent."
+        }
+        "device.keyring.federate_user_identity_token" => {
+            "Issue a bounded cross-realm user identity token signed by a managed key bound to the source user URA."
+        }
+        _ => return None,
+    })
+}
+
 pub fn try_description_for_owned(name: &str) -> anyhow::Result<String> {
+    if name == plugin_lifecycle_ability::COMPANION_STATUS_ABILITY {
+        return Ok(plugin_lifecycle_ability::companion_status_description().to_string());
+    }
+    if name == plugin_lifecycle_ability::COMPANION_RECONCILE_ABILITY {
+        return Ok(plugin_lifecycle_ability::companion_reconcile_description().to_string());
+    }
+    if super::try_system_ability_descriptor_path(name).is_ok_and(|path| path.is_file()) {
+        return Ok(super::system_manifest::canonical_registration_contract(name)?.description);
+    }
     if let Some(description) = crate::daemon::plugins::try_builtin_description_for_owned(name)? {
         return Ok(description);
     }
@@ -681,6 +859,18 @@ impl CatalogSchemaProjection {
     }
 
     fn try_declared_input_schema(name: &str) -> anyhow::Result<Option<serde_json::Value>> {
+        if matches!(
+            name,
+            plugin_lifecycle_ability::COMPANION_STATUS_ABILITY
+                | plugin_lifecycle_ability::COMPANION_RECONCILE_ABILITY
+        ) {
+            return Ok(Some(plugin_lifecycle_ability::companion_input_schema()));
+        }
+        if super::try_system_ability_descriptor_path(name).is_ok_and(|path| path.is_file()) {
+            return Ok(Some(
+                super::system_manifest::canonical_registration_contract(name)?.input_schema,
+            ));
+        }
         if let Some(schema) = crate::daemon::plugins::try_builtin_input_schema_for(name)? {
             return Ok(Some(schema));
         }
@@ -725,6 +915,9 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         automation_names::LOOP_STATUS => loop_ability::status_input_schema(),
         automation_names::LOOP_SUBSCRIBE => loop_ability::subscribe_input_schema(),
         automation_names::LOOP_CANCEL => loop_ability::cancel_input_schema(),
+        name if governance_names::KEYRING_ABILITIES.contains(&name) => {
+            return crate::daemon::keyring::abilities::input_schema_for(name)
+        }
         resource_names::SKILL_INSTALL => skill_install_ability::install_input_schema(),
         resource_names::SKILL_REMOVE => skill_install_ability::remove_input_schema(),
         resource_names::SKILL_UPGRADE => skill_install_ability::upgrade_input_schema(),
@@ -801,7 +994,6 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => {
             agent_authoring_ability::input_schema()
         }
-        device_names::NODE_LIST => device_ops_ability::list_nodes_input_schema(),
         device_names::NODE_DESCRIBE => device_ops_ability::describe_node_input_schema(),
         device_names::NODE_REMOVE => device_ops_ability::remove_node_input_schema(),
         federation_names::ABILITY_DEPLOY => device_ops_ability::deploy_ability_input_schema(),
@@ -832,6 +1024,27 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         name if media::input_schema(name).is_some() => return media::input_schema(name),
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::input_schema()
+        }
+        n if files_store_ability::input_schema_for(n).is_some() => {
+            return files_store_ability::input_schema_for(n)
+        }
+        n if pages_ability::management_ability_specs()
+            .iter()
+            .any(|spec| spec.relative_name == n) =>
+        {
+            return Some(
+                pages_ability::management_ability_specs()
+                    .into_iter()
+                    .find(|spec| spec.relative_name == n)
+                    .expect("pages spec checked above")
+                    .input_schema,
+            )
+        }
+        refresh_remote_targets_ability::ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS => {
+            refresh_remote_targets_ability::input_schema()
+        }
+        watch_remote_targets_ability::ABILITY_RESOURCE_WATCH_REMOTE_TARGETS => {
+            watch_remote_targets_ability::input_schema()
         }
         // RFC-006-C v0.1 — device-local OpenAI shim. Schemas mirror
         // the OpenAI request envelopes the handler accepts (chat
@@ -1024,16 +1237,6 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         return Some(AbilityLayer::Operational);
     }
 
-    if let Some(layer) = crate::daemon::plugins::ability_layer_for(name) {
-        return Some(match layer {
-            crate::daemon::plugins::PluginAbilityLayer::Introspection => {
-                AbilityLayer::Introspection
-            }
-            crate::daemon::plugins::PluginAbilityLayer::Control => AbilityLayer::Control,
-            crate::daemon::plugins::PluginAbilityLayer::Observation => AbilityLayer::Observation,
-            crate::daemon::plugins::PluginAbilityLayer::Operational => AbilityLayer::Operational,
-        });
-    }
     if let Some(layer) = daemon_invocation_contracts::contract_layer(name) {
         return Some(match layer {
             daemon_invocation_contracts::DaemonInvocationContractLayer::Introspection => {
@@ -1047,8 +1250,11 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
             }
         });
     }
+    if super::runtime_admin_contracts::contains(name) {
+        return Some(AbilityLayer::Operational);
+    }
 
-    match name {
+    let canonical_layer = match name {
         // ── Introspection ───────────────────────────────────
         governance_names::META_DESCRIBE
         | governance_names::META_LIST_ABILITIES
@@ -1069,6 +1275,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // belongs with the introspection-layer reads.
         | integration_names::MCP_CLIENT_LIST
         | integration_names::A2A_BRIDGE_LIST_SKILLS
+        // Daemon-local aggregate discovery front door. It fans in directory
+        // snapshots and does not mutate agent or federation state.
+        | agent_names::DISCOVER
         | agent_names::AGENT_LIST
         | governance_names::INVOCATION_HISTORY_LIST
         | governance_names::INVOCATION_HISTORY_GET
@@ -1081,6 +1290,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | governance_names::ADMISSION_EXPLAIN
         | device_names::TERMINAL_LIST
         | device_names::SESSION_LIST
+        | "device.keyring.list"
+        | "device.keyring.get_public"
+        | "device.keyring.peer_list"
         | governance_names::CONSENT_LIST_PENDING
         // RFC-005 v3.2 A9 — meta.list_resources is a pure read of
         // the local resources table (same shape as
@@ -1096,6 +1308,10 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | resource_names::SKILL_LIST
         | resource_names::SKILL_TREE
         | resource_names::SKILL_READ_FILE
+        | "files.get"
+        | "files.list"
+        | "project_list"
+        | "pages.get"
         // chat.history.* — pure reads of persisted chat
         // transcripts (JSONL under the agent workspace). Same
         // Introspection class as invocation.history.*.
@@ -1112,6 +1328,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | "context.favorites.list"
         | "context.captures.list"
         | "context.captures.get"
+        | "context.captures.read"
         | resource_names::VOICE_SHOW_CALL
         | resource_names::VOICE_WATCH_CALL
         | resource_names::VOICE_LIST_CALLS => Some(AbilityLayer::Introspection),
@@ -1123,6 +1340,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | governance_names::AUTHORITY_BINDING_REVOKE
         | governance_names::POLICY_REQUEST_CREATE
         | governance_names::POLICY_REQUEST_RESOLVE
+        | "device.keyring.peer_add"
         // context mutations — flip clipboard tracking, delete a
         // clip, add / remove favorites: device-context
         // configuration writes, same decision class as
@@ -1136,6 +1354,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         governance_names::OBSERVE_HEALTH
         | governance_names::OBSERVE_NETWORK_HEALTH
         | governance_names::ADMIN_STATUS
+        | "pages.health"
         | "plugin.status"
         | "plugin.companion_status" => Some(AbilityLayer::Observation),
         // ── Operational (per-feature business verbs) ────────
@@ -1148,16 +1367,11 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | resource_names::SKILL_INSTALL
         | resource_names::SKILL_REMOVE
         | resource_names::SKILL_UPGRADE
-        // device-hosted node/ability/remote operations. list_nodes /
-        // describe_node read state but conceptually they sit
-        // with the federation-tier *operations* (peer
-        // enumeration, network health) — Operational by
-        // intent, mirroring how schedule.list / loop.status
-        // got bumped into the introspection layer because they
-        // describe daemon-managed state. The remaining
-        // verbs (remove_node, deploy_ability, uninstall_ability)
-        // mutate state — Operational unambiguous.
-        | device_names::NODE_LIST
+        // device-hosted node/ability/remote operations. `node.describe` reads
+        // the canonical federation-backed device view for one device; fleet
+        // enumeration belongs to `federation.discover`, not a second
+        // device-owned route. The remaining verbs (remove_node, deploy_ability,
+        // uninstall_ability) mutate state — Operational unambiguous.
         | device_names::NODE_DESCRIBE
         | device_names::NODE_REMOVE
         | federation_names::ABILITY_DEPLOY
@@ -1216,6 +1430,12 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | automation_names::LOOP_CREATE
         | automation_names::LOOP_SUBSCRIBE
         | automation_names::LOOP_CANCEL
+        | "device.keyring.create"
+        | "device.keyring.rotate"
+        | "device.keyring.revoke"
+        | "device.keyring.expire_set"
+        | "device.keyring.bind_subject"
+        | "device.keyring.federate_user_identity_token"
         // EAL orchestration. mission.run compiles and executes a
         // program (potentially multi-step, potentially cross-agent);
         // mission.cancel mutates the run state of an in-flight
@@ -1237,6 +1457,11 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | resource_names::SKILL_PUBLISH
         | resource_names::SKILL_UNPUBLISH
         | resource_names::SKILL_WRITE_FILE
+        | "files.put"
+        | "pages.publish"
+        | "pages.unpublish"
+        | resource_names::RESOURCE_REFRESH_REMOTE_TARGETS
+        | resource_names::RESOURCE_WATCH_REMOTE_TARGETS
         // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
         // filesystem half. fs.read is technically read-only
         // but it returns business content, not just metadata
@@ -1306,7 +1531,24 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
             Some(AbilityLayer::Operational)
         }
         _ => None,
+    };
+    if canonical_layer.is_some() {
+        return canonical_layer;
     }
+
+    // Plugin state is runtime-owned and may resolve through a user-selected
+    // package root. Consult it only after every canonical daemon contract has
+    // been classified from static control-plane facts. Otherwise constructing
+    // the deterministic system registry merely to answer an ownership query
+    // reads `$HOME/.easynet/plugins`, coupling descriptor identity to ambient
+    // process state and making pure route projection race with unrelated
+    // environment-isolation tests.
+    crate::daemon::plugins::ability_layer_for(name).map(|layer| match layer {
+        crate::daemon::plugins::PluginAbilityLayer::Introspection => AbilityLayer::Introspection,
+        crate::daemon::plugins::PluginAbilityLayer::Control => AbilityLayer::Control,
+        crate::daemon::plugins::PluginAbilityLayer::Observation => AbilityLayer::Observation,
+        crate::daemon::plugins::PluginAbilityLayer::Operational => AbilityLayer::Operational,
+    })
 }
 
 #[cfg(test)]
@@ -1366,6 +1608,26 @@ mod canonical_contract_tests {
         let variants: Vec<SystemAbilityContract> = vec![
             SystemAbilityContract {
                 descriptor_version: "9.9.9".to_string(),
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                exposure: crate::daemon::ability::manifest::AbilityExposure::Internal,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                dedicated_surface:
+                    crate::daemon::ability::manifest::AbilityDedicatedSurface::Terminal,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                subject_contract_kind:
+                    crate::daemon::ability::manifest::AbilitySubjectContractKind::ExplicitUra,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                subject_contract_ura: Some(
+                    "easynet:///r/test/resource/device.dev-a/session/test".to_string(),
+                ),
                 ..baseline.clone()
             },
             SystemAbilityContract {

@@ -110,14 +110,17 @@ authority. Collision prevention is enforced in the daemon path:
    granting authority or silently publishing an unsafe ability.
 
 A plugin package never becomes an authority root. The daemon binds
-`PluginAbilityImpl` under the device/agent authority it owns; callers only see
-the resulting governed `AbilityDescriptor`.
+`PluginAbilityImpl` through the device-sponsored `plugin-management`
+SystemAgent; callers only see the resulting governed `AbilityDescriptor`.
+The Device remains the plugin runtime execution host and custody substrate, not
+the public descriptor owner/callee.
 
 ## Authority Rule
 
-The daemon binder applies the current owner policy (`OwnerKind::Device` today)
-when it binds a plugin contribution. This keeps plugin packages from becoming
-authority roots by accident.
+The daemon binder applies `OwnerKind::plugin_management_system()` when it binds
+a plugin contribution. This keeps plugin packages from becoming authority roots
+by accident while also preventing plugin abilities from falling back to direct
+Device ownership.
 
 If a future plugin needs a distinct authority projection, that must be added as
 a daemon policy decision in the binder or policy broker, not as arbitrary

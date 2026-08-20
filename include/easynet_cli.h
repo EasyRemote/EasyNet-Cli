@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * Runtime C ABI v6 packaged by libeasynet_cli.
+ * Runtime C ABI v7 packaged by libeasynet_cli.
  *
  * The stable C surface owns runtime host lifecycle, generic Invocation lifecycle,
  * stream/bidi control, and runtime/error DTOs. Domain profile helpers belong
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define RUNTIME_ABI_VERSION 6u
+#define RUNTIME_ABI_VERSION 7u
 
 #define RUNTIME_OK 0
 #define ERR_GENERIC 1
@@ -117,6 +117,11 @@ int32_t runtime_resolve_descriptor_ref(
     RuntimeHandle handle,
     const char *request_json,
     char **out_descriptor_json
+);
+int32_t runtime_governance_read(
+    RuntimeHandle handle,
+    const char *invocation_json,
+    char **out_result_json
 );
 
 int32_t runtime_invocation_invoke(

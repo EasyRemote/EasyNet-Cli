@@ -26,7 +26,7 @@ use axon_sdk::invocation::LocalRuntime;
 
 use crate::daemon::ability::builtins::agents::chat::{
     build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
-    build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
+    build_discover_handler_for, build_host_rpc_handler, build_host_stream_handler, ContextLoader,
 };
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::agent_registry::AgentEntry;
@@ -114,27 +114,6 @@ impl HostedAgentRuntimeBinding {
     }
 }
 
-fn dispatch_key_for_hosted_agent_runtime_key(
-    runtime_key: &str,
-    expected_agent: &str,
-) -> Option<String> {
-    let selector = crate::core::ura::AbilitySelector::parse(runtime_key).ok()?;
-    let parsed_owner = crate::core::ura::parse_ura(selector.owner_ura()).ok()?;
-    if parsed_owner.kind != crate::core::ura::URAKind::Agent {
-        return None;
-    }
-    let (_, agent_id) = parsed_owner
-        .agent_ids()
-        .or_else(|| parsed_owner.device_agent_ids())?;
-    if agent_id != expected_agent {
-        return None;
-    }
-    Some(crate::core::ura::local_dispatch_ability_key(
-        selector.owner_ura(),
-        selector.public_name(),
-    ))
-}
-
 fn hot_agent_runtime_surface_name(agent_identifier: &str) -> Result<String, String> {
     if agent_identifier.contains('/') {
         let agent_id = crate::core::agent::id::AgentId::parse(agent_identifier)
@@ -150,22 +129,6 @@ fn hot_agent_runtime_surface_name(agent_identifier: &str) -> Result<String, Stri
     crate::core::agent::id::AgentId::new(crate::core::agent::id::DEFAULT_TENANT, agent_identifier)
         .map(|agent| agent.name)
         .map_err(|error| error.to_string())
-}
-
-async fn hosted_agent_runtime_ability_uras_for_agent(
-    runtime: &Arc<LocalRuntime>,
-    agent: &str,
-) -> Vec<String> {
-    let prefix = format!("{agent}.");
-    runtime
-        .list_abilities()
-        .await
-        .into_iter()
-        .filter_map(|descriptor| {
-            let dispatch_key = dispatch_key_for_hosted_agent_runtime_key(&descriptor.name, agent)?;
-            dispatch_key.starts_with(&prefix).then_some(descriptor.name)
-        })
-        .collect()
 }
 
 /// Captures every dependency a hot-add path needs to synthesise an
@@ -188,14 +151,16 @@ pub struct HotAgentRegistrar {
     /// agents do not observe a different user/public tier.
     discover_federation_resolver:
         crate::daemon::ability::builtins::agents::discover::SharedDiscoverFederationResolver,
-    /// Optional hub-advertise bridge for hot-added hosted agents.
+    /// Optional Hub control adapter for hosted-Agent assignment, projection,
+    /// and revocation workflows.
     ///
     /// Runtime registration is local; hub visibility is separate.
     /// Device-mode boot wires this after the long-lived
     /// `session.open` escalation channel exists. Tests and
     /// non-device modes leave it empty. Local lifecycle success is independent
-    /// of Hub reachability; the public lifecycle response reports
-    /// `not_configured`, `succeeded`, or `failed` explicitly.
+    /// of Hub reachability. Live add/refresh publication is owned by the
+    /// catalog's coalesced federation worker; this adapter remains the narrow
+    /// transport used by generation recovery and stop/purge publication.
     hot_advertiser: OnceLock<Arc<dyn HotAgentAdvertiser>>,
 }
 
@@ -204,7 +169,7 @@ pub struct HotAgentRegistrar {
 /// (`agent/device.<device-id>.<agent-id>`, RFC-005 §3.1.2 / DEC-F048).
 /// Hosted user agents MUST NOT register under it: a hosted agent named
 /// `device.<x>` would mint `device.<x>.*` runtime rows that read as
-/// device-owned ability shapes downstream.
+/// device-sponsored SystemAgent shapes downstream.
 #[must_use]
 pub fn name_claims_reserved_device_owner(name: &str) -> bool {
     name == "device" || name.starts_with("device.")
@@ -335,24 +300,34 @@ impl HotAgentUnregistration {
     }
 }
 
-/// Input for a hot hosted-agent advertise pass.
+/// Input for an explicit hosted-Agent advertise pass.
 ///
 /// `agent_ura` drives `federation.advertise_agent` (identity). When
 /// `abilities_payload` + `abilities_resource_ura` are present, the
 /// advertiser ALSO fires `federation.advertise_abilities` on the same
 /// transport so a hot ability add/remove reaches the hub immediately
 /// instead of waiting for the next heartbeat. ISS-002.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct HotAgentAdvertiseRequest {
     pub agent_ura: String,
-    pub generation: u64,
-    /// Pre-encoded `federation.advertise_abilities` args (built from the
-    /// just-persisted owner projection via
-    /// `advertise::advertise_abilities_payload`). `None` skips the
-    /// abilities advertise (identity-only). The advertiser targets the
-    /// hub federation surface by ability name, so no resource URA is
-    /// carried here.
-    pub abilities_payload: Option<Vec<u8>>,
+    /// Committed runtime descriptors are domain input, not a pre-encoded
+    /// projection. The publication workflow must first obtain and persist the
+    /// Hub assignment, then construct the generation-fenced projection.
+    pub descriptors: Vec<crate::daemon::ability::descriptors::AbilityDescriptor>,
+}
+
+/// Identity-only generation assignment command. It deliberately carries no
+/// descriptors or encoded owner projection, so retraction recovery cannot
+/// accidentally resurrect abilities while learning the generation to revoke.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotAgentAssignmentRequest {
+    pub plan: crate::daemon::federation::hosted_agent_publication::HostedAgentAssignmentPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotAgentAssignmentOutcome {
+    Assigned(crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment),
+    Failed(String),
 }
 
 /// Projection-only publication. Purge tombstones must use this surface so an
@@ -363,10 +338,13 @@ pub struct HotAgentProjectionRequest {
     pub generation: u64,
     pub transaction_id: String,
     pub delivery_fence: u64,
+    /// Exact complete-set size the Hub receipt must acknowledge. Tombstones
+    /// carry zero; non-empty hot projections carry their descriptor count.
+    pub expected_ability_count: usize,
     pub abilities_payload: Vec<u8>,
 }
 
-/// Outcome for best-effort hub advertisement after hot agent add.
+/// Terminal outcome for one Hub publication transport pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotAgentAdvertiseState {
     Succeeded,
@@ -430,14 +408,17 @@ pub struct HotAgentRevokeRequest {
     pub delivery_fence: u64,
 }
 
-/// Narrow abstraction over the transport used to notify the hub
-/// about a hot-added hosted agent.
+/// Narrow abstraction over hosted-Agent Hub lifecycle transport.
 ///
 /// The registrar owns the trait object so runtime lifecycle code
 /// does not depend on `daemon::invocation` concrete
 /// session types. Device-mode boot supplies an implementation backed
-/// by the current `session.open` bidi; tests can supply a recorder.
+/// by the current `session.open` bidi; tests can supply a recorder. Dynamic
+/// add/refresh convergence is scheduled by the catalog publication worker so
+/// there is only one live identity-publication owner.
 pub trait HotAgentAdvertiser: Send + Sync {
+    fn assign_hosted_agent(&self, request: HotAgentAssignmentRequest) -> HotAgentAssignmentOutcome;
+
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
         -> HotAgentAdvertiseOutcome;
 
@@ -549,6 +530,17 @@ impl HotAgentRegistrar {
                 catalog.as_ref(),
             ),
         )
+    }
+
+    /// True when the boot-owned dynamic federation worker is attached to the
+    /// committed catalog. Agent lifecycle code reports scheduling from this
+    /// explicit capability instead of inferring it from the unrelated
+    /// revoke/assignment transport adapter.
+    #[must_use]
+    pub(crate) fn dynamic_publication_configured(&self) -> bool {
+        self.dispatch_handle
+            .get()
+            .is_some_and(|catalog| catalog.has_dynamic_publication_hook())
     }
 
     /// Register the canonical `<agent>.chat / discover / invoke`
@@ -733,23 +725,6 @@ impl HotAgentRegistrar {
                 synced.insert(discover_ability);
             }
 
-            // ── invoke
-            let invoke_handler =
-                build_invoke_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
-            let invoke_ability = format!("{name}.invoke");
-            if Self::register_rpc_with_spec(
-                &mut sync_ctx,
-                &invoke_ability,
-                owner.clone(),
-                crate::daemon::ability::builtins::agents::invoke::manifest(),
-                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
-                invoke_handler,
-            )
-            .await
-            {
-                synced.insert(invoke_ability);
-            }
-
             // ── TOML-declared executor-bound abilities. Manifests without
             // `[exec]` are discoverable declarations, not invocable runtime
             // handlers.
@@ -772,22 +747,48 @@ impl HotAgentRegistrar {
                     continue;
                 };
                 let Some(exec) = manifest.exec() else {
+                    if Self::register_descriptor_only(
+                        &mut sync_ctx,
+                        &ability_name,
+                        owner.clone(),
+                        manifest.clone(),
+                    )
+                    .await
+                    {
+                        synced.insert(ability_name);
+                    }
                     continue;
                 };
                 match exec {
                     crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
-                        let h = build_host_stream_handler(stream_spec.clone());
-                        if Self::register_stream_with_envelope_and_spec(
-                            &mut sync_ctx,
-                            &ability_name,
-                            owner.clone(),
-                            manifest.clone(),
-                            crate::daemon::ability::descriptors::AdmissionAction::Stream,
-                            h,
-                        )
-                        .await
-                        {
-                            synced.insert(ability_name);
+                        if manifest.admission_action() == Some("invoke") {
+                            let h = build_host_rpc_handler(stream_spec.clone());
+                            if Self::register_rpc_with_envelope_and_spec(
+                                &mut sync_ctx,
+                                &ability_name,
+                                owner.clone(),
+                                manifest.clone(),
+                                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                                h,
+                            )
+                            .await
+                            {
+                                synced.insert(ability_name);
+                            }
+                        } else {
+                            let h = build_host_stream_handler(stream_spec.clone());
+                            if Self::register_stream_with_envelope_and_spec(
+                                &mut sync_ctx,
+                                &ability_name,
+                                owner.clone(),
+                                manifest.clone(),
+                                crate::daemon::ability::descriptors::AdmissionAction::Stream,
+                                h,
+                            )
+                            .await
+                            {
+                                synced.insert(ability_name);
+                            }
                         }
                     }
                     _ => {
@@ -817,10 +818,7 @@ impl HotAgentRegistrar {
         // ── reconcile: a provider withdraws an ability by deleting
         // its TOML; the row must leave the live runtime on the next
         // sync, not on the next daemon restart.
-        for stale in hosted_agent_runtime_ability_uras_for_agent(runtime, name).await {
-            let Some(dispatch_key) = dispatch_key_for_hosted_agent_runtime_key(&stale, name) else {
-                continue;
-            };
+        for dispatch_key in catalog.dynamic_catalog_abilities_for_authority(&binding.agent_ura) {
             if synced.contains(&dispatch_key) {
                 continue;
             }
@@ -862,7 +860,7 @@ impl HotAgentRegistrar {
             self.restore_agent_rows(name, previous, runtime, &catalog, &binding)
                 .await
         } else {
-            self.remove_agent_rows(runtime, &catalog, name).await
+            self.remove_agent_rows(&catalog, &binding).await
         };
         let mut rollback_failures = rollback.err().into_iter().collect::<Vec<_>>();
         if previous.is_none() {
@@ -922,11 +920,7 @@ impl HotAgentRegistrar {
         };
         let mut outcome = HotAgentRuntimeSyncOutcome::default();
         let mut failures = Vec::new();
-        for runtime_key in hosted_agent_runtime_ability_uras_for_agent(runtime, name).await {
-            let Some(dispatch_key) = dispatch_key_for_hosted_agent_runtime_key(&runtime_key, name)
-            else {
-                continue;
-            };
+        for dispatch_key in catalog.dynamic_catalog_abilities_for_authority(&binding.agent_ura) {
             match catalog.hot_unregister(&dispatch_key) {
                 Ok(true) => outcome.removed += 1,
                 Ok(false) => {}
@@ -1013,16 +1007,11 @@ impl HotAgentRegistrar {
 
     async fn remove_agent_rows(
         &self,
-        runtime: &Arc<LocalRuntime>,
         catalog: &Arc<AxonAbilityCatalog>,
-        name: &str,
+        binding: &HostedAgentRuntimeBinding,
     ) -> Result<(), String> {
         let mut failures = Vec::new();
-        for runtime_key in hosted_agent_runtime_ability_uras_for_agent(runtime, name).await {
-            let Some(dispatch_key) = dispatch_key_for_hosted_agent_runtime_key(&runtime_key, name)
-            else {
-                continue;
-            };
+        for dispatch_key in catalog.dynamic_catalog_abilities_for_authority(&binding.agent_ura) {
             if let Err(error) = catalog.hot_unregister(&dispatch_key) {
                 failures.push(format!("{dispatch_key}: {error}"));
             }
@@ -1083,6 +1072,64 @@ impl HotAgentRegistrar {
             }
             Err(err) => {
                 Self::record_registration_error(ability_name, err, ctx.outcome, ctx.failures);
+                false
+            }
+        }
+    }
+
+    async fn register_descriptor_only(
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
+        ability_name: &str,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+    ) -> bool {
+        let was_present = ctx
+            .catalog
+            .dynamic_catalog_abilities_for_authority(ctx.authority_scope.authority_root())
+            .iter()
+            .any(|ability| ability == ability_name);
+        let runtime_key = match ctx.binding.runtime_ability_ura(ability_name) {
+            Some(runtime_key) => runtime_key,
+            None => {
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
+                return false;
+            }
+        };
+        let was_executable = ctx.runtime.has_ability(&runtime_key).await;
+        if was_executable {
+            if let Err(error) = ctx.catalog.hot_unregister(ability_name) {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
+                return false;
+            }
+        }
+        let manifest = match ensure_admission_action(
+            manifest,
+            crate::daemon::ability::descriptors::AdmissionAction::Read,
+        ) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
+                return false;
+            }
+        };
+        match ctx
+            .catalog
+            .hot_register_descriptor_only_with_authority_scope(
+                ability_name,
+                owner,
+                ctx.authority_scope.clone(),
+                manifest,
+            ) {
+            Ok(()) if was_present => {
+                ctx.outcome.replaced += 1;
+                true
+            }
+            Ok(()) => {
+                ctx.outcome.registered += 1;
+                true
+            }
+            Err(error) => {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
                 false
             }
         }
@@ -1307,7 +1354,8 @@ impl HotAgentRegistrar {
 mod tests {
     use super::*;
 
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::AgentEntry;
 
     fn seed_hosted_agent(name: &str) -> String {
         crate::daemon::persistence::config::save_credentials(
@@ -1326,7 +1374,7 @@ mod tests {
         let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
         crate::daemon::persistence::local_agents::save(
             &crate::daemon::persistence::local_agents::LocalAgentsFile {
-                host_device_agent_ura: host_device_ura.clone(),
+                host_device_ura: host_device_ura.clone(),
                 hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
                     profile: "llm".to_string(),
                     name: name.to_string(),
@@ -1342,7 +1390,7 @@ mod tests {
             crate::core::agent::id::AgentId::parse(name)
                 .expect("test agent name")
                 .to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         crate::daemon::persistence::agent_registry::save_agents(&registry)
             .expect("seed durable Agent registry");
@@ -1399,7 +1447,7 @@ mod tests {
             None,
         );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
 
         // Dotted form — would mint rows that read as device-owned
         // ability shapes (`device.dev-1.sys.chat`).
@@ -1476,7 +1524,7 @@ mod tests {
             .expect("seed dynamic ghost ability");
         assert!(rt.has_ability(&ghost_key).await);
 
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         let outcome = registrar
             .register_agent("liangbing", &entry)
             .await
@@ -1495,7 +1543,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_agent_lands_chat_discover_invoke_into_runtime_after_set_runtime() {
+    async fn register_agent_lands_chat_and_discover_without_invoke_wrapper() {
         // **Phase 5c invariant pin.**
         //
         // After `set_runtime`, calling `register_agent("liangbing", entry)`
@@ -1521,15 +1569,15 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         let outcome = registrar
             .register_agent("liangbing", &entry)
             .await
             .expect("register succeeds");
 
         assert!(
-            outcome.registered >= 3,
-            "chat/discover/invoke triple must land (plus any TOML), got {outcome:?}"
+            outcome.registered >= 2,
+            "chat/discover abilities must land (plus any TOML), got {outcome:?}"
         );
         assert_eq!(outcome.failed, 0);
         assert_eq!(outcome.replaced, 0);
@@ -1555,7 +1603,7 @@ mod tests {
                 .await
         );
         assert!(
-            rt.has_ability(&runtime_key("liangbing", "liangbing.invoke"))
+            !rt.has_ability(&runtime_key("liangbing", "liangbing.invoke"))
                 .await
         );
     }
@@ -1578,17 +1626,17 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
-        let first_entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
+        let first_entry = AgentEntry::new(RuntimeKind::ClaudeCode, Some("sonnet".to_string()));
         let first = registrar
             .register_agent("liangbing", &first_entry)
             .await
             .expect("initial register succeeds");
-        assert!(first.registered >= 3, "initial register must land rows");
+        assert!(first.registered >= 2, "initial register must land rows");
         assert_eq!(first.replaced, 0);
         assert_eq!(first.failed, 0);
 
         let mut changes = rt.subscribe_ability_changes();
-        let second_entry = AgentEntry::new(AgentType::ClaudeCode, Some("opus".to_string()));
+        let second_entry = AgentEntry::new(RuntimeKind::ClaudeCode, Some("opus".to_string()));
         let second = registrar
             .register_agent("liangbing", &second_entry)
             .await
@@ -1598,8 +1646,8 @@ mod tests {
             "refreshing an existing agent should not create duplicate rows"
         );
         assert!(
-            second.replaced >= 3,
-            "chat/discover/invoke triple must be replaced, got {second:?}"
+            second.replaced >= 2,
+            "chat/discover abilities must be replaced, got {second:?}"
         );
         assert_eq!(
             second.failed, 0,
@@ -1608,7 +1656,6 @@ mod tests {
 
         let expected_chat = runtime_key("liangbing", "liangbing.chat");
         let expected_discover = runtime_key("liangbing", "liangbing.discover");
-        let expected_invoke = runtime_key("liangbing", "liangbing.invoke");
         let mut replaced = std::collections::BTreeSet::new();
         for _ in 0..16 {
             let Ok(event) =
@@ -1619,25 +1666,20 @@ mod tests {
             if let Ok(AbilityChangeEvent::Replaced { name, .. }) = event {
                 replaced.insert(name);
             }
-            if replaced.contains(&expected_chat)
-                && replaced.contains(&expected_discover)
-                && replaced.contains(&expected_invoke)
-            {
+            if replaced.contains(&expected_chat) && replaced.contains(&expected_discover) {
                 break;
             }
         }
         assert!(
-            replaced.contains(&expected_chat)
-                && replaced.contains(&expected_discover)
-                && replaced.contains(&expected_invoke),
-            "runtime must broadcast replacement for the canonical agent triple, got {replaced:?}"
+            replaced.contains(&expected_chat) && replaced.contains(&expected_discover),
+            "runtime must broadcast replacement for chat/discover, got {replaced:?}"
         );
     }
 
     #[tokio::test]
     async fn register_agent_before_set_runtime_fails_with_typed_readiness() {
         let registrar = build_pending();
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         let error = registrar
             .register_agent("liangbing", &entry)
             .await
@@ -1665,7 +1707,7 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         registrar
             .register_agent("liangbing", &entry)
             .await
@@ -1681,8 +1723,8 @@ mod tests {
             .expect("unregister succeeds");
         let removed = removal.outcome().removed;
         assert!(
-            removed >= 3,
-            "chat/discover/invoke triple must be removed, got {removed}"
+            removed >= 2,
+            "chat/discover abilities must be removed, got {removed}"
         );
         assert!(
             !rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))

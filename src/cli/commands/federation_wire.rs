@@ -305,11 +305,11 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         anyhow::bail!("pairing credentials missing hub_public_key_b64");
     }
     use crate::daemon::identity::self_identity::load_runtime_caller_signer;
-    use crate::daemon::keyring::lifecycle::ensure_key_service_running;
+    use crate::daemon::keyring::lifecycle::ensure_bootstrap_key_service_running;
     use base64::Engine as _;
 
     let agent_ura = facts.device_ura();
-    ensure_key_service_running()
+    ensure_bootstrap_key_service_running()
         .context("ensure key service for joined Device runtime identity")?;
     let identity = load_runtime_caller_signer(agent_ura.clone())
         .map_err(|error| anyhow::anyhow!("resolve joined Device runtime identity: {error}"))?;
@@ -490,11 +490,8 @@ fn persist_hub_tls_ca_pem_for_join(
 
 /// TOML edit: insert-or-update a `[[trusted_agent]]` row whose
 /// `agent_ura` matches the joining device. Preserves every other
-/// row + comment via `toml_edit`. Idempotent when the row already
-/// has the same `public_key_b64` (the deterministic derivation
-/// from `(realm, node_id)` should always produce the same
-/// pubkey for the same identity, so a re-run of `easynet device join`
-/// against the same credentials is a no-op).
+/// row + comment via `toml_edit`. Idempotent when the row already has the same
+/// daemon key-service public projection for the joined device identity.
 fn upsert_self_trusted_agent(
     raw: &str,
     agent_ura: &str,

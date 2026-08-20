@@ -16,11 +16,13 @@ make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
     mkdir -p \
+        "$sandbox/sdk/python/tests" \
         "$sandbox/sdk/node/test" \
         "$sandbox/sdk/java/src/test/java/run/runtime/sdk" \
         "$sandbox/sdk/swift/Tests/RuntimeSDKTests"
     cp "$REPO_ROOT/sdk/node/test/runtime-core.test.mjs" "$sandbox/sdk/node/test/runtime-core.test.mjs"
     cp "$REPO_ROOT/sdk/node/test/types.test.ts" "$sandbox/sdk/node/test/types.test.ts"
+    cp "$REPO_ROOT/sdk/python/tests/test_environment.py" "$sandbox/sdk/python/tests/test_environment.py"
     cp "$REPO_ROOT/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java" \
         "$sandbox/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
     cp "$REPO_ROOT/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift" \

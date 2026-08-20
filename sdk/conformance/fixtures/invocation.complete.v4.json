@@ -1,7 +1,7 @@
 {
   "caller_ura": "easynet:///r/example/agent/alice.sdk",
-  "callee_ura": "easynet:///r/example/device/dev-a",
-  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+  "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+  "descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
   "subject_ura": "easynet:///r/example/device/dev-a",
   "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
   "causal_context": {

@@ -17,6 +17,26 @@ use super::constants::{
     NATIVE_MAX_BITRATE_KBPS,
 };
 
+/// Human-readable contract for `remote_desktop.grant_consent`.
+pub fn grant_consent_description() -> &'static str {
+    "Record explicit local-user consent for creating a remote desktop session \
+     on the selected display/window/application resource. The terminal receipt \
+     of this invocation must be supplied as causal_context to \
+     remote_desktop.create_session."
+}
+
+/// JSON input schema for `remote_desktop.grant_consent`.
+pub fn grant_consent_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["intent"],
+        "properties": {
+            "intent": { "type": "string", "enum": ["remote_desktop_session"] }
+        }
+    })
+}
+
 /// Human-readable contract for `remote_desktop.create_session`.
 pub fn create_session_description() -> &'static str {
     "Create a remote desktop control session for a display/window/application \
@@ -31,7 +51,9 @@ pub fn create_session_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
+        "required": ["consent_ticket"],
         "properties": {
+            "consent_ticket": { "type": "string", "minLength": 64, "maxLength": 64 },
             "session_id": { "type": "string" },
             "mode": { "type": "string", "enum": ["view_only", "interactive"] },
             "lease_ttl_ms": { "type": "integer", "minimum": 1, "maximum": MAX_LEASE_TTL_MS },
@@ -137,6 +159,24 @@ pub fn add_ice_candidate_input_schema() -> Value {
             "session_id": { "type": "string" },
             "session_token": { "type": "string" },
             "candidate": { "type": "object" }
+        }
+    })
+}
+
+pub fn report_client_state_description() -> &'static str {
+    "Report browser-observed media presentation for the active remote desktop transport epoch."
+}
+
+pub fn report_client_state_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session_id", "session_token", "transport_epoch", "state"],
+        "properties": {
+            "session_id": { "type": "string" },
+            "session_token": { "type": "string" },
+            "transport_epoch": { "type": "integer", "minimum": 1 },
+            "state": { "type": "string", "enum": ["presenting", "stalled", "detached"] }
         }
     })
 }

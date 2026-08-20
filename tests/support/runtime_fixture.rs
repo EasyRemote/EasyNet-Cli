@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use axon_sdk::invocation::axiom::authority_proof_expected_hash;
 use axon_sdk::invocation::{
-    sha256, AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    sha256, AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+    AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
     DescriptorBoundEnvelope, InvocationAuthorityProof, KeyResolver, LocalRuntime,
-    ReceiptSigningAuthority, VerifiedAdmissionPolicy,
+    ReceiptSigningAuthority, UraProfile, VerifiedAdmissionPolicy,
 };
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 
@@ -49,8 +50,23 @@ pub fn daemon_runtime_with_key_resolver_and_ledger(
     easynet_cli::daemon::axon_bridge::runtime_factory::build_daemon_runtime_with_receipt_provider(
         resolver,
         Arc::new(DeterministicReceiptProvider::default()),
+        isolated_runtime_persistence(),
         ledger,
     )
+}
+
+fn isolated_runtime_persistence(
+) -> easynet_cli::daemon::axon_bridge::runtime_factory::RuntimePersistenceConfig {
+    static RUNTIME_PERSISTENCE_SEQ: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let seq = RUNTIME_PERSISTENCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "easynet-integration-daemon-runtime-{}-{}",
+        std::process::id(),
+        seq
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    easynet_cli::daemon::axon_bridge::runtime_factory::RuntimePersistenceConfig::persistent(dir)
 }
 
 #[derive(Default)]
@@ -64,9 +80,14 @@ impl CanonicalReceiptProvider for DeterministicReceiptProvider {
         &self,
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-        let binding = AuthorityBinding::Self_ {
-            principal_ura: envelope.envelope().caller.ura.clone(),
-        };
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
         let mut proof = InvocationAuthorityProof::new(
             "integration-test-verified-admission",
             Some(binding.clone()),

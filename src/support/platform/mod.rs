@@ -9,7 +9,6 @@ pub(crate) mod node;
 pub mod operator_log;
 pub(crate) mod output;
 pub(crate) mod process_singleton;
-#[cfg(feature = "axon-pb")]
 pub(crate) mod remote_device;
 pub(crate) mod shutdown;
 pub(crate) mod sysinfo;

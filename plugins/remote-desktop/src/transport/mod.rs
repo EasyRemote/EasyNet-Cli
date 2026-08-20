@@ -11,6 +11,7 @@
 // modules respectively.
 
 mod manager;
+mod media_source;
 mod terminal;
 mod webrtc;
 mod webrtc_baseline_media;
@@ -26,6 +27,7 @@ pub(in crate::daemon::plugins::remote_desktop) use manager::{
 pub(in crate::daemon::plugins::remote_desktop) use terminal::BidiTerminalGuard;
 pub(in crate::daemon::plugins::remote_desktop) use webrtc::{
     apply_pending_remote_ice_candidates, apply_remote_ice_candidate_values, DirectWebRtcHandler,
+    DirectWebRtcHandlerConfig,
 };
 pub(in crate::daemon::plugins::remote_desktop) use webrtc_endpoint::{
     start_direct_webrtc_endpoint, StartDirectWebRtcEndpointRequest,

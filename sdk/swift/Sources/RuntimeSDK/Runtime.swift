@@ -420,6 +420,19 @@ public struct InvocationCancel: Sendable {
 
     static func fromJSON(_ raw: Data, expectedControl: InvocationControlCapability?) throws -> InvocationCancel {
         let object = try runtimeJSONObject(raw, "invocation_cancel")
+        try runtimeRequireExactProjectionKeys(
+            object,
+            "invocation cancel",
+            [
+                "handle_id",
+                "request_accepted",
+                "deduplicated",
+                "cancelled",
+                "state",
+                "terminal",
+            ],
+            "invocation_cancel"
+        )
         let handleId = try runtimeRequiredInt64(object, "handle_id", "invocation_cancel")
         let control: InvocationControlCapability
         if let expectedControl {
@@ -868,6 +881,17 @@ private func runtimeRequireExactKeys(
     }
 }
 
+private func runtimeRequireExactProjectionKeys(
+    _ object: [String: Any],
+    _ field: String,
+    _ allowedKeys: Set<String>,
+    _ stage: String
+) throws {
+    for key in object.keys.sorted() where !allowedKeys.contains(key) {
+        throw SDKError.validation(stage, "\(field) contains noncanonical field \(key)")
+    }
+}
+
 private func runtimeRequireRequiredKeys(
     _ object: [String: Any],
     _ field: String,
@@ -1014,9 +1038,7 @@ private func runtimeBase64(
     expectedLength: Int?,
     allowEmpty: Bool
 ) throws -> Data {
-    guard let data = Data(base64Encoded: value) else {
-        throw SDKError.validation("runtime_receipt", "\(field) must be base64")
-    }
+    let data = try canonicalBase64Data(value, stage: "runtime_receipt", field: field)
     if data.isEmpty, !allowEmpty {
         throw SDKError.validation("runtime_receipt", "\(field) must decode to non-empty bytes")
     }

@@ -395,14 +395,11 @@ impl MissionTokenUsage {
 }
 
 fn mission_token_usage_from_outputs(
-    outputs: &HashMap<String, String>,
+    outputs: &HashMap<String, serde_json::Value>,
 ) -> Option<MissionTokenUsage> {
     let mut aggregate = MissionTokenUsage::default();
     let mut saw_usage = false;
-    for raw in outputs.values() {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-            continue;
-        };
+    for value in outputs.values() {
         if aggregate.add_usage_value(value.get("usage").unwrap_or(&serde_json::Value::Null)) {
             saw_usage = true;
         }
@@ -807,9 +804,9 @@ pub struct MissionRunResult {
     pub run_id: String,
     /// Persisted run metadata.
     pub meta: MissionRunMeta,
-    /// Captured outputs of `let`-bound steps. The key is the binding
-    /// name; the value is the step result parsed back from JSON (or
-    /// stored as a JSON string if it does not parse).
+    /// Captured outputs of `let`-bound steps. The interpreter decodes each
+    /// child result exactly once at the byte boundary; non-JSON output is a
+    /// JSON string and structured output remains structured.
     #[allow(dead_code)]
     pub bound_vars: HashMap<String, serde_json::Value>,
     /// True if the run completed without aborting. False if any step
@@ -1066,30 +1063,11 @@ impl MissionRunner {
                     },
                 ))?;
 
-                // Convert ExecutionReport.outputs (HashMap<String, String>)
-                // into HashMap<String, Value> by parsing each as JSON. If a
-                // value isn't valid JSON, fall back to wrapping it as a JSON
-                // string. This makes `bound_vars["__reply"]` directly usable
-                // by the `agent send` desugar path.
-                let bound_vars: HashMap<String, serde_json::Value> = report
-                    .outputs
-                    .into_iter()
-                    .map(|(k, raw)| {
-                        // `unwrap_or_else` would be wasted here — parsing is
-                        // the whole operation; if it fails we fall back to
-                        // wrapping `raw` as a plain JSON string. Evaluating
-                        // the fallback eagerly costs nothing.
-                        let v = serde_json::from_str::<serde_json::Value>(&raw)
-                            .unwrap_or(serde_json::Value::String(raw));
-                        (k, v)
-                    })
-                    .collect();
-
                 Ok(MissionRunResult {
                     run_dir: run_dir.path.clone(),
                     run_id,
                     meta,
-                    bound_vars,
+                    bound_vars: report.outputs,
                     ok: steps_failed == 0,
                 })
             }
@@ -1355,8 +1333,7 @@ mod tests {
                     "num_turns": 1,
                     "total_cost_usd": 0.25
                 }
-            })
-            .to_string(),
+            }),
         );
         outputs.insert(
             "worker".to_string(),
@@ -1370,10 +1347,12 @@ mod tests {
                     "num_turns": 2,
                     "total_cost_usd": 0.75
                 }
-            })
-            .to_string(),
+            }),
         );
-        outputs.insert("plain".to_string(), "not json".to_string());
+        outputs.insert(
+            "plain".to_string(),
+            serde_json::Value::String("not json".to_string()),
+        );
 
         let usage = mission_token_usage_from_outputs(&outputs)
             .expect("step outputs with usage facts aggregate into mission meta");
@@ -1694,12 +1673,13 @@ mod tests {
     /// Register an Agent in the daemon-owned registry under a temp HOME.
     fn register_test_agent(name: &str) {
         use crate::core::agent::id::AgentId;
-        use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+        use crate::core::agent::spec::RuntimeKind;
+        use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
         let registry_key = AgentId::parse(name).expect("test agent id").to_string();
         let mut registry = AgentRegistry::default();
         registry
             .agents
-            .insert(registry_key, AgentEntry::new(AgentType::ClaudeCode, None));
+            .insert(registry_key, AgentEntry::new(RuntimeKind::ClaudeCode, None));
         crate::daemon::persistence::agent_registry::save_agents(&registry)
             .expect("save test agent");
     }

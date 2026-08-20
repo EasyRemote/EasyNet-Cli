@@ -31,7 +31,9 @@ use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
-use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
+use crate::daemon::federation::read_model::advertised_agents::{
+    AdvertisedAgentStore, HostedAgentLifecycleCoordinator,
+};
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleContext;
@@ -59,6 +61,9 @@ pub(crate) struct DirectoryPlane {
     /// `federation.advertise_abilities`, projected through
     /// `federation.resolve(include_abilities=true)`.
     pub(crate) ability_catalog: Arc<AbilityCatalogStore>,
+    /// Single writer boundary for hosted-Agent identity, projection, and
+    /// revoke lifecycle transitions.
+    pub(crate) hosted_agent_lifecycle: Arc<HostedAgentLifecycleCoordinator>,
     /// Live daemon ability control plane. Local resolver publication and route
     /// admission capture one immutable snapshot from this same aggregate.
     pub(crate) local_ability_catalog: Option<Arc<AxonAbilityCatalog>>,
@@ -106,9 +111,10 @@ pub(crate) struct SessionPlane {
     /// Streaming correlation for remote bidi bridges that need chunked
     /// replies; same-hub `fs.transfer` is the first consumer.
     pub(crate) pending_stream: Option<Arc<PendingStreamDispatchMap>>,
-    /// Device-mode escalation handle: when `Some`, federation
-    /// canonical_invoke routes through the existing `session.open`
-    /// bidi to the hub instead of the (empty) local PresenceRegistry.
+    /// Device-mode hub session handle. Public invocations may use this
+    /// carrier only after [`TargetGate`] obtains a positive Hub
+    /// `namespace.resolve` final-route decision; a local resolver
+    /// miss by itself is terminal.
     pub(crate) escalation: Option<Arc<SessionEscalationHandle>>,
     /// On-miss device trust sync shared with the device's
     /// `session.open` dispatcher; warms the local anchor for

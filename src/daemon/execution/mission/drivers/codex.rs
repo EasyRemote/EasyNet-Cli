@@ -36,7 +36,7 @@ use std::time::Duration;
 use anyhow::Context;
 use serde_json::Value;
 
-use crate::daemon::execution::mission::adapter::DriverCommand;
+use crate::daemon::execution::mission::adapter::{DriverCommand, DriverIsolation};
 use crate::daemon::execution::mission::dispatch::ToolCall;
 use crate::daemon::execution::mission::drivers::invocation_trace::{
     apply_tool_result_meta, parse_invocation_trace_metadata, text_to_json_value, EASYNET_MCP_SERVER,
@@ -93,6 +93,10 @@ pub struct CodexOptions {
     pub write_mode: bool,
     /// Workspace directory (with .codex/ config). If set, codex runs in this cwd.
     pub cwd: Option<PathBuf>,
+    /// Structured system content, projected as Codex developer instructions.
+    pub system_prompt: Option<String>,
+    /// Ambient-context policy for this invocation.
+    pub isolation: DriverIsolation,
     /// PR-7 Commit 2: Timeline writer. Same semantics as
     /// `ClaudeOptions::timeline` — each streamed stdout line
     /// emits a `progress` event on the P1-P6 event log.
@@ -146,6 +150,8 @@ impl Default for CodexOptions {
             env: BTreeMap::new(),
             write_mode: false,
             cwd: None,
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
             command: DriverCommand::Default,
@@ -159,6 +165,88 @@ impl CodexOptions {
     pub fn resolved_command(&self) -> &str {
         self.command.resolve(DEFAULT_CODEX_BINARY)
     }
+}
+
+fn append_codex_policy_args(args: &mut Vec<String>, opts: &CodexOptions) {
+    match opts.isolation {
+        DriverIsolation::Agent => {
+            args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+        }
+        DriverIsolation::Strict => {
+            args.extend([
+                "--sandbox".to_string(),
+                "read-only".to_string(),
+                "--ephemeral".to_string(),
+                "--ignore-user-config".to_string(),
+                "--ignore-rules".to_string(),
+            ]);
+            for setting in [
+                "approval_policy=\"never\"".to_string(),
+                "project_doc_max_bytes=0".to_string(),
+                "skills.bundled.enabled=false".to_string(),
+                "skills.include_instructions=false".to_string(),
+                "web_search=\"disabled\"".to_string(),
+                "features.shell_tool=false".to_string(),
+                "features.unified_exec=false".to_string(),
+                "features.apply_patch_freeform=false".to_string(),
+                "include_environment_context=false".to_string(),
+                "include_permissions_instructions=false".to_string(),
+                "include_apps_instructions=false".to_string(),
+                "include_collaboration_mode_instructions=false".to_string(),
+            ] {
+                args.push("-c".to_string());
+                args.push(setting);
+            }
+        }
+    }
+
+    if let Some(system_prompt) = &opts.system_prompt {
+        args.push("-c".to_string());
+        args.push(format!(
+            "developer_instructions={}",
+            toml_basic_string(system_prompt)
+        ));
+    }
+}
+
+fn append_codex_mcp_args(args: &mut Vec<String>, opts: &CodexOptions) -> anyhow::Result<()> {
+    if opts.isolation == DriverIsolation::Strict {
+        return Ok(());
+    }
+
+    let agent_name = opts
+        .cwd
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("codex")
+        .to_string();
+    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry(&agent_name)
+        .context("resolve EasyNet MCP entry for Codex mission driver")?;
+    args.push("-c".to_string());
+    args.push(format!(
+        "mcp_servers.easynet.command={}",
+        toml_basic_string(&mcp_cmd)
+    ));
+    let args_toml = mcp_args
+        .iter()
+        .map(|arg| toml_basic_string(arg))
+        .collect::<Vec<_>>()
+        .join(", ");
+    args.push("-c".to_string());
+    args.push(format!("mcp_servers.easynet.args=[{args_toml}]"));
+    if let serde_json::Value::Object(map) = &mcp_env {
+        for (key, value) in map {
+            if let Some(value) = value.as_str() {
+                args.push("-c".to_string());
+                args.push(format!(
+                    "mcp_servers.easynet.env.{key}={}",
+                    toml_basic_string(value)
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Invoke `codex exec --json` in streaming mode.
@@ -204,9 +292,7 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
         ]
     };
 
-    // Sandbox + approvals. We mirror the app-server wrapper here: read-only
-    // sandbox, auto-approve everything, fully non-interactive.
-    args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+    append_codex_policy_args(&mut args, &opts);
 
     // Inject the EasyNet MCP server via `-c` overrides so the agent can call
     // back into our Hub. Codex only reads MCP config from ~/.codex/config.toml
@@ -218,38 +304,7 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
     // (`~/.easynet/agents/<agent>`). If the cwd is not set or doesn't
     // follow that shape, fall back to "codex" as a generic label — the
     // audit line will still be useful even with a non-specific name.
-    let agent_name = opts
-        .cwd
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("codex")
-        .to_string();
-    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry(&agent_name)
-        .context("resolve EasyNet MCP entry for Codex mission driver")?;
-    args.push("-c".to_string());
-    args.push(format!(
-        "mcp_servers.easynet.command={}",
-        toml_basic_string(&mcp_cmd)
-    ));
-    let args_toml = mcp_args
-        .iter()
-        .map(|a| toml_basic_string(a))
-        .collect::<Vec<_>>()
-        .join(", ");
-    args.push("-c".to_string());
-    args.push(format!("mcp_servers.easynet.args=[{args_toml}]"));
-    if let serde_json::Value::Object(map) = &mcp_env {
-        for (k, v) in map {
-            if let Some(s) = v.as_str() {
-                args.push("-c".to_string());
-                args.push(format!(
-                    "mcp_servers.easynet.env.{k}={}",
-                    toml_basic_string(s)
-                ));
-            }
-        }
-    }
+    append_codex_mcp_args(&mut args, &opts)?;
 
     if let Some(m) = &opts.model {
         args.push("-m".to_string());
@@ -1153,7 +1208,7 @@ pub fn doctor() -> anyhow::Result<String> {
 // (JSON-RPC 2.0 over stdio, no usage today). They share a binary
 // but the on-wire shape differs enough to warrant a per-mode
 // adapter — the dispatch layer picks the right one via
-// `drivers::adapter_for(AgentType)`.
+// `drivers::adapter_for(RuntimeKind)`.
 
 use crate::daemon::execution::mission::adapter::{AgentAdapter, InvokeOpts};
 use crate::daemon::execution::mission::dispatch::AgentUsage;
@@ -1185,6 +1240,8 @@ impl AgentAdapter for CodexExecAdapter {
                 env: opts.env,
                 write_mode: false,
                 cwd: Some(opts.cwd),
+                system_prompt: opts.system_prompt,
+                isolation: opts.isolation,
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
                 // Honor the operator-supplied binary through the
@@ -1224,6 +1281,11 @@ impl AgentAdapter for CodexAppServerAdapter {
         prompt: &str,
         opts: InvokeOpts,
     ) -> anyhow::Result<crate::daemon::execution::mission::adapter::AdapterOutput> {
+        if opts.system_prompt.is_some() || opts.isolation == DriverIsolation::Strict {
+            anyhow::bail!(
+                "codex app-server does not implement structured strict chat input; use the codex exec runtime"
+            );
+        }
         // `codex app-server` does not emit a structured usage
         // block today — we return `None` and the dispatch layer
         // handles the absence uniformly. If Codex starts emitting
@@ -1239,6 +1301,8 @@ impl AgentAdapter for CodexAppServerAdapter {
                 env: opts.env,
                 write_mode: false,
                 cwd: Some(opts.cwd),
+                system_prompt: opts.system_prompt,
+                isolation: opts.isolation,
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
                 // Honor the operator-supplied binary through the
@@ -1277,6 +1341,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strict_policy_uses_native_system_prompt_and_disables_ambient_surfaces() {
+        let opts = CodexOptions {
+            system_prompt: Some("Return only SIGNAL.".to_string()),
+            isolation: DriverIsolation::Strict,
+            ..Default::default()
+        };
+        let mut args = Vec::new();
+
+        append_codex_policy_args(&mut args, &opts);
+        append_codex_mcp_args(&mut args, &opts).unwrap();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--sandbox", "read-only"]));
+        assert!(args.contains(&"--ephemeral".to_string()));
+        assert!(args.contains(&"--ignore-user-config".to_string()));
+        assert!(args.contains(&"project_doc_max_bytes=0".to_string()));
+        assert!(args.contains(&"skills.include_instructions=false".to_string()));
+        assert!(args.contains(&"features.shell_tool=false".to_string()));
+        assert!(args.contains(&format!(
+            "developer_instructions={}",
+            toml_basic_string("Return only SIGNAL.")
+        )));
+        assert!(!args.iter().any(|arg| arg.contains("mcp_servers.easynet")));
+        assert!(!args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+    }
+
+    #[test]
     fn current_codex_function_call_and_mcp_result_capture_easynet_identity() {
         let final_text = Arc::new(Mutex::new(String::new()));
         let stats = Arc::new(Mutex::new(RunStats::default()));
@@ -1289,7 +1381,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","duration":{"secs":1,"nanos":731744417},"invocation":{"server":"easynet","tool":"demo_weather","arguments":{"city":"Singapore"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"result\":\"26.5C\",\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"request_id\":\"req-1\",\"ability_ura\":\"easynet:///r/localhost/ability/dev.demo.weather\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/device/dev\"}}"}]}}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","duration":{"secs":1,"nanos":731744417},"invocation":{"server":"easynet","tool":"demo_weather","arguments":{"city":"Singapore"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"result\":\"26.5C\",\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"request_id\":\"req-1\",\"ability_ura\":\"easynet:///r/localhost/ability/alice.weather.demo.weather\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/agent/alice.weather\"}}"}]}}}}"#,
             &final_text,
             &stats,
             start,
@@ -1308,7 +1400,7 @@ mod tests {
         assert_eq!(call.request_id.as_deref(), Some("req-1"));
         assert_eq!(
             call.ability_ura.as_deref(),
-            Some("easynet:///r/localhost/ability/dev.demo.weather")
+            Some("easynet:///r/localhost/ability/alice.weather.demo.weather")
         );
         assert_eq!(
             call.invocation_ura.as_deref(),
@@ -1316,7 +1408,7 @@ mod tests {
         );
         assert_eq!(
             call.callee_ura.as_deref(),
-            Some("easynet:///r/localhost/device/dev")
+            Some("easynet:///r/localhost/agent/alice.weather")
         );
     }
 

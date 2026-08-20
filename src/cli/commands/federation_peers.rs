@@ -69,7 +69,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::daemon::trust::anchor::{
-    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustedAgent, TrustedAgentRole,
+    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustAnchorRole, TrustedAgent,
 };
 use crate::support::platform::output;
 
@@ -255,7 +255,7 @@ fn trusted_hubs_from_anchor(anchor: RealmTrustAnchor) -> anyhow::Result<Vec<Trus
     anchor
         .entries_sorted()
         .into_iter()
-        .filter(|entry| entry.role == TrustedAgentRole::Hub)
+        .filter(|entry| entry.role == TrustAnchorRole::Hub)
         .map(trusted_hub_entry)
         .collect()
 }

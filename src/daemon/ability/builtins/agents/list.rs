@@ -56,7 +56,7 @@ where
         Arc::new(snapshot_provider);
     reg.register_rpc_with_owner(
         ABILITY_LIST_AGENTS,
-        OwnerKind::Device,
+        OwnerKind::agent_management_system(),
         Arc::new(move |_args: Value| list_agents_handler(&provider)),
     );
 }
@@ -78,9 +78,16 @@ fn agent_rows(snapshot: &AgentAggregateSnapshot) -> anyhow::Result<Vec<Value>> {
             let name = agent_id.name.as_str();
             let root = e.required_root_path(registry_key, "agent.list")?;
             let ura = snapshot.hosted_llm_agent_ura(name);
+            let publication_state = ura
+                .as_deref()
+                .map(crate::daemon::persistence::hosted_agent_publications::record_for)
+                .transpose()?
+                .flatten()
+                .map(|record| record.publication_state().to_string());
             Ok(json!({
                 "name": name,
                 "ura": ura.map(|value| Value::String(value.to_string())).unwrap_or(Value::Null),
+                "publication_state": publication_state.map(Value::String).unwrap_or(Value::Null),
                 "runtime": e.agent_type.to_string(),
                 "model": e.model.clone().map(Value::String).unwrap_or(Value::Null),
                 "label": e.label.clone().map(Value::String).unwrap_or(Value::Null),
@@ -112,11 +119,12 @@ pub fn list_agents_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
     use crate::daemon::persistence::local_agents::LocalAgentsFile;
     use std::path::PathBuf;
 
-    fn registered_entry(agent_type: AgentType, model: Option<String>, name: &str) -> AgentEntry {
+    fn registered_entry(agent_type: RuntimeKind, model: Option<String>, name: &str) -> AgentEntry {
         let mut entry = AgentEntry::new(agent_type, model);
         entry.root_path = Some(PathBuf::from(format!("/tmp/easynet-test-{name}")));
         entry
@@ -162,8 +170,11 @@ mod tests {
     #[test]
     fn list_agents_projects_name_runtime_model_label() {
         let mut registry = AgentRegistry::default();
-        let mut entry =
-            registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude");
+        let mut entry = registered_entry(
+            RuntimeKind::ClaudeCode,
+            Some("sonnet".to_string()),
+            "claude",
+        );
         entry.with_label(Some("primary".to_string()));
         registry.agents.insert("default/claude".to_string(), entry);
 
@@ -183,10 +194,15 @@ mod tests {
 
     #[test]
     fn list_agents_projects_hosted_agent_ura_from_local_agents() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/claude".to_string(),
-            registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude"),
+            registered_entry(
+                RuntimeKind::ClaudeCode,
+                Some("sonnet".to_string()),
+                "claude",
+            ),
         );
         let mut local_agents = crate::daemon::persistence::local_agents::LocalAgentsFile::default();
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
@@ -196,10 +212,52 @@ mod tests {
             "easynet:///r/acme/agent/alice.claude",
         );
 
-        let rows = agent_rows(&AgentAggregateSnapshot::new(registry, local_agents)).unwrap();
+        let snapshot = AgentAggregateSnapshot::new(registry, local_agents);
+        let rows = agent_rows(&snapshot).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["ura"], "easynet:///r/acme/agent/alice.claude");
+        assert_eq!(rows[0]["publication_state"], Value::Null);
+
+        let pending = crate::daemon::persistence::hosted_agent_publications::begin_registration(
+            "easynet:///r/acme/agent/alice.claude",
+            "easynet:///r/acme/device/dev-1",
+            1,
+        )
+        .unwrap();
+        let assignment =
+            crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment {
+                agent_ura: "easynet:///r/acme/agent/alice.claude".to_string(),
+                host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
+                incarnation_id: pending.incarnation_id().clone(),
+                generation: 1,
+            };
+        crate::daemon::persistence::hosted_agent_publications::bind_assignment(&assignment, 2)
+            .unwrap();
+        assert_eq!(
+            agent_rows(&snapshot).unwrap()[0]["publication_state"],
+            "assigned"
+        );
+        crate::daemon::persistence::hosted_agent_publications::stage_projection(
+            &assignment,
+            pending.desired_catalog_epoch,
+            1,
+            "sha256:projection",
+            3,
+        )
+        .unwrap();
+        crate::daemon::persistence::hosted_agent_publications::mark_published(
+            &assignment,
+            pending.desired_catalog_epoch,
+            1,
+            "sha256:projection",
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            agent_rows(&snapshot).unwrap()[0]["publication_state"],
+            "published"
+        );
     }
 
     #[test]
@@ -207,7 +265,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/minimal".to_string(),
-            registered_entry(AgentType::Codex, None, "minimal"),
+            registered_entry(RuntimeKind::Codex, None, "minimal"),
         );
 
         let mut reg = agent_list_test_catalog();
@@ -217,6 +275,11 @@ mod tests {
         let resp = handler(json!({})).unwrap();
 
         let row = &resp["agents"][0];
+        assert_eq!(
+            row["ura"],
+            Value::Null,
+            "missing hosted-Agent identity must not synthesize the User account as an Agent"
+        );
         assert_eq!(row["model"], Value::Null);
         assert_eq!(row["label"], Value::Null);
     }
@@ -226,7 +289,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "minimal".to_string(),
-            registered_entry(AgentType::Codex, None, "minimal"),
+            registered_entry(RuntimeKind::Codex, None, "minimal"),
         );
 
         let rows = agent_rows(&snapshot(registry)).unwrap();
@@ -241,7 +304,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "minimal".to_string(),
-            AgentEntry::new(AgentType::Codex, None),
+            AgentEntry::new(RuntimeKind::Codex, None),
         );
 
         let error = agent_rows(&snapshot(registry))

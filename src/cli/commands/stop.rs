@@ -25,11 +25,9 @@
 //                        easynet-daemon child
 //   3. stop-discovered-daemon
 //                     — SIGTERM daemon PID advertised in control.json
-//   4. sweep-daemons   — pgrep `easynet-daemon` to catch ghosts
-//                        whose pidfile was lost
-//   5. cleanup-discovery
+//   4. cleanup-discovery
 //                     — remove stale control.json after daemon exit
-//   6. cleanup-state   — remove runtime.json when it existed
+//   5. cleanup-state   — remove runtime.json when it existed
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -98,7 +96,6 @@ impl StopPlan {
         self.stage_revoke();
         self.stage_stop_daemon();
         self.stage_stop_discovered_daemon();
-        self.stage_sweep_daemons();
         let discovery_cleanup = self.stage_cleanup_discovery();
         let cleanup = self.stage_cleanup_state();
         self.stage_desktop_companions();
@@ -242,26 +239,6 @@ impl StopPlan {
                     &format!("pid {pid} did not exit in time"),
                 );
             }
-        }
-    }
-
-    /// `pgrep -f easynet-daemon` belt-and-suspenders pass. Catches
-    /// the "pidfile lost" case where an earlier stop crashed
-    /// mid-write, or where an operator spawned `easynet-daemon`
-    /// manually without going through `easynet runtime start`.
-    fn stage_sweep_daemons(&mut self) {
-        self.renderer.set_active("sweep-daemons");
-        let swept = self.process_controller.sweep_stray_easynet_daemons();
-        if swept.is_empty() {
-            self.renderer.stage_skipped("sweep-daemons", "(none found)");
-        } else {
-            let pids = swept
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            self.renderer
-                .stage_ok(&format!("sweep-daemons (pid {pids})"));
         }
     }
 

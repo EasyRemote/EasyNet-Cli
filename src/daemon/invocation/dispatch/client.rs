@@ -82,7 +82,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         client
             .invoke(request)
             .await
@@ -114,7 +114,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         client
             .invoke_stream(request)
             .await
@@ -150,7 +150,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let (up_tx, up_rx) = tokio::sync::mpsc::channel(64);
         up_tx
             .send(frame0)
@@ -353,11 +353,10 @@ impl RuntimeClient {
         }
         let tuple = signed.prepared().tuple();
         let response = self.inner.invoke(signed).await?;
-        let outcome = InvocationOutcome::from_invoke_response(
-            tuple,
-            response,
-            &local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
-        )?;
+        let resolver = local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(
+            self.inner.endpoint().to_path_buf(),
+        );
+        let outcome = InvocationOutcome::from_invoke_response(tuple, response, &resolver)?;
         Ok(InvocationHandle { outcome })
     }
 
@@ -385,11 +384,10 @@ impl RuntimeClient {
         let signed_cancel = authority.sign(prepared).await?;
         let tuple = signed_cancel.prepared().tuple();
         let response = self.inner.invoke(signed_cancel).await?;
-        let outcome = InvocationOutcome::from_invoke_response(
-            tuple,
-            response,
-            &local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
-        )?;
+        let resolver = local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(
+            self.inner.endpoint().to_path_buf(),
+        );
+        let outcome = InvocationOutcome::from_invoke_response(tuple, response, &resolver)?;
         Ok(InvocationHandle { outcome })
     }
 
@@ -971,44 +969,50 @@ fn causal_binding_kind(causal: Option<&axon_sdk::pb::axon::v1::CausalContext>) -
 fn authority_binding_summary(
     binding: Option<&axon_sdk::pb::axon::v1::AuthorityBinding>,
 ) -> serde_json::Value {
-    use axon_sdk::pb::axon::v1::authority_binding::Authority;
+    use axon_sdk::pb::axon::v1::authority_binding::Form;
+    use axon_sdk::pb::axon::v1::authority_relation_binding::Evidence;
 
-    match binding.and_then(|binding| binding.authority.as_ref()) {
-        Some(Authority::SelfAuthority(value)) => serde_json::json!({
-            "kind": "self",
-            "principal_ura": value.principal_ura,
-        }),
-        Some(Authority::DelegatedAuthority(value)) => serde_json::json!({
-            "kind": "delegation",
-            "issuer_ura": value.issuer_ura,
-            "subject_ura": value.subject_ura,
-            "caller_ura": value.caller_ura,
-            "audience": value.audience,
-            "scopes": value.scopes,
-            "issued_at_ms": value.issued_at_ms,
-            "expires_at_ms": value.expires_at_ms,
-            "signature_base64": base64_bytes(&value.signature),
-        }),
-        Some(Authority::CapabilityGrant(value)) => serde_json::json!({
-            "kind": "capability",
-            "capability_ura": value.capability_ura,
-        }),
-        Some(Authority::PolicyGrant(value)) => serde_json::json!({
-            "kind": "policy",
-            "policy_ura": value.policy_ura,
-        }),
-        Some(Authority::SessionAuthority(value)) => serde_json::json!({
-            "kind": "session",
-            "backend_ura": value.backend_ura,
-            "user_ura": value.user_ura,
-            "session_id": value.session_id,
-            "scopes": value.scopes,
-            "audiences": value.audiences,
-            "issued_at_ms": value.issued_at_ms,
-            "expires_at_ms": value.expires_at_ms,
-            "signature_base64": base64_bytes(&value.signature),
-        }),
-        Some(Authority::BootstrapAuthority(value)) => serde_json::json!({
+    match binding.and_then(|binding| binding.form.as_ref()) {
+        Some(Form::Binding(binding)) => {
+            let authority_ura = binding
+                .authority
+                .as_ref()
+                .map(|identity| identity.ura.as_str())
+                .unwrap_or_default();
+            match &binding.evidence {
+                Some(Evidence::Identity(_)) => serde_json::json!({
+                    "kind": "self+identity",
+                    "authority_ura": authority_ura,
+                }),
+                Some(Evidence::Delegation(value)) => serde_json::json!({
+                    "kind": "delegated_by+delegation",
+                    "authority_ura": authority_ura,
+                    "issuer_ura": value.issuer.as_ref().map(|i| i.ura.as_str()).unwrap_or_default(),
+                    "audience": value.audience,
+                    "scopes": value.scopes,
+                    "issued_at_ms": value.issued_at_ms,
+                    "expires_at_ms": value.expires_at_ms,
+                    "signature_base64": base64_bytes(&value.signature),
+                }),
+                Some(Evidence::Session(value)) => serde_json::json!({
+                    "kind": "session_of+session",
+                    "authority_ura": authority_ura,
+                    "issuer_ura": value.issuer.as_ref().map(|i| i.ura.as_str()).unwrap_or_default(),
+                    "session_id": value.session_id,
+                    "scopes": value.scopes,
+                    "audiences": value.audiences,
+                    "issued_at_ms": value.issued_at_ms,
+                    "expires_at_ms": value.expires_at_ms,
+                    "signature_base64": base64_bytes(&value.signature),
+                }),
+                Some(Evidence::Attestation(_)) => serde_json::json!({
+                    "kind": "credential_of+attestation",
+                    "authority_ura": authority_ura,
+                }),
+                None => serde_json::Value::Null,
+            }
+        }
+        Some(Form::Bootstrap(value)) => serde_json::json!({
             "kind": "bootstrap",
             "principal_ura": value.principal_ura,
             "realm": value.realm,
@@ -1018,16 +1022,70 @@ fn authority_binding_summary(
     }
 }
 
-fn authority_binding_kind(binding: Option<&axon_sdk::pb::axon::v1::AuthorityBinding>) -> String {
-    use axon_sdk::pb::axon::v1::authority_binding::Authority;
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    use super::authority_binding_summary;
 
-    match binding.and_then(|binding| binding.authority.as_ref()) {
-        Some(Authority::SelfAuthority(_)) => "self",
-        Some(Authority::DelegatedAuthority(_)) => "delegation",
-        Some(Authority::CapabilityGrant(_)) => "capability",
-        Some(Authority::PolicyGrant(_)) => "policy",
-        Some(Authority::SessionAuthority(_)) => "session",
-        Some(Authority::BootstrapAuthority(_)) => "bootstrap",
+    #[test]
+    fn session_authority_summary_uses_public_generic_fields() {
+        let binding = axon_sdk::pb::axon::v1::AuthorityBinding {
+            form: Some(axon_sdk::pb::axon::v1::authority_binding::Form::Binding(
+                axon_sdk::pb::axon::v1::AuthorityRelationBinding {
+                    authority: Some(axon_sdk::pb::axon::v1::AgentIdentity {
+                        ura: "easynet:///r/example/agent/alice".to_string(),
+                        profile: "axon-strict-v2".to_string(),
+                    }),
+                    relation: axon_sdk::pb::axon::v1::AuthorityRelation::SessionOf as i32,
+                    evidence: Some(
+                        axon_sdk::pb::axon::v1::authority_relation_binding::Evidence::Session(
+                            axon_sdk::pb::axon::v1::SessionEvidence {
+                                issuer: Some(axon_sdk::pb::axon::v1::AgentIdentity {
+                                    ura: "easynet:///r/example/agent/backend".to_string(),
+                                    profile: "axon-strict-v2".to_string(),
+                                }),
+                                session_id: "session-1".to_string(),
+                                scopes: vec!["invoke".to_string()],
+                                audiences: vec!["easynet:///r/example/device/dev-a".to_string()],
+                                issued_at_ms: 1,
+                                expires_at_ms: 2,
+                                signature: vec![0x73; 64],
+                            },
+                        ),
+                    ),
+                },
+            )),
+        };
+
+        let projection = authority_binding_summary(Some(&binding));
+
+        assert_eq!(projection["kind"], "session_of+session");
+        assert_eq!(
+            projection["issuer_ura"],
+            "easynet:///r/example/agent/backend"
+        );
+        assert_eq!(
+            projection["authority_ura"],
+            "easynet:///r/example/agent/alice"
+        );
+        assert!(projection.get("backend_ura").is_none());
+        assert!(projection.get("user_ura").is_none());
+        assert!(projection.get("subject_ura").is_none());
+    }
+}
+
+fn authority_binding_kind(binding: Option<&axon_sdk::pb::axon::v1::AuthorityBinding>) -> String {
+    use axon_sdk::pb::axon::v1::authority_binding::Form;
+    use axon_sdk::pb::axon::v1::authority_relation_binding::Evidence;
+
+    match binding.and_then(|binding| binding.form.as_ref()) {
+        Some(Form::Binding(binding)) => match &binding.evidence {
+            Some(Evidence::Identity(_)) => "self+identity",
+            Some(Evidence::Delegation(_)) => "delegated_by+delegation",
+            Some(Evidence::Session(_)) => "session_of+session",
+            Some(Evidence::Attestation(_)) => "credential_of+attestation",
+            None => "",
+        },
+        Some(Form::Bootstrap(_)) => "bootstrap",
         None => "",
     }
     .to_string()
@@ -1059,6 +1117,85 @@ impl RuntimeErrorSummary {
             message: error.message.clone(),
             retryable: error.retryable,
         }
+    }
+}
+
+/// Active SDK-owned InvokeBidi session.
+///
+/// Invariants:
+/// 1. Frame 0 has already been sent before construction.
+/// 2. Public convenience send helpers fail closed until a frame-chain-aware
+///    sender can attach canonical N≥1 MACs.
+/// 3. Dropping the session closes the up-direction stream. It does
+///    not synthesize protocol EOF; callers that need graceful close
+///    must use a frame-chain-aware sender.
+#[cfg(feature = "axon-pb")]
+pub struct DaemonBidiSession {
+    ability: String,
+    up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
+    down: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonBidiSession {
+    /// Ability name this bidi session opened.
+    pub fn ability(&self) -> &str {
+        &self.ability
+    }
+
+    /// Split the session into its raw transport halves for crate
+    /// internal adapters that must drive read and write tasks
+    /// independently, such as the C ABI registry.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        String,
+        tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
+        tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
+    ) {
+        (self.ability, self.up_tx, self.down)
+    }
+
+    /// Read the next down-direction frame.
+    pub async fn next_down(&mut self) -> Result<Option<axon_sdk::pb::axon::v1::InvokeBidiDown>> {
+        self.down
+            .message()
+            .await
+            .map_err(|status| DaemonError::InvokeBidiStatus {
+                ability: self.ability.clone(),
+                code: status.code(),
+                message: status.message().to_string(),
+            })
+    }
+
+    /// Send a binary chunk on the up direction.
+    pub async fn send_binary_chunk(
+        &mut self,
+        _chunk: axon_sdk::pb::axon::v1::BinaryChunk,
+    ) -> Result<()> {
+        Err(DaemonError::InvalidInvocation(
+            "bidi binary send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
+    }
+
+    /// Send a control frame on the up direction.
+    pub async fn send_control(
+        &mut self,
+        _control: axon_sdk::pb::axon::v1::BidiControl,
+    ) -> Result<()> {
+        Err(DaemonError::InvalidInvocation(
+            "bidi control send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
+    }
+
+    /// Send a graceful EOF control frame.
+    pub async fn send_eof(&mut self) -> Result<()> {
+        Err(DaemonError::InvalidInvocation(
+            "bidi EOF send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
     }
 }
 
@@ -1184,84 +1321,5 @@ mod invocation_outcome_tests {
         assert!(error
             .to_string()
             .contains("partial receipt checkpoint chain"));
-    }
-}
-
-/// Active SDK-owned InvokeBidi session.
-///
-/// Invariants:
-/// 1. Frame 0 has already been sent before construction.
-/// 2. Public convenience send helpers fail closed until a frame-chain-aware
-///    sender can attach canonical N≥1 MACs.
-/// 3. Dropping the session closes the up-direction stream. It does
-///    not synthesize protocol EOF; callers that need graceful close
-///    must use a frame-chain-aware sender.
-#[cfg(feature = "axon-pb")]
-pub struct DaemonBidiSession {
-    ability: String,
-    up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
-    down: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
-}
-
-#[cfg(feature = "axon-pb")]
-impl DaemonBidiSession {
-    /// Ability name this bidi session opened.
-    pub fn ability(&self) -> &str {
-        &self.ability
-    }
-
-    /// Split the session into its raw transport halves for crate
-    /// internal adapters that must drive read and write tasks
-    /// independently, such as the C ABI registry.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        String,
-        tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
-        tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
-    ) {
-        (self.ability, self.up_tx, self.down)
-    }
-
-    /// Read the next down-direction frame.
-    pub async fn next_down(&mut self) -> Result<Option<axon_sdk::pb::axon::v1::InvokeBidiDown>> {
-        self.down
-            .message()
-            .await
-            .map_err(|status| DaemonError::InvokeBidiStatus {
-                ability: self.ability.clone(),
-                code: status.code(),
-                message: status.message().to_string(),
-            })
-    }
-
-    /// Send a binary chunk on the up direction.
-    pub async fn send_binary_chunk(
-        &mut self,
-        _chunk: axon_sdk::pb::axon::v1::BinaryChunk,
-    ) -> Result<()> {
-        Err(DaemonError::InvalidInvocation(
-            "bidi binary send requires an explicit frame-chain MAC; use a frame-chain aware sender"
-                .to_string(),
-        ))
-    }
-
-    /// Send a control frame on the up direction.
-    pub async fn send_control(
-        &mut self,
-        _control: axon_sdk::pb::axon::v1::BidiControl,
-    ) -> Result<()> {
-        Err(DaemonError::InvalidInvocation(
-            "bidi control send requires an explicit frame-chain MAC; use a frame-chain aware sender"
-                .to_string(),
-        ))
-    }
-
-    /// Send a graceful EOF control frame.
-    pub async fn send_eof(&mut self) -> Result<()> {
-        Err(DaemonError::InvalidInvocation(
-            "bidi EOF send requires an explicit frame-chain MAC; use a frame-chain aware sender"
-                .to_string(),
-        ))
     }
 }

@@ -575,7 +575,10 @@ mod tests {
             .runtime_env()
             .label()
             .contains("plugin:"));
-        assert_eq!(record.authority().scope().owner_projection(), "device");
+        assert_eq!(
+            record.authority().scope().owner_projection(),
+            "system-agent:plugin-management"
+        );
         let result = catalog
             .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 "test.declarative_echo",
@@ -643,7 +646,7 @@ mod tests {
         let mut catalog = executable_test_catalog();
         catalog.register_rpc_with_owner(
             "fs.read",
-            OwnerKind::Device,
+            OwnerKind::locomotion_system(),
             Arc::new(|_args| Ok(json!({"from": "static-system"}))),
         );
 
@@ -682,7 +685,7 @@ mod tests {
         let mut catalog = executable_test_catalog();
         catalog.register_rpc_with_envelope_and_owner(
             "observe.health",
-            OwnerKind::Device,
+            OwnerKind::runtime_health_system(),
             Arc::new(|env, _args| {
                 let gateway = PluginEalInvocationGateway::new(env);
                 let request =
@@ -1081,11 +1084,14 @@ quick_add = true
 
     fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "2"
-	name = "{ability}"
-	descriptor_version = "1.2.3"
-	description = "test descriptor for {ability}"
-	admission_action = "invoke"
+            r#"schema_version = "3"
+		name = "{ability}"
+		descriptor_version = "1.2.3"
+		description = "test descriptor for {ability}"
+		exposure = "internal"
+		dedicated_surface = "none"
+		subject_contract_kind = "explicit-ura"
+		admission_action = "invoke"
 
 	[input_schema]
 	type = "object"

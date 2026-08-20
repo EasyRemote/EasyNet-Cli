@@ -12,6 +12,7 @@ pub mod build;
 pub mod catalog_metadata;
 pub(crate) mod daemon_invocation_contracts;
 mod descriptor_paths;
+pub(crate) mod ownership;
 pub mod profiles;
 pub(crate) mod publication;
 pub(crate) mod runtime_admin_contracts;

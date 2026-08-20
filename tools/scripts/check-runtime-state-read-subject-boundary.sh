@@ -466,6 +466,7 @@ LLM_API="src/cli/commands/llm_api.rs"
 SKILL_CLI="src/cli/commands/skill.rs"
 API_KEY_CLI="src/cli/commands/api_key_cli.rs"
 ABILITY_GROUP="src/cli/commands/groups/ability.rs"
+REMOTE_SYSTEM_ABILITY="src/cli/daemon_client/remote_system_ability.rs"
 
 [[ -f "$AGENT_GATEWAY" ]] || fail "missing $AGENT_GATEWAY"
 [[ -f "$AGENT_VIEW" ]] || fail "missing $AGENT_VIEW"
@@ -589,12 +590,12 @@ if rg -n -U '\binvoke_local_ability\s*\(' "$ABILITY_GROUP"; then
   fail "ability CLI must not use generic invoke_local_ability"
 fi
 
-if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity\("ability\.uninstall", args\)' "$ABILITY_GROUP" >/dev/null; then
-  fail "ability.uninstall must delegate local daemon identity subject policy to the system issuer"
+if ! rg -n -U 'PairedInvocationIdentity::load\(\s*"ability uninstall"[\s\S]*invoke_target_ability_uninstall\(\s*&target_ura,\s*identity\.caller_user_ura\(\),\s*&args\.ability_ura' "$ABILITY_GROUP" >/dev/null; then
+  fail "ability.uninstall must preserve paired User caller, Ability subject, and explicit Device target"
 fi
 
-if ! rg -n -U 'let payload = ability_uninstall_payload\(&args\)\?;\s*let result = invoke_ability_uninstall\(payload\)\?;' "$ABILITY_GROUP" >/dev/null; then
-  fail "ability.uninstall must remain on the explicit action issuer path"
+if ! rg -n -U 'RemoteUserActionInvocationIssuer::caller_declared_root_plan\(\s*&target_call,\s*caller_ura,\s*ability_ura,' "$REMOTE_SYSTEM_ABILITY" >/dev/null; then
+  fail "ability.uninstall must remain on the explicit paired-User action issuer path"
 fi
 
 echo "check-runtime-state-read-subject-boundary: ok"

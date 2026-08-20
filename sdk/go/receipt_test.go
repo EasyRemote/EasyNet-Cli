@@ -39,7 +39,10 @@ func TestReceiptRoutesGeneratedFromManifest(t *testing.T) {
 func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.T) {
 	var invocations []map[string]any
 	var descriptorRequests []RuntimeDescriptorRefRequest
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(context.Context, []byte) ([]byte, error) {
+		t.Fatal("receipt provider must not use generic runtime Invoke")
+		return nil, nil
+	}, GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		var draft map[string]any
 		if err := json.Unmarshal(raw, &draft); err != nil {
 			return nil, err
@@ -160,7 +163,7 @@ func TestRuntimeReceiptProviderRejectsWrongDeviceOwnerSubjectBeforeDescriptorRes
 
 func TestRuntimeReceiptProviderAcceptsMatchingDeviceOwnerSubject(t *testing.T) {
 	var descriptorRequests []RuntimeDescriptorRefRequest
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		output := map[string]any{
 			"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
 			"records":    []any{},
@@ -326,21 +329,6 @@ func TestReceiptReferenceDelegatesScalarCausalProjectionToAxon(t *testing.T) {
 	}
 }
 
-func TestParseReceiptRecordsAcceptsLedgerRecordWrapper(t *testing.T) {
-	records, err := parseReceiptRecords([]any{
-		map[string]any{
-			"record": receiptLedgerRecordFixture(),
-			"source": "invocation.history.list",
-		},
-	})
-	if err != nil {
-		t.Fatalf("parseReceiptRecords: %v", err)
-	}
-	if len(records) != 1 || records[0].RequestID != "req-1" {
-		t.Fatalf("records = %#v", records)
-	}
-}
-
 func TestReceiptReferenceFromRuntimeReceiptUsesSummaryAnchor(t *testing.T) {
 	reference, err := ReceiptReferenceFromRuntimeReceipt(RuntimeReceipt{
 		ReceiptURA:  "easynet:///r/example/resource/device.dev-a/invocation/req-1/receipt/1",
@@ -366,7 +354,7 @@ func TestReceiptReferenceFromRuntimeReceiptUsesSummaryAnchor(t *testing.T) {
 
 func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 	var arguments map[string]any
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		var draft map[string]any
 		if err := json.Unmarshal(raw, &draft); err != nil {
 			return nil, err
@@ -423,7 +411,7 @@ func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 
 func TestRuntimeReceiptProviderProjectsMultipleAbilityURAsAsOneSet(t *testing.T) {
 	var arguments map[string]any
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		var draft map[string]any
 		if err := json.Unmarshal(raw, &draft); err != nil {
 			return nil, err
@@ -481,6 +469,42 @@ func TestRuntimeReceiptProviderRejectsMalformedBoundedResults(t *testing.T) {
 	}
 }
 
+func TestRuntimeReceiptProviderParsesBoundedHistorySummaryWithoutFullLedgerPayloads(t *testing.T) {
+	provider := runtimeReceiptProviderWithOutput(t, map[string]any{
+		"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+		"records": []any{map[string]any{
+			"invocation_ura":    "easynet:///r/example/resource/device.dev-a/invocation/inv-1",
+			"request_id":        "req-1",
+			"trace_id":          "trace-1",
+			"span_id":           "span-1",
+			"caller_ura":        "easynet:///r/example/authority",
+			"callee_ura":        "easynet:///r/example/agent/device.dev-a.runtime-governance",
+			"subject_ura":       "easynet:///r/example/resource/user.alice/runtime-state/read",
+			"ability_ura":       "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list",
+			"ability_name":      "invocation.history.list",
+			"state":             "Completed",
+			"started_unix_ms":   1_700_000_000_000,
+			"completed_unix_ms": 1_700_000_000_100,
+			"elapsed_ms":        100,
+			"error": map[string]any{
+				"source": "runtime", "code": "EXAMPLE", "message": "bounded", "retryable": false, "truncated": true,
+			},
+		}},
+	})
+
+	page, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeReceiptHistoryTestContext(t), Limit: 1})
+	if err != nil {
+		t.Fatalf("List bounded summary: %v", err)
+	}
+	if len(page.Records) != 1 || page.Records[0].RequestID != "req-1" {
+		t.Fatalf("summary records = %#v", page.Records)
+	}
+	var summaryError invocationHistoryErrorSummary
+	if err := json.Unmarshal(page.Records[0].Error, &summaryError); err != nil || !summaryError.Truncated {
+		t.Fatalf("summary error = %s, decode error = %v", page.Records[0].Error, err)
+	}
+}
+
 func TestRuntimeReceiptProviderRejectsNonCanonicalURAFilters(t *testing.T) {
 	provider := runtimeReceiptProviderWithOutput(t, map[string]any{})
 	_, err := provider.List(context.Background(), ReceiptListRequest{
@@ -512,7 +536,7 @@ func TestRuntimeReceiptProviderRequiresCanonicalLedgerSource(t *testing.T) {
 
 func runtimeReceiptProviderWithOutput(t *testing.T, output map[string]any) *RuntimeReceiptProvider {
 	t.Helper()
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		encoded, err := json.Marshal(output)
 		if err != nil {
 			return nil, err

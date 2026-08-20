@@ -16,13 +16,14 @@ use crate::daemon::federation::wire_contract::ResolveKeyRequest;
 use crate::daemon::invocation::admission::decision::AccessAction;
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::owner_resolution::{local_device_owner_fact, OwnerFact};
+use crate::daemon::invocation::admission::policy_gate::TrustedCallerPath;
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     AdvertiseAbilitiesRequest, AdvertiseAgentRequest, HeartbeatRequest, JoinRequest,
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE_KEY,
 };
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
+use crate::daemon::trust::anchor::RealmTrustAnchor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BootstrapAuthorityDecision {
@@ -41,7 +42,7 @@ impl BootstrapAuthorityVerifier {
         action: AccessAction,
         args: &[u8],
         trust_anchor: &RealmTrustAnchor,
-        trusted_role: TrustedAgentRole,
+        trusted_path: TrustedCallerPath,
         daemon_ura: Option<&str>,
     ) -> BootstrapAuthorityDecision {
         let Some(caller_ura) = envelope
@@ -69,13 +70,39 @@ impl BootstrapAuthorityVerifier {
             return BootstrapAuthorityDecision::NotApplicable;
         };
 
-        if trusted_role == TrustedAgentRole::Hub {
+        if trusted_path == TrustedCallerPath::Hub {
             return verify_hub_link_authority(
                 caller_ura, callee_ura, ability, action, args, daemon_ura,
             );
         }
 
-        if trusted_role != TrustedAgentRole::Device || !is_device_ura(caller_ura) {
+        if trusted_path == TrustedCallerPath::User {
+            return verify_user_resolve_key_bootstrap_authority(
+                caller_ura,
+                callee_ura,
+                subject_ura,
+                ability,
+                action,
+                args,
+                daemon_ura,
+            );
+        }
+
+        let TrustedCallerPath::DeviceCustody(device_purpose) = trusted_path else {
+            return BootstrapAuthorityDecision::NotApplicable;
+        };
+        if !is_device_ura(caller_ura)
+            || !device_purpose.matches_scope(
+                crate::daemon::invocation::admission::device_caller::DeviceInvocationPurposeScope {
+                    caller_ura,
+                    callee_ura,
+                    subject_ura,
+                    public_ability: ability,
+                    daemon_ura,
+                    action,
+                },
+            )
+        {
             return BootstrapAuthorityDecision::NotApplicable;
         }
 
@@ -97,8 +124,8 @@ impl BootstrapAuthorityVerifier {
         }
 
         let owner = match trust_anchor.lookup_principal_owner(caller_ura) {
-            Some(owner) => Some(OwnerFact::user(
-                owner.owner_user_id.clone(),
+            Some(owner) => Some(OwnerFact::user_ura(
+                owner.owner_ura.clone(),
                 owner.owner_ura.clone(),
             )),
             None => match local_device_owner_fact(caller_ura) {
@@ -113,8 +140,8 @@ impl BootstrapAuthorityVerifier {
         let Some(owner) = owner else {
             return BootstrapAuthorityDecision::NotApplicable;
         };
-        let Some(owner_user_id) = owner
-            .owner_user_id
+        let Some(owner_user_ura) = owner
+            .owner_user_ura
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         else {
@@ -147,7 +174,7 @@ impl BootstrapAuthorityVerifier {
                     authority_id: bootstrap_authority_id(
                         publication.caller_device_ura(),
                         ability,
-                        publication.owner_user_id(),
+                        publication.owner_user_segment(),
                     ),
                 };
             }
@@ -179,7 +206,7 @@ impl BootstrapAuthorityVerifier {
         }
 
         BootstrapAuthorityDecision::Verified {
-            authority_id: bootstrap_authority_id(caller_ura, ability, owner_user_id),
+            authority_id: bootstrap_authority_id(caller_ura, ability, owner_user_ura),
         }
     }
 }
@@ -203,6 +230,33 @@ fn verify_hub_link_authority(
     }
     BootstrapAuthorityDecision::Verified {
         authority_id: hub_link_authority_id(caller_ura, callee_ura, ability),
+    }
+}
+
+fn verify_user_resolve_key_bootstrap_authority(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    action: AccessAction,
+    args: &[u8],
+    daemon_ura: Option<&str>,
+) -> BootstrapAuthorityDecision {
+    if ability != ABILITY_FEDERATION_RESOLVE_KEY || action != AccessAction::Read {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    if !is_user_ura(caller_ura) || !callee_is_selected_authority(callee_ura, caller_ura, daemon_ura)
+    {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    let Some(agent_ura) = verify_user_bootstrap_resolve_key(args, caller_ura, callee_ura) else {
+        return BootstrapAuthorityDecision::NotApplicable;
+    };
+    if !user_resolve_key_bootstrap_subject_matches(subject_ura, callee_ura, ability, &agent_ura) {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    BootstrapAuthorityDecision::Verified {
+        authority_id: user_resolve_key_bootstrap_authority_id(caller_ura, callee_ura, &agent_ura),
     }
 }
 
@@ -283,19 +337,56 @@ fn verify_bootstrap_resolve_key(args: &[u8], authority_ura: &str, owner_ura: &st
     None
 }
 
+fn verify_user_bootstrap_resolve_key(
+    args: &[u8],
+    caller_ura: &str,
+    authority_ura: &str,
+) -> Option<String> {
+    let request = serde_json::from_slice::<ResolveKeyRequest>(args).ok()?;
+    let agent_ura = request.agent_ura.trim();
+    if agent_ura != caller_ura && agent_ura != authority_ura {
+        return None;
+    }
+    if let Some(pin) = request
+        .presented_pubkey_b64
+        .as_deref()
+        .map(str::trim)
+        .filter(|pin| !pin.is_empty())
+    {
+        let public_key = BASE64_STANDARD.decode(pin).ok()?;
+        if public_key.len() != 32 {
+            return None;
+        }
+    }
+    Some(agent_ura.to_string())
+}
+
+fn user_resolve_key_bootstrap_subject_matches(
+    subject_ura: &str,
+    authority_ura: &str,
+    ability: &str,
+    agent_ura: &str,
+) -> bool {
+    if subject_ura == agent_ura {
+        return true;
+    }
+    crate::core::ura::owner_ability_ura(authority_ura, ability).as_deref() == Some(subject_ura)
+}
+
 /// Pairing bootstrap may seed exactly the paired owner's user signing key at
 /// the selected authority. It is intentionally narrower than general identity
 /// mutation: a device cannot author another user, a device key, or an authority key.
 fn verify_bootstrap_owner_user_key(args: &[u8], owner_ura: &str) -> Option<()> {
     #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct UserKeyRegistration {
-        agent_ura: String,
+        principal_ura: String,
         public_key_b64: String,
         role: String,
     }
 
     let request = serde_json::from_slice::<UserKeyRegistration>(args).ok()?;
-    if request.role.trim() != "user" || request.agent_ura.trim() != owner_ura {
+    if request.role.trim() != "user" || request.principal_ura.trim() != owner_ura {
         return None;
     }
     let public_key = BASE64_STANDARD.decode(request.public_key_b64.trim()).ok()?;
@@ -321,6 +412,12 @@ fn verify_hub_link_resolve_key(args: &[u8], hub_ura: &str) -> Option<()> {
 fn is_device_ura(ura: &str) -> bool {
     parse_ura(ura)
         .map(|parsed| parsed.kind == URAKind::Device && parsed.device_id().is_some())
+        .unwrap_or(false)
+}
+
+fn is_user_ura(ura: &str) -> bool {
+    parse_ura(ura)
+        .map(|parsed| parsed.kind == URAKind::User && parsed.user_id().is_some())
         .unwrap_or(false)
 }
 
@@ -356,13 +453,13 @@ fn callee_is_selected_authority(
     callee.kind == URAKind::Authority && callee.realm == caller.realm
 }
 
-fn bootstrap_authority_id(caller_ura: &str, ability: &str, owner_user_id: &str) -> String {
+fn bootstrap_authority_id(caller_ura: &str, ability: &str, owner_user_segment: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(caller_ura.as_bytes());
     hasher.update([0]);
     hasher.update(ability.as_bytes());
     hasher.update([0]);
-    hasher.update(owner_user_id.as_bytes());
+    hasher.update(owner_user_segment.as_bytes());
     format!(
         "device_bootstrap_authority:sha256:{}",
         hex::encode(hasher.finalize())
@@ -395,12 +492,30 @@ fn device_hub_key_bootstrap_authority_id(caller_ura: &str, hub_ura: &str, abilit
     )
 }
 
+fn user_resolve_key_bootstrap_authority_id(
+    caller_ura: &str,
+    hub_ura: &str,
+    agent_ura: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(caller_ura.as_bytes());
+    hasher.update([0]);
+    hasher.update(hub_ura.as_bytes());
+    hasher.update([0]);
+    hasher.update(agent_ura.as_bytes());
+    format!(
+        "user_resolve_key_bootstrap_authority:sha256:{}",
+        hex::encode(hasher.finalize())
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
     use crate::daemon::persistence::config::state_dir;
-    use crate::daemon::trust::anchor::TrustedPrincipalOwner;
+    use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedPrincipalOwner};
     use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
     fn envelope(caller: &str, callee: &str, subject: &str) -> Envelope {
@@ -435,6 +550,29 @@ mod tests {
         .expect("anchor")
     }
 
+    fn device_path(
+        caller_ura: &str,
+        callee_ura: &str,
+        subject_ura: &str,
+        ability: &str,
+        action: AccessAction,
+        daemon_ura: Option<&str>,
+    ) -> TrustedCallerPath {
+        let purpose =
+            crate::daemon::invocation::admission::device_caller::verify_device_invocation_purpose(
+                crate::daemon::invocation::admission::device_caller::DeviceInvocationPurposeScope {
+                    caller_ura,
+                    callee_ura,
+                    subject_ura,
+                    public_ability: ability,
+                    daemon_ura,
+                    action,
+                },
+            )
+            .expect("test Device invocation purpose");
+        TrustedCallerPath::DeviceCustody(purpose)
+    }
+
     #[test]
     fn paired_device_can_publish_own_owner_projection() {
         let args = serde_json::to_vec(&serde_json::json!({
@@ -458,7 +596,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -487,7 +632,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -506,7 +658,14 @@ mod tests {
             AccessAction::Stream,
             &[],
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/device/dev-1",
+                device_control::SESSION_OPEN,
+                AccessAction::Stream,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -514,22 +673,38 @@ mod tests {
     }
 
     #[test]
-    fn paired_device_cannot_open_session_for_other_device() {
+    fn hosted_agent_custody_path_does_not_inherit_device_bootstrap_authority() {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
-                "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/device/other",
-                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/agent/hosted",
+                "easynet:///r/test/agent/hosted",
+                "easynet:///r/test/agent/hosted",
             ),
             device_control::SESSION_OPEN,
             AccessAction::Stream,
             &[],
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::AgentDeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn paired_device_cannot_open_session_for_other_device() {
+        let got =
+            crate::daemon::invocation::admission::device_caller::verify_device_invocation_purpose(
+                crate::daemon::invocation::admission::device_caller::DeviceInvocationPurposeScope {
+                    caller_ura: "easynet:///r/test/device/dev-1",
+                    callee_ura: "easynet:///r/test/device/other",
+                    subject_ura: "easynet:///r/test/device/dev-1",
+                    public_ability: device_control::SESSION_OPEN,
+                    daemon_ura: Some("easynet:///r/test/authority"),
+                    action: AccessAction::Stream,
+                },
+            );
+        assert!(got.is_err());
     }
 
     #[test]
@@ -550,11 +725,49 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn session_purpose_cannot_be_reused_as_heartbeat_bootstrap_authority() {
+        let caller = "easynet:///r/test/device/dev-1";
+        let authority = "easynet:///r/test/authority";
+        let args = serde_json::to_vec(&serde_json::json!({
+            "since_abilities_revision": 0,
+            "refresh_owner_uras": [caller],
+        }))
+        .expect("args");
+        let session_path = device_path(
+            caller,
+            authority,
+            caller,
+            device_control::SESSION_OPEN,
+            AccessAction::Stream,
+            Some(authority),
+        );
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(caller, authority, caller),
+            ABILITY_FEDERATION_HEARTBEAT,
+            AccessAction::Manage,
+            &args,
+            &anchor(),
+            session_path,
+            Some(authority),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
     }
 
     #[test]
@@ -575,7 +788,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -586,10 +806,8 @@ mod tests {
     fn device_without_owner_binding_has_no_bootstrap_authority() {
         let _home = HomeGuard::new();
         let args = serde_json::to_vec(&serde_json::json!({
-            "membership_ura": "easynet:///r/test/device/dev-1",
-            "agent_ura": "easynet:///r/test/device/dev-1",
-            "public_key_hex": "00",
-            "realm": "test",
+            "since_abilities_revision": 0,
+            "refresh_owner_uras": [],
         }))
         .expect("args");
 
@@ -599,11 +817,18 @@ mod tests {
                 "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
-            ABILITY_FEDERATION_JOIN,
+            ABILITY_FEDERATION_HEARTBEAT,
             AccessAction::Manage,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -617,10 +842,8 @@ mod tests {
         std::fs::write(state_dir().join("credentials.json"), b"{")
             .expect("write malformed credentials");
         let args = serde_json::to_vec(&serde_json::json!({
-            "membership_ura": "easynet:///r/test/device/dev-1",
-            "agent_ura": "easynet:///r/test/device/dev-1",
-            "public_key_hex": "00",
-            "realm": "test",
+            "since_abilities_revision": 0,
+            "refresh_owner_uras": [],
         }))
         .expect("args");
 
@@ -630,11 +853,18 @@ mod tests {
                 "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
-            ABILITY_FEDERATION_JOIN,
+            ABILITY_FEDERATION_HEARTBEAT,
             AccessAction::Manage,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -672,7 +902,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -702,7 +939,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -731,7 +975,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -760,7 +1011,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -768,12 +1026,201 @@ mod tests {
     }
 
     #[test]
-    fn paired_device_can_seed_only_its_owner_user_key_during_bootstrap() {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[0x11; 32]);
+    fn paired_user_can_resolve_own_key_during_trust_bootstrap() {
         let args = serde_json::to_vec(&serde_json::json!({
             "agent_ura": "easynet:///r/test/user/alice",
+            "presented_pubkey_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/user/alice",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedCallerPath::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_user_can_resolve_selected_authority_key_during_trust_bootstrap() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/authority",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/authority",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedCallerPath::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_user_can_resolve_own_key_through_descriptor_subject_during_trust_bootstrap() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/alice",
+            "presented_pubkey_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        }))
+        .expect("args");
+        let hub = "easynet:///r/test/authority";
+        let subject = crate::core::ura::owner_ability_ura(hub, ABILITY_FEDERATION_RESOLVE_KEY)
+            .expect("resolve_key ability subject");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope("easynet:///r/test/user/alice", hub, &subject),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedCallerPath::User,
+            Some(hub),
+        );
+
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_user_resolve_key_bootstrap_binds_subject_to_requested_agent() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/alice",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/authority",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedCallerPath::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn paired_user_resolve_key_bootstrap_cannot_read_other_users() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/bob",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/user/bob",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedCallerPath::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn paired_device_can_seed_only_its_owner_user_key_during_bootstrap() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[0x11; 32]);
+        let args = RegisterPubkeyRequest::new(
+            "easynet:///r/test/user/alice",
+            BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            TrustAnchorRole::User,
+        )
+        .to_arguments_bytes()
+        .expect("args");
+        let subject = crate::core::ura::owner_ability_ura(
+            "easynet:///r/test/authority",
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+        )
+        .expect("subject");
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+            ),
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+            AccessAction::Manage,
+            &args,
+            &anchor(),
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
+            Some("easynet:///r/test/authority"),
+        );
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+
+        let other_args = RegisterPubkeyRequest::new(
+            "easynet:///r/test/user/bob",
+            BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            TrustAnchorRole::User,
+        )
+        .to_arguments_bytes()
+        .expect("args");
+        let rejected = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+            ),
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+            AccessAction::Manage,
+            &other_args,
+            &anchor(),
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
+            Some("easynet:///r/test/authority"),
+        );
+        assert_eq!(rejected, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn paired_device_user_key_bootstrap_rejects_explicit_owner_binding() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[0x12; 32]);
+        let args = serde_json::to_vec(&serde_json::json!({
+            "principal_ura": "easynet:///r/test/user/alice",
             "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
             "role": "user",
+            "principal_owner_ura": "easynet:///r/test/user/alice",
         }))
         .expect("args");
         let subject = crate::core::ura::owner_ability_ura(
@@ -791,31 +1238,18 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
-            Some("easynet:///r/test/authority"),
-        );
-        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
-
-        let other_args = serde_json::to_vec(&serde_json::json!({
-            "agent_ura": "easynet:///r/test/user/bob",
-            "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
-            "role": "user",
-        }))
-        .expect("args");
-        let rejected = BootstrapAuthorityVerifier::verify(
-            &envelope(
+            device_path(
                 "easynet:///r/test/device/dev-1",
                 "easynet:///r/test/authority",
                 &subject,
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
             ),
-            ABILITY_IDENTITY_REGISTER_PUBKEY,
-            AccessAction::Manage,
-            &other_args,
-            &anchor(),
-            TrustedAgentRole::Device,
             Some("easynet:///r/test/authority"),
         );
-        assert_eq!(rejected, BootstrapAuthorityDecision::NotApplicable);
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
     }
 
     #[test]
@@ -840,7 +1274,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -869,7 +1310,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Hub,
+            TrustedCallerPath::Hub,
             Some("easynet:///r/test/authority"),
         );
 
@@ -898,7 +1339,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Hub,
+            TrustedCallerPath::Hub,
             Some("easynet:///r/test/authority"),
         );
 
@@ -927,7 +1368,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Hub,
+            TrustedCallerPath::Hub,
             Some("easynet:///r/other/authority"),
         );
 

@@ -68,9 +68,10 @@ func (d *directRuntimeFakeDaemon) Invoke(ctx context.Context, req *axonpb.Invoke
 
 func canonicalDirectRuntimeReceiptPair(invocationID string) (*axonpb.InvocationReceipt, *axonpb.InvocationReceipt) {
 	const (
-		callerURA = "easynet:///r/example/agent/alice.sdk"
-		calleeURA = "easynet:///r/example/device/dev-a"
-		profile   = "axon-strict-v2"
+		callerURA     = "easynet:///r/example/agent/alice.sdk"
+		calleeURA     = runtimeTestCalleeURA
+		deviceSubject = "easynet:///r/example/device/dev-a"
+		profile       = "axon-strict-v2"
 	)
 	proofPayload := []byte("canonical-direct-runtime-test-proof")
 	proofHash := sha256.Sum256(proofPayload)
@@ -101,14 +102,14 @@ func canonicalDirectRuntimeReceiptPair(invocationID string) (*axonpb.InvocationR
 			CleanupComplete:    cleanupComplete,
 			CallerBinding:      &axonpb.AgentIdentity{Ura: callerURA, Profile: profile},
 			CalleeBinding:      &axonpb.AgentIdentity{Ura: calleeURA, Profile: profile},
-			SubjectBinding:     &axonpb.SubjectIdentity{Ura: calleeURA, Profile: profile},
+			SubjectBinding:     &axonpb.SubjectIdentity{Ura: deviceSubject, Profile: profile},
 			InvocationNonce:    []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 			CausalBinding:      &axonpb.CausalContext{Form: &axonpb.CausalContext_None{None: &axonpb.Empty{}}},
 			CalleeSignature:    &axonpb.CalleeSignature{Algorithm: "ed25519", Signature: bytes.Repeat([]byte{0x71}, 64)},
 			AuthorityBinding:   binding(),
 			AbilityBinding:     runtimeTestDescriptorRef,
 			Usage:              &axonpb.InvocationUsage{},
-			SubjectRef:         &axonpb.EntityRef{Kind: axonpb.EntityRefKind_ENTITY_REF_KIND_DEVICE, Ura: calleeURA, Profile: profile},
+			SubjectRef:         &axonpb.EntityRef{Kind: axonpb.EntityRefKind_ENTITY_REF_KIND_DEVICE, Ura: deviceSubject, Profile: profile},
 			DescriptorVersion:  "1.0.0",
 			SchemaHash:         bytes.Repeat([]byte{0x11}, 32),
 			ImplHash:           bytes.Repeat([]byte{0x22}, 32),
@@ -149,8 +150,8 @@ func TestDirectAuthorityBindingProjectsSessionAuthorityToGenericFacadeFields(t *
 	projected := directAuthorityBinding(&axonpb.AuthorityBinding{
 		Authority: &axonpb.AuthorityBinding_SessionAuthority{
 			SessionAuthority: &axonpb.SessionAuthority{
-				BackendUra:  "easynet:///r/example/agent/backend",
-				UserUra:     "easynet:///r/example/agent/alice",
+				IssuerUra:   "easynet:///r/example/agent/backend",
+				SubjectUra:  "easynet:///r/example/agent/alice",
 				SessionId:   "session-1",
 				Scopes:      []string{"invoke"},
 				Audiences:   []string{runtimeTestDescriptorRef},
@@ -367,6 +368,17 @@ func TestDirectRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	if got := string(result.OutputJSON()); got != `{"ok":true}` {
 		t.Fatalf("OutputJSON = %s", got)
 	}
+	var admission map[string]any
+	if err := json.Unmarshal(result.AdmissionReceipt(), &admission); err != nil {
+		t.Fatalf("admission receipt JSON: %v", err)
+	}
+	var terminal map[string]any
+	if err := json.Unmarshal(result.TerminalReceipt(), &terminal); err != nil {
+		t.Fatalf("terminal receipt JSON: %v", err)
+	}
+	if admission["receipt_id"] != "inv-1:1" || terminal["receipt_id"] != "inv-1:7" {
+		t.Fatalf("receipt ids = admission %#v terminal %#v", admission["receipt_id"], terminal["receipt_id"])
+	}
 	if daemon.seenInvoke == nil || daemon.seenInvoke.GetEnvelope().GetCaller().GetUra() != "easynet:///r/example/agent/alice" {
 		t.Fatalf("daemon did not receive caller envelope: %#v", daemon.seenInvoke)
 	}
@@ -477,7 +489,7 @@ func TestDirectRuntimeGRPCErrorProjectsOwnerOfflineAsDescriptorOwnerOffline(t *t
 		err := directRuntimeGRPCError(
 			status.Error(
 				grpcCode,
-				"ROUTE_NEGATIVE: namespace.resolve negative for `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+				"DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
 			),
 			"unix:///tmp/easynet-daemon.sock",
 		)
@@ -497,6 +509,29 @@ func TestDirectRuntimeGRPCErrorProjectsOwnerOfflineAsDescriptorOwnerOffline(t *t
 		if sdkErr.Class() != ErrorClassRouting {
 			t.Fatalf("class = %s, want %s", sdkErr.Class(), ErrorClassRouting)
 		}
+	}
+}
+
+func TestDirectRuntimeGRPCErrorDoesNotInferOwnerOfflineFromRouteText(t *testing.T) {
+	err := directRuntimeGRPCError(
+		status.Error(
+			codes.NotFound,
+			"ROUTE_NEGATIVE: namespace.resolve negative for `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+		),
+		"unix:///tmp/easynet-daemon.sock",
+	)
+	if !IsCode(err, ErrDescriptorNotFound) {
+		t.Fatalf("directRuntimeGRPCError = %#v, want DESCRIPTOR_NOT_FOUND", err)
+	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("directRuntimeGRPCError = %#v, want SDKError", err)
+	}
+	if sdkErr.Message == "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online" {
+		t.Fatalf("message was rewritten from route diagnostic text: %q", sdkErr.Message)
+	}
+	if sdkErr.Retryable {
+		t.Fatalf("retryable = true, want false for descriptor not found")
 	}
 }
 
@@ -1153,8 +1188,8 @@ func directRuntimeDraftWithMetadataAndSignature(
 	t.Helper()
 	fields := map[string]any{
 		"caller_ura":     "easynet:///r/example/agent/alice",
-		"callee_ura":     "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"callee_ura":     "easynet:///r/example/agent/device.dev-a.ability-management",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.ability-management.er.weather@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura":    "easynet:///r/example/device/dev-a",
 		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": map[string]any{"form": "none"},
@@ -1184,8 +1219,8 @@ func directRuntimeUserSubjectDraft(t *testing.T) InvocationDraft {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{
 		"caller_ura":     "easynet:///r/example/user/alice",
-		"callee_ura":     "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"callee_ura":     "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura":    "easynet:///r/example/user/alice",
 		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": map[string]any{"form": "none"},

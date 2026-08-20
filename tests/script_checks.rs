@@ -173,13 +173,13 @@ fn kernel_boundary_script_contract_holds() {
 fn ffi_abi_v6_exact_surface_script_contract_holds() {
     // Pins the generic binding boundary: exact header/source/dylib allowlist,
     // error code table, daemon lifecycle, and complete Invocation lifecycle.
-    run_bash_script("tests/scripts/test_check_ffi_abi_v6_header.sh");
+    run_bash_script("tests/scripts/test_check_ffi_abi_v7_header.sh");
 }
 
 #[test]
 fn release_package_contract_script_holds() {
     // Pins the release shape consumed by install.sh: runtime binaries,
-    // dendrite bridge, and ABI v6 binding artefacts must be packaged
+    // dendrite bridge, and ABI v7 binding artefacts must be packaged
     // and installed together.
     run_bash_script("tests/scripts/test_check_release_package_contract.sh");
 }
@@ -203,6 +203,78 @@ fn remote_desktop_contract_boundary_script_holds() {
     // Pins the product remote-desktop contract to canonical wire names.
     // Retired transport spelling aliases must fail during typed parse.
     run_bash_script("tests/scripts/test_check_remote_desktop_contract_boundary.sh");
+}
+
+#[test]
+fn remoteapp_session_subject_boundary_script_holds() {
+    // Pins remoteapp session abilities to explicit selected-resource subjects.
+    // Session control must not teach callers to place subject or token fields
+    // inside ability args.
+    run_bash_script("tests/scripts/test_check_remoteapp_session_subject_boundary.sh");
+}
+
+#[test]
+fn remoteapp_picker_subject_boundary_script_holds() {
+    // Pins the remoteapp picker to live target inventory and selected
+    // Resource URA subjects instead of cached meta.list_resources rows or
+    // args.subject compatibility shapes.
+    run_bash_script("tests/scripts/test_check_remoteapp_picker_subject_boundary.sh");
+}
+
+#[test]
+fn remoteapp_frontend_invocation_boundary_script_holds() {
+    // Pins the real EasyNet frontend execution surface to selected target
+    // subjects. Browser calls must put the picker-selected target in the
+    // Invocation envelope, never in create_session args or first-target
+    // fallback paths.
+    run_bash_script("tests/scripts/test_check_remoteapp_frontend_invocation_boundary.sh");
+}
+
+#[test]
+fn remoteapp_target_binding_boundary_script_holds() {
+    // Pins application/window sessions to binding-owned capture/input/media
+    // boundaries. Production app/window media must not silently re-resolve
+    // ResourceEntry rows or fall back to display capture.
+    run_bash_script("tests/scripts/test_check_remoteapp_target_binding_boundary.sh");
+}
+
+#[test]
+fn remoteapp_lifecycle_input_boundary_script_holds() {
+    // Pins app/window lifecycle and input safety to target-owned move/resize
+    // revisions, target-loss media-source degradation, weak native identity
+    // ambiguity, and view-only input until focus-safe dispatch exists.
+    run_bash_script("tests/scripts/test_check_remoteapp_lifecycle_input_boundary.sh");
+}
+
+#[test]
+fn remoteapp_e2e_acceptance_boundary_script_holds() {
+    // Pins host decoded-frame acceptance to live inventory, exact target
+    // binding, WebRTC/H.264 evidence, and independently scanned artifact
+    // pixels for window/application sessions.
+    run_bash_script("tests/scripts/test_check_remoteapp_e2e_acceptance_boundary.sh");
+}
+
+#[test]
+fn remoteapp_performance_boundary_script_holds() {
+    // Pins the SPEC PERF-01..PERF-07 evidence map so performance/resource
+    // requirements cannot remain documentation-only claims.
+    run_bash_script("tests/scripts/test_check_remoteapp_performance_boundary.sh");
+}
+
+#[test]
+fn frontend_ability_contract_boundary_script_holds() {
+    // Pins every governed ability descriptor to one explicit execution surface
+    // and subject-construction owner. Remote desktop abilities must stay on
+    // the dedicated remote_desktop surface, not the generic media/catalog UI.
+    run_bash_script("tests/scripts/test_check_frontend_ability_contract_boundary.sh");
+}
+
+#[test]
+fn browser_cdp_axon_boundary_script_holds() {
+    // Pins the browser executor to a package-owned provider, current headed
+    // Chrome with isolated debugging profiles, and CDP application frames
+    // carried only by the governed Axon bidi session.
+    run_bash_script("tests/scripts/test_check_browser_cdp_axon_boundary.sh");
 }
 
 #[test]
@@ -231,13 +303,6 @@ fn cli_flat_command_boundary_script_holds() {
     // Pins the top-level CLI to noun-first command groups. The retired
     // join/start/stop flat shortcuts must not come back.
     run_bash_script("tests/scripts/test_check_cli_flat_command_boundary.sh");
-}
-
-#[test]
-fn invoke_ability_ura_input_script_contract_holds() {
-    // Pins <agent>.invoke to canonical ability_ura input only. The
-    // retired target/ability request fields must stay rejected.
-    run_bash_script("tests/scripts/test_check_invoke_ability_ura_input.sh");
 }
 
 #[test]
@@ -571,7 +636,7 @@ fn mcp_cost_metadata_projection_boundary_script_holds() {
 
 #[test]
 fn device_ability_call_mode_resolution_boundary_script_holds() {
-    // Pins dynamic device ability call-mode ownership to one registrar value
+    // Pins dynamic ability deployment call-mode ownership to one registrar value
     // object. Install, uninstall, replay, and runtime proof binding must not
     // reintroduce procedural inference helpers.
     run_bash_script("tests/scripts/test_check_device_ability_call_mode_resolution_boundary.sh");

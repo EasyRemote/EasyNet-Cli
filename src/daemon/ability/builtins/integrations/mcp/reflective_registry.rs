@@ -522,37 +522,30 @@ impl PostArcReflection {
     /// [`op_event!`] so an operator reading the boot log can tell
     /// which path was taken without inspecting env state.
     ///
-    /// `pages_user` is the daemon's paired user (`None` ⇒ unpaired
-    /// daemon — bare-name projection gated off per AGENT_IDENTITY
-    /// §2). `realm` is the same realm the user-rooted ability
-    /// families used so a reflected tool's owner URA matches the
-    /// rest of the daemon's catalogue.
     pub fn plan(
         mode: McpReflectionMode,
-        pages_user: Option<&str>,
-        realm: &str,
         client: &McpClientService,
         registry: &mut AxonAbilityCatalog,
     ) -> Self {
-        let Some(user) = pages_user else {
-            // Unpaired daemons emit a single informational line so
-            // an operator who configured `mcps.json` but
-            // forgot to pair a user understands why their MCP tools
-            // are not showing up as bare-name abilities. We do NOT
-            // consult the service for its server count here — that
-            // requires the async lock, and this code path runs in
-            // the sync boot context — so the log is unconditional.
-            // False positives (printing this line when there are no
-            // servers configured either) are cheap; false silences
-            // would frustrate operators.
+        let Some(host_device_ura) = registry.hosted_device_authority_root() else {
             crate::op_event!(
                 component = mcp_reflective,
                 kind = reflection_skipped,
-                reason = "daemon_unpaired",
+                reason = "no_device_authority",
             );
             return Self::Skip;
         };
-        let owner_ura = axon_sdk::ura::agent_ura(realm, user, "mcp");
+        let Ok(host) = crate::core::ura::parse_ura(host_device_ura) else {
+            return Self::Skip;
+        };
+        let Some(device_id) = host.device_id() else {
+            return Self::Skip;
+        };
+        let owner_ura = crate::core::ura::device_agent_ura(
+            &host.realm,
+            device_id,
+            crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID,
+        );
         match mode {
             McpReflectionMode::Off => {
                 crate::op_event!(
@@ -1390,45 +1383,44 @@ fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthorit
         .map_err(|e| format!("owner URA parse failed: {e}"))?;
     let (owner_kind, owner_projection, authority_root) = match parsed.kind {
         crate::core::ura::URAKind::Agent => {
-            // DEC-F048: MCP reflective descriptors carry user-configured
-            // tooling. A device-sponsored System Agent carries no user
-            // identity and MUST NOT own them (RFC-005 §3.1.2) — explicit
-            // reject, not a missing-field error (F-047 verdict v2).
-            if parsed.device_agent_ids().is_some() {
-                return Err(format!(
-                    "owner {owner_ura} is a device-sponsored System Agent; \
-                     System Agents cannot own MCP reflective descriptors \
-                     (RFC-005 §3.1.2, DEC-F048)"
-                ));
+            if let Some((_, system_agent_id)) = parsed.device_agent_ids() {
+                if system_agent_id
+                    != crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID
+                {
+                    return Err(format!(
+                        "owner {owner_ura} is not the MCP integration SystemAgent"
+                    ));
+                }
+                (
+                    OwnerKind::mcp_integration_system(),
+                    format!("system-agent:{system_agent_id}"),
+                    owner_ura.to_string(),
+                )
+            } else {
+                let Some((_, agent_id)) = parsed.agent_ids() else {
+                    return Err("owner agent URA is missing agent_id".to_string());
+                };
+                (
+                    OwnerKind::Agent(agent_id.to_string()),
+                    format!("agent:{agent_id}"),
+                    owner_ura.to_string(),
+                )
             }
-            let Some((_, agent_id)) = parsed.agent_ids() else {
-                return Err("owner agent URA is missing agent_id".to_string());
-            };
-            (
-                OwnerKind::Agent(agent_id.to_string()),
-                format!("agent:{agent_id}"),
-                owner_ura.to_string(),
-            )
         }
         crate::core::ura::URAKind::Authority => (
             OwnerKind::RealmAuthority,
-            "hub".to_string(),
+            "authority".to_string(),
             owner_ura.to_string(),
         ),
-        crate::core::ura::URAKind::Device => (
-            OwnerKind::Device,
-            "device".to_string(),
-            owner_ura.to_string(),
-        ),
+        crate::core::ura::URAKind::Device => {
+            return Err(
+                "Device cannot own MCP reflective descriptors; use an explicit hosted Agent or Authority owner URA".to_string(),
+            );
+        }
         crate::core::ura::URAKind::User => {
-            let Some(user_id) = parsed.user_id() else {
-                return Err("owner user URA is missing user_id".to_string());
-            };
-            (
-                OwnerKind::User(user_id.to_string()),
-                format!("user:{user_id}"),
-                crate::core::ura::agent_ura(&parsed.realm, user_id, "account"),
-            )
+            return Err(
+                "User Principal cannot own MCP reflective descriptors; use an explicit Agent or Authority owner URA".to_string(),
+            );
         }
         other => {
             return Err(format!(
@@ -1623,13 +1615,22 @@ mod tests {
 
     fn registry_for_mcp_owner(owner_ura: &str) -> AxonAbilityCatalog {
         let owner = crate::core::ura::parse_ura(owner_ura).expect("canonical MCP owner URA");
-        let device_ura = crate::core::ura::device_ura(&owner.realm, "mcp-test-device");
-        let authority_context =
+        let device_id = owner
+            .device_agent_ids()
+            .map(|(device_id, _)| device_id)
+            .unwrap_or("mcp-test-device");
+        let device_ura = crate::core::ura::device_ura(&owner.realm, device_id);
+        let authority_context = if owner.device_agent_ids().is_some() {
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+                device_ura,
+            )
+        } else {
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
                 device_ura,
                 vec![owner_ura.to_string()],
             )
-            .expect("MCP test authority context");
+        }
+        .expect("MCP test authority context");
         AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
@@ -1646,14 +1647,28 @@ mod tests {
             owner_kind_for_descriptor_owner("easynet:///r/localhost/agent/dev.claude").unwrap(),
             OwnerKind::Agent("claude".to_string())
         );
-        // Device-sponsored System Agent is refused: MCP reflective
-        // descriptors are user-configured tooling and System Agents
-        // carry no user identity (DEC-F048; F-047 verdict v2).
+        assert_eq!(
+            owner_kind_for_descriptor_owner("easynet:///r/localhost/authority").unwrap(),
+            OwnerKind::RealmAuthority
+        );
+        assert_eq!(
+            owner_kind_for_descriptor_owner(
+                "easynet:///r/localhost/agent/device.dev-1.mcp-integration"
+            )
+            .unwrap(),
+            OwnerKind::mcp_integration_system()
+        );
+        // An unrelated SystemAgent cannot acquire the MCP reflection surface.
         let err =
             owner_kind_for_descriptor_owner("easynet:///r/localhost/agent/device.dev-1.terminal")
-                .expect_err("System Agent cannot own MCP descriptors");
-        assert!(err.contains("RFC-005 §3.1.2"), "{err}");
-        assert!(err.contains("device-sponsored System Agent"), "{err}");
+                .expect_err("non-MCP SystemAgent cannot own MCP descriptors");
+        assert!(err.contains("not the MCP integration SystemAgent"), "{err}");
+        let err = owner_kind_for_descriptor_owner("easynet:///r/localhost/device/dev-1")
+            .expect_err("Device cannot own MCP descriptors");
+        assert!(
+            err.contains("Device cannot own MCP reflective descriptors"),
+            "{err}"
+        );
     }
 
     /// Build an in-process MCP client wrapping a small Python echo
@@ -2035,40 +2050,38 @@ while True:
     }
 
     #[test]
-    fn plan_unpaired_daemon_always_skips() {
-        // Unpaired daemons cannot construct the mcp-profile owner URA
-        // (no user segment), so reflection MUST short-circuit before
-        // any mode-dependent work. This invariant holds across all
-        // three modes — `pages_user = None` always wins.
+    fn plan_without_device_authority_always_skips() {
         let svc = empty_mcp();
-        let mut reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+                "easynet:///r/test-realm/authority",
+            )
+            .unwrap();
+        let mut reg =
+            AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context);
         for mode in [
             McpReflectionMode::Off,
             McpReflectionMode::Lazy,
             McpReflectionMode::Eager,
         ] {
-            let plan = PostArcReflection::plan(mode, None, "test-realm", &svc, &mut reg);
+            let plan = PostArcReflection::plan(mode, &svc, &mut reg);
             assert!(
                 matches!(plan, PostArcReflection::Skip),
-                "unpaired + {mode:?} must yield Skip, got {plan:?}",
+                "no Device authority + {mode:?} must yield Skip, got {plan:?}",
                 mode = mode.as_str()
             );
         }
     }
 
     #[test]
-    fn plan_off_mode_skips_even_when_paired() {
+    fn plan_off_mode_skips_with_device_authority() {
         // `EASYNET_MCP_REFLECTION=off` is the operator's explicit opt
         // out — pairing state is irrelevant, the plan stays Skip.
         let svc = empty_mcp();
-        let mut reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
-        let plan = PostArcReflection::plan(
-            McpReflectionMode::Off,
-            Some("test-user"),
-            "test-realm",
-            &svc,
-            &mut reg,
+        let mut reg = registry_for_mcp_owner(
+            "easynet:///r/test-realm/agent/device.mcp-test-device.mcp-integration",
         );
+        let plan = PostArcReflection::plan(McpReflectionMode::Off, &svc, &mut reg);
         assert!(matches!(plan, PostArcReflection::Skip), "{plan:?}");
     }
 
@@ -2080,20 +2093,20 @@ while True:
         // is sufficient — the actual reflection happens later inside
         // the supervisor's spawned thread.
         let svc = empty_mcp();
-        let mut reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
-        let plan = PostArcReflection::plan(
-            McpReflectionMode::Lazy,
-            Some("test-user"),
-            "test-realm",
-            &svc,
-            &mut reg,
+        let mut reg = registry_for_mcp_owner(
+            "easynet:///r/test-realm/agent/device.mcp-test-device.mcp-integration",
         );
+        let plan = PostArcReflection::plan(McpReflectionMode::Lazy, &svc, &mut reg);
         match plan {
             PostArcReflection::SpawnLazy { owner_ura } => {
                 assert_eq!(
                     owner_ura,
-                    axon_sdk::ura::agent_ura("test-realm", "test-user", "mcp"),
-                    "lazy supervisor must receive the canonical mcp-profile URA"
+                    crate::core::ura::device_agent_ura(
+                        "test-realm",
+                        "mcp-test-device",
+                        crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID,
+                    ),
+                    "lazy supervisor must receive the MCP SystemAgent URA"
                 );
             }
             other => panic!("Lazy + paired must yield SpawnLazy, got {other:?}"),
@@ -2110,7 +2123,9 @@ while True:
         // a future refactor that moved the index off the variant would
         // break the hot-reload sink attachment.
         let (_dir, svc) = make_echo_client("echo");
-        let reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
+        let reg = registry_for_mcp_owner(
+            "easynet:///r/test-realm/agent/device.mcp-test-device.mcp-integration",
+        );
 
         // `PostArcReflection::plan` calls `run_eager_blocking`, which
         // uses `block_in_place` when an ambient runtime is available.
@@ -2120,13 +2135,7 @@ while True:
             let svc = Arc::clone(&svc);
             move || {
                 let mut reg_local = reg;
-                let plan = PostArcReflection::plan(
-                    McpReflectionMode::Eager,
-                    Some("test-user"),
-                    "test-realm",
-                    &svc,
-                    &mut reg_local,
-                );
+                let plan = PostArcReflection::plan(McpReflectionMode::Eager, &svc, &mut reg_local);
                 (plan, reg_local)
             }
         })
@@ -2140,7 +2149,11 @@ while True:
             } => {
                 assert_eq!(
                     owner_ura,
-                    axon_sdk::ura::agent_ura("test-realm", "test-user", "mcp"),
+                    crate::core::ura::device_agent_ura(
+                        "test-realm",
+                        "mcp-test-device",
+                        crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID,
+                    ),
                 );
                 let echo_entry = per_server
                     .get("echo")

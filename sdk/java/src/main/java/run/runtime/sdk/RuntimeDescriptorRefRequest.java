@@ -84,13 +84,12 @@ public record RuntimeDescriptorRefRequest(
           "runtime",
           "descriptor_ref provider requests require caller_ura and subject_ura");
     }
-    if (ABILITY_DESCRIPTOR_PROVIDER.equals(provider)) {
-      String authority = RuntimeAbilityProjection.authorityURAForRealmOf(calleeURA);
-      if (!subjectURA.equals(authority)) {
-        throw SDKError.validation(
-            "runtime",
-            "ability_descriptor provider descriptor resolution subject must be the callee realm Authority");
-      }
+    if (!RuntimeSubjects.isRuntimeGovernanceReadSubject(subjectURA, calleeURA)) {
+      throw SDKError.validation(
+          "runtime",
+          "descriptor_ref provider "
+              + provider
+              + " subject_ura must be a runtime governance read subject");
     }
   }
 

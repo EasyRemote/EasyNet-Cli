@@ -32,6 +32,58 @@ func TestRuntimeIdentityProjectionReadsCredentials(t *testing.T) {
 	}
 }
 
+func TestRuntimeIdentityProjectionDefaultsToControlDiscoveryIdentity(t *testing.T) {
+	dir := t.TempDir()
+	control := filepath.Join(dir, "control.json")
+	if err := os.WriteFile(control, []byte(`{
+		"socket_path":"/tmp/control.sock",
+		"invocation_endpoint":"unix:///tmp/daemon.sock",
+		"daemon_identity":{"mode":"device","realm":"acme","node_id":"runtime-a"},
+		"pid":42,
+		"daemon_version":"test",
+		"supported_ipc_versions":{"min":1,"max":1},
+		"capability_flags":["invocation"]
+	}`), 0o600); err != nil {
+		t.Fatalf("write control discovery: %v", err)
+	}
+
+	environment := &SdkEnvironment{
+		options: SdkEnvironmentOptions{
+			Discover: RuntimeHostDiscoverOptions{ControlPath: control},
+		},
+	}
+	projection, err := environment.ReadRuntimeIdentityProjection(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ReadRuntimeIdentityProjection: %v", err)
+	}
+	if projection.Realm != "acme" || projection.RuntimeInstanceID != "runtime-a" {
+		t.Fatalf("unexpected control discovery projection: %#v", projection)
+	}
+}
+
+func TestRuntimeIdentityProjectionRejectsIncompleteControlDiscoveryIdentity(t *testing.T) {
+	dir := t.TempDir()
+	control := filepath.Join(dir, "control.json")
+	if err := os.WriteFile(control, []byte(`{
+		"pid":42,
+		"daemon_version":"test",
+		"supported_ipc_versions":{"min":1,"max":1},
+		"capability_flags":["invocation"]
+	}`), 0o600); err != nil {
+		t.Fatalf("write control discovery: %v", err)
+	}
+
+	environment := &SdkEnvironment{
+		options: SdkEnvironmentOptions{
+			Discover: RuntimeHostDiscoverOptions{ControlPath: control},
+		},
+	}
+	_, err := environment.ReadRuntimeIdentityProjection(context.Background(), "")
+	if !IsCode(err, ErrCallerIdentityUnavailable) {
+		t.Fatalf("error = %v, want %s", err, ErrCallerIdentityUnavailable)
+	}
+}
+
 func TestRuntimeIdentityProjectionRejectsNodeIDAlias(t *testing.T) {
 	_, err := NewRuntimeIdentityProjectionFromJSON([]byte(`{"realm":"acme","node_id":"dev-a"}`))
 	if err == nil {

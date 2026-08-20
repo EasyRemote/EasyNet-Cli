@@ -43,27 +43,28 @@ pub const ABILITY_SUBSCRIBE: &str = crate::daemon::ability::names::automation::D
 pub const ABILITY_LIST_TURNS: &str = crate::daemon::ability::names::automation::DISCUSS_LIST_TURNS;
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<DiscussService>) {
+    let owner = OwnerKind::automation_system();
     let a = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         "discuss.create",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| create_handler(&a, args)),
     );
     let b = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         "discuss.post",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| post_handler(&b, args)),
     );
     let c = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         "discuss.list_turns",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| list_turns_handler(&c, args)),
     );
     reg.register_stream_with_owner(
         "discuss.subscribe",
-        OwnerKind::Device,
+        owner,
         Arc::new(move |args: Value| subscribe_handler(&svc, args)),
     );
 }

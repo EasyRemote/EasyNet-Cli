@@ -44,9 +44,11 @@ use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use tonic::Status;
 
+use axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA;
+
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::trust::anchor::{
-    RealmTrustAnchor, RealmTrustError, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
+    RealmTrustAnchor, RealmTrustError, TrustAnchorRole, TrustedAgent, TrustedPrincipalOwner,
 };
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
@@ -70,7 +72,7 @@ impl RuntimeTrustContext {
         public_key_b64: String,
     ) -> Result<(), Status> {
         self.writer()
-            .register_pubkey(user_ura, public_key_b64, TrustedAgentRole::User)
+            .register_pubkey(user_ura, public_key_b64, TrustAnchorRole::User)
     }
 
     pub(crate) fn bind_principal_owner(&self, owner: TrustedPrincipalOwner) -> Result<(), Status> {
@@ -151,7 +153,7 @@ impl<'a> RuntimeTrust<'a> {
         &self,
         principal_ura: String,
         public_key_b64: String,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
     ) -> Result<(), Status> {
         self.register_pubkey_with_owner(principal_ura, public_key_b64, role, None)
     }
@@ -160,8 +162,31 @@ impl<'a> RuntimeTrust<'a> {
         &self,
         principal_ura: String,
         public_key_b64: String,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
         owner: Option<TrustedPrincipalOwner>,
+    ) -> Result<(), Status> {
+        self.register_pubkey_protecting(principal_ura, public_key_b64, role, owner, None)
+    }
+
+    /// `register_pubkey_with_owner`, plus one caller-nominated public key
+    /// that the user-key cap's LRU eviction must never select while making
+    /// room for this registration.
+    ///
+    /// A multi-key import loop (hub trust-sync replaying every key it
+    /// resolved for a user) calls this once per key. Each call independently
+    /// runs cap eviction, so without a protected key, importing keys 2..N of
+    /// the same loop can evict a key imported by an earlier iteration in
+    /// that very loop — including the daemon's own active runtime signer,
+    /// which self-registers through this path at boot. Callers doing a
+    /// simple, single, operator-driven key registration pass `None` and get
+    /// the plain LRU behaviour from `register_pubkey_with_owner`.
+    pub(crate) fn register_pubkey_protecting(
+        &self,
+        principal_ura: String,
+        public_key_b64: String,
+        role: TrustAnchorRole,
+        owner: Option<TrustedPrincipalOwner>,
+        protected_public_key_b64: Option<&str>,
     ) -> Result<(), Status> {
         validate_public_key_b64("identity.register_pubkey", &public_key_b64)?;
         self.validate_register_realm(&principal_ura, role)?;
@@ -188,21 +213,27 @@ impl<'a> RuntimeTrust<'a> {
         };
 
         self.mutate_anchor_when_changed("identity.register_pubkey", |next_anchor| {
-            let user_key_already_present = matches!(role, TrustedAgentRole::User)
+            let user_key_already_present = matches!(role, TrustAnchorRole::User)
                 && next_anchor
                     .lookup_user_by_pubkey(&principal_ura, &public_key_b64)
                     .is_some();
             let mut changed = false;
             match role {
-                TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::Device => {
+                TrustAnchorRole::Backend | TrustAnchorRole::Hub | TrustAnchorRole::Device => {
                     next_anchor.upsert_singleton_agent(entry)?;
                     changed = true;
                 }
-                TrustedAgentRole::User if !user_key_already_present => {
+                TrustAnchorRole::User if !user_key_already_present => {
+                    Self::enforce_user_key_cap_before_append(
+                        next_anchor,
+                        &principal_ura,
+                        now_unix_ms(),
+                        protected_public_key_b64,
+                    )?;
                     next_anchor.append_agent(entry)?;
                     changed = true;
                 }
-                TrustedAgentRole::User => {}
+                TrustAnchorRole::User => {}
             }
             if let Some(owner) = owner {
                 next_anchor.upsert_principal_owner(owner)?;
@@ -210,6 +241,31 @@ impl<'a> RuntimeTrust<'a> {
             }
             Ok(((), changed))
         })
+    }
+
+    fn enforce_user_key_cap_before_append(
+        anchor: &mut RealmTrustAnchor,
+        user_ura: &str,
+        now_ms: u64,
+        protected_public_key_b64: Option<&str>,
+    ) -> Result<(), RealmTrustError> {
+        while anchor.lookup_user_all(user_ura).len() >= MAX_KEYS_PER_AGENT_URA {
+            let Some(oldest_key) = anchor
+                .lookup_user_all(user_ura)
+                .iter()
+                .filter(|entry| Some(entry.public_key_b64.as_str()) != protected_public_key_b64)
+                .min_by(|left, right| {
+                    left.added_at_unix_ms
+                        .cmp(&right.added_at_unix_ms)
+                        .then_with(|| left.public_key_b64.cmp(&right.public_key_b64))
+                })
+                .map(|entry| entry.public_key_b64.clone())
+            else {
+                break;
+            };
+            anchor.revoke_user_pubkey(user_ura, &oldest_key, now_ms)?;
+        }
+        Ok(())
     }
 
     /// Persist one authenticated runtime-principal ownership fact.
@@ -312,7 +368,7 @@ impl<'a> RuntimeTrust<'a> {
     fn validate_register_realm(
         &self,
         principal_ura: &str,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
     ) -> Result<(), Status> {
         let parsed_realm = crate::core::ura::realm_from_ura(principal_ura).ok_or_else(|| {
             Status::invalid_argument(format!(
@@ -320,7 +376,7 @@ impl<'a> RuntimeTrust<'a> {
                  canonical URA grammar",
             ))
         })?;
-        if parsed_realm != self.daemon_realm && !matches!(role, TrustedAgentRole::Device) {
+        if parsed_realm != self.daemon_realm && !matches!(role, TrustAnchorRole::Device) {
             return Err(Status::permission_denied(format!(
                 "identity.register_pubkey: role `{}` requires principal_ura realm `{parsed_realm}` \
                  to match daemon realm `{}` — cross-realm user pubkey resolution \
@@ -382,12 +438,12 @@ pub(crate) fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn role_wire_label(role: TrustedAgentRole) -> &'static str {
+fn role_wire_label(role: TrustAnchorRole) -> &'static str {
     match role {
-        TrustedAgentRole::Backend => "backend",
-        TrustedAgentRole::Device => "device",
-        TrustedAgentRole::Hub => "hub",
-        TrustedAgentRole::User => "user",
+        TrustAnchorRole::Backend => "backend",
+        TrustAnchorRole::Device => "device",
+        TrustAnchorRole::Hub => "hub",
+        TrustAnchorRole::User => "user",
     }
 }
 
@@ -472,7 +528,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 b64_pubkey(1),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("register");
 
@@ -495,12 +551,12 @@ mod tests {
         let user_ura = "easynet:///r/realm/user/alice".to_string();
         let public_key = b64_pubkey(1);
         ctx.writer()
-            .register_pubkey(user_ura.clone(), public_key.clone(), TrustedAgentRole::User)
+            .register_pubkey(user_ura.clone(), public_key.clone(), TrustAnchorRole::User)
             .expect("initial register");
         let generation = ctx.cell.cert_anchor_generation();
 
         ctx.writer()
-            .register_pubkey(user_ura.clone(), public_key, TrustedAgentRole::User)
+            .register_pubkey(user_ura.clone(), public_key, TrustAnchorRole::User)
             .expect("same-key retry is idempotent");
 
         assert_eq!(ctx.cell.cert_anchor_generation(), generation);
@@ -508,6 +564,92 @@ mod tests {
         let from_disk =
             RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
         assert_eq!(from_disk.lookup_user_all(&user_ura).len(), 1);
+    }
+
+    #[test]
+    fn register_user_prunes_oldest_key_before_sdk_verifier_cap_is_exceeded() {
+        let (_dir, ctx) = context();
+        let user_ura = "easynet:///r/realm/user/alice".to_string();
+        let oldest = b64_pubkey(1);
+        let newest = b64_pubkey(9);
+
+        for seed in 1..=9u8 {
+            ctx.writer()
+                .register_pubkey(user_ura.clone(), b64_pubkey(seed), TrustAnchorRole::User)
+                .expect("register user key");
+        }
+
+        let snapshot = ctx.reader().user_snapshot(&user_ura);
+        assert_eq!(
+            snapshot.keys.len(),
+            axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA
+        );
+        assert_eq!(snapshot.revoked_key_count, 1);
+        assert_eq!(snapshot.rotation_epoch, 1);
+        let from_disk =
+            RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
+        assert!(from_disk
+            .lookup_user_by_pubkey(&user_ura, &oldest)
+            .is_none());
+        assert!(from_disk
+            .lookup_user_by_pubkey(&user_ura, &newest)
+            .is_some());
+        assert!(from_disk.is_user_pubkey_revoked(&user_ura, &oldest));
+    }
+
+    /// Regression for the incident that motivated
+    /// `register_pubkey_protecting`: a multi-key import loop (hub trust-sync
+    /// replaying every key it resolved for a user) registers keys one at a
+    /// time, and each call independently runs cap eviction. Without a
+    /// protected key, importing a batch of stale/historical keys can evict
+    /// the daemon's own active runtime signer key — which the loop itself
+    /// registered first — before the loop finishes, bricking the next boot.
+    #[test]
+    fn register_protecting_never_evicts_the_protected_key_even_when_it_is_oldest() {
+        let (_dir, ctx) = context();
+        let user_ura = "easynet:///r/realm/user/alice".to_string();
+        let protected = b64_pubkey(1);
+
+        // The protected key lands first, so by insertion order it is the
+        // "oldest" and would normally be the first eviction candidate.
+        ctx.writer()
+            .register_pubkey_protecting(
+                user_ura.clone(),
+                protected.clone(),
+                TrustAnchorRole::User,
+                None,
+                Some(protected.as_str()),
+            )
+            .expect("register protected key");
+
+        // Fill the bucket past capacity with newer keys, all naming the same
+        // protected key — simulating the rest of one import loop.
+        for seed in 2..=9u8 {
+            ctx.writer()
+                .register_pubkey_protecting(
+                    user_ura.clone(),
+                    b64_pubkey(seed),
+                    TrustAnchorRole::User,
+                    None,
+                    Some(protected.as_str()),
+                )
+                .expect("register batch key");
+        }
+
+        let snapshot = ctx.reader().user_snapshot(&user_ura);
+        assert_eq!(
+            snapshot.keys.len(),
+            axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA
+        );
+        let from_disk =
+            RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
+        assert!(
+            from_disk
+                .lookup_user_by_pubkey(&user_ura, &protected)
+                .is_some(),
+            "protected key must survive cap eviction across the whole import loop"
+        );
+        assert!(!from_disk.is_user_pubkey_revoked(&user_ura, &protected));
     }
 
     #[test]
@@ -520,14 +662,14 @@ mod tests {
             .register_pubkey(
                 device_ura.clone(),
                 public_key.clone(),
-                TrustedAgentRole::Device,
+                TrustAnchorRole::Device,
             )
             .expect("initial register");
         ctx.writer()
             .register_pubkey_with_owner(
                 device_ura.clone(),
                 public_key,
-                TrustedAgentRole::Device,
+                TrustAnchorRole::Device,
                 Some(TrustedPrincipalOwner {
                     principal_ura: device_ura.clone(),
                     owner_user_id: "alice".to_string(),
@@ -553,7 +695,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/other/user/alice".to_string(),
                 b64_pubkey(1),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect_err("reject cross-realm user");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -566,14 +708,14 @@ mod tests {
         let hub_ura = crate::core::ura::hub_ura("realm");
 
         ctx.writer()
-            .register_pubkey(hub_ura.clone(), b64_pubkey(1), TrustedAgentRole::Hub)
+            .register_pubkey(hub_ura.clone(), b64_pubkey(1), TrustAnchorRole::Hub)
             .expect("canonical Authority identity admits Hub role");
         let err = ctx
             .writer()
             .register_pubkey(
                 "easynet:///r/realm/authority/extra".to_string(),
                 b64_pubkey(2),
-                TrustedAgentRole::Hub,
+                TrustAnchorRole::Hub,
             )
             .expect_err("Authority URA with tail must not be admitted as Hub");
 
@@ -589,14 +731,14 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 b64_pubkey(1),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("first");
         ctx.writer()
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 b64_pubkey(2),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("second");
         let before = ctx.cell.cert_anchor_generation();
@@ -622,7 +764,7 @@ mod tests {
                     .register_pubkey(
                         crate::core::ura::user_ura("realm", &format!("user-{index}")),
                         b64_pubkey(index),
-                        TrustedAgentRole::User,
+                        TrustAnchorRole::User,
                     )
                     .expect("register user key")
             }));
@@ -647,7 +789,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 key.clone(),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("register");
         let removed = ctx
@@ -689,7 +831,7 @@ mod tests {
         let key = b64_pubkey(1);
         let user_ura = "easynet:///r/realm/user/alice";
         ctx.writer()
-            .register_pubkey(user_ura.to_string(), key.clone(), TrustedAgentRole::User)
+            .register_pubkey(user_ura.to_string(), key.clone(), TrustAnchorRole::User)
             .expect("register");
         assert!(ctx
             .writer()
@@ -698,7 +840,7 @@ mod tests {
 
         let err = ctx
             .writer()
-            .register_pubkey(user_ura.to_string(), key, TrustedAgentRole::User)
+            .register_pubkey(user_ura.to_string(), key, TrustAnchorRole::User)
             .expect_err("tombstoned key rejected");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     }
@@ -711,7 +853,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 json!("not-base64").as_str().unwrap().to_string(),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect_err("bad key");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);

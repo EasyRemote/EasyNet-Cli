@@ -11,6 +11,7 @@ from easynet_sdk import (
     AuthorizedRuntimeSession,
     CallerIdentityRef,
     DescriptorResolution,
+    DescriptorResolutionRequest,
     DescriptorResolutionState,
     ErrorCode,
     InvocationIntent,
@@ -87,9 +88,9 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             session_owner_ura="easynet:///r/example/user/alice",
             creator_principal_id="easynet:///r/example/agent/backend",
             creator_principal_ura="easynet:///r/example/agent/backend",
-            callee_ura="easynet:///r/example/device/dev-a",
+            callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
             subject_ura=retired_subject,
-            audience="easynet:///r/example/device/dev-a",
+            audience="easynet:///r/example/agent/device.dev-a.runtime-governance",
             scopes=("observe.health",),
             allowed_actions=("invoke",),
             allowed_followup_abilities=("observe.health",),
@@ -189,7 +190,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -214,7 +215,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura="easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history",
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -235,7 +236,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura="easynet:///r/example/resource/user.alice/session/invocation_history",
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -255,7 +256,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -277,7 +278,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         )
         call = receipt_read_call_context(
             caller_ura="easynet:///r/example/agent/alice.backend",
-            callee_ura="easynet:///r/example/device/dev-a",
+            callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
             nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
             causal_context={"form": "none"},
             authority=authority,
@@ -297,7 +298,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -320,7 +321,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -372,7 +373,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura="easynet:///r/example/resource/device.dev-a/archive/resource/user.alice/session/session-1",
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -392,7 +393,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -418,15 +419,19 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         stream = provider.open_stream(signed)
         self.assertEqual(stream.stream_id, "stream-1")
         assert transport.seen_draft is not None
-        self.assertEqual(transport.seen_draft["signer_id"], "caller-key")
+        self.assertEqual(
+            transport.seen_draft["caller_signature"]["key_id_hint"],
+            "caller-key",
+        )
 
         bidi = provider.open_bidi(signed, ())
         self.assertEqual(bidi.session_id, "bidi-1")
         assert transport.seen_draft is not None
         self.assertEqual(
-            transport.seen_draft["signature"]["signature_base64"],
+            transport.seen_draft["caller_signature"]["signature_base64"],
             "c2lnbmF0dXJl",
         )
+        self.assertNotIn("signature", transport.seen_draft)
 
     def test_runtime_client_providers_reject_missing_client_at_construction(self) -> None:
         with self.assertRaises(SDKError) as runtime_error:
@@ -436,6 +441,108 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         with self.assertRaises(SDKError) as descriptor_error:
             RuntimeClientDescriptorProvider(None)  # type: ignore[arg-type]
         self.assertTrue(is_code(descriptor_error.exception, ErrorCode.PROVIDER_UNAVAILABLE))
+
+    def test_runtime_client_descriptor_provider_uses_ability_descriptor_provider_for_catalogue_ability_ura(
+        self,
+    ) -> None:
+        class Transport:
+            def __init__(self) -> None:
+                self.descriptor_requests: list[dict[str, object]] = []
+
+            def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+                request = json.loads(request_json.decode("utf-8"))
+                self.descriptor_requests.append(request)
+                return json.dumps(
+                    {
+                        "descriptor_ref": (
+                            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources"
+                            "@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+                        )
+                    }
+                ).encode("utf-8")
+
+        transport = Transport()
+        provider = RuntimeClientDescriptorProvider(RuntimeClient(transport))  # type: ignore[arg-type]
+
+        resolution = provider.resolve_descriptor(
+            DescriptorResolutionRequest(
+                caller_identity=CallerIdentityRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                acting_principal=ActingPrincipalRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                target=RuntimeTargetRef("easynet:///r/example/agent/device.dev-a.runtime-introspection"),
+                ability=AbilityRef(
+                    "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources"
+                ),
+                subject=SubjectRef("easynet:///r/example/user/alice"),
+                call_mode="rpc",
+                deadline_unix_ms=0,
+                idempotency_key="",
+                causal_context={},
+            )
+        )
+
+        self.assertEqual(resolution.state, DescriptorResolutionState.RESOLVED)
+        self.assertEqual(
+            transport.descriptor_requests[-1]["provider"],
+            "ability_descriptor",
+        )
+        self.assertEqual(
+            transport.descriptor_requests[-1]["subject_ura"],
+            "easynet:///r/example/resource/user.alice/runtime-state/read",
+        )
+
+    def test_runtime_client_descriptor_provider_uses_governance_subject_for_receipt_history_provider(
+        self,
+    ) -> None:
+        class Transport:
+            def __init__(self) -> None:
+                self.descriptor_requests: list[dict[str, object]] = []
+
+            def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+                request = json.loads(request_json.decode("utf-8"))
+                self.descriptor_requests.append(request)
+                return json.dumps(
+                    {
+                        "descriptor_ref": (
+                            "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list"
+                            "@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!read"
+                        )
+                    }
+                ).encode("utf-8")
+
+        transport = Transport()
+        provider = RuntimeClientDescriptorProvider(RuntimeClient(transport))  # type: ignore[arg-type]
+
+        resolution = provider.resolve_descriptor(
+            DescriptorResolutionRequest(
+                caller_identity=CallerIdentityRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                acting_principal=ActingPrincipalRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                target=RuntimeTargetRef("easynet:///r/example/agent/device.dev-a.runtime-governance"),
+                ability=AbilityRef("invocation.history.list"),
+                subject=SubjectRef("easynet:///r/example/user/alice"),
+                call_mode="rpc",
+                deadline_unix_ms=0,
+                idempotency_key="",
+                causal_context={},
+            )
+        )
+
+        self.assertEqual(resolution.state, DescriptorResolutionState.RESOLVED)
+        self.assertEqual(
+            transport.descriptor_requests[-1]["provider"],
+            "receipt_history",
+        )
+        self.assertEqual(
+            transport.descriptor_requests[-1]["subject_ura"],
+            "easynet:///r/example/resource/user.alice/runtime-state/read",
+        )
 
 
 class _SessionFixture:
@@ -517,7 +624,7 @@ class _DescriptorProvider:
         self.calls += 1
         return DescriptorResolution(
             state=DescriptorResolutionState.RESOLVED,
-            descriptor_ref="easynet:///r/example/ability/invocation.history.list@1.0.0",
+            descriptor_ref="easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             descriptor_fingerprint="descriptor-fingerprint",
             owner_principal=PrincipalRef("easynet:///r/example/user/alice"),
         )
@@ -599,7 +706,9 @@ def _intent(caller: str = "easynet:///r/example/agent/backend") -> InvocationInt
         acting_principal=ActingPrincipalRef(
             PrincipalRef("easynet:///r/example/agent/backend")
         ),
-        target=RuntimeTargetRef("easynet:///r/example/device/dev-a"),
+        target=RuntimeTargetRef(
+            "easynet:///r/example/agent/device.dev-a.runtime-governance"
+        ),
         ability=AbilityRef("invocation.history.list"),
         subject=SubjectRef(
             "easynet:///r/example/resource/user.alice/session/session-1",
@@ -619,9 +728,9 @@ def _session_authority(override: dict[str, object] | None = None) -> SessionAuth
         "session_id": "session-1",
         "session_owner_user_id": "alice",
         "creator_principal_id": "easynet:///r/example/agent/backend",
-        "callee_ura": "easynet:///r/example/device/dev-a",
+        "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-governance",
         "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
-        "audience": "easynet:///r/example/device/dev-a",
+        "audience": "easynet:///r/example/agent/device.dev-a.runtime-governance",
         "scopes": ["invocation.history.*"],
         "allowed_actions": ["read"],
         "allowed_followup_abilities": ["invocation.history.list"],

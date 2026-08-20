@@ -6,9 +6,8 @@
 //              unified path: cross-device enumeration goes through
 //              `federation.discover` (the same surface
 //              `easynet device list` uses); ability count goes
-//              through `easynet.discover`. No more
-//              `node.list` — that handler is on the phase 4
-//              cull list.
+//              through `easynet.discover`. There is no separate
+//              device-owned fleet listing route.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -235,7 +234,7 @@ fn probe_runtime_health(print_success: bool) -> anyhow::Result<bool> {
 
 #[derive(Debug)]
 enum StatusPairingState {
-    Paired(config::Credentials),
+    Paired(Box<config::Credentials>),
     Unpaired,
     Invalid { reason: String },
 }
@@ -247,7 +246,7 @@ impl StatusPairingState {
 
     fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
         match result {
-            Ok(Some(credentials)) => Self::Paired(credentials),
+            Ok(Some(credentials)) => Self::Paired(Box::new(credentials)),
             Ok(None) => Self::Unpaired,
             Err(error) => Self::Invalid {
                 reason: format!("{error:#}"),
@@ -314,8 +313,9 @@ fn render_paired_credentials(creds: &config::Credentials) {
     let realm = creds.realm_str();
     let hub_ura = ura::hub_ura(realm);
     let device_ura = ura::device_ura(realm, &creds.node_id);
-    // Per RFC-001 §3.2, hub / user / device are all first-class agents; the user
-    // row must use the immutable product user id, not the display username slug.
+    // Per RFC-001 §3.2, Hub, User, and Device are routable URA identities, not
+    // one Agent class. The User row is a Principal/accountability root and must
+    // use the immutable product user id, not the display username slug.
     let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
     let user_binding = runtime_user_binding_display(creds);
     rows.push(("Current user", user_binding.value()));

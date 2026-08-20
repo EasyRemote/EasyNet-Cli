@@ -242,7 +242,7 @@ func directCallerSignatureForAxon(draft InvocationDraft) (axoninv.CallerSignatur
 			nil,
 		)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(signature.SignatureBase64)
+	decoded, err := base64.StdEncoding.Strict().DecodeString(signature.SignatureBase64)
 	if err != nil {
 		return axoninv.CallerSignature{}, invalidRuntimePayload(fmt.Sprintf("decode caller_signature.signature_base64: %v", err), err)
 	}

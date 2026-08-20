@@ -99,7 +99,6 @@ impl SystemAbilityDescriptorGroup {
             | device_control::TERMINAL_INPUT
             | device_control::TERMINAL_READ
             | device_control::TERMINAL_RESIZE
-            | device_control::NODE_LIST
             | device_control::NODE_DESCRIBE
             | device_control::NODE_REMOVE
             | federation::ABILITY_DEPLOY
@@ -119,6 +118,7 @@ impl SystemAbilityDescriptorGroup {
             | resources::CONTEXT_FAVORITES_REMOVE
             | resources::CONTEXT_CAPTURES_LIST
             | resources::CONTEXT_CAPTURES_GET
+            | resources::CONTEXT_CAPTURES_READ
             | resources::MEDIA_MIC_SUBSCRIBE
             | resources::MEDIA_CAMERA_SUBSCRIBE
             | resources::MEDIA_CAMERA_SNAPSHOT
@@ -127,7 +127,17 @@ impl SystemAbilityDescriptorGroup {
             | resources::MEDIA_SCREEN_SUBSCRIBE
             | resources::MEDIA_SCREEN_SNAPSHOT
             | resources::MEDIA_SPEAKER_PUBLISH
+            | "files.get"
+            | "files.list"
+            | "files.put"
             | resources::META_LIST_RESOURCES
+            | "pages.get"
+            | "pages.health"
+            | "pages.publish"
+            | "pages.unpublish"
+            | "project_list"
+            | resources::RESOURCE_REFRESH_REMOTE_TARGETS
+            | resources::RESOURCE_WATCH_REMOTE_TARGETS
             | resources::SKILL_INSTALL
             | resources::SKILL_REMOVE
             | resources::SKILL_UPGRADE
@@ -200,6 +210,16 @@ impl SystemAbilityDescriptorGroup {
             | federation::STATUS => Ok(Self::Federation),
 
             governance::ADMIN_STATUS
+            | governance::KEYRING_CREATE
+            | governance::KEYRING_LIST
+            | governance::KEYRING_GET_PUBLIC
+            | governance::KEYRING_ROTATE
+            | governance::KEYRING_REVOKE
+            | governance::KEYRING_EXPIRE_SET
+            | governance::KEYRING_BIND_SUBJECT
+            | governance::KEYRING_PEER_ADD
+            | governance::KEYRING_PEER_LIST
+            | governance::KEYRING_FEDERATE_USER_IDENTITY_TOKEN
             | governance::OBSERVE_HEALTH
             | governance::OBSERVE_NETWORK_HEALTH
             | governance::RUNTIME_BOOTSTRAP_SELF_IDENTITY
@@ -244,6 +264,14 @@ impl SystemAbilityDescriptorGroup {
             | federation::IDENTITY_LIST_USER_PUBKEYS
             | federation::IDENTITY_REGISTER_PUBKEY
             | federation::IDENTITY_REVOKE_USER_PUBKEY => Ok(Self::Governance),
+
+            // Deterministic SystemInventory descriptors for the user-scoped
+            // API-key family. Do not match arbitrary `<user>.api_key.*` names
+            // here: live user-specific registrations are dynamic rows with an
+            // explicit admission action, not one TOML file per user id.
+            "catalog-pages-owner.api_key.create"
+            | "catalog-pages-owner.api_key.list"
+            | "catalog-pages-owner.api_key.revoke" => Ok(Self::Governance),
 
             other => Err(DescriptorPathError::UnknownSystemAbility(other.to_string())),
         }

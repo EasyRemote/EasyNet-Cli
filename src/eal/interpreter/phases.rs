@@ -844,7 +844,7 @@ fn run_loop_block_sequentially(
                     LOOP_VERIFY_SYNTHETIC_BINDING.to_string(),
                     CapturedResult {
                         value: result_bytes.clone(),
-                        invocation: invocation.clone(),
+                        invocation: (**invocation).clone(),
                     },
                 );
             }

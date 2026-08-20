@@ -33,6 +33,9 @@ type AbilityDescriptorProjection struct {
 	Class            string
 	ReceiptSemantics map[string]any
 	Visibility       string
+	ScopeSubjects    map[string]any
+	ScopeAgents      map[string]any
+	DeniedAgents     []string
 	Source           string
 	Description      string
 	Hints            AbilityDescriptorHints
@@ -46,9 +49,11 @@ type AbilityDescriptorProjection struct {
 // runtime identity profile boundary; this value object only carries the
 // projected fields.
 type AbilityDescriptorRef struct {
-	Raw        string
-	AbilityURA string
-	Version    string
+	Raw            string
+	AbilityURA     string
+	Version        string
+	DescriptorHash string
+	Action         string
 }
 
 // AbilityDescriptorListRequest asks the runtime catalog for
@@ -210,9 +215,11 @@ func ProjectAbilityDescriptorRef(ctx context.Context, addressing Addressing, raw
 		return AbilityDescriptorRef{}, invalidProfilePayload(addressingProfile, "descriptor_ref projection is incomplete", nil)
 	}
 	return AbilityDescriptorRef{
-		Raw:        projection.DescriptorRef,
-		AbilityURA: projection.AbilityURA,
-		Version:    projection.DescriptorVersion,
+		Raw:            projection.DescriptorRef,
+		AbilityURA:     projection.AbilityURA,
+		Version:        projection.DescriptorVersion,
+		DescriptorHash: projection.DescriptorHash,
+		Action:         projection.Action,
 	}, nil
 }
 
@@ -229,6 +236,9 @@ func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 		Class:            descriptorString(raw["class"]),
 		ReceiptSemantics: descriptorMap(raw["receipt_semantics"]),
 		Visibility:       descriptorString(raw["visibility"]),
+		ScopeSubjects:    descriptorMap(raw["scope_subjects"]),
+		ScopeAgents:      descriptorMap(raw["scope_agents"]),
+		DeniedAgents:     descriptorStringSlice(raw["denied_agents"]),
 		Source:           descriptorString(raw["source"]),
 		Description:      descriptorString(raw["description"]),
 		Metadata:         descriptorMap(raw["metadata"]),
@@ -262,6 +272,9 @@ func projectRuntimeAbilityDescriptor(raw map[string]any, index int) (AbilityDesc
 		Class:            "",
 		ReceiptSemantics: nil,
 		Visibility:       "",
+		ScopeSubjects:    nil,
+		ScopeAgents:      nil,
+		DeniedAgents:     nil,
 		Source:           "",
 		Description:      "",
 		Metadata:         nil,
@@ -282,19 +295,26 @@ func projectRuntimeAbilityDescriptor(raw map[string]any, index int) (AbilityDesc
 	if projection.Version, err = requiredDescriptorString(raw, "descriptor_version", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
-	if projection.SchemaHash, err = optionalDescriptorString(raw, "schema_hash", index); err != nil {
+	if projection.AbilityURA == "" ||
+		projection.DescriptorRef == "" ||
+		projection.Name == "" ||
+		projection.OwnerURA == "" ||
+		projection.Version == "" {
+		return AbilityDescriptorProjection{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d is missing identity fields", index), nil)
+	}
+	if projection.SchemaHash, err = requiredDescriptorString(raw, "schema_hash", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
-	if projection.DescriptorHash, err = optionalDescriptorString(raw, "descriptor_hash", index); err != nil {
+	if projection.DescriptorHash, err = requiredDescriptorString(raw, "descriptor_hash", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
-	if projection.CallMode, err = optionalDescriptorString(raw, "call_mode", index); err != nil {
+	if projection.CallMode, err = requiredDescriptorString(raw, "call_mode", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
 	if projection.Class, err = optionalDescriptorString(raw, "class", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
-	if projection.Visibility, err = optionalDescriptorString(raw, "visibility", index); err != nil {
+	if projection.Visibility, err = requiredDescriptorString(raw, "visibility", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
 	if projection.Source, err = optionalDescriptorString(raw, "source", index); err != nil {
@@ -306,15 +326,23 @@ func projectRuntimeAbilityDescriptor(raw map[string]any, index int) (AbilityDesc
 	if projection.ReceiptSemantics, err = optionalDescriptorMapWithErr(raw, "receipt_semantics", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
+	if projection.ScopeSubjects, err = requiredDescriptorMap(raw, "scope_subjects", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.ScopeAgents, err = requiredDescriptorMap(raw, "scope_agents", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.DeniedAgents, err = requiredDescriptorStringSlice(raw, "denied_agents", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
 	if projection.Metadata, err = optionalDescriptorMapWithErr(raw, "metadata", index); err != nil {
 		return AbilityDescriptorProjection{}, err
 	}
-	if projection.AbilityURA == "" ||
-		projection.DescriptorRef == "" ||
-		projection.Name == "" ||
-		projection.OwnerURA == "" ||
-		projection.Version == "" {
-		return AbilityDescriptorProjection{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d is missing identity fields", index), nil)
+	if projection.SchemaHash == "" ||
+		projection.DescriptorHash == "" ||
+		projection.CallMode == "" ||
+		projection.Visibility == "" {
+		return AbilityDescriptorProjection{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d is missing governed contract fields", index), nil)
 	}
 	if hints, err := optionalDescriptorMapWithErr(raw, "hints", index); err != nil {
 		return AbilityDescriptorProjection{}, err
@@ -378,6 +406,26 @@ func descriptorMap(value any) map[string]any {
 	return nil
 }
 
+func descriptorStringSlice(value any) []string {
+	typed, ok := value.([]string)
+	if ok {
+		return append([]string(nil), typed...)
+	}
+	raw, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	projected := make([]string, 0, len(raw))
+	for _, value := range raw {
+		item, ok := value.(string)
+		if !ok {
+			return nil
+		}
+		projected = append(projected, item)
+	}
+	return projected
+}
+
 func requiredDescriptorString(raw map[string]any, field string, index int) (string, error) {
 	value, ok := raw[field]
 	if !ok || value == nil {
@@ -412,6 +460,30 @@ func optionalDescriptorMapWithErr(raw map[string]any, field string, index int) (
 		return nil, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be an object", index, field), nil)
 	}
 	return mapped, nil
+}
+
+func requiredDescriptorMap(raw map[string]any, field string, index int) (map[string]any, error) {
+	value, ok := raw[field]
+	if !ok || value == nil {
+		return nil, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be an object", index, field), nil)
+	}
+	mapped := descriptorMap(value)
+	if mapped == nil {
+		return nil, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be an object", index, field), nil)
+	}
+	return mapped, nil
+}
+
+func requiredDescriptorStringSlice(raw map[string]any, field string, index int) ([]string, error) {
+	value, ok := raw[field]
+	if !ok || value == nil {
+		return nil, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be an array of strings", index, field), nil)
+	}
+	projected := descriptorStringSlice(value)
+	if projected == nil {
+		return nil, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be an array of strings", index, field), nil)
+	}
+	return projected, nil
 }
 
 func optionalDescriptorBool(raw map[string]any, field string, index int) (bool, error) {

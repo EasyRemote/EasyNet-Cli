@@ -44,7 +44,6 @@ from ...errors import (
     SDKError,
     canonical_failure_code,
     canonical_terminal_state_code,
-    is_descriptor_owner_offline_message,
 )
 from ...invocation import InvocationDraft
 from ...axon_addressing import AddressingProjection
@@ -1328,8 +1327,6 @@ def _stream_chunk_json(chunk: Any) -> bytes:
         "payload_json": _output_json(chunk.payload, content_type),
         "error": error,
     }
-    if chunk.invocation_id:
-        event["invocation_id"] = chunk.invocation_id
     if chunk.elapsed_ms:
         event["elapsed_ms"] = chunk.elapsed_ms
     if chunk.HasField("admission_receipt"):
@@ -1644,6 +1641,7 @@ def _canonical_receipt_projection(receipt: Any) -> dict[str, object]:
     proof_binding_kind = _authority_binding_kind(proof.binding)
     proof_binding = _facade_authority_binding_projection(proof.binding)
     projection: dict[str, object] = {
+        "receipt_id": _receipt_id(receipt),
         "receipt_ura": _receipt_ura(receipt),
         "index": int(receipt.index),
         "invocation_id": receipt.invocation_id,
@@ -1758,6 +1756,7 @@ def _canonical_receipt_document(receipt: Any) -> dict[str, object]:
             "authority_proof.binding does not match authority_binding"
         )
     return {
+        "receipt_id": _receipt_id(receipt),
         "receipt_ura": _receipt_ura(receipt),
         "index": str(int(receipt.index)),
         "invocation_id": receipt.invocation_id,
@@ -1806,6 +1805,13 @@ def _receipt_ref_projection(receipt: Any) -> dict[str, object]:
         "receipt_hash_hex": receipt.receipt_hash.hex(),
         "receipt_ura": receipt.receipt_ura,
     }
+
+
+def _receipt_id(receipt: Any) -> str:
+    invocation_id = receipt.invocation_id.strip()
+    if not invocation_id or "/" in invocation_id:
+        raise _receipt_protocol_error("invocation_id must be owner-local for receipt id")
+    return f"{invocation_id}:{int(receipt.index)}"
 
 
 def _receipt_ura(receipt: Any) -> str:
@@ -1944,7 +1950,7 @@ def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
         }
     if authority == "session_authority":
         value = binding.session_authority
-        for field_name in ("backend_ura", "user_ura", _AXON_AUTHORITY_LINK_FIELD):
+        for field_name in ("issuer_ura", "subject_ura", _AXON_AUTHORITY_LINK_FIELD):
             _require_receipt_text(
                 getattr(value, field_name),
                 f"authority_binding.session_authority.{field_name}",
@@ -1964,8 +1970,8 @@ def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
         )
         return {
             "kind": "session",
-            "issuer_ura": value.backend_ura,
-            "subject_ura": value.user_ura,
+            "issuer_ura": value.issuer_ura,
+            "subject_ura": value.subject_ura,
             _AXON_AUTHORITY_LINK_FIELD: getattr(value, _AXON_AUTHORITY_LINK_FIELD),
             "scopes": list(value.scopes),
             "audiences": list(value.audiences),
@@ -1998,17 +2004,14 @@ def _canonical_authority_binding_projection(binding: Any) -> dict[str, object]:
         "self": "self_",
         "delegation": "delegated",
     }.get(kind, kind)
-    if kind == "session":
-        projection["backend_ura"] = projection.pop("issuer_ura")
-        projection["user_ura"] = projection.pop("subject_ura")
     if "issued_at_ms" in projection:
         projection["issued_at_ms"] = str(projection["issued_at_ms"])
     if "expires_at_ms" in projection:
         projection["expires_at_ms"] = str(projection["expires_at_ms"])
     if "signature_base64" in projection:
-        projection["signature_hex"] = base64.b64decode(
-            str(projection.pop("signature_base64")),
-            validate=True,
+        signature_base64 = str(projection.pop("signature_base64"))
+        projection["signature_hex"] = _base64_decode(
+            signature_base64, "signature_base64"
         ).hex()
     return projection
 
@@ -2333,7 +2336,7 @@ def _close_identity_projector(
 def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
     code = error.code()
     message = error.details() or str(error)
-    if is_descriptor_owner_offline_message(message):
+    if _canonical_error_code_from_message_prefix(message) == ErrorCode.DESCRIPTOR_OWNER_OFFLINE:
         return _direct_error(
             "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
             code=ErrorCode.DESCRIPTOR_OWNER_OFFLINE,
@@ -2379,6 +2382,16 @@ def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
         details={"endpoint": endpoint, "grpc_status": str(code)},
         cause=error,
     )
+
+
+def _canonical_error_code_from_message_prefix(message: str) -> ErrorCode | None:
+    prefix, separator, _ = message.strip().partition(":")
+    if not separator:
+        return None
+    try:
+        return ErrorCode(prefix.strip())
+    except ValueError:
+        return None
 
 
 def _unsupported(message: str) -> SDKError:
@@ -2469,7 +2482,7 @@ def _decode_object(raw: bytes, name: str) -> dict[str, object]:
 
 def _base64_decode(value: str, field_name: str) -> bytes:
     try:
-        return base64.b64decode(value.encode("ascii"), validate=True)
+        decoded = base64.b64decode(value.encode("ascii"), validate=True)
     except (binascii.Error, UnicodeEncodeError) as exc:
         raise _direct_error(
             f"{field_name} must be base64: {exc}",
@@ -2477,6 +2490,13 @@ def _base64_decode(value: str, field_name: str) -> bytes:
             retry=RetryHint.NEVER,
             cause=exc,
         ) from exc
+    if base64.b64encode(decoded).decode("ascii") != value:
+        raise _direct_error(
+            f"{field_name} must be canonical base64",
+            code=ErrorCode.INVALID_INVOCATION,
+            retry=RetryHint.NEVER,
+        )
+    return decoded
 
 
 def _hex_decode(value: str, field_name: str) -> bytes:

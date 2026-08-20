@@ -20,6 +20,7 @@ const (
 	URAKindUnknown   URAKind = "unknown"
 	URAKindUser      URAKind = "user"
 	URAKindDevice    URAKind = "device"
+	URAKindService   URAKind = "service"
 	URAKindAgent     URAKind = "agent"
 	URAKindAbility   URAKind = "ability"
 	URAKindAuthority URAKind = "authority"
@@ -47,6 +48,7 @@ type ParsedURA struct {
 	UserID            string
 	DeviceID          string
 	AgentID           string
+	ServiceID         string
 	AbilityID         string
 	AbilityOwner      AbilityOwner
 	AbilityNamespace  string
@@ -59,10 +61,11 @@ type ParsedURA struct {
 type AbilityOwnerKind string
 
 type AbilityOwner struct {
-	Kind    AbilityOwnerKind
-	UserID  string
-	AgentID string
-	OwnerID string
+	Kind      AbilityOwnerKind
+	UserID    string
+	AgentID   string
+	OwnerID   string
+	ServiceID string
 }
 
 type ParsedAbility struct {
@@ -72,9 +75,11 @@ type ParsedAbility struct {
 }
 
 const (
-	abilityOwnerAuthority AbilityOwnerKind = "authority"
-	AbilityOwnerAgent     AbilityOwnerKind = "agent"
-	abilityOwnerDevice    AbilityOwnerKind = "device"
+	abilityOwnerAuthority   AbilityOwnerKind = "authority"
+	AbilityOwnerAgent       AbilityOwnerKind = "agent"
+	AbilityOwnerService     AbilityOwnerKind = "service"
+	abilityOwnerDevice      AbilityOwnerKind = "device"
+	abilityOwnerSystemAgent AbilityOwnerKind = "system-agent"
 )
 
 func IsResourceNamespace(namespace string) bool {
@@ -153,12 +158,20 @@ func AgentURA(realm, userID, agentID string) string {
 	return axonsdk.AgentURA(realm, userID, agentID)
 }
 
+func ServiceURA(realm, principalID, serviceID string) string {
+	return axonsdk.ServiceURA(realm, principalID, serviceID)
+}
+
 func DeviceAgentURA(realm, deviceID, agentID string) string {
 	return axonsdk.DeviceAgentURA(realm, deviceID, agentID)
 }
 
 func AbilityURA(realm, userID, agentID, abilityID string) string {
 	return axonsdk.AbilityURA(realm, userID, agentID, abilityID)
+}
+
+func ServiceAbilityURA(realm, principalID, serviceID, abilityID string) string {
+	return axonsdk.ServiceAbilityURA(realm, principalID, serviceID, abilityID)
 }
 
 func AuthorityURA(realm string) string {
@@ -241,6 +254,7 @@ func parsedURAFromAxon(parts axonsdk.ParsedURA) ParsedURA {
 		UserID:            parts.UserID,
 		DeviceID:          parts.DeviceID,
 		AgentID:           parts.AgentID,
+		ServiceID:         parts.ServiceID,
 		AbilityID:         parts.AbilityID,
 		AbilityOwner:      abilityOwnerFromAxon(parts.AbilityOwner),
 		AbilityNamespace:  parts.AbilityNamespace,
@@ -268,9 +282,10 @@ func abilityOwnerFromAxon(owner axonsdk.AbilityOwner) AbilityOwner {
 		kind = abilityOwnerDevice
 	}
 	return AbilityOwner{
-		Kind:    kind,
-		UserID:  owner.UserID,
-		AgentID: owner.AgentID,
-		OwnerID: owner.DeviceID,
+		Kind:      kind,
+		UserID:    owner.UserID,
+		AgentID:   owner.AgentID,
+		OwnerID:   owner.DeviceID,
+		ServiceID: owner.ServiceID,
 	}
 }

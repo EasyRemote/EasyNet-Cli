@@ -322,7 +322,7 @@ fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Resul
         .ok_or_else(|| {
             Status::internal("cross-hub canonical_invoke signing: callee URA missing after rewrite")
         })?;
-    crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+    crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
         callee_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
@@ -339,6 +339,18 @@ fn descriptor_subject_ura_for(
     subject_ura: &str,
     ability: &str,
 ) -> anyhow::Result<String> {
+    let subject_kind = crate::core::ura::parse_ura(subject_ura)?.kind;
+    if matches!(
+        subject_kind,
+        crate::core::ura::URAKind::Authority | crate::core::ura::URAKind::User
+    ) {
+        return crate::core::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
+            anyhow::anyhow!(
+                "provenance subject `{subject_ura}` requires a descriptor-bound subject, but \
+                 callee `{callee_ura}` cannot own ability `{ability}`"
+            )
+        });
+    }
     if try_entity_ref(subject_ura.to_string()).is_ok() {
         return Ok(subject_ura.to_string());
     }
@@ -379,7 +391,7 @@ mod tests {
     }
 
     fn peer_discover_descriptor_ref() -> String {
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             "easynet:///r/peer/authority",
             "federation.discover",
             crate::daemon::ability::CallMode::Rpc,

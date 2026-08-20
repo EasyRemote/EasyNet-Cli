@@ -34,12 +34,18 @@ fn production_mission_and_eal_have_one_invocation_authority() {
 
 #[test]
 fn cli_execution_surfaces_only_call_mission_run() {
-    for path in [
-        "src/cli/commands/groups/mission.rs",
-        "src/cli/commands/agent/send.rs",
+    for (path, mission_gateway) in [
+        (
+            "src/cli/commands/groups/mission.rs",
+            "automation::mission::ABILITY_RUN",
+        ),
+        (
+            "src/cli/commands/agent/send.rs",
+            "invoke_agent_subject_mission_run",
+        ),
     ] {
         let source = repo_file(path);
-        assert!(source.contains("ABILITY_RUN"), "{path}");
+        assert!(source.contains(mission_gateway), "{path}");
         assert!(!source.contains("MissionRunner"), "{path}");
         assert!(!source.contains("run_mission_inproc"), "{path}");
         assert!(!source.contains("send_external"), "{path}");

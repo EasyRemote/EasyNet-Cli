@@ -37,7 +37,7 @@ def test_seven_language_capability_matrix_self_test() -> None:
     _run_gate("check-sdk-parity-matrix.sh", "--self-test")
 
 
-def test_stream_and_bidi_backpressure_bounds() -> None:
+def test_stream_backpressure_and_bidi_observation_bounds() -> None:
     stream = StreamHandle.from_json(
         MemoryStreamTransport(
             [
@@ -66,13 +66,10 @@ def test_stream_and_bidi_backpressure_bounds() -> None:
         b'{"session_id":"bidi-1","state":"Open","max_buffered_frames":1}',
     )
     bidi.receive()
-    try:
-        bidi.receive()
-    except SDKError as error:
-        assert is_code(error, ErrorCode.INVALID_ARGUMENT)
-    else:
-        raise AssertionError("bidi overflow was accepted")
-    assert bidi.state is BidiState.FAILED
+    bidi.receive()
+    assert [frame.sequence for frame in bidi.received_frames] == [2]
+    assert bidi.state is BidiState.OPEN
+    assert bidi.runtime_state is BidiState.OPEN
 
 
 def test_stream_cancel_request_is_non_terminal() -> None:

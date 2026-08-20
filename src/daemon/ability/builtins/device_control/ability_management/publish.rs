@@ -102,16 +102,9 @@ pub const ABILITY_UNPUBLISH: &str = crate::daemon::ability::names::federation::A
 /// because publish is rare and the registry lookup is cheap (no
 /// hot-path concern). No captured state to keep coherent.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
-        "ability.publish",
-        OwnerKind::Device,
-        Arc::new(publish_handler),
-    );
-    reg.register_rpc_with_owner(
-        "ability.unpublish",
-        OwnerKind::Device,
-        Arc::new(unpublish_handler),
-    );
+    let owner = OwnerKind::ability_management_system();
+    reg.register_rpc_with_owner(ABILITY_PUBLISH, owner.clone(), Arc::new(publish_handler));
+    reg.register_rpc_with_owner(ABILITY_UNPUBLISH, owner, Arc::new(unpublish_handler));
 }
 
 /// `ability.publish` handler.
@@ -525,7 +518,7 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
     use crate::daemon::persistence::agent_registry as agents;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
     /// Materialise a throwaway agent inside a `HomeGuard`-isolated
     /// `~/.easynet/`. The HomeGuard already holds the process-global
@@ -549,7 +542,7 @@ mod tests {
         )
         .unwrap();
         let mut registry = AgentRegistry::default();
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         entry.root_path = Some(agent_root.clone());
         registry.agents.insert(format!("default/{name}"), entry);
         agents::save_agents(&registry).unwrap();

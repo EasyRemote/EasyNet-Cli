@@ -35,7 +35,7 @@ use tonic::Status;
 use crate::daemon::invocation::admission::admission_facade::AdmissionTransportBoundary;
 use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyIntent;
 use crate::daemon::invocation::admission::revoke_user_pubkey::RevokeUserPubkeyIntent;
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole};
 
 pub(crate) struct IdentityWriteGate {
     trust_anchor: Arc<RealmTrustAnchor>,
@@ -63,23 +63,29 @@ impl IdentityWriteGate {
         &self,
         caller_envelope: Option<&Envelope>,
         intent: &RegisterPubkeyIntent,
+        bootstrap: Option<&UserSelfRegisterBootstrap>,
     ) -> Result<(), Status> {
-        let caller = self.authorized_caller(caller_envelope, "identity.register_pubkey")?;
+        let caller_ura = required_caller_ura(caller_envelope, "identity.register_pubkey")?;
+        if bootstrap.is_some_and(|proof| proof.admits(caller_ura, intent)) {
+            return Ok(());
+        }
+
+        let caller = self.authorized_caller_ura(caller_ura, "identity.register_pubkey")?;
         let caller_ura = caller.ura.as_str();
 
         match intent.role() {
-            TrustedAgentRole::Device => {
+            TrustAnchorRole::Device => {
                 if caller.local_self || self.is_local_backend_or_hub(caller_ura, caller.role) {
-                    Ok(())
+                    self.authorize_device_owner_binding(caller_envelope, intent)
                 } else {
                     Err(self.permission_denied_register(caller_ura, caller.role, intent))
                 }
             }
-            TrustedAgentRole::User => {
+            TrustAnchorRole::User => {
                 if caller.local_self || self.is_local_backend_or_hub(caller_ura, caller.role) {
                     return Ok(());
                 }
-                if caller.role == TrustedAgentRole::Device
+                if caller.role == TrustAnchorRole::Device
                     && self
                         .trust_anchor
                         .lookup_principal_owner(caller_ura)
@@ -89,7 +95,7 @@ impl IdentityWriteGate {
                 }
                 Err(self.permission_denied_register(caller_ura, caller.role, intent))
             }
-            TrustedAgentRole::Backend => {
+            TrustAnchorRole::Backend => {
                 if caller.local_self
                     || (self.is_local_backend_or_hub(caller_ura, caller.role)
                         && caller_ura == intent.principal_ura())
@@ -99,7 +105,7 @@ impl IdentityWriteGate {
                     Err(self.permission_denied_register(caller_ura, caller.role, intent))
                 }
             }
-            TrustedAgentRole::Hub => {
+            TrustAnchorRole::Hub => {
                 Err(self.permission_denied_register(caller_ura, caller.role, intent))
             }
         }
@@ -127,18 +133,19 @@ impl IdentityWriteGate {
         caller_envelope: Option<&Envelope>,
         ability: &'static str,
     ) -> Result<AuthorizedIdentityWriteCaller, Status> {
-        let caller_ura = caller_envelope
-            .and_then(|env| env.caller.as_ref())
-            .map(|caller| caller.ura.trim())
-            .filter(|caller| !caller.is_empty())
-            .ok_or_else(|| {
-                Status::invalid_argument(format!("{ability}: missing caller envelope.caller.ura"))
-            })?;
+        let caller_ura = required_caller_ura(caller_envelope, ability)?;
+        self.authorized_caller_ura(caller_ura, ability)
+    }
 
+    fn authorized_caller_ura(
+        &self,
+        caller_ura: &str,
+        ability: &'static str,
+    ) -> Result<AuthorizedIdentityWriteCaller, Status> {
         if self.is_local_self(caller_ura) {
             return Ok(AuthorizedIdentityWriteCaller {
                 ura: caller_ura.to_string(),
-                role: TrustedAgentRole::Backend,
+                role: TrustAnchorRole::Backend,
                 local_self: true,
             });
         }
@@ -161,20 +168,68 @@ impl IdentityWriteGate {
             .accepts_local_self_caller(self.daemon_ura.as_deref(), caller_ura)
     }
 
-    fn is_local_backend_or_hub(&self, caller_ura: &str, caller_role: TrustedAgentRole) -> bool {
-        if !matches!(
-            caller_role,
-            TrustedAgentRole::Backend | TrustedAgentRole::Hub
-        ) {
+    fn is_local_backend_or_hub(&self, caller_ura: &str, caller_role: TrustAnchorRole) -> bool {
+        if !matches!(caller_role, TrustAnchorRole::Backend | TrustAnchorRole::Hub) {
             return false;
         }
         crate::core::ura::hub_ura(&self.daemon_realm) == caller_ura
     }
 
+    fn authorize_device_owner_binding(
+        &self,
+        caller_envelope: Option<&Envelope>,
+        intent: &RegisterPubkeyIntent,
+    ) -> Result<(), Status> {
+        let owner_ura = intent
+            .principal_owner_ura()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Status::permission_denied(
+                    "identity.register_pubkey: realm identity adapter Device registration requires principal_owner_ura",
+                )
+            })?;
+        let owner = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey: principal_owner_ura must be canonical: {error}"
+            ))
+        })?;
+        if owner.kind != crate::core::ura::URAKind::User || owner.realm != self.daemon_realm {
+            return Err(Status::permission_denied(
+                "identity.register_pubkey: Device owner must be a same-realm User",
+            ));
+        }
+        let owner_user_id = owner.user_id().ok_or_else(|| {
+            Status::invalid_argument(
+                "identity.register_pubkey: principal_owner_ura must include a User id",
+            )
+        })?;
+        let expected_subject = crate::core::ura::resource_dot_ura(
+            &self.daemon_realm,
+            &format!("user.{owner_user_id}"),
+            "invoke/identity.register_pubkey",
+        );
+        let actual_subject = caller_envelope
+            .and_then(|envelope| envelope.subject.as_ref())
+            .map(|subject| subject.ura.trim())
+            .filter(|subject| !subject.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "identity.register_pubkey: realm identity adapter subject is required",
+                )
+            })?;
+        if actual_subject != expected_subject {
+            return Err(Status::permission_denied(format!(
+                "identity.register_pubkey: principal_owner_ura `{owner_ura}` does not match admitted adapter subject `{actual_subject}`"
+            )));
+        }
+        Ok(())
+    }
+
     fn permission_denied_register(
         &self,
         caller_ura: &str,
-        caller_role: TrustedAgentRole,
+        caller_role: TrustAnchorRole,
         intent: &RegisterPubkeyIntent,
     ) -> Status {
         Status::permission_denied(format!(
@@ -187,19 +242,51 @@ impl IdentityWriteGate {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserSelfRegisterBootstrap {
+    principal_ura: String,
+}
+
+impl UserSelfRegisterBootstrap {
+    pub(crate) fn new(principal_ura: impl Into<String>) -> Self {
+        Self {
+            principal_ura: principal_ura.into(),
+        }
+    }
+
+    fn admits(&self, caller_ura: &str, intent: &RegisterPubkeyIntent) -> bool {
+        intent.role() == TrustAnchorRole::User
+            && caller_ura == self.principal_ura
+            && intent.principal_ura() == self.principal_ura
+    }
+}
+
 #[derive(Debug)]
 struct AuthorizedIdentityWriteCaller {
     ura: String,
-    role: TrustedAgentRole,
+    role: TrustAnchorRole,
     local_self: bool,
 }
 
-fn role_label(role: TrustedAgentRole) -> &'static str {
+fn required_caller_ura<'a>(
+    caller_envelope: Option<&'a Envelope>,
+    ability: &'static str,
+) -> Result<&'a str, Status> {
+    caller_envelope
+        .and_then(|env| env.caller.as_ref())
+        .map(|caller| caller.ura.trim())
+        .filter(|caller| !caller.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(format!("{ability}: missing caller envelope.caller.ura"))
+        })
+}
+
+fn role_label(role: TrustAnchorRole) -> &'static str {
     match role {
-        TrustedAgentRole::Backend => "backend",
-        TrustedAgentRole::Device => "device",
-        TrustedAgentRole::Hub => "hub",
-        TrustedAgentRole::User => "user",
+        TrustAnchorRole::Backend => "backend",
+        TrustAnchorRole::Device => "device",
+        TrustAnchorRole::Hub => "hub",
+        TrustAnchorRole::User => "user",
     }
 }
 
@@ -207,12 +294,20 @@ fn role_label(role: TrustedAgentRole) -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::invocation::admission::revoke_user_pubkey::RevokeUserPubkeyIntent;
-    use axon_sdk::pb::axon::v1::AgentIdentity;
+    use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
-    fn intent(principal_ura: &str, role: TrustedAgentRole) -> RegisterPubkeyIntent {
+    fn intent(principal_ura: &str, role: TrustAnchorRole) -> RegisterPubkeyIntent {
         RegisterPubkeyIntent::for_test(principal_ura.to_string(), role)
+    }
+
+    fn device_intent(principal_ura: &str, owner_ura: &str) -> RegisterPubkeyIntent {
+        RegisterPubkeyIntent::for_test_with_owner(
+            principal_ura.to_string(),
+            TrustAnchorRole::Device,
+            owner_ura.to_string(),
+        )
     }
 
     fn revoke_intent(user_ura: &str) -> RevokeUserPubkeyIntent {
@@ -229,9 +324,22 @@ mod tests {
         }
     }
 
+    fn identity_adapter_envelope(caller_ura: &str, owner_user_id: &str) -> Envelope {
+        let mut envelope = envelope(caller_ura);
+        envelope.subject = Some(SubjectIdentity {
+            ura: crate::core::ura::resource_dot_ura(
+                "local",
+                &format!("user.{owner_user_id}"),
+                "invoke/identity.register_pubkey",
+            ),
+            profile: "axon-strict-v2".to_string(),
+        });
+        envelope
+    }
+
     fn anchor_entry(
         agent_ura: &str,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
     ) -> crate::daemon::trust::anchor::TrustedAgent {
         let key = SigningKey::from_bytes(&[0x42; 32]);
         crate::daemon::trust::anchor::TrustedAgent {
@@ -273,8 +381,9 @@ mod tests {
             Some(&env),
             &intent(
                 &crate::core::ura::hub_ura("local"),
-                TrustedAgentRole::Backend,
+                TrustAnchorRole::Backend,
             ),
+            None,
         )
         .expect("daemon local self caller owns bootstrap writes");
     }
@@ -294,8 +403,9 @@ mod tests {
                 Some(&env),
                 &intent(
                     &crate::core::ura::hub_ura("local"),
-                    TrustedAgentRole::Backend,
+                    TrustAnchorRole::Backend,
                 ),
+                None,
             )
             .expect_err("off-box daemon URA spoof must not author trust rows");
 
@@ -310,34 +420,60 @@ mod tests {
     #[test]
     fn local_backend_can_register_device_and_user_rows() {
         let backend_ura = crate::core::ura::hub_ura("local");
-        let gate = gate(vec![anchor_entry(&backend_ura, TrustedAgentRole::Backend)]);
-        let env = envelope(&backend_ura);
+        let gate = gate(vec![anchor_entry(&backend_ura, TrustAnchorRole::Backend)]);
+        let env = identity_adapter_envelope(&backend_ura, "user-1");
 
         gate.authorize_register_pubkey(
             Some(&env),
-            &intent(
-                "easynet:///r/user-realm/device/dev-1",
-                TrustedAgentRole::Device,
+            &device_intent(
+                "easynet:///r/local/device/dev-1",
+                "easynet:///r/local/user/user-1",
             ),
+            None,
         )
         .expect("backend pairs devices");
         gate.authorize_register_pubkey(
             Some(&env),
-            &intent("easynet:///r/local/user/user-1", TrustedAgentRole::User),
+            &intent("easynet:///r/local/user/user-1", TrustAnchorRole::User),
+            None,
         )
         .expect("backend product auth registers user keys");
     }
 
     #[test]
+    fn realm_identity_adapter_rejects_owner_argument_different_from_admitted_subject() {
+        let backend_ura = crate::core::ura::hub_ura("local");
+        let gate = gate(vec![anchor_entry(&backend_ura, TrustAnchorRole::Backend)]);
+        let env = identity_adapter_envelope(&backend_ura, "alice");
+
+        let error = gate
+            .authorize_register_pubkey(
+                Some(&env),
+                &device_intent(
+                    "easynet:///r/local/device/dev-1",
+                    "easynet:///r/local/user/bob",
+                ),
+                None,
+            )
+            .expect_err("admitted User A subject must not bind Device to User B");
+
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        assert!(error
+            .message()
+            .contains("does not match admitted adapter subject"));
+    }
+
+    #[test]
     fn device_caller_cannot_register_user_row() {
         let device_ura = "easynet:///r/local/device/dev-1";
-        let gate = gate(vec![anchor_entry(device_ura, TrustedAgentRole::Device)]);
+        let gate = gate(vec![anchor_entry(device_ura, TrustAnchorRole::Device)]);
         let env = envelope(device_ura);
 
         let err = gate
             .authorize_register_pubkey(
                 Some(&env),
-                &intent("easynet:///r/local/user/user-1", TrustedAgentRole::User),
+                &intent("easynet:///r/local/user/user-1", TrustAnchorRole::User),
+                None,
             )
             .expect_err("device must not author user trust rows");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -349,7 +485,7 @@ mod tests {
         let device_ura = "easynet:///r/local/device/dev-1";
         let owner_ura = "easynet:///r/local/user/owner-1";
         let gate = gate_with_owners(
-            vec![anchor_entry(device_ura, TrustedAgentRole::Device)],
+            vec![anchor_entry(device_ura, TrustAnchorRole::Device)],
             vec![crate::daemon::trust::anchor::TrustedPrincipalOwner {
                 principal_ura: device_ura.to_string(),
                 owner_user_id: "owner-1".to_string(),
@@ -359,37 +495,69 @@ mod tests {
         );
         let env = envelope(device_ura);
 
-        gate.authorize_register_pubkey(Some(&env), &intent(owner_ura, TrustedAgentRole::User))
+        gate.authorize_register_pubkey(Some(&env), &intent(owner_ura, TrustAnchorRole::User), None)
             .expect("paired device may seed its owner user key");
 
         let err = gate
             .authorize_register_pubkey(
                 Some(&env),
-                &intent("easynet:///r/local/user/other", TrustedAgentRole::User),
+                &intent("easynet:///r/local/user/other", TrustAnchorRole::User),
+                None,
             )
             .expect_err("paired device must not seed another user's key");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
     }
 
     #[test]
+    fn untrusted_user_self_bootstrap_requires_matching_proof() {
+        let gate = gate(vec![]);
+        let untrusted_user = "easynet:///r/local/user/user-bootstrap";
+        let env = envelope(untrusted_user);
+
+        let err = gate
+            .authorize_register_pubkey(
+                Some(&env),
+                &intent(untrusted_user, TrustAnchorRole::User),
+                None,
+            )
+            .expect_err("untrusted user self-registration still requires bootstrap proof");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
+        gate.authorize_register_pubkey(
+            Some(&env),
+            &intent(untrusted_user, TrustAnchorRole::User),
+            Some(&UserSelfRegisterBootstrap::new(untrusted_user)),
+        )
+        .expect("admitted user self-bootstrap may author only its own user key");
+
+        let err = gate
+            .authorize_register_pubkey(
+                Some(&env),
+                &intent("easynet:///r/local/user/other", TrustAnchorRole::User),
+                Some(&UserSelfRegisterBootstrap::new(untrusted_user)),
+            )
+            .expect_err("bootstrap proof must not author another user row");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    }
+
+    #[test]
     fn backend_can_refresh_only_its_own_backend_row() {
         let backend_ura = crate::core::ura::hub_ura("local");
-        let gate = gate(vec![anchor_entry(&backend_ura, TrustedAgentRole::Backend)]);
+        let gate = gate(vec![anchor_entry(&backend_ura, TrustAnchorRole::Backend)]);
         let env = envelope(&backend_ura);
 
         gate.authorize_register_pubkey(
             Some(&env),
-            &intent(&backend_ura, TrustedAgentRole::Backend),
+            &intent(&backend_ura, TrustAnchorRole::Backend),
+            None,
         )
         .expect("backend may refresh its own row");
 
         let err = gate
             .authorize_register_pubkey(
                 Some(&env),
-                &intent(
-                    &crate::core::ura::hub_ura("peer"),
-                    TrustedAgentRole::Backend,
-                ),
+                &intent(&crate::core::ura::hub_ura("peer"), TrustAnchorRole::Backend),
+                None,
             )
             .expect_err("backend must not mint another backend row");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -398,13 +566,14 @@ mod tests {
     #[test]
     fn public_caller_cannot_register_hub_row() {
         let backend_ura = crate::core::ura::hub_ura("local");
-        let gate = gate(vec![anchor_entry(&backend_ura, TrustedAgentRole::Backend)]);
+        let gate = gate(vec![anchor_entry(&backend_ura, TrustAnchorRole::Backend)]);
         let env = envelope(&backend_ura);
 
         let err = gate
             .authorize_register_pubkey(
                 Some(&env),
-                &intent(&crate::core::ura::hub_ura("peer"), TrustedAgentRole::Hub),
+                &intent(&crate::core::ura::hub_ura("peer"), TrustAnchorRole::Hub),
+                None,
             )
             .expect_err("hub trust rows are daemon/operator local");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -413,7 +582,7 @@ mod tests {
     #[test]
     fn local_backend_can_revoke_user_rows() {
         let backend_ura = crate::core::ura::hub_ura("local");
-        let gate = gate(vec![anchor_entry(&backend_ura, TrustedAgentRole::Backend)]);
+        let gate = gate(vec![anchor_entry(&backend_ura, TrustAnchorRole::Backend)]);
         let env = envelope(&backend_ura);
 
         gate.authorize_revoke_user_pubkey(
@@ -426,7 +595,7 @@ mod tests {
     #[test]
     fn device_caller_cannot_revoke_user_row() {
         let device_ura = "easynet:///r/local/device/dev-1";
-        let gate = gate(vec![anchor_entry(device_ura, TrustedAgentRole::Device)]);
+        let gate = gate(vec![anchor_entry(device_ura, TrustAnchorRole::Device)]);
         let env = envelope(device_ura);
 
         let err = gate

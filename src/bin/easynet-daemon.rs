@@ -22,8 +22,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -56,17 +55,18 @@ use easynet_cli::daemon::resources::context::clipboard_tracker;
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
-fn device_ability_replay_fatal_message(
+fn ability_deployment_replay_fatal_message(
     report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> Option<String> {
     if report.runtime_not_ready || report.store_unreadable || report.stale > 0 || report.errored > 0
     {
         return Some(format!(
-            "device ability replay failed before daemon start: runtime_not_ready={}, \
-             store_unreadable={}, stale={}, quarantined={}, errored={}, outcomes={}",
+            "ability deployment replay failed before daemon start: runtime_not_ready={}, \
+             store_unreadable={}, stale={}, lease_pending={}, quarantined={}, errored={}, outcomes={}",
             report.runtime_not_ready,
             report.store_unreadable,
             report.stale,
+            report.lease_pending,
             report.quarantined,
             report.errored,
             report.outcomes_json()
@@ -75,16 +75,17 @@ fn device_ability_replay_fatal_message(
     None
 }
 
-fn report_device_ability_replay(
+fn report_ability_deployment_replay(
     report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> anyhow::Result<()> {
-    if let Some(message) = device_ability_replay_fatal_message(report) {
+    if let Some(message) = ability_deployment_replay_fatal_message(report) {
         anyhow::bail!(message);
     }
     eprintln!(
-        "[device-ability] replay: {} registered, {} stale, {} quarantined, {} errored, \
+        "[ability-deployment] replay: {} registered, {} lease-pending, {} stale, {} quarantined, {} errored, \
          runtime_not_ready={}, store_unreadable={}, outcomes={}",
         report.registered,
+        report.lease_pending,
         report.stale,
         report.quarantined,
         report.errored,
@@ -136,8 +137,8 @@ fn assert_daemon_baseline_conformance(
 fn ensure_daemon_runtime_identity(config: &DaemonConfig) -> anyhow::Result<()> {
     use easynet_cli::daemon::identity::self_identity::KeyringClient;
 
-    easynet_cli::daemon::keyring::lifecycle::ensure_key_service_running()
-        .context("start or attach daemon key service")?;
+    easynet_cli::daemon::keyring::lifecycle::ensure_daemon_key_service_running()
+        .context("establish daemon-owned key service")?;
     let client = KeyringClient::default_path();
 
     // `_system.local` is the daemon's internal caller identity. It uses the
@@ -209,6 +210,14 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
+    // One state root has exactly one daemon process authority. Hold this
+    // operating-system lease before starting custody, binding sockets, or
+    // publishing any runtime owner. Without it a second process could unlink
+    // the first process's UDS files while the first retained its Hub session
+    // and Pages listener, splitting catalog, presence, and execution state.
+    let _process_lease = easynet_cli::daemon::boot::DaemonProcessLease::acquire_current()
+        .context("acquire daemon process lease")?;
+
     // The key service is a detached custody process so that it cannot be
     // inherited accidentally by arbitrary child commands. Its lifecycle is
     // nevertheless owned by this daemon: every normal shutdown and every
@@ -255,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
     let tenant = TenantId::new(daemon_config.realm().to_string());
     boot_bus.emit_started("tenant-stores");
     let daemon_identity = ready_daemon_identity(&daemon_config)?;
-    if let Some(node_id) = daemon_identity.node_id {
+    if let Some(node_id) = daemon_identity.node_id.as_deref() {
         let runtime_node = NodeId::new(node_id);
         kernel
             .session_service()
@@ -278,18 +287,20 @@ async fn main() -> anyhow::Result<()> {
 
     boot_bus.emit_started("loop-controller");
     if media_resource_bootstrap_enabled() {
-        match config::load_credentials() {
-            Ok(creds) => {
-                let owner_agent =
-                    easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+        match media_resource_bootstrap_owner_agent(&daemon_config, &daemon_identity) {
+            Ok(Some(owner_agent)) => {
                 match easynet_cli::daemon::ability::builtins::resources::media::resource_bootstrap::seed_default_device_resources(
-                    creds.realm_str(),
+                    daemon_config.realm(),
                     &owner_agent,
                 ) {
                     Ok(count) => eprintln!("[daemon] media resources ready: {count} known"),
                     Err(err) => eprintln!("[daemon] media resource bootstrap failed: {err:#}"),
                 }
             }
+            Ok(None) => eprintln!(
+                "[daemon] media resource bootstrap skipped: {} mode has no device runtime identity",
+                daemon_config.mode().as_str()
+            ),
             Err(err) => {
                 eprintln!("[daemon] media resource bootstrap skipped: {err}");
             }
@@ -343,7 +354,7 @@ async fn main() -> anyhow::Result<()> {
     // we pass None. A test or the standalone MCP server that
     // wants chat without any context injection passes
     // Some(Arc::new(Vec::new())) instead.
-    // Resolve user-rooted ability identity ONCE at daemon boot.
+    // Resolve user-scoped ability identity ONCE at daemon boot.
     // EASYNET_PAGES_USER + credentials.json get read here and
     // never again — the resolved value flows through to
     // build_registry_for_daemon as an explicit argument so the
@@ -433,6 +444,9 @@ async fn main() -> anyhow::Result<()> {
         easynet_cli::daemon::axon_bridge::runtime_factory::build_production_local_runtime(
             receipt_authority_config,
             federation_runtime.trusted_identity_resolver(),
+            easynet_cli::daemon::axon_bridge::runtime_factory::RuntimePersistenceConfig::persistent(
+                config::state_dir().join("axon-invocations"),
+            ),
         )
         .map_err(|error| anyhow::anyhow!("build owner-bound Axon receipt runtime: {error}"))?;
     let local_runtime = daemon_runtime.runtime();
@@ -464,15 +478,15 @@ async fn main() -> anyhow::Result<()> {
     );
     let built_registry = ability_catalog::build_registry_for_daemon_result(
         ability_catalog::RegistryDaemonBuildConfig {
-            services: ability_catalog::RegistryBuildServices::new(
+            services: ability_catalog::RegistryBuildServices::new_with_access_control_stores(
                 kernel.session_service(),
                 kernel.permission_service(),
                 kernel.discuss_service(),
                 kernel.schedule_service(),
                 kernel.loop_service(),
+                Arc::clone(&access_control_stores),
             )
-            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver))
-            .with_access_control_stores(Arc::clone(&access_control_stores)),
+            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver)),
             invocation_ledger: invocation_ledger.clone(),
             loaders: None,
             pages_identity,
@@ -520,17 +534,19 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Attach and replay the Device ability registrar only when this process
+    // Attach and replay the ability deployment registrar only when this process
     // actually hosts Device authority. Hub-only mode has no Device runtime
-    // plane, so it must not read or materialize durable Device deployments.
+    // plane, so it must not read or materialize durable ability deployments.
     // In Device/Both this is the boot half of the `ability.deploy` install
     // transaction and remains fail-closed on stale or errored rows.
     if matches!(daemon_config.mode(), DaemonMode::Device | DaemonMode::Both) {
-        if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
-            device_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
-            device_registrar.set_runtime(Arc::clone(&local_runtime))?;
-            let report = device_registrar.replay_from_store().await;
-            report_device_ability_replay(&report)?;
+        if let Some(ability_deployment_registrar) =
+            built_registry.ability_deployment_registrar_cell.get()
+        {
+            ability_deployment_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
+            ability_deployment_registrar.set_runtime(Arc::clone(&local_runtime))?;
+            let report = ability_deployment_registrar.replay_from_store().await;
+            report_ability_deployment_replay(&report)?;
         }
     }
 
@@ -830,6 +846,38 @@ fn local_runtime_invocation_identity(
     LocalRuntimeInvocationIdentity::new(identity.realm, NodeId::new(node_id)).map(Some)
 }
 
+fn media_resource_bootstrap_owner_agent(
+    config: &DaemonConfig,
+    identity: &DaemonIdentity,
+) -> anyhow::Result<Option<String>> {
+    if matches!(config.mode(), DaemonMode::Hub) {
+        return Ok(None);
+    }
+    if identity.realm != config.realm() {
+        anyhow::bail!(
+            "media resource bootstrap identity realm `{}` does not match configured realm `{}`",
+            identity.realm,
+            config.realm()
+        );
+    }
+    let node_id = identity
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} media resource bootstrap requires daemon_identity.node_id",
+                config.mode().as_str()
+            )
+        })?;
+    Ok(Some(easynet_cli::core::ura::device_agent_ura(
+        config.realm(),
+        node_id,
+        easynet_cli::daemon::ability::names::resources::MEDIA_SYSTEM_AGENT_ID,
+    )))
+}
+
 fn media_resource_bootstrap_enabled() -> bool {
     match std::env::var(ENV_BOOTSTRAP_MEDIA_RESOURCES) {
         Ok(value) => !matches!(
@@ -905,11 +953,13 @@ fn open_invocation_ledger() -> Option<Arc<axon_sdk::invocation::InvocationLedger
 /// `Kernel::invoke` as an SDK descriptor-bound request:
 ///
 ///   ability       = "<target_agent>.chat"
-///   caller        = `_system.local`
-///   callee        = target device URA in the daemon-configured realm
+///   caller        = persisted accountable User Principal
+///   callee        = persisted hosted Agent URA
+///   execution host = the Agent placement's Device URA
 ///   subject       = schedule URA
 ///   nonce         = fresh
-///   causal_context = None   (v1; v2 will cite a canonical prior receipt)
+///   causal_context = descriptor-bound User root; the schedule fire ledger
+///                    carries durable create/fire causality
 ///   args          = { "prompt": "scheduled fire of <id> at <time>" }
 ///
 /// Kernel::invoke admits a Session keyed by Axon's invocation id and
@@ -918,11 +968,8 @@ fn open_invocation_ledger() -> Option<Arc<axon_sdk::invocation::InvocationLedger
 /// terminal receipt, so operators see the same diagnostic they would see if
 /// they dispatched the agent manually.
 ///
-/// v1 idempotency: an in-memory `last_fire_at` map keyed by
-/// `schedule_id` keeps a fire from re-emitting on the next tick if
-/// the cron expression's resolution is finer than the tick period.
-/// Daemon restart loses this state — schedules due since the last
-/// fire will refire once on resume per their misfire policy.
+/// Idempotency is durable: the Schedule aggregate reserves a fire before
+/// dispatch and stores its terminal receipt/error afterward.
 fn spawn_schedule_tick(
     kernel: Arc<Kernel>,
     schedule: Arc<ScheduleService>,
@@ -930,20 +977,13 @@ fn spawn_schedule_tick(
 ) {
     const TICK_PERIOD: Duration = Duration::from_secs(15);
     tokio::spawn(async move {
-        let last_fire: Arc<Mutex<HashMap<ScheduleId, i64>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut interval = tokio::time::interval(TICK_PERIOD);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let _ = interval.tick().await; // skip the immediate-fire tick
         loop {
             interval.tick().await;
             let now = Utc::now();
-            let lookup_last = {
-                let lf = Arc::clone(&last_fire);
-                move |id: &ScheduleId| -> Option<i64> {
-                    lf.lock().ok().and_then(|g| g.get(id).copied())
-                }
-            };
-            let due = match schedule.due(now, lookup_last) {
+            let due = match schedule.due(now) {
                 Ok(due) => due,
                 Err(err) => {
                     eprintln!("[schedule-tick] due selection failed: {err:#}");
@@ -954,10 +994,6 @@ fn spawn_schedule_tick(
                 continue;
             }
             for fire in due {
-                let now_ms = now.timestamp_millis();
-                if let Ok(mut g) = last_fire.lock() {
-                    g.insert(fire.schedule_id.clone(), now_ms);
-                }
                 let schedules = match schedule.list() {
                     Ok(schedules) => schedules,
                     Err(err) => {
@@ -985,11 +1021,41 @@ fn spawn_schedule_tick(
                     fire.catch_up,
                     &agent,
                 );
-                let (local_device_ura, schedule_subject_ura) =
-                    schedule_tick_invocation_uras(&identity, &entry.target_node, &fire.schedule_id);
+                if entry.target_node != *identity.local_node() {
+                    eprintln!(
+                        "[schedule-tick] schedule {} targets node {} but this local runner owns {}; remote scheduled dispatch requires the routed invocation path",
+                        fire.schedule_id,
+                        entry.target_node,
+                        identity.local_node()
+                    );
+                    continue;
+                }
+                if entry.authority.execution_host_ura != identity.local_device_ura() {
+                    eprintln!(
+                        "[schedule-tick] schedule {} authority host does not match this runtime",
+                        fire.schedule_id
+                    );
+                    continue;
+                }
+                let fire_at_unix_ms = fire.fire_at.timestamp_millis();
+                if let Err(err) = schedule.reserve_fire(&fire) {
+                    eprintln!(
+                        "[schedule-tick] reserve {} fire {} failed: {err:#}",
+                        fire.schedule_id, fire_at_unix_ms
+                    );
+                    continue;
+                }
+                let target_agent_ura = entry.authority.target_callee_ura.clone();
+                let (target_agent_ura, schedule_subject_ura) =
+                    schedule_tick_invocation_uras(&identity, &target_agent_ura, &fire.schedule_id);
                 let payload = match serde_json::to_vec(&serde_json::json!({"prompt": prompt})) {
                     Ok(payload) => payload,
                     Err(err) => {
+                        let _ = schedule.fail_fire(
+                            &fire.schedule_id,
+                            fire_at_unix_ms,
+                            format!("encode invocation payload: {err:#}"),
+                        );
                         eprintln!(
                             "[schedule-tick] encode invocation for {}: {err:#}",
                             fire.schedule_id
@@ -997,14 +1063,21 @@ fn spawn_schedule_tick(
                         continue;
                     }
                 };
-                let request = match kernel.prepare_local_system_rpc(
-                    &local_device_ura,
+                let request = match kernel.prepare_accountable_user_rpc(
+                    &entry.authority.accountable_user_ura,
+                    &target_agent_ura,
                     &format!("{}.chat", agent),
                     &schedule_subject_ura,
                     payload,
+                    axon_sdk::invocation::CausalContext::None,
                 ) {
                     Ok(request) => request,
                     Err(err) => {
+                        let _ = schedule.fail_fire(
+                            &fire.schedule_id,
+                            fire_at_unix_ms,
+                            format!("prepare canonical invocation: {err:#}"),
+                        );
                         eprintln!(
                             "[schedule-tick] prepare canonical invocation for {}: {err:#}",
                             fire.schedule_id
@@ -1017,8 +1090,16 @@ fn spawn_schedule_tick(
                     fire.schedule_id, agent, fire.fire_at
                 );
                 let kernel_clone = Arc::clone(&kernel);
+                let schedule_clone = Arc::clone(&schedule);
+                let schedule_id = fire.schedule_id.clone();
                 tokio::task::spawn_blocking(move || match kernel_clone.invoke(request) {
                     Ok(finalized) => {
+                        let _ = schedule_clone.complete_fire(
+                            &schedule_id,
+                            fire_at_unix_ms,
+                            finalized.terminal_receipt.invocation_id(),
+                            finalized.terminal_receipt.self_hash(),
+                        );
                         eprintln!(
                             "[schedule-tick]   receipt {} → {:?}",
                             finalized.terminal_receipt.invocation_id(),
@@ -1026,6 +1107,11 @@ fn spawn_schedule_tick(
                         );
                     }
                     Err(e) => {
+                        let _ = schedule_clone.fail_fire(
+                            &schedule_id,
+                            fire_at_unix_ms,
+                            format!("{e:#}"),
+                        );
                         eprintln!("[schedule-tick]   invoke error: {e:#}");
                     }
                 });
@@ -1036,11 +1122,11 @@ fn spawn_schedule_tick(
 
 fn schedule_tick_invocation_uras(
     identity: &LocalRuntimeInvocationIdentity,
-    target_node: &NodeId,
+    target_agent_ura: &str,
     schedule_id: &ScheduleId,
 ) -> (String, String) {
     (
-        identity.device_ura_for_node(target_node.as_str()),
+        target_agent_ura.to_string(),
         identity.resource_subject_ura(&format!("schedule.{}", schedule_id.as_str()), ""),
     )
 }
@@ -1134,32 +1220,32 @@ mod tests {
     }
 
     #[test]
-    fn device_replay_boot_policy_rejects_stale_rows() {
+    fn ability_deployment_replay_boot_policy_rejects_stale_rows() {
         let report = ReplayReport {
             stale: 1,
             errored: 1,
             ..ReplayReport::default()
         };
 
-        assert!(device_ability_replay_fatal_message(&report)
+        assert!(ability_deployment_replay_fatal_message(&report)
             .unwrap()
             .contains("stale=1"));
     }
 
     #[test]
-    fn device_replay_boot_policy_still_rejects_runtime_wiring_bug() {
+    fn ability_deployment_replay_boot_policy_still_rejects_runtime_wiring_bug() {
         let report = ReplayReport {
             runtime_not_ready: true,
             ..ReplayReport::default()
         };
 
-        assert!(device_ability_replay_fatal_message(&report)
+        assert!(ability_deployment_replay_fatal_message(&report)
             .unwrap()
             .contains("runtime_not_ready=true"));
     }
 
     #[test]
-    fn device_replay_boot_policy_reports_outcome_details() {
+    fn ability_deployment_replay_boot_policy_reports_outcome_details() {
         let report = ReplayReport {
             errored: 1,
             outcomes: vec![ReplayOutcome {
@@ -1172,7 +1258,7 @@ mod tests {
             ..ReplayReport::default()
         };
 
-        let message = device_ability_replay_fatal_message(&report).unwrap();
+        let message = ability_deployment_replay_fatal_message(&report).unwrap();
         assert!(message.contains("errored=1"), "{message}");
         assert!(message.contains("er.generate"), "{message}");
         assert!(
@@ -1334,16 +1420,61 @@ tls_key_pem = "/tmp/key.pem"
     }
 
     #[test]
+    fn media_resource_bootstrap_owner_uses_ready_identity() {
+        let _home = TestHomeGuard::new();
+        std::env::set_var("EASYNET_NODE_ID", "stale-env-node");
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+        let identity = ready_daemon_identity(&config).expect("ready identity");
+
+        let owner_agent = media_resource_bootstrap_owner_agent(&config, &identity)
+            .expect("media owner")
+            .expect("device media owner");
+
+        assert_eq!(
+            owner_agent,
+            "easynet:///r/tenant-a/agent/device.credential-node.media"
+        );
+        assert!(!owner_agent.contains("stale-env-node"));
+    }
+
+    #[test]
+    fn media_resource_bootstrap_owner_is_absent_for_hub() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "hub"
+realm = "tenant-a"
+"#,
+        );
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+        let identity = ready_daemon_identity(&config).expect("ready identity");
+
+        let owner_agent =
+            media_resource_bootstrap_owner_agent(&config, &identity).expect("media owner");
+
+        assert!(owner_agent.is_none());
+    }
+
+    #[test]
     fn schedule_tick_invocation_uras_use_runtime_realm() {
         let identity =
             LocalRuntimeInvocationIdentity::new("tenant-a", NodeId::new("local-node")).unwrap();
-        let target_node = NodeId::new("target-node");
         let schedule_id = ScheduleId::new("nightly");
+        let target_agent_ura = "easynet:///r/tenant-a/agent/user-a.reporter";
 
         let (callee, subject) =
-            schedule_tick_invocation_uras(&identity, &target_node, &schedule_id);
+            schedule_tick_invocation_uras(&identity, target_agent_ura, &schedule_id);
 
-        assert_eq!(callee, "easynet:///r/tenant-a/device/target-node");
+        assert_eq!(callee, target_agent_ura);
         assert_eq!(subject, "easynet:///r/tenant-a/resource/schedule.nightly");
         assert!(!callee.contains("/r/default/"));
         assert!(!subject.contains("/r/default/"));

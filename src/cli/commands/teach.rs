@@ -37,6 +37,7 @@ use crate::support::platform::output;
 /// loudly instead of rendering a placeholder success — the CLI never
 /// reports a transfer it cannot describe.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DescriptorGrantResponse {
     granted_descriptor: String,
     execution_mode: String,
@@ -46,6 +47,7 @@ struct DescriptorGrantResponse {
 
 /// Typed projection of the `meta.acquire` daemon response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DescriptorImportResponse {
     new_descriptor_ura: String,
     execution_mode: String,
@@ -56,6 +58,7 @@ struct DescriptorImportResponse {
 
 /// Typed projection of the `meta.forget` daemon response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DescriptorRemovalResponse {
     removed_descriptor: String,
     source_descriptor_ura: String,
@@ -285,7 +288,8 @@ fn invoke_descriptor_mutation(
     hosted_agent_ura: &str,
 ) -> anyhow::Result<(Value, Value)> {
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
-    let target = LocalAbilityTarget::new(ability, &local_daemon_ura)?;
+    let target =
+        LocalAbilityTarget::for_device_sponsored_system_ability(ability, &local_daemon_ura)?;
     let context = LocalSystemInvocationIssuer::root_context(
         subject_ura,
         &[],
@@ -430,6 +434,48 @@ mod tests {
         assert!(
             serde_json::from_value::<DescriptorImportResponse>(missing_status).is_err(),
             "learn must not silently ignore missing descriptor transaction status"
+        );
+    }
+
+    #[test]
+    fn descriptor_transfer_responses_reject_unknown_fields() {
+        let grant = serde_json::from_value::<DescriptorGrantResponse>(serde_json::json!({
+            "granted_descriptor": "easynet:///r/default/agent/user.mentor/ability/quote",
+            "execution_mode": "sandbox_first",
+            "transfer_kind": "discovery_only_manifest",
+            "invokable_after_acquire": false,
+            "state_code": "J200"
+        }))
+        .expect_err("teach response must reject read-model drift");
+        assert!(
+            grant.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {grant}"
+        );
+
+        let import = serde_json::from_value::<DescriptorImportResponse>(serde_json::json!({
+            "new_descriptor_ura": "easynet:///r/default/agent/user.student/ability/quote",
+            "execution_mode": "sandbox_first",
+            "transfer_kind": "discovery_only_manifest",
+            "invokable": false,
+            "descriptor_transaction_status": "committed",
+            "descriptor_ref": "legacy"
+        }))
+        .expect_err("acquire response must reject descriptor projection drift");
+        assert!(
+            import.to_string().contains("descriptor_ref"),
+            "schema error should name the noncanonical field: {import}"
+        );
+
+        let removal = serde_json::from_value::<DescriptorRemovalResponse>(serde_json::json!({
+            "removed_descriptor": "easynet:///r/default/agent/user.student/ability/quote",
+            "source_descriptor_ura": "easynet:///r/default/agent/user.mentor/ability/quote",
+            "descriptor_transaction_status": "committed",
+            "legacy_subject": "quote"
+        }))
+        .expect_err("forget response must reject retired aliases");
+        assert!(
+            removal.to_string().contains("legacy_subject"),
+            "schema error should name the noncanonical field: {removal}"
         );
     }
 

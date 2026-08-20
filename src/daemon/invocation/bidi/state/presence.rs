@@ -326,7 +326,13 @@ impl PresenceSlot {
 /// dispatch contract version the claimant declared plus its per-boot
 /// claimant fingerprint (T1.2). One value object so registration
 /// sites cannot pass half the negotiation.
-pub const CANONICAL_SESSION_CARRIER_VERSION: u32 = 1;
+///
+/// v3 closes the canonical server-stream lifecycle in both carrier
+/// directions: a consumer disconnect is projected as `StreamCancel` or
+/// `ReverseStreamCancel`, and only the execution host emits the terminal
+/// checkpoint. A v2 carrier must fail negotiation instead of silently leaking
+/// a provider lease it cannot cancel.
+pub const CANONICAL_SESSION_CARRIER_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContract {
@@ -574,6 +580,18 @@ impl PresenceRegistry {
             .and_then(|entry| entry.dispatch_session())
     }
 
+    /// True when `ura` is directory-visible but deliberately not dispatchable.
+    ///
+    /// Resolve-only rows are used for daemon-owned self presence: routing may
+    /// see the host as online, but invocation execution must stay on the local
+    /// runtime instead of the reverse-channel presence dispatcher.
+    #[must_use]
+    pub fn is_resolve_only(&self, ura: &str) -> bool {
+        self.by_ura
+            .get(ura)
+            .is_some_and(|entry| matches!(entry.value(), PresenceSlot::ResolveOnly(_)))
+    }
+
     /// Find the current `(session_id, sender)` pair for `ura`.
     #[must_use]
     pub fn lookup_tracked(&self, ura: &str) -> Option<(PresenceSessionId, DispatchSender)> {
@@ -759,7 +777,7 @@ mod tests {
                 "easynet:///r/t/device/d1".into(),
                 tx1,
                 SessionContract {
-                    version: 1,
+                    version: CANONICAL_SESSION_CARRIER_VERSION,
                     claimant_boot_nonce: vec![1; 16],
                 },
             )
@@ -769,7 +787,7 @@ mod tests {
         assert_eq!(
             reg.lookup_dispatch_session("easynet:///r/t/device/d1")
                 .map(|session| session.contract_version),
-            Some(1)
+            Some(CANONICAL_SESSION_CARRIER_VERSION)
         );
 
         // A different claimant displacing the slot surfaces the prior
@@ -839,6 +857,7 @@ mod tests {
         assert!(registration.displaced.is_none());
         assert!(registration.displaced_claimant_nonce.is_none());
         assert!(registry.contains(&ura));
+        assert!(registry.is_resolve_only(&ura));
         assert_eq!(registry.snapshot(), vec![ura.clone()]);
         assert!(registry.lookup(&ura).is_none());
         assert!(

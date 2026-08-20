@@ -1,0 +1,23 @@
+schema_version = "3"
+name = "browser.capture_page"
+descriptor_version = "1.0.0"
+description = "Capture one structural snapshot of the session's current page as a self-contained MHTML document (Page.captureSnapshot). This is the structural observation plane: it returns the page's semantic state for agent reasoning, indexing, and archival — not pixels (browser.capture_viewport) and not live control (browser.attach_session). The invocation subject MUST be the session resource URA and the caller MUST be the session creator. Snapshots above the bounded size limit fail rather than truncate."
+exposure = "operator"
+dedicated_surface = "browser"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "provider_backed"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+additionalProperties = false

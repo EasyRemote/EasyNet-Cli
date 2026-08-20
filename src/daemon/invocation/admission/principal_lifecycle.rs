@@ -19,7 +19,7 @@ use crate::daemon::invocation::admission::runtime_trust::{
     now_unix_ms, RuntimeTrust, RuntimeTrustContext,
 };
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
-use crate::daemon::trust::anchor::TrustedAgentRole;
+use crate::daemon::trust::anchor::TrustAnchorRole;
 
 pub const ABILITY_PRINCIPAL_CREATE: &str =
     crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_CREATE;
@@ -824,7 +824,7 @@ impl<'a> PrincipalLifecycle<'a> {
         .register_pubkey(
             principal_ura.to_string(),
             public_key_b64.to_string(),
-            TrustedAgentRole::User,
+            TrustAnchorRole::User,
         )
     }
 

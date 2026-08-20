@@ -16,10 +16,10 @@ use serde_json::{json, Value};
 #[cfg(not(feature = "axon-pb"))]
 use crate::cli::commands::invocation_tuple::remote_invocation_transport_unsupported;
 use crate::cli::commands::invocation_tuple::{
-    require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
+    required_causal_context, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_target_stream_explicit_root, LocalAbilityTarget, LocalStreamFrame,
+    invoke_local_target_stream_explicit_causal, LocalAbilityTarget, LocalStreamFrame,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -38,8 +38,8 @@ pub enum StreamOutputFormat {
 pub struct StreamArgs {
     /// Canonical Ability URA returned by `easynet ability list`.
     pub ability_ura: String,
-    /// Pin the stream invocation to a remote Device or Authority URA through the
-    /// local daemon's canonical InvokeStream RPC.
+    /// Route through a Device placement locator or pin the exact catalogue
+    /// Agent/SystemAgent/Service/Authority callee through canonical InvokeStream.
     #[arg(long, short = 'n', value_name = "URA")]
     pub node: Option<String>,
     /// JSON object passed to the stream ability as its arguments.
@@ -55,8 +55,13 @@ pub struct StreamArgs {
     #[arg(long, value_name = "HEX")]
     pub nonce_hex: Option<String>,
     /// Declare this stream as a root invocation with an empty causal parent set.
+    /// Mutually exclusive with --causal-context-json.
     #[arg(long)]
     pub causal_root: bool,
+    /// Explicit non-root causal context JSON. Root streams must use
+    /// --causal-root so root placement has one encoding.
+    #[arg(long, value_name = "JSON")]
+    pub causal_context_json: Option<String>,
     /// Stop after this many frames even if the daemon stream is live.
     /// Omit to wait for the daemon's terminal frame.
     #[arg(long, value_name = "N")]
@@ -76,16 +81,23 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
     }
     let ability_ref = AbilityInvocationRef::parse(&args.ability_ura)?;
     let ability_selector = ability_ref.selector();
-    let node_ura: Option<String> = match args.node.as_deref().map(str::trim) {
+    let route_target: Option<
+        crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget,
+    > = match args.node.as_deref().map(str::trim) {
         None => None,
         Some("") => anyhow::bail!(
             "--node was given but empty; omit the flag to stream locally, \
-             or pass a real `easynet:///r/<tenant>/device/<node>` URA"
+             or pass a Device placement or exact Agent/SystemAgent/Service/Authority callee URA"
         ),
         Some(node) => {
             #[cfg(feature = "axon-pb")]
             {
-                Some(crate::daemon::invocation::routing::remote_invoke::parse_node_ura(node)?)
+                Some(
+                    crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget::parse(
+                        node,
+                        ability_selector,
+                    )?,
+                )
             }
             #[cfg(not(feature = "axon-pb"))]
             {
@@ -102,26 +114,29 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
     };
     let timeout = timeouts::invocation_transport_guard(args.timeout).map_err(anyhow::Error::msg)?;
     let target = LocalAbilityTarget::from_selector(ability_selector);
-    let frames = match node_ura.as_deref() {
+    let frames = match route_target.as_ref() {
         #[cfg(feature = "axon-pb")]
-        Some(remote_node) => {
-            let credentials = crate::daemon::persistence::config::load_credentials()
-                .context("remote ability stream requires paired device credentials")?;
-            let caller_ura =
-                crate::support::platform::remote_device::caller_device_ura(&credentials)?;
+        Some(route_target) => {
+            let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+                "remote ability stream",
+            )?;
             let remote_target = ability_ref
-                .remote_target_for_mode(remote_node, crate::daemon::ability::CallMode::Stream)?;
+                .remote_target_for_mode(route_target, crate::daemon::ability::CallMode::Stream)?;
             let surface = "remote ability stream with --node";
             let subject = required_subject(args.subject.as_deref(), surface)?.to_string();
             let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
-            require_causal_root(args.causal_root, surface)?;
+            let causal_context = required_causal_context(
+                args.causal_root,
+                args.causal_context_json.as_deref(),
+                surface,
+            )?;
             let request =
                 crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
                     &remote_target,
-                    caller_ura,
+                    identity.caller_user_ura().to_string(),
                     subject,
                     invocation_nonce,
-                    crate::daemon::invocation::routing::remote_invoke::declared_root_causal_context(),
+                    causal_context,
                     arguments,
                     timeout,
                 )?
@@ -143,21 +158,26 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
             let surface = "local ability stream";
             let subject = required_subject(args.subject.as_deref(), surface)?;
             let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
-            require_causal_root(args.causal_root, surface)?;
-            invoke_local_target_stream_explicit_root(
+            let causal_context = required_causal_context(
+                args.causal_root,
+                args.causal_context_json.as_deref(),
+                surface,
+            )?;
+            invoke_local_target_stream_explicit_causal(
                 &target,
                 arguments,
                 subject,
                 invocation_nonce,
+                causal_context,
                 timeout,
                 args.max_frames,
             )?
         }
     };
     print_frames(&frames, args.raw, args.format)?;
-    let fulfilled_by = node_ura
-        .as_deref()
-        .map(|node| format!("canonical InvokeStream target={node}"))
+    let fulfilled_by = route_target
+        .as_ref()
+        .map(|target| format!("canonical InvokeStream target={}", target.as_str()))
         .unwrap_or_else(|| "local daemon".to_string());
     output::success(&format!(
         "{} -> streamed {} frame(s) ({fulfilled_by})",
@@ -238,13 +258,15 @@ mod tests {
     #[test]
     fn zero_max_frames_is_rejected_before_ipc() {
         let err = run(StreamArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.test.stream".to_string(),
+            ability_ura: "easynet:///r/acme/ability/system-agent.local.locomotion.test.stream"
+                .to_string(),
             node: None,
             args: None,
             timeout: 60,
             subject: None,
             nonce_hex: None,
             causal_root: false,
+            causal_context_json: None,
             max_frames: Some(0),
             raw: false,
             format: StreamOutputFormat::Ndjson,

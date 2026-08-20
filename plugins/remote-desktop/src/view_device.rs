@@ -12,7 +12,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     DEFAULT_VIDEO_STREAM_BITRATE_KBPS, MAX_ATTACH_FPS, NATIVE_MAX_BITRATE_KBPS,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, unsupported_input_channel_types_value, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view, MACOS_SCK_VIDEOTOOLBOX_BACKEND,
@@ -117,8 +117,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     } else {
         "xcap.avcapture_screen_input"
     };
+    let production_target_subjects = production_backend.supported_subjects_value();
+    let capture_target_models = json!([
+        "display_surface",
+        "window_surface",
+        "display_scoped_application_window_set"
+    ]);
     let reason = if production_ready {
-        "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display capture"
+        "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
     } else {
         "current builtin backend is capped by xcap macOS recorder; 144Hz requires the ScreenCaptureKit/VideoToolbox plugin backend"
     };
@@ -133,11 +139,34 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "data_channel_input": true,
         "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
         "supported_input_events": ["pointer.move", "pointer.down", "pointer.up", "key.down", "key.up"],
+        "unsupported_input_types": unsupported_input_channel_types_value(),
+        "unsupported_capabilities": [
+            {
+                "capability": "clipboard",
+                "reason": "split_ability_required",
+                "future_abilities": [
+                    "remote_desktop.clipboard.read",
+                    "remote_desktop.clipboard.write",
+                    "remote_desktop.clipboard.watch"
+                ]
+            },
+            {
+                "capability": "file_transfer",
+                "reason": "split_ability_required",
+                "future_abilities": [
+                    "remote_desktop.file_transfer.create",
+                    "remote_desktop.file_transfer.accept",
+                    "remote_desktop.file_transfer.send",
+                    "remote_desktop.file_transfer.cancel"
+                ]
+            }
+        ],
         "input_plane": {
             "kind": "webrtc_data_channel",
             "label": INPUT_DATA_CHANNEL_LABEL,
             "low_latency": true,
             "supported_events": ["pointer.move", "pointer.down", "pointer.up", "key.down", "key.up"],
+            "unsupported_input_types": unsupported_input_channel_types_value(),
         },
         "low_latency_mode": true,
         "max_fps": max_fps,
@@ -147,6 +176,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "metadata": {
             "production_media_endpoint": "direct_webrtc_h264",
             "diagnostic_media_endpoint": "builtin_openh264_annexb",
+            "production_target_subjects": production_target_subjects,
+            "capture_target_models": capture_target_models,
             "display_capture_source": display_capture_source,
             "display_capture_api": display_capture_api,
             "webrtc_endpoint": "device_side_peer_connection",
@@ -169,4 +200,62 @@ pub(in crate::daemon::plugins::remote_desktop) fn empty_pipeline_metrics() -> Va
         "packet_loss_ratio": 0.0,
         "dropped_frames": 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::device_capabilities_view;
+
+    #[test]
+    fn device_capabilities_report_clipboard_and_file_transfer_unsupported() {
+        let capabilities = device_capabilities_view();
+
+        assert_eq!(
+            capabilities["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
+        assert_eq!(
+            capabilities["input_plane"]["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][0]["capability"],
+            json!("clipboard")
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][0]["reason"],
+            json!("split_ability_required")
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][1]["capability"],
+            json!("file_transfer")
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][1]["future_abilities"][2],
+            json!("remote_desktop.file_transfer.send")
+        );
+    }
+
+    #[test]
+    fn device_capabilities_project_native_target_subject_matrix() {
+        let capabilities = device_capabilities_view();
+
+        assert_eq!(
+            capabilities["metadata"]["production_target_subjects"],
+            json!(["display", "window", "application"])
+        );
+        assert_eq!(
+            capabilities["metadata"]["capture_target_models"],
+            json!([
+                "display_surface",
+                "window_surface",
+                "display_scoped_application_window_set"
+            ])
+        );
+        assert!(capabilities["metadata"]["reason"]
+            .as_str()
+            .is_some_and(|message| message.contains("display/window/application")));
+    }
 }

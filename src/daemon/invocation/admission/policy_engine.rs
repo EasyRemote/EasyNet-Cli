@@ -7,33 +7,104 @@ use super::decision::{
     AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PolicyDecisionReason,
     PrincipalKind, TokenClass,
 };
+use super::device_caller_types::{DeviceCallerPurpose, VerifiedDeviceInvocationPurpose};
 use super::grant_matcher::{
     GrantMatchInput, PermissionEffect, PermissionGrant, PermissionGrantMatcher,
 };
 
 #[derive(Debug, Clone)]
+pub enum SystemPolicyRuleMatch {
+    AuthoritySelfRead,
+    AuthoritySelfManage,
+    AuthoritySelfStream,
+    AuthorityPeerDirectoryStream,
+    RealmAuthorityPublicRead,
+    DevicePublicationCustodyManage,
+    DeviceSelfSessionStream,
+    DeviceLifecycleSelfRevokeManage,
+    DeviceHostedAgentRetractionManage,
+    RemoteOwnerForward,
+}
+
+impl SystemPolicyRuleMatch {
+    fn policy_rule_id(&self) -> &'static str {
+        match self {
+            Self::AuthoritySelfRead => "system.authority.self_read",
+            Self::AuthoritySelfManage => "system.authority.self_manage",
+            Self::AuthoritySelfStream => "system.authority.self_stream",
+            Self::AuthorityPeerDirectoryStream => "system.authority.peer_directory_stream",
+            Self::RealmAuthorityPublicRead => "system.realm_authority.public_read",
+            Self::DevicePublicationCustodyManage => "system.device.publication_custody_manage",
+            Self::DeviceSelfSessionStream => "system.device.self_session_stream",
+            Self::DeviceLifecycleSelfRevokeManage => "system.device.lifecycle_self_revoke_manage",
+            Self::DeviceHostedAgentRetractionManage => {
+                "system.device.hosted_agent_retraction_manage"
+            }
+            Self::RemoteOwnerForward => "system.federation.remote_owner_forward",
+        }
+    }
+
+    fn allow_reason(&self, input: &PolicyInput) -> Option<PolicyDecisionReason> {
+        match self {
+            Self::AuthoritySelfRead | Self::RealmAuthorityPublicRead => {
+                (input.action == AccessAction::Read && input.safe_read)
+                    .then_some(PolicyDecisionReason::HubTokenReadAllow)
+            }
+            Self::AuthoritySelfManage => (input.action == AccessAction::Manage)
+                .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::DevicePublicationCustodyManage => (input.action == AccessAction::Manage
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::PublicationCustody)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::DeviceLifecycleSelfRevokeManage => (input.action == AccessAction::Manage
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::LifecycleSelfRevoke)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::DeviceHostedAgentRetractionManage => (input.action == AccessAction::Manage
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::HostedAgentRetraction)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::AuthoritySelfStream | Self::AuthorityPeerDirectoryStream => (input.action
+                == AccessAction::Stream)
+                .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::DeviceSelfSessionStream => (input.action == AccessAction::Stream
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::DeviceSelfSession)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::RemoteOwnerForward => Some(PolicyDecisionReason::FederationForwardAllow),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PolicyInput {
     pub owner: OwnerResolution,
-    pub caller_user_id: Option<String>,
+    pub caller_user_ura: Option<String>,
     pub caller_ura: String,
     pub principal_kind: PrincipalKind,
     pub principal_id: String,
     pub token_id: Option<String>,
     pub token_class: Option<TokenClass>,
+    pub(crate) device_invocation_purpose: Option<VerifiedDeviceInvocationPurpose>,
     pub callee_ura: String,
     pub subject_ura: String,
     pub ability_ura: String,
     pub action: AccessAction,
     pub safe_read: bool,
-    pub authority_self_read: bool,
-    pub authority_self_manage: bool,
-    pub realm_authority_public_read: bool,
-    pub device_self_publication_manage: bool,
-    pub device_self_session_stream: bool,
+    pub system_rule_matches: Vec<SystemPolicyRuleMatch>,
+    /// Exact generic runtime lifecycle control. This admits the command to
+    /// the lifecycle authority; it does not authorize a target. The target
+    /// registry still binds caller, execution authority, and lifecycle hash.
+    pub invocation_lifecycle_control: bool,
     pub interactive_context_available: bool,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
     pub verified_authority_id: Option<String>,
+    pub verified_session_id: Option<String>,
     pub rejector_ura: Option<String>,
     pub now: DateTime<Utc>,
     pub grants: Vec<PermissionGrant>,
@@ -44,38 +115,21 @@ pub struct PolicyEngine;
 impl PolicyEngine {
     #[must_use]
     pub fn check(input: PolicyInput) -> PolicyDecision {
-        let owner_user_id = input
+        let owner_user_ura = input
             .owner
-            .owner_user_id
+            .owner_user_ura
             .clone()
             .filter(|owner| !owner.trim().is_empty());
         let matcher = PermissionGrantMatcher::new(&input.grants);
 
-        if input.action == AccessAction::Manage
-            && (input.authority_self_manage || input.device_self_publication_manage)
-        {
-            return decision(
-                &input,
-                PolicyDecisionOutcome::Allow,
-                PolicyDecisionReason::ExplicitGrantAllow,
-                None,
-            );
-        }
-        if input.action == AccessAction::Stream && input.device_self_session_stream {
-            return decision(
-                &input,
-                PolicyDecisionOutcome::Allow,
-                PolicyDecisionReason::ExplicitGrantAllow,
-                None,
-            );
-        }
-
-        if let Some(owner_user_id) = owner_user_id.as_deref() {
+        if let Some(owner_user_ura) = owner_user_ura.as_deref() {
             let grant_input = GrantMatchInput {
-                owner_user_id,
+                owner_user_ura,
                 principal_kind: input.principal_kind,
                 principal_id: &input.principal_id,
                 token_id: input.token_id.as_deref(),
+                token_class: input.token_class,
+                session_id: input.verified_session_id.as_deref(),
                 callee_ura: &input.callee_ura,
                 subject_ura: &input.subject_ura,
                 ability_ura: &input.ability_ura,
@@ -92,6 +146,29 @@ impl PolicyEngine {
             }
         }
 
+        // Cleanup authority is inherited from an already-admitted Invocation,
+        // not from the product grant that originally opened it. Admit only the
+        // exact lifecycle-control classification here; the cancellation
+        // registry performs the target ownership check before signalling Axon.
+        if input.invocation_lifecycle_control && input.action == AccessAction::Manage {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::InvocationLifecycleControlAllow,
+                None,
+            );
+        }
+
+        if let Some((rule_match, reason)) =
+            input.system_rule_matches.iter().find_map(|rule_match| {
+                rule_match
+                    .allow_reason(&input)
+                    .map(|reason| (rule_match, reason))
+            })
+        {
+            return system_rule_decision(&input, PolicyDecisionOutcome::Allow, reason, rule_match);
+        }
+
         // Verified authority is bounded by its verifier, but it never
         // overrides an explicit owner deny. Bootstrap authority may be the
         // only source of owner truth during first publication, so it remains
@@ -100,32 +177,12 @@ impl PolicyEngine {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Allow,
-                PolicyDecisionReason::ExplicitGrantAllow,
+                PolicyDecisionReason::AuthorityProofAllow,
                 None,
             );
         }
 
-        if input.authority_self_read && input.action == AccessAction::Read && input.safe_read {
-            return decision(
-                &input,
-                PolicyDecisionOutcome::Allow,
-                PolicyDecisionReason::HubTokenReadAllow,
-                None,
-            );
-        }
-        if input.realm_authority_public_read
-            && input.action == AccessAction::Read
-            && input.safe_read
-        {
-            return decision(
-                &input,
-                PolicyDecisionOutcome::Allow,
-                PolicyDecisionReason::HubTokenReadAllow,
-                None,
-            );
-        }
-
-        let Some(owner_user_id) = owner_user_id else {
+        let Some(owner_user_ura) = owner_user_ura else {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Deny,
@@ -135,10 +192,12 @@ impl PolicyEngine {
         };
 
         let grant_input = GrantMatchInput {
-            owner_user_id: &owner_user_id,
+            owner_user_ura: &owner_user_ura,
             principal_kind: input.principal_kind,
             principal_id: &input.principal_id,
             token_id: input.token_id.as_deref(),
+            token_class: input.token_class,
+            session_id: input.verified_session_id.as_deref(),
             callee_ura: &input.callee_ura,
             subject_ura: &input.subject_ura,
             ability_ura: &input.ability_ura,
@@ -146,7 +205,12 @@ impl PolicyEngine {
             now: input.now,
         };
 
-        if input.caller_user_id.as_deref() == Some(owner_user_id.as_str()) {
+        if input
+            .owner
+            .owner_ura
+            .as_deref()
+            .is_some_and(|owner_ura| input.caller_user_ura.as_deref() == Some(owner_ura))
+        {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Allow,
@@ -168,12 +232,7 @@ impl PolicyEngine {
         }
 
         if let Some(grant) = matcher.find(&grant_input, PermissionEffect::Allow) {
-            return decision(
-                &input,
-                PolicyDecisionOutcome::Allow,
-                PolicyDecisionReason::ExplicitGrantAllow,
-                Some(grant.grant_id.clone()),
-            );
+            return explicit_grant_decision(&input, grant.grant_id.clone());
         }
 
         if let Some(grant) = matcher.find_reconfirmation_required(&grant_input) {
@@ -212,6 +271,18 @@ impl PolicyEngine {
     }
 }
 
+fn explicit_grant_decision(input: &PolicyInput, grant_id: String) -> PolicyDecision {
+    let mut policy_decision = decision(
+        input,
+        PolicyDecisionOutcome::Allow,
+        PolicyDecisionReason::ExplicitGrantAllow,
+        None,
+    );
+    policy_decision.policy_rule_id = Some(grant_id.clone());
+    policy_decision.grant_id = Some(grant_id);
+    policy_decision
+}
+
 fn decision(
     input: &PolicyInput,
     outcome: PolicyDecisionOutcome,
@@ -221,12 +292,13 @@ fn decision(
     PolicyDecision {
         decision: outcome,
         reason,
-        owner_user_id: input.owner.owner_user_id.clone(),
+        owner_user_ura: input.owner.owner_user_ura.clone(),
         owner_source: input.owner.owner_source,
         caller_ura: input.caller_ura.clone(),
         principal_kind: input.principal_kind,
         principal_id: input.principal_id.clone(),
         token_id: input.token_id.clone(),
+        token_class: input.token_class,
         callee_ura: input.callee_ura.clone(),
         subject_ura: input.subject_ura.clone(),
         ability_ura: input.ability_ura.clone(),
@@ -241,6 +313,17 @@ fn decision(
     }
 }
 
+fn system_rule_decision(
+    input: &PolicyInput,
+    outcome: PolicyDecisionOutcome,
+    reason: PolicyDecisionReason,
+    rule_match: &SystemPolicyRuleMatch,
+) -> PolicyDecision {
+    let mut policy_decision = decision(input, outcome, reason, None);
+    policy_decision.policy_rule_id = Some(rule_match.policy_rule_id().to_string());
+    policy_decision
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,43 +335,83 @@ mod tests {
     fn base_input() -> PolicyInput {
         PolicyInput {
             owner: OwnerResolution {
-                owner_user_id: Some("alice".to_string()),
+                owner_user_ura: Some("easynet:///r/test/user/alice".to_string()),
                 owner_ura: Some("easynet:///r/test/user/alice".to_string()),
                 owner_source: OwnerSource::Subject,
                 audit_warnings: vec![],
             },
-            caller_user_id: None,
+            caller_user_ura: None,
             caller_ura: "easynet:///r/test/authority".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
             token_class: Some(TokenClass::HubLink),
+            device_invocation_purpose: None,
             callee_ura: "easynet:///r/test/device/dev".to_string(),
             subject_ura: "easynet:///r/test/device/dev".to_string(),
             ability_ura: "easynet:///r/test/ability/device.meta.list_resources".to_string(),
             action: AccessAction::Read,
             safe_read: true,
-            authority_self_read: false,
-            authority_self_manage: false,
-            realm_authority_public_read: false,
-            device_self_publication_manage: false,
-            device_self_session_stream: false,
+            system_rule_matches: Vec::new(),
+            invocation_lifecycle_control: false,
             interactive_context_available: false,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: Some("ed25519:key".to_string()),
             verified_authority_id: None,
+            verified_session_id: None,
             rejector_ura: Some("easynet:///r/test/device/dev".to_string()),
             now: Utc::now(),
             grants: vec![],
         }
     }
 
+    fn deny_for_input(input: &PolicyInput, grant_id: &str) -> PermissionGrant {
+        PermissionGrant {
+            grant_id: grant_id.to_string(),
+            owner_user_ura: input
+                .owner
+                .owner_user_ura
+                .clone()
+                .expect("resolved owner user URA"),
+            principal_kind: input.principal_kind,
+            principal_id: input.principal_id.clone(),
+            token_id: input.token_id.clone(),
+            token_class: input.token_class,
+            session_id: None,
+            session_expires_at: None,
+            callee_ura: Some(input.callee_ura.clone()),
+            subject_ura_pattern: Some(input.subject_ura.clone()),
+            ability_ura_pattern: Some(input.ability_ura.clone()),
+            actions: vec![input.action],
+            constraints: None,
+            effect: PermissionEffect::Deny,
+            lifetime: PermissionGrantLifetime::Permanent,
+            state: PermissionGrantState::Active,
+            expires_at: None,
+            review_required_after: None,
+            last_reviewed_at: None,
+            last_used_at: None,
+            created_by: "easynet:///r/test/user/alice".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: None,
+            revoked_at: None,
+            reason: None,
+        }
+    }
+
+    fn assert_explicit_deny(input: PolicyInput, grant_id: &str) {
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(got.reason, PolicyDecisionReason::ExplicitDeny);
+        assert_eq!(got.grant_id.as_deref(), Some(grant_id));
+    }
+
     #[test]
     fn owner_default_allows_before_missing_grant() {
         let mut input = base_input();
-        input.caller_user_id = Some("alice".to_string());
+        input.caller_user_ura = Some("easynet:///r/test/user/alice".to_string());
         input.principal_kind = PrincipalKind::User;
-        input.principal_id = "alice".to_string();
+        input.principal_id = "easynet:///r/test/user/alice".to_string();
         input.token_id = None;
         input.token_class = None;
         input.action = AccessAction::Stream;
@@ -296,6 +419,26 @@ mod tests {
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
         assert_eq!(got.reason, PolicyDecisionReason::OwnerAllow);
+    }
+
+    #[test]
+    fn owner_default_rejects_same_user_id_from_different_realm() {
+        let mut input = base_input();
+        input.owner.owner_user_ura = Some("easynet:///r/realm-b/user/alice".to_string());
+        input.owner.owner_ura = Some("easynet:///r/realm-b/user/alice".to_string());
+        input.caller_user_ura = Some("easynet:///r/realm-a/user/alice".to_string());
+        input.caller_ura = "easynet:///r/realm-a/user/alice".to_string();
+        input.principal_kind = PrincipalKind::User;
+        input.principal_id = "easynet:///r/realm-a/user/alice".to_string();
+        input.token_id = None;
+        input.token_class = None;
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+
+        let got = PolicyEngine::check(input);
+
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(got.reason, PolicyDecisionReason::NonInteractiveDeny);
     }
 
     #[test]
@@ -313,9 +456,38 @@ mod tests {
     }
 
     #[test]
+    fn invocation_lifecycle_control_allows_hub_link_manage_without_product_grant() {
+        let mut input = base_input();
+        input.ability_ura = "easynet:///r/test/ability/device.dev.invocation.cancel".to_string();
+        input.action = AccessAction::Manage;
+        input.safe_read = false;
+        input.invocation_lifecycle_control = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(
+            got.reason,
+            PolicyDecisionReason::InvocationLifecycleControlAllow
+        );
+    }
+
+    #[test]
+    fn lifecycle_control_classification_does_not_admit_non_manage_action() {
+        let mut input = base_input();
+        input.ability_ura = "easynet:///r/test/ability/device.dev.invocation.cancel".to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.invocation_lifecycle_control = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(got.reason, PolicyDecisionReason::TokenScopeDenied);
+    }
+
+    #[test]
     fn unresolved_owner_denies() {
         let mut input = base_input();
-        input.owner.owner_user_id = None;
+        input.owner.owner_user_ura = None;
         input.owner.owner_source = OwnerSource::Unresolved;
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
@@ -325,26 +497,27 @@ mod tests {
     #[test]
     fn authority_self_read_allows_safe_hub_link_without_user_owner() {
         let mut input = base_input();
-        input.owner.owner_user_id = None;
+        input.owner.owner_user_ura = None;
         input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
         input.owner.owner_source = OwnerSource::Unresolved;
         input.caller_ura = "easynet:///r/test/authority".to_string();
         input.callee_ura = "easynet:///r/test/authority".to_string();
         input.subject_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
         input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
-        input.authority_self_read = true;
-        input.authority_self_manage = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthoritySelfRead);
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
         assert_eq!(got.reason, PolicyDecisionReason::HubTokenReadAllow);
-        assert!(got.owner_user_id.is_none());
+        assert!(got.owner_user_ura.is_none());
     }
 
     #[test]
     fn authority_self_read_uses_gate_projection_not_token_class_duplication() {
         let mut input = base_input();
-        input.owner.owner_user_id = None;
+        input.owner.owner_user_ura = None;
         input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
         input.owner.owner_source = OwnerSource::Unresolved;
         input.token_class = None;
@@ -352,8 +525,9 @@ mod tests {
         input.callee_ura = "easynet:///r/test/authority".to_string();
         input.subject_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
         input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
-        input.authority_self_read = true;
-        input.authority_self_manage = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthoritySelfRead);
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
@@ -363,7 +537,7 @@ mod tests {
     #[test]
     fn authority_self_read_does_not_allow_mutation_without_owner() {
         let mut input = base_input();
-        input.owner.owner_user_id = None;
+        input.owner.owner_user_ura = None;
         input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
         input.owner.owner_source = OwnerSource::Unresolved;
         input.caller_ura = "easynet:///r/test/authority".to_string();
@@ -372,8 +546,9 @@ mod tests {
         input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
         input.action = AccessAction::Invoke;
         input.safe_read = false;
-        input.authority_self_read = true;
-        input.authority_self_manage = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthoritySelfRead);
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
@@ -383,24 +558,28 @@ mod tests {
     #[test]
     fn realm_authority_public_read_allows_descriptor_safe_device_metadata_without_user_owner() {
         let mut input = base_input();
-        input.owner.owner_user_id = None;
+        input.owner.owner_user_ura = None;
         input.owner.owner_ura = Some("easynet:///r/test/device/dev".to_string());
         input.owner.owner_source = OwnerSource::Unresolved;
-        input.realm_authority_public_read = true;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::RealmAuthorityPublicRead);
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
         assert_eq!(got.reason, PolicyDecisionReason::HubTokenReadAllow);
-        assert!(got.owner_user_id.is_none());
+        assert!(got.owner_user_ura.is_none());
     }
 
     #[test]
     fn realm_authority_public_read_does_not_allow_mutation_without_owner() {
         let mut input = base_input();
-        input.owner.owner_user_id = None;
+        input.owner.owner_user_ura = None;
         input.owner.owner_ura = Some("easynet:///r/test/device/dev".to_string());
         input.owner.owner_source = OwnerSource::Unresolved;
-        input.realm_authority_public_read = true;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::RealmAuthorityPublicRead);
         input.action = AccessAction::Invoke;
         input.safe_read = false;
 
@@ -422,12 +601,90 @@ mod tests {
         input.ability_ura = "easynet:///r/test/ability/authority.federation.revoke".to_string();
         input.action = AccessAction::Manage;
         input.safe_read = false;
-        input.authority_self_manage = true;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthoritySelfManage);
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
-        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
-        assert_eq!(got.owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(got.reason, PolicyDecisionReason::SystemRuleAllow);
+        assert_eq!(
+            got.policy_rule_id.as_deref(),
+            Some("system.authority.self_manage")
+        );
+        assert!(got.grant_id.is_none());
+        assert_eq!(
+            got.owner_user_ura.as_deref(),
+            Some("easynet:///r/test/user/alice")
+        );
+    }
+
+    #[test]
+    fn authority_self_stream_allows_realm_authority_before_owner_resolution() {
+        let mut input = base_input();
+        input.owner.owner_user_ura = None;
+        input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.principal_kind = PrincipalKind::Token;
+        input.principal_id = "easynet:///r/test/authority".to_string();
+        input.token_id = Some("easynet:///r/test/authority".to_string());
+        input.token_class = Some(TokenClass::HubLink);
+        input.callee_ura = "easynet:///r/test/authority".to_string();
+        input.subject_ura =
+            "easynet:///r/test/resource/authority/invoke/federation.subscribe_directory_v2"
+                .to_string();
+        input.ability_ura =
+            "easynet:///r/test/ability/authority.federation.subscribe_directory_v2".to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthoritySelfStream);
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::SystemRuleAllow);
+        assert_eq!(
+            got.policy_rule_id.as_deref(),
+            Some("system.authority.self_stream")
+        );
+        assert!(got.grant_id.is_none());
+        assert!(got.owner_user_ura.is_none());
+    }
+
+    #[test]
+    fn authority_peer_directory_stream_allows_hub_link_without_user_owner() {
+        let mut input = base_input();
+        input.owner.owner_user_ura = None;
+        input.owner.owner_ura = Some("easynet:///r/hub-b.local/authority".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.caller_ura = "easynet:///r/hub-a.local/authority".to_string();
+        input.principal_kind = PrincipalKind::Token;
+        input.principal_id = "easynet:///r/hub-a.local/authority".to_string();
+        input.token_id = Some("easynet:///r/hub-a.local/authority".to_string());
+        input.token_class = Some(TokenClass::HubLink);
+        input.callee_ura = "easynet:///r/hub-b.local/authority".to_string();
+        input.subject_ura =
+            "easynet:///r/hub-a.local/resource/hub.federation/directory/hub-b.local".to_string();
+        input.ability_ura =
+            "easynet:///r/hub-b.local/ability/authority.federation.subscribe_directory_v2"
+                .to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthorityPeerDirectoryStream);
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::SystemRuleAllow);
+        assert_eq!(
+            got.policy_rule_id.as_deref(),
+            Some("system.authority.peer_directory_stream")
+        );
+        assert!(got.grant_id.is_none());
+        assert!(got.owner_user_ura.is_none());
     }
 
     #[test]
@@ -441,11 +698,13 @@ mod tests {
             .with_timezone(&Utc);
         input.grants = vec![PermissionGrant {
             grant_id: "grant-stream".to_string(),
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
             token_class: Some(TokenClass::HubLink),
+            session_id: None,
+            session_expires_at: None,
             callee_ura: Some(input.callee_ura.clone()),
             subject_ura_pattern: Some(input.subject_ura.clone()),
             ability_ura_pattern: Some(input.ability_ura.clone()),
@@ -475,6 +734,177 @@ mod tests {
     }
 
     #[test]
+    fn session_grant_requires_matching_verified_session_id() {
+        let mut input = base_input();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.ability_ura = "easynet:///r/test/ability/terminal.create".to_string();
+        input.now = DateTime::parse_from_rfc3339("2026-08-07T00:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        input.grants = vec![PermissionGrant {
+            grant_id: "grant-session".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
+            principal_kind: PrincipalKind::Token,
+            principal_id: "token-principal".to_string(),
+            token_id: Some("token-1".to_string()),
+            token_class: Some(TokenClass::HubLink),
+            session_id: Some("session-1".to_string()),
+            session_expires_at: Some("2026-08-07T01:00:00Z".to_string()),
+            callee_ura: Some(input.callee_ura.clone()),
+            subject_ura_pattern: Some(input.subject_ura.clone()),
+            ability_ura_pattern: Some(input.ability_ura.clone()),
+            actions: vec![AccessAction::Stream],
+            constraints: None,
+            effect: PermissionEffect::Allow,
+            lifetime: PermissionGrantLifetime::Session,
+            state: PermissionGrantState::Active,
+            expires_at: None,
+            review_required_after: None,
+            last_reviewed_at: None,
+            last_used_at: None,
+            created_by: "easynet:///r/test/user/alice".to_string(),
+            created_at: "2026-08-07T00:00:00Z".to_string(),
+            updated_at: None,
+            revoked_at: None,
+            reason: None,
+        }];
+
+        let unbound = PolicyEngine::check(input.clone());
+        assert_eq!(unbound.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(unbound.reason, PolicyDecisionReason::TokenScopeDenied);
+
+        input.verified_session_id = Some("session-2".to_string());
+        let wrong_session = PolicyEngine::check(input.clone());
+        assert_eq!(wrong_session.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(wrong_session.reason, PolicyDecisionReason::TokenScopeDenied);
+
+        input.verified_session_id = Some("session-1".to_string());
+        let bound = PolicyEngine::check(input);
+        assert_eq!(bound.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(bound.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert_eq!(bound.grant_id.as_deref(), Some("grant-session"));
+    }
+
+    #[test]
+    fn explicit_deny_wins_over_authority_self_manage_allow() {
+        let mut input = base_input();
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.principal_id = input.caller_ura.clone();
+        input.token_id = Some(input.caller_ura.clone());
+        input.callee_ura = "easynet:///r/test/authority".to_string();
+        input.subject_ura = "easynet:///r/test/device/dev".to_string();
+        input.ability_ura = "easynet:///r/test/ability/authority.federation.revoke".to_string();
+        input.action = AccessAction::Manage;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthoritySelfManage);
+        input.grants = vec![deny_for_input(&input, "deny-authority-manage")];
+
+        assert_explicit_deny(input, "deny-authority-manage");
+    }
+
+    #[test]
+    fn explicit_deny_wins_over_device_publication_manage_allow() {
+        let mut input = base_input();
+        input.principal_kind = PrincipalKind::DeviceCustody;
+        input.principal_id = "easynet:///r/test/device/dev".to_string();
+        input.token_id = Some(input.principal_id.clone());
+        input.token_class = Some(TokenClass::DevicePairing);
+        input.caller_ura = input.principal_id.clone();
+        input.callee_ura = input.principal_id.clone();
+        input.subject_ura = input.principal_id.clone();
+        input.ability_ura = "easynet:///r/test/ability/device.dev.ability.publish".to_string();
+        input.action = AccessAction::Manage;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::DevicePublicationCustodyManage);
+        input.grants = vec![deny_for_input(&input, "deny-device-publish")];
+
+        assert_explicit_deny(input, "deny-device-publish");
+    }
+
+    #[test]
+    fn explicit_deny_wins_over_device_session_stream_allow() {
+        let mut input = base_input();
+        input.principal_kind = PrincipalKind::DeviceCustody;
+        input.principal_id = "easynet:///r/test/device/dev".to_string();
+        input.token_id = Some(input.principal_id.clone());
+        input.token_class = Some(TokenClass::DevicePairing);
+        input.caller_ura = input.principal_id.clone();
+        input.callee_ura = input.principal_id.clone();
+        input.subject_ura = "easynet:///r/test/resource/session/terminal/session-1".to_string();
+        input.ability_ura = "easynet:///r/test/ability/device.dev.terminal.stream".to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::DeviceSelfSessionStream);
+        input.grants = vec![deny_for_input(&input, "deny-device-session")];
+
+        assert_explicit_deny(input, "deny-device-session");
+    }
+
+    #[test]
+    fn explicit_deny_wins_over_authority_self_stream_allow() {
+        let mut input = base_input();
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.principal_id = input.caller_ura.clone();
+        input.token_id = Some(input.caller_ura.clone());
+        input.callee_ura = input.caller_ura.clone();
+        input.subject_ura =
+            "easynet:///r/test/resource/authority/invoke/federation.subscribe_directory_v2"
+                .to_string();
+        input.ability_ura =
+            "easynet:///r/test/ability/authority.federation.subscribe_directory_v2".to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthoritySelfStream);
+        input.grants = vec![deny_for_input(&input, "deny-authority-stream")];
+
+        assert_explicit_deny(input, "deny-authority-stream");
+    }
+
+    #[test]
+    fn explicit_deny_wins_over_authority_peer_directory_stream_allow() {
+        let mut input = base_input();
+        input.caller_ura = "easynet:///r/hub-a.local/authority".to_string();
+        input.principal_id = input.caller_ura.clone();
+        input.token_id = Some(input.caller_ura.clone());
+        input.callee_ura = "easynet:///r/hub-b.local/authority".to_string();
+        input.subject_ura =
+            "easynet:///r/hub-a.local/resource/hub.federation/directory/hub-b.local".to_string();
+        input.ability_ura =
+            "easynet:///r/hub-b.local/ability/authority.federation.subscribe_directory_v2"
+                .to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::AuthorityPeerDirectoryStream);
+        input.grants = vec![deny_for_input(&input, "deny-peer-directory-stream")];
+
+        assert_explicit_deny(input, "deny-peer-directory-stream");
+    }
+
+    #[test]
+    fn explicit_deny_wins_over_remote_owner_forward_allow() {
+        let mut input = base_input();
+        input.action = AccessAction::Invoke;
+        input.safe_read = false;
+        input
+            .system_rule_matches
+            .push(SystemPolicyRuleMatch::RemoteOwnerForward);
+        input.grants = vec![deny_for_input(&input, "deny-federation-forward")];
+
+        assert_explicit_deny(input, "deny-federation-forward");
+    }
+
+    #[test]
     fn verified_authority_proof_allows_without_durable_grant() {
         let mut input = base_input();
         input.action = AccessAction::Stream;
@@ -483,7 +913,7 @@ mod tests {
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
-        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert_eq!(got.reason, PolicyDecisionReason::AuthorityProofAllow);
         assert_eq!(got.authority_proof_id.as_deref(), Some("proof-1"));
         assert!(got.grant_id.is_none());
     }
@@ -492,7 +922,7 @@ mod tests {
     fn verified_authority_proof_allows_without_resolved_owner() {
         let mut input = base_input();
         input.owner = OwnerResolution {
-            owner_user_id: None,
+            owner_user_ura: None,
             owner_ura: None,
             owner_source: crate::daemon::invocation::admission::decision::OwnerSource::Unresolved,
             audit_warnings: vec![],
@@ -503,7 +933,7 @@ mod tests {
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
-        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert_eq!(got.reason, PolicyDecisionReason::AuthorityProofAllow);
         assert_eq!(got.authority_proof_id.as_deref(), Some("proof-bootstrap"));
         assert!(got.grant_id.is_none());
     }
@@ -516,11 +946,13 @@ mod tests {
         input.verified_authority_id = Some("proof-1".to_string());
         input.grants = vec![PermissionGrant {
             grant_id: "deny-stream".to_string(),
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
             principal_kind: input.principal_kind,
             principal_id: input.principal_id.clone(),
             token_id: input.token_id.clone(),
             token_class: input.token_class,
+            session_id: None,
+            session_expires_at: None,
             callee_ura: Some(input.callee_ura.clone()),
             subject_ura_pattern: Some(input.subject_ura.clone()),
             ability_ura_pattern: Some(input.ability_ura.clone()),

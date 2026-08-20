@@ -34,6 +34,10 @@ pub enum ProviderSidecarHelperState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "the Exec prefix distinguishes provider-sidecar frames from canonical invocation call modes"
+)]
 pub enum ProviderSidecarCallMode {
     ExecInvoke,
     ExecStream,
@@ -108,9 +112,9 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
     ProviderSidecarHelperCapability {
         language: "python",
         call_mode: ProviderSidecarCallMode::ExecStream,
-        state: ProviderSidecarHelperState::Seam,
+        state: ProviderSidecarHelperState::ProviderBacked,
         template_available: false,
-        helper_package: None,
+        helper_package: Some("easynet_sdk.providers.runtime.plugin_exec"),
     },
     ProviderSidecarHelperCapability {
         language: "go",
@@ -150,9 +154,9 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
     ProviderSidecarHelperCapability {
         language: "python",
         call_mode: ProviderSidecarCallMode::ExecBidi,
-        state: ProviderSidecarHelperState::Seam,
+        state: ProviderSidecarHelperState::ProviderBacked,
         template_available: false,
-        helper_package: None,
+        helper_package: Some("easynet_sdk.providers.runtime.plugin_exec"),
     },
     ProviderSidecarHelperCapability {
         language: "go",
@@ -418,10 +422,13 @@ call_mode = "rpc"
 
     fn ability_toml(&self) -> String {
         format!(
-            r#"schema_version = "2"
+            r#"schema_version = "3"
 name = "{ability_name}"
 descriptor_version = "{descriptor_version}"
 description = "Echo one message from a Hello World plugin."
+exposure = "task"
+dedicated_surface = "none"
+subject_contract_kind = "authenticated-user"
 admission_action = "invoke"
 
 [input_schema]
@@ -1082,7 +1089,8 @@ mod tests {
             assert!(std::ptr::eq(profile.capability, capability));
             assert_eq!(Some(profile.helper_package()), capability.helper_package);
         }
-        for language in ["c/c++"] {
+        {
+            let language = "c/c++";
             let capability = rows
                 .get(&(language, ProviderSidecarCallMode::ExecInvoke))
                 .unwrap_or_else(|| panic!("missing sidecar helper matrix row for {language}"));
@@ -1105,14 +1113,26 @@ mod tests {
                     !capability.template_available,
                     "{language}/{call_mode:?} template must stay closed until its provider helper owns streaming frames"
                 );
-                assert!(matches!(
-                    capability.state,
-                    ProviderSidecarHelperState::Unsupported | ProviderSidecarHelperState::Seam
-                ));
-                assert!(
-                    capability.helper_package.is_none(),
-                    "{language}/{call_mode:?} must not claim unary exec helper coverage"
-                );
+                if language == "python" {
+                    assert!(matches!(
+                        capability.state,
+                        ProviderSidecarHelperState::ProviderBacked
+                    ));
+                    assert_eq!(
+                        capability.helper_package,
+                        Some("easynet_sdk.providers.runtime.plugin_exec"),
+                        "python/{call_mode:?} helper coverage must stay provider-owned"
+                    );
+                } else {
+                    assert!(matches!(
+                        capability.state,
+                        ProviderSidecarHelperState::Unsupported | ProviderSidecarHelperState::Seam
+                    ));
+                    assert!(
+                        capability.helper_package.is_none(),
+                        "{language}/{call_mode:?} must not claim unary exec helper coverage"
+                    );
+                }
             }
         }
     }
@@ -1155,6 +1175,50 @@ mod tests {
                     "template-open matrix row must be reachable through PluginTemplateProfile: {row:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn generated_exec_templates_parse_as_plugin_packages_for_every_open_language() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let languages = [
+            PluginTemplateLanguage::Python,
+            PluginTemplateLanguage::Go,
+            PluginTemplateLanguage::Rust,
+            PluginTemplateLanguage::Java,
+            PluginTemplateLanguage::Node,
+        ];
+
+        for language in languages {
+            let label = language.label();
+            let target = root.path().join(format!("hello-{label}-plugin"));
+            let package_id = format!("local.hello_{label}_plugin");
+            let ability_name = format!("hello_{label}_plugin.echo");
+            let project = init_hello_plugin(PluginTemplateInit {
+                path: target.clone(),
+                package_id: Some(package_id.clone()),
+                ability_name: Some(ability_name.clone()),
+                package_version: "0.1.0".to_string(),
+                descriptor_version: "1.0.0".to_string(),
+                language,
+            })
+            .unwrap_or_else(|error| panic!("generate {label} plugin template: {error}"));
+
+            assert_eq!(project.language, language);
+            let package =
+                crate::daemon::plugins::package::PluginPackage::from_installed(&target, None)
+                    .unwrap_or_else(|error| {
+                        panic!("generated {label} template must parse as plugin package: {error}")
+                    });
+            assert_eq!(package.manifest().id(), package_id);
+            assert_eq!(package.manifest().version(), "0.1.0");
+            assert_eq!(package.manifest().entrypoint(), "declarative.exec");
+            assert_eq!(package.manifest().abilities().len(), 1);
+            assert_eq!(package.manifest().abilities()[0].name(), ability_name);
+            assert!(
+                package.ability_descriptor(&ability_name).is_some(),
+                "generated {label} template ability descriptor must be indexed"
+            );
         }
     }
 

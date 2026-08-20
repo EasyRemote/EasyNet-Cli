@@ -512,6 +512,7 @@ impl AttemptIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AttemptState {
     Received,
@@ -523,6 +524,7 @@ pub(crate) enum AttemptState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct InvocationAttemptRecord {
     pub(crate) attempt_id: String,
     pub(crate) call_mode: String,
@@ -721,6 +723,50 @@ mod tests {
                 .to_string()
                 .contains("decode invocation attempt ledger row 1"),
             "{error:#}"
+        );
+    }
+
+    #[test]
+    fn invocation_attempt_audit_rejects_unknown_row_fields() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("attempts.jsonl");
+        let row = serde_json::json!({
+            "attempt_id": "attempt-1",
+            "call_mode": "Invoke",
+            "state": "received",
+            "stage": "ingress",
+            "started_unix_ms": 1,
+            "completed_unix_ms": null,
+            "elapsed_ms": null,
+            "invocation_ura": null,
+            "request_id": null,
+            "trace_id": null,
+            "span_id": null,
+            "caller_ura": null,
+            "callee_ura": null,
+            "subject_ura": null,
+            "ability": null,
+            "ability_ura": null,
+            "route_ura": null,
+            "execution_host_ura": null,
+            "status_code": null,
+            "status_message": null,
+            "error_stage": null,
+            "retryable": null,
+            "diagnostic_summary": "received invocation",
+            "suggested_action": "none",
+            "state_code": "legacy"
+        });
+        std::fs::write(&path, format!("{row}\n")).expect("write drifted attempt ledger");
+        let ledger = InvocationAttemptLedger::open(&path).expect("attempt ledger");
+
+        let error = ledger
+            .list_recent(10)
+            .expect_err("attempt ledger row must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "decode error should name the noncanonical field: {error:#}"
         );
     }
 

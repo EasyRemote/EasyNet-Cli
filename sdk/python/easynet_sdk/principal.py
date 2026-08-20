@@ -32,7 +32,7 @@ from ._principal_routes import (
     _ABILITY_SUSPEND,
     _PROFILE,
 )
-from .runtime_ability import RuntimeCallContext
+from .runtime_ability import RuntimeCallContext, _validate_call
 
 __all__ = [
     "AuthorizationGrant",
@@ -330,6 +330,7 @@ class RuntimePrincipalProvider:
             raise _invalid("runtime ability client is required")
         if not (call.caller_ura.strip() and call.callee_ura.strip() and call.subject_ura.strip()):
             raise _invalid("runtime call context requires caller_ura, callee_ura and subject_ura")
+        _validate_call(call)
         self._ability = ability
         self._call = call
 
@@ -757,6 +758,8 @@ def _required_public_key(value: object, field: str) -> bytes:
         decoded = base64.b64decode(encoded, validate=True)
     except binascii.Error as error:
         raise _invalid(f"{field} base64 decode failed", error) from error
+    if base64.b64encode(decoded).decode("ascii") != encoded:
+        raise _invalid(f"{field} must be canonical base64")
     if len(decoded) != 32:
         raise _invalid(f"{field} must decode to 32 bytes")
     return decoded

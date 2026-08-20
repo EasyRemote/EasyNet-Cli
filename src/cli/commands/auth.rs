@@ -241,20 +241,50 @@ pub struct LoginArgs {
     pub nickname: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct AuthResp {
     token: String,
     #[serde(default)]
     refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
     user: UserResp,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct UserResp {
     id: String,
     #[serde(default)]
+    account_key: Option<String>,
+    #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    phone: Option<String>,
+    #[serde(default)]
     nickname: Option<String>,
     username: String,
+    #[serde(default)]
+    avatar: Option<String>,
+    #[serde(default)]
+    passkey_public_key_count: Option<i64>,
+    #[serde(default)]
+    account_public_keys: Option<Vec<AccountPublicKeyResp>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct AccountPublicKeyResp {
+    id: String,
+    name: String,
+    credential_id: String,
+    public_key: String,
+    fingerprint: String,
+    backed_up: bool,
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -502,6 +532,9 @@ pub(crate) fn mint_pairing_token() -> anyhow::Result<PairingResp> {
 
 pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
     let resp = mint_pairing_token()?;
+    let session_hub = load_session()?
+        .map(|session| session.hub_url.trim_end_matches('/').to_string())
+        .filter(|hub| !hub.is_empty());
 
     if args.quiet {
         println!("{}", resp.pairing_token);
@@ -524,7 +557,10 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
     }
     println!();
     println!("Next:");
-    println!("  easynet device join {}", resp.pairing_token);
+    match session_hub {
+        Some(hub) => println!("  easynet device join {} --hub {}", resp.pairing_token, hub),
+        None => println!("  easynet device join {}", resp.pairing_token),
+    }
     Ok(())
 }
 
@@ -536,12 +572,20 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 //
 // Why not under `easynet device` (the existing group)?
 // `easynet device list` already exists and talks to the LOCAL
-// daemon UDS via `node.list` (device-mode CLI: "what does
-// THIS device see in its hub federation?"). Operator-mode HTTP
+// daemon through the canonical federation discovery path
+// (device-mode CLI: "what does THIS device see in its hub federation?").
+// Operator-mode HTTP
 // is a different lens entirely: "what does the BACKEND know about
 // the realm, viewed as the logged-in user?". Keeping the two
 // surfaces separate avoids overloading verbs that already have a
 // well-known meaning.
+//
+// These response DTOs are presentation projections over backend read-models,
+// not canonical runtime contracts. They intentionally validate required facts
+// and collection shapes while ignoring additive backend fields. Strict schema
+// rejection belongs at canonical boundaries such as persisted credentials,
+// pairing credential envelopes, daemon control frames, and Invocation/Receipt
+// wire objects.
 
 fn auth_get_json<T: for<'de> Deserialize<'de>>(path: &str) -> anyhow::Result<T> {
     let mut session = authenticated_session()?;
@@ -579,9 +623,11 @@ pub struct DevicesArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct DeviceListResp {
     items: Vec<DeviceItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -597,6 +643,80 @@ struct DeviceItem {
     arch: Option<String>,
     #[serde(default)]
     realm: Option<String>,
+    #[serde(default)]
+    trust_level: Option<String>,
+    #[serde(default)]
+    device_group: Option<String>,
+    #[serde(default)]
+    auth_binding: Option<String>,
+    #[serde(default)]
+    credential_provisioned: Option<bool>,
+    #[serde(default)]
+    public_key_registered: Option<bool>,
+    #[serde(default)]
+    device_public_key: Option<String>,
+    #[serde(default)]
+    device_public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    credential_token: Option<String>,
+    #[serde(default)]
+    hub_endpoint: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    deploy_signature: Option<String>,
+    #[serde(default)]
+    federated_peers: Vec<FederatedPeerEntry>,
+    #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
+    last_seen_unix_ms: Option<i64>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
+    #[serde(default)]
+    state_code: Option<String>,
+    #[serde(default)]
+    transition_id: Option<String>,
+    #[serde(default)]
+    interrupted_transition: Option<String>,
+    #[serde(default)]
+    failure: Option<ConnectionFailure>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+struct FederatedPeerEntry {
+    realm: String,
+    peer_hub_url: String,
+    #[serde(default)]
+    peer_hub_pubkey: Option<String>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+struct ResolveUnavailable {
+    source: String,
+    reason: String,
+    #[serde(default)]
+    query_name: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    stage: Option<String>,
+    #[serde(default)]
+    retryable: Option<bool>,
+    #[serde(default)]
+    retry_after_unix_ms: Option<i64>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+struct ConnectionFailure {
+    code: String,
+    message: String,
+    stage: String,
+    retryable: bool,
 }
 
 pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
@@ -609,10 +729,31 @@ pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
                     "node_id": d.node_id,
                     "display_name": d.display_name,
                     "state": d.state,
+                    "trust_level": d.trust_level,
+                    "device_group": d.device_group,
                     "os": d.os,
                     "arch": d.arch,
                     "realm": d.realm,
-                })).collect::<Vec<_>>()
+                    "auth_binding": d.auth_binding,
+                    "credential_provisioned": d.credential_provisioned,
+                    "public_key_registered": d.public_key_registered,
+                    "device_public_key": d.device_public_key,
+                    "device_public_key_fingerprint": d.device_public_key_fingerprint,
+                    "credential_token": d.credential_token,
+                    "hub_endpoint": d.hub_endpoint,
+                    "username": d.username,
+                    "user_id": d.user_id,
+                    "deploy_signature": d.deploy_signature,
+                    "ura": d.ura,
+                    "last_seen_unix_ms": d.last_seen_unix_ms,
+                    "state_code": d.state_code,
+                    "transition_id": d.transition_id,
+                    "interrupted_transition": d.interrupted_transition,
+                    "failure": d.failure,
+                    "resolve_unavailable": d.resolve_unavailable,
+                    "federated_peers": d.federated_peers,
+                })).collect::<Vec<_>>(),
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -647,21 +788,35 @@ pub struct AbilitiesArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AbilityListResp {
     items: Vec<AbilityItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AbilityItem {
     #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
     #[serde(default)]
     ability_ura: Option<String>,
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    install_id: Option<String>,
+    #[serde(default)]
+    owner_ura: Option<String>,
 }
 
 pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
@@ -672,11 +827,18 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "items": resp.items.iter().map(|a| serde_json::json!({
+                    "ura": a.ura,
                     "name": a.name,
+                    "tool_name": a.tool_name,
                     "ability_ura": a.ability_ura,
                     "version": a.version,
+                    "category": a.category,
+                    "description": a.description,
                     "state": a.state,
-                })).collect::<Vec<_>>()
+                    "install_id": a.install_id,
+                    "owner_ura": a.owner_ura,
+                })).collect::<Vec<_>>(),
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -843,9 +1005,45 @@ pub struct AgentsArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AgentListResp {
-    items: Vec<serde_json::Value>,
+    items: Vec<AgentItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct AgentItem {
+    agent_id: String,
+    display_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+    #[serde(default)]
+    base_runtime: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    base_model: Option<String>,
+    tags: Vec<String>,
+    node_id: String,
+    #[serde(default)]
+    host_device_ura: Option<String>,
+    #[serde(default)]
+    skills: Vec<SkillInfo>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct SkillInfo {
+    skill_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -857,24 +1055,14 @@ struct AgentTableProjection {
 }
 
 impl AgentTableProjection {
-    fn from_backend_row(row: &serde_json::Value) -> Self {
+    fn from_backend_row(row: &AgentItem) -> Self {
         Self {
-            agent_id: canonical_agent_row_string(row, "agent_id").to_string(),
-            display_name: canonical_agent_row_string(row, "display_name").to_string(),
-            node_id: canonical_agent_row_string(row, "node_id").to_string(),
-            skill_count: row
-                .get("skills")
-                .and_then(serde_json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0),
+            agent_id: row.agent_id.clone(),
+            display_name: row.display_name.clone(),
+            node_id: row.node_id.clone(),
+            skill_count: row.skills.len(),
         }
     }
-}
-
-fn canonical_agent_row_string<'a>(row: &'a serde_json::Value, field: &'static str) -> &'a str {
-    row.get(field)
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("-")
 }
 
 pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
@@ -884,6 +1072,7 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "items": resp.items,
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -1139,15 +1328,20 @@ mod tests {
 
     #[test]
     fn auth_agents_table_uses_canonical_backend_fields() {
-        let row = AgentTableProjection::from_backend_row(&serde_json::json!({
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
             "agent_id": "agent-1",
             "display_name": "Agent One",
+            "tags": [],
             "node_id": "device-1",
             "skills": [
-                { "name": "shell.run" },
-                { "name": "terminal.create" }
-            ]
-        }));
+                    { "skill_id": "skill-1", "name": "shell.run" },
+                    { "skill_id": "skill-2", "name": "terminal.create" }
+                ]
+            }]
+        }))
+        .expect("agent list row should decode through the typed backend contract");
+        let row = AgentTableProjection::from_backend_row(&response.items[0]);
 
         assert_eq!(
             row,
@@ -1161,18 +1355,22 @@ mod tests {
     }
 
     #[test]
-    fn auth_agents_table_rejects_legacy_row_aliases() {
-        let row = AgentTableProjection::from_backend_row(&serde_json::json!({
-            "ura": "easynet:///r/test/agent/legacy",
-            "name": "Legacy Agent",
-            "node_id": "device-1",
-            "skills": []
-        }));
+    fn auth_agents_table_rejects_rows_missing_canonical_identity_fields() {
+        let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "ura": "easynet:///r/test/agent/legacy",
+                "name": "Legacy Agent",
+                "tags": [],
+                "node_id": "device-1",
+                "skills": []
+            }]
+        }))
+        .expect_err("agent list rows must require canonical backend identity fields");
 
-        assert_eq!(row.agent_id, "-");
-        assert_eq!(row.display_name, "-");
-        assert_eq!(row.node_id, "device-1");
-        assert_eq!(row.skill_count, 0);
+        assert!(
+            error.to_string().contains("agent_id"),
+            "schema error should name the missing canonical field: {error}"
+        );
     }
 
     #[test]
@@ -1295,6 +1493,66 @@ mod tests {
     }
 
     #[test]
+    fn login_response_accepts_backend_public_user_projection() {
+        let response = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "refresh_token": "refresh",
+            "expires_in": 3600,
+            "user": {
+                "id": "user-alice",
+                "account_key": "user-alice",
+                "ura": "easynet:///r/acme/user/user-alice",
+                "username": "alice",
+                "email": "alice@example.test",
+                "phone": "",
+                "nickname": "Alice",
+                "avatar": "",
+                "passkey_public_key_count": 0,
+                "account_public_keys": []
+            }
+        }))
+        .expect("CLI auth response DTO must accept the backend public UserResp contract");
+
+        assert_eq!(response.user.id, "user-alice");
+        assert_eq!(response.user.username, "alice");
+        assert_eq!(response.user.nickname.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn login_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "refresh_token": "refresh",
+            "user": {
+                "id": "user-alice",
+                "username": "alice",
+                "user_ura": "easynet:///r/acme/user/user-alice",
+                "account_public_keys": []
+            },
+            "state_code": "J200"
+        }))
+        .expect("auth facade must ignore additive backend fields it does not consume");
+
+        assert_eq!(response.user.id, "user-alice");
+        assert_eq!(response.user.username, "alice");
+    }
+
+    #[test]
+    fn login_response_rejects_rows_missing_canonical_user_fields() {
+        let nested = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "user": {
+                "user_ura": "easynet:///r/acme/user/user-alice"
+            }
+        }))
+        .expect_err("login user projection must require canonical owner facts");
+        assert!(
+            nested.to_string().contains("id"),
+            "schema error should name the missing canonical field: {nested}"
+        );
+    }
+
+    #[test]
     fn refresh_response_does_not_require_user_owner_facts() {
         let response = serde_json::from_value::<RefreshResp>(serde_json::json!({
             "token": "new-token"
@@ -1303,5 +1561,267 @@ mod tests {
 
         assert_eq!(response.token, "new-token");
         assert!(response.refresh_token.is_none());
+    }
+
+    #[test]
+    fn refresh_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<RefreshResp>(serde_json::json!({
+            "token": "new-token",
+            "state_code": "J200"
+        }))
+        .expect("refresh facade must ignore additive backend fields it does not consume");
+
+        assert_eq!(response.token, "new-token");
+    }
+
+    #[test]
+    fn pairing_token_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<PairingResp>(serde_json::json!({
+            "pairing_token": "token_123",
+            "realm": "acme",
+            "state_code": "J200"
+        }))
+        .expect("pairing-token mint facade must ignore additive backend fields");
+
+        assert_eq!(response.pairing_token, "token_123");
+    }
+
+    #[test]
+    fn device_list_response_accepts_backend_read_model_contract() {
+        let response = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "display_name": "Device",
+                "state": "online",
+                "trust_level": "",
+                "device_group": "",
+                "os": "darwin",
+                "arch": "arm64",
+                "realm": "acme",
+                "ura": "easynet:///r/acme/device/dev-1",
+                "last_seen_unix_ms": 42,
+                "resolve_unavailable": [],
+                "state_code": "J800",
+                "transition_id": "T11_REFETCH_READ_MODEL",
+                "interrupted_transition": "T11_REFETCH_READ_MODEL",
+                "failure": {
+                    "code": "RESOLVE_UNAVAILABLE",
+                    "message": "namespace resolver unavailable",
+                    "stage": "resolve",
+                    "retryable": true
+                }
+            }],
+            "resolve_unavailable": [{
+                "source": "backend_namespace_resolve",
+                "reason": "NOT_FOUND",
+                "query_name": "easynet:///r/acme/device/dev-1",
+                "message": "owner is not online",
+                "code": "ROUTE_NEGATIVE",
+                "stage": "resolve",
+                "retryable": true,
+                "retry_after_unix_ms": 1000
+            }]
+        }))
+        .expect(
+            "operator-mode device list must accept backend public DeviceResp read-model fields",
+        );
+
+        assert_eq!(response.items[0].state_code.as_deref(), Some("J800"));
+        assert_eq!(
+            response.resolve_unavailable[0].source,
+            "backend_namespace_resolve"
+        );
+    }
+
+    #[test]
+    fn device_list_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [],
+            "cursor": "legacy"
+        }))
+        .expect("operator-mode device list must ignore additive envelope fields");
+
+        assert!(response.items.is_empty());
+
+        let item = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "display_name": "Device",
+                "state": "online",
+                "legacy_state_code": "J200"
+            }]
+        }))
+        .expect("operator-mode device rows must ignore additive row fields");
+
+        assert_eq!(item.items[0].node_id, "dev-1");
+    }
+
+    #[test]
+    fn device_list_response_rejects_null_collections() {
+        let top_level = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("device list items must be a canonical JSON array");
+        assert!(
+            top_level.to_string().contains("sequence"),
+            "schema error should reject null list collections: {top_level}"
+        );
+
+        let nested = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "federated_peers": null
+            }]
+        }))
+        .expect_err("device row federated_peers must be a canonical JSON array when present");
+        assert!(
+            nested.to_string().contains("sequence"),
+            "schema error should reject null nested collections: {nested}"
+        );
+    }
+
+    #[test]
+    fn ability_list_response_accepts_backend_public_contract() {
+        let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": [{
+                "ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
+                "name": "browser.open_session",
+                "tool_name": "browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
+                "version": "1.0.0",
+                "category": "browser",
+                "description": "Open a browser session",
+                "state": "available",
+                "install_id": "install-1",
+                "owner_ura": "easynet:///r/acme/agent/device.dev-1.plugin-management"
+            }],
+            "resolve_unavailable": []
+        }))
+        .expect("operator-mode ability list must accept backend public AbilityResp fields");
+
+        assert_eq!(
+            response.items[0].owner_ura.as_deref(),
+            Some("easynet:///r/acme/agent/device.dev-1.plugin-management")
+        );
+    }
+
+    #[test]
+    fn ability_list_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": [{
+                "name": "browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
+                "version": "1.0.0",
+                "state": "available",
+                "descriptor_ref": "legacy"
+            }]
+        }))
+        .expect("operator-mode ability rows must ignore additive backend fields");
+
+        assert_eq!(
+            response.items[0].name.as_deref(),
+            Some("browser.open_session")
+        );
+    }
+
+    #[test]
+    fn ability_list_response_rejects_null_collections() {
+        let error = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("ability list items must be a canonical JSON array");
+
+        assert!(
+            error.to_string().contains("sequence"),
+            "schema error should reject null ability collections: {error}"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_ignores_additive_envelope_fields() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [],
+            "state_code": "J200"
+        }))
+        .expect("operator-mode agent list must ignore additive envelope fields");
+
+        assert!(response.items.is_empty());
+    }
+
+    #[test]
+    fn agent_list_response_accepts_backend_public_contract() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "description": "Agent roster row",
+                "runtime": "claude-code",
+                "base_runtime": "claude-code",
+                "model": "sonnet",
+                "base_model": "sonnet",
+                "tags": [],
+                "node_id": "dev-1",
+                "host_device_ura": "easynet:///r/acme/device/dev-1",
+                "skills": [{
+                    "skill_id": "skill-1",
+                    "name": "read",
+                    "description": "Read files",
+                    "tags": ["files"],
+                    "state": "enabled"
+                }]
+            }],
+            "resolve_unavailable": []
+        }))
+        .expect("operator-mode agent list must accept backend public AgentResp fields");
+
+        let row = AgentTableProjection::from_backend_row(&response.items[0]);
+        assert_eq!(row.agent_id, "easynet:///r/acme/agent/alice.claude");
+        assert_eq!(row.skill_count, 1);
+    }
+
+    #[test]
+    fn agent_list_response_ignores_additive_row_fields() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "tags": [],
+                "node_id": "dev-1",
+                "legacy_agent_id": "alice"
+            }]
+        }))
+        .expect("operator-mode agent rows must ignore additive backend fields");
+
+        assert_eq!(
+            response.items[0].agent_id,
+            "easynet:///r/acme/agent/alice.claude"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_rejects_null_collections() {
+        let top_level = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("agent list items must be a canonical JSON array");
+        assert!(
+            top_level.to_string().contains("sequence"),
+            "schema error should reject null agent collections: {top_level}"
+        );
+
+        let nested = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "tags": null,
+                "node_id": "dev-1",
+                "skills": []
+            }]
+        }))
+        .expect_err("agent row tags must be a canonical JSON array");
+        assert!(
+            nested.to_string().contains("sequence"),
+            "schema error should reject null nested agent collections: {nested}"
+        );
     }
 }

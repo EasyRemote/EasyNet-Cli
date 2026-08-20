@@ -18,6 +18,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     MAX_VIDEO_DIMENSION, MIN_ATTACH_FPS, NATIVE_MAX_BITRATE_KBPS, NATIVE_MIN_BITRATE_KBPS,
     REASON_INVALID_ARGUMENT, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,25 +90,6 @@ impl Default for RemoteDesktopVideoConstraints {
             max_frame_queue_depth: DEFAULT_FRAME_QUEUE_DEPTH,
             drop_stale_frames: true,
         }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct RemoteDesktopInputPolicy {
-    keyboard_enabled: bool,
-    pointer_enabled: bool,
-    clipboard_enabled: bool,
-    file_drop_enabled: bool,
-}
-
-impl RemoteDesktopInputPolicy {
-    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
-        json!({
-            "keyboard_enabled": self.keyboard_enabled,
-            "pointer_enabled": self.pointer_enabled,
-            "clipboard_enabled": self.clipboard_enabled,
-            "file_drop_enabled": self.file_drop_enabled,
-        })
     }
 }
 
@@ -232,31 +214,31 @@ pub(crate) fn parse_video_constraints(
     let empty = Map::new();
     let raw = raw.unwrap_or(&empty);
     validate_video_keys(raw)?;
-    let max_width = parse_video_u32(&raw, "max_width", 1920, 1, MAX_VIDEO_DIMENSION)?;
-    let max_height = parse_video_u32(&raw, "max_height", 1080, 1, MAX_VIDEO_DIMENSION)?;
+    let max_width = parse_video_u32(raw, "max_width", 1920, 1, MAX_VIDEO_DIMENSION)?;
+    let max_height = parse_video_u32(raw, "max_height", 1080, 1, MAX_VIDEO_DIMENSION)?;
     let max_fps = parse_video_u32(
-        &raw,
+        raw,
         "max_fps",
         DEFAULT_TARGET_FPS,
         MIN_ATTACH_FPS as u64,
         MAX_ATTACH_FPS as u64,
     )?;
     let max_bitrate_kbps = parse_video_u32(
-        &raw,
+        raw,
         "max_bitrate_kbps",
         DEFAULT_TARGET_BITRATE_KBPS,
         1,
         250_000,
     )?;
     let target_latency_ms = parse_video_u32(
-        &raw,
+        raw,
         "target_latency_ms",
         DEFAULT_GLASS_TO_GLASS_LATENCY_MS,
         1,
         1000,
     )?;
     let max_frame_queue_depth = parse_video_u32(
-        &raw,
+        raw,
         "max_frame_queue_depth",
         DEFAULT_FRAME_QUEUE_DEPTH,
         1,
@@ -335,14 +317,16 @@ pub(crate) fn parse_input_policy(
     let read_bool = |key: &'static str| -> anyhow::Result<bool> {
         Ok(optional_bool_field(requested, key, ABILITY_CREATE_SESSION)?.unwrap_or(false))
     };
-    Ok(RemoteDesktopInputPolicy {
-        keyboard_enabled: interactive && (read_bool("keyboard_enabled")? || read_bool("keyboard")?),
-        pointer_enabled: interactive && (read_bool("pointer_enabled")? || read_bool("pointer")?),
-        clipboard_enabled: interactive
-            && (read_bool("clipboard_enabled")? || read_bool("clipboard")?),
-        file_drop_enabled: interactive
-            && (read_bool("file_drop_enabled")? || read_bool("file_drop")?),
-    })
+    let keyboard_enabled = read_bool("keyboard_enabled")? || read_bool("keyboard")?;
+    let pointer_enabled = read_bool("pointer_enabled")? || read_bool("pointer")?;
+    let _clipboard_enabled = read_bool("clipboard_enabled")?;
+    let _clipboard = read_bool("clipboard")?;
+    let _file_drop_enabled = read_bool("file_drop_enabled")?;
+    let _file_drop = read_bool("file_drop")?;
+    Ok(RemoteDesktopInputPolicy::new(
+        interactive && keyboard_enabled,
+        interactive && pointer_enabled,
+    ))
 }
 
 pub(crate) fn parse_optional_session_id(args: &Value) -> anyhow::Result<Option<String>> {
@@ -380,7 +364,7 @@ fn optional_input_policy(args: &Value) -> anyhow::Result<Option<&Map<String, Val
     }
 }
 
-fn optional_u64_field(
+pub(in crate::daemon::plugins::remote_desktop) fn optional_u64_field(
     args: &Value,
     key: &'static str,
     ability: &str,
@@ -754,6 +738,14 @@ mod tests {
                 "`keyboard_enabled` must be a boolean",
             ),
             (
+                json!({"input_policy": {"clipboard_enabled": "true"}}),
+                "`clipboard_enabled` must be a boolean",
+            ),
+            (
+                json!({"input_policy": {"file_drop_enabled": "true"}}),
+                "`file_drop_enabled` must be a boolean",
+            ),
+            (
                 json!({"input_policy": {"legacy_pointer": true}}),
                 "input_policy.legacy_pointer is not supported",
             ),
@@ -767,5 +759,31 @@ mod tests {
                 "error must carry invalid_argument reason; got: {err}"
             );
         }
+    }
+
+    #[test]
+    fn input_policy_reports_clipboard_and_file_drop_unsupported_even_when_requested() {
+        let policy = parse_input_policy(
+            &json!({
+                "input_policy": {
+                    "keyboard_enabled": true,
+                    "pointer_enabled": true,
+                    "clipboard_enabled": true,
+                    "file_drop_enabled": true
+                }
+            }),
+            "interactive",
+        )
+        .expect("well-formed interactive input policy parses");
+        let value = policy.to_test_value();
+
+        assert_eq!(value["keyboard_enabled"], json!(true));
+        assert_eq!(value["pointer_enabled"], json!(true));
+        assert_eq!(value["clipboard_enabled"], json!(false));
+        assert_eq!(value["file_drop_enabled"], json!(false));
+        assert_eq!(
+            value["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
     }
 }

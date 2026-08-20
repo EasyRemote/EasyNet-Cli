@@ -11,8 +11,6 @@ from ._identity_guards import contains_all_zero_principal
 from .axon_addressing import (
     AddressingClient,
     AddressingProjection,
-    authority_ura,
-    parse_ura,
 )
 from .authority import (
     DELEGATION_METADATA_KEY,
@@ -29,6 +27,7 @@ from ._runtime_governance import (
     RECEIPT_HISTORY_PROVIDER,
     is_runtime_governance_read_ability,
 )
+from ._runtime_subjects import runtime_governance_read_subject_ura
 from .runtime import (
     InvocationCancel,
     InvocationHandle,
@@ -65,7 +64,7 @@ _GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
 )
 _CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
     allow_governance_read=True,
-    subject_policy="runtime_owner",
+    subject_policy="runtime_governance_read",
     descriptor_provider=ABILITY_DESCRIPTOR_PROVIDER,
 )
 
@@ -89,6 +88,7 @@ class _RuntimeAbilityProjection:
     descriptor_ref: str
     ability_ura: str
     public_name: str
+    action: str
 
     @classmethod
     def from_descriptor_ref(
@@ -108,6 +108,7 @@ class _RuntimeAbilityProjection:
         canonical_ref = projection.descriptor_ref.strip()
         if not ability_ura or not canonical_ref:
             raise _invalid("descriptor_ref must contain a canonical Ability URA")
+        action = projection.action.strip() or "invoke"
         try:
             ability = addressing.project_ability_ura(ability_ura)
         except SDKError as exc:
@@ -122,6 +123,7 @@ class _RuntimeAbilityProjection:
             descriptor_ref=canonical_ref,
             ability_ura=ability_ura,
             public_name=public_name,
+            action=action,
         )
 
     def matches_scope(self, matcher: Callable[[str], bool]) -> bool:
@@ -244,7 +246,7 @@ class RuntimeAbilityClient:
     def _invoke_governance_read(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> dict[str, object]:
-        result = self._runtime.invoke(
+        result = self._runtime._governance_read(
             self._build_governance_read(call, ability_name, arguments)
         )
         if not result.ok:
@@ -269,6 +271,20 @@ class RuntimeAbilityClient:
     ) -> str:
         if policy.subject_policy == "runtime_owner":
             return call.callee_ura.strip()
+        if policy.subject_policy == "runtime_governance_read":
+            authority = _runtime_session_authority_from_call(call)
+            if authority is not None:
+                subject = self._addressing.parse_ura(call.subject_ura.strip())
+                return runtime_governance_read_subject_ura(
+                    self._addressing.user_ura(
+                        subject.realm, authority.session_owner_user_id.strip()
+                    ),
+                    call.callee_ura,
+                )
+            return runtime_governance_read_subject_ura(
+                call.subject_ura,
+                call.callee_ura,
+            )
         if policy.subject_policy != "descriptor_bound":
             raise _invalid("runtime ability subject policy is unsupported")
         subject = self._addressing.parse_ura(call.subject_ura.strip())
@@ -287,7 +303,9 @@ class RuntimeAbilityClient:
         policy: _RuntimeAbilityDispatchPolicy,
     ) -> str:
         if policy.descriptor_provider == ABILITY_DESCRIPTOR_PROVIDER:
-            return authority_ura(parse_ura(call.callee_ura.strip()).realm)
+            if policy.subject_policy in {"runtime_owner", "runtime_governance_read"}:
+                return selected_subject_ura.strip()
+            return call.subject_ura.strip()
         if policy.subject_policy == "runtime_owner":
             return selected_subject_ura.strip()
         return call.subject_ura.strip()
@@ -334,10 +352,13 @@ def _validate_call(call: RuntimeCallContext) -> None:
     _validate_runtime_call_context(call)
     nonce = _required_text(call.nonce_base64, "nonce_base64")
     try:
-        if not base64.b64decode(nonce, validate=True):
-            raise ValueError("empty nonce")
+        decoded = base64.b64decode(nonce, validate=True)
     except (ValueError, binascii.Error) as error:
         raise _invalid("nonce_base64 must be canonical base64", error) from error
+    if base64.b64encode(decoded).decode("ascii") != nonce:
+        raise _invalid("nonce_base64 must be canonical base64")
+    if len(decoded) != 16:
+        raise _invalid("nonce_base64 must decode to 16 bytes")
 
 
 def _validate_runtime_call_context(call: RuntimeCallContext) -> None:
@@ -406,6 +427,19 @@ def _runtime_authority_from_metadata(
     return None
 
 
+def _runtime_session_authority_from_call(
+    call: RuntimeCallContext,
+) -> SessionAuthority | None:
+    if isinstance(call.authority, SessionAuthority):
+        return call.authority
+    if call.authority is not None:
+        return None
+    session = call.metadata.get(SESSION_AUTHORITY_METADATA_KEY)
+    if isinstance(session, str) and session.strip():
+        return SessionAuthority.from_metadata(session)
+    return None
+
+
 def _validate_runtime_authority_binding(
     authority: RuntimeInvocationAuthority,
     call: RuntimeCallContext,
@@ -440,6 +474,10 @@ def _validate_runtime_authority_binding(
         raise _invalid(
             "runtime session authority does not admit descriptor-bound subject_ura"
         )
+    if not _authority_list_admits(authority.allowed_actions, ability.action):
+        raise _invalid(
+            f"runtime session authority allowed_actions do not admit {ability.action}"
+        )
     if not ability.matches_scope(authority.matches_scope):
         raise _invalid("runtime session authority scopes do not admit ability")
 
@@ -448,6 +486,13 @@ def _required_text(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise _invalid(f"{field_name} is required")
     return value.strip()
+
+
+def _authority_list_admits(patterns: tuple[str, ...], value: str) -> bool:
+    clean_value = value.strip()
+    return bool(clean_value) and any(
+        pattern.strip() == clean_value for pattern in patterns
+    )
 
 
 def _invocation_failure(result: InvocationResult) -> SDKError:

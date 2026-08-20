@@ -89,14 +89,22 @@ type DescriptorResolverTransport interface {
 	ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
+// governanceReadTransport is the provider-backed seam for runtime governance
+// read abilities. It intentionally sits outside RuntimeTransport so public
+// product actions cannot accidentally reuse this ingress.
+type governanceReadTransport interface {
+	GovernanceRead(ctx context.Context, draftJSON []byte) ([]byte, error)
+}
+
 // RuntimeDescriptorRefRequest selects one runtime-owned ability descriptor.
 type RuntimeDescriptorRefRequest struct {
-	CalleeURA  string `json:"callee_ura"`
-	Ability    string `json:"ability"`
-	CallMode   string `json:"call_mode"`
-	CallerURA  string `json:"caller_ura,omitempty"`
-	SubjectURA string `json:"subject_ura,omitempty"`
-	Provider   string `json:"provider,omitempty"`
+	CalleeURA         string            `json:"callee_ura"`
+	Ability           string            `json:"ability"`
+	CallMode          string            `json:"call_mode"`
+	CallerURA         string            `json:"caller_ura,omitempty"`
+	SubjectURA        string            `json:"subject_ura,omitempty"`
+	AuthorityMetadata map[string]string `json:"authority_metadata,omitempty"`
+	Provider          string            `json:"provider,omitempty"`
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.
@@ -112,6 +120,7 @@ type RuntimeTransportFunc struct {
 	FreeHandleFunc           func(ctx context.Context, control InvocationControlCapability) error
 	RecoverFunc              func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ResolveDescriptorRefFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GovernanceReadFunc       func(ctx context.Context, draftJSON []byte) ([]byte, error)
 	CloseFunc                func(ctx context.Context) error
 }
 
@@ -214,6 +223,13 @@ func (f RuntimeTransportFunc) ResolveDescriptorRef(ctx context.Context, requestJ
 		return nil, invalidRuntimeClient("runtime descriptor resolver transport function is required")
 	}
 	return f.ResolveDescriptorRefFunc(ctx, requestJSON)
+}
+
+func (f RuntimeTransportFunc) GovernanceRead(ctx context.Context, draftJSON []byte) ([]byte, error) {
+	if f.GovernanceReadFunc == nil {
+		return nil, invalidRuntimeClient("runtime governance read transport function is required")
+	}
+	return f.GovernanceReadFunc(ctx, draftJSON)
 }
 
 func (f RuntimeTransportFunc) Close(ctx context.Context) error {
@@ -358,6 +374,17 @@ func admitRuntimeDescriptorRefRequest(req RuntimeDescriptorRefRequest) (RuntimeD
 			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref provider request " + field.name + " must not be all-zero")
 		}
 	}
+	target, err := newRuntimeCatalogueReadTarget(req.CalleeURA, req.SubjectURA, req.Ability, req.Provider)
+	if err != nil {
+		if strings.Contains(err.Error(), "runtime governance read subject_ura") {
+			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient(
+				"descriptor_ref provider " + req.Provider + " subject_ura must be a runtime governance read subject",
+			)
+		}
+		return RuntimeDescriptorRefRequest{}, err
+	}
+	req.CalleeURA = target.calleeURA
+	req.SubjectURA = target.subjectURA
 	if err := admitRuntimeDescriptorRefProviderSubject(req); err != nil {
 		return RuntimeDescriptorRefRequest{}, err
 	}
@@ -381,20 +408,9 @@ func admitRuntimeDescriptorRefProviderSubject(req RuntimeDescriptorRefRequest) e
 }
 
 func admitAbilityDescriptorProviderSubject(calleeURA string, subjectURA string) error {
-	callee, err := ParseURAParts(calleeURA)
-	if err != nil {
-		return invalidRuntimeClient("descriptor_ref provider ability_descriptor callee_ura must be canonical")
-	}
-	subject, err := ParseURAParts(subjectURA)
-	if err != nil {
-		return invalidRuntimeClient("descriptor_ref provider ability_descriptor subject_ura must be canonical")
-	}
-	if subject.Kind != URAKindAuthority {
-		return invalidRuntimeClient("descriptor_ref provider ability_descriptor subject_ura must be an Authority URA")
-	}
-	if subject.Realm != callee.Realm || subjectURA != AuthorityURA(callee.Realm) {
+	if !isRuntimeGovernanceReadSubjectURA(subjectURA, calleeURA) {
 		return invalidRuntimeClient(
-			"descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+			"descriptor_ref provider ability_descriptor subject_ura must be a runtime governance read subject",
 		)
 	}
 	return nil
@@ -459,6 +475,32 @@ func (c *RuntimeClient) Invoke(ctx context.Context, draft InvocationDraft) (Invo
 	return NewInvocationResultFromJSON(raw)
 }
 
+// governanceRead submits a complete runtime governance-read tuple through the
+// provider-backed governance ingress. It is not a public action path.
+func (c *RuntimeClient) governanceRead(ctx context.Context, draft InvocationDraft) (InvocationResult, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	governance, ok := transport.(governanceReadTransport)
+	if !ok {
+		return InvocationResult{}, invalidRuntimeClient("runtime transport does not expose governance read")
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return InvocationResult{}, invalidRuntimePayload(fmt.Sprintf("encode governance read draft: %v", err), err)
+	}
+	raw, err := governance.GovernanceRead(ctx, draftJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return InvocationResult{}, sdkErr
+		}
+		return InvocationResult{}, transportRuntimeError("governance read transport failed", err)
+	}
+	return NewInvocationResultFromJSON(raw)
+}
+
 // InvokeStream opens a server stream over a complete Invocation tuple.
 func (c *RuntimeClient) InvokeStream(ctx context.Context, draft InvocationDraft) (*StreamHandle, error) {
 	transport, err := c.runtimeTransport(ctx)
@@ -489,11 +531,15 @@ func (c *RuntimeClient) OpenSignedStream(ctx context.Context, signed SignedInvoc
 	if !signed.SubmitReady() {
 		return nil, invalidRuntimePayload("signed invocation is not submit-ready", nil)
 	}
-	signedJSON, err := json.Marshal(signed)
+	draft, err := signed.InvocationDraft()
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation: %v", err), err)
+		return nil, err
 	}
-	streamTransport, rawOpen, err := transport.OpenStream(ctx, signedJSON)
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation draft: %v", err), err)
+	}
+	streamTransport, rawOpen, err := transport.OpenStream(ctx, draftJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -538,15 +584,19 @@ func (c *RuntimeClient) OpenSignedBidi(ctx context.Context, signed SignedInvocat
 	if !signed.SubmitReady() {
 		return nil, invalidRuntimePayload("signed invocation is not submit-ready", nil)
 	}
-	signedJSON, err := json.Marshal(signed)
+	draft, err := signed.InvocationDraft()
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation: %v", err), err)
+		return nil, err
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation draft: %v", err), err)
 	}
 	streamsJSON, err := json.Marshal(streams)
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode bidi stream descriptors: %v", err), err)
 	}
-	bidiTransport, rawOpen, err := transport.OpenBidi(ctx, signedJSON, streamsJSON)
+	bidiTransport, rawOpen, err := transport.OpenBidi(ctx, draftJSON, streamsJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -1094,6 +1144,14 @@ func decodeRuntimeReceiptProjectionFromJSON(raw []byte) (RuntimeReceipt, error) 
 	if err := json.Unmarshal(raw, &rawMap); err != nil || rawMap == nil {
 		return RuntimeReceipt{}, invalidRuntimePayload("runtime receipt must be an object", err)
 	}
+	if strings.TrimSpace(dto.ReceiptID) == "" {
+		receiptID, err := runtimeReceiptID(dto.InvocationID, uint64(dto.Index))
+		if err != nil {
+			return RuntimeReceipt{}, err
+		}
+		dto.ReceiptID = receiptID
+		rawMap["receipt_id"] = dto.ReceiptID
+	}
 	return RuntimeReceipt{
 		Raw:                   rawMap,
 		ReceiptID:             dto.ReceiptID,
@@ -1133,6 +1191,17 @@ func decodeRuntimeReceiptProjectionFromJSON(raw []byte) (RuntimeReceipt, error) 
 		OutputHashHex:         dto.OutputHashHex,
 		ParentReceipts:        dto.ParentReceipts,
 	}, nil
+}
+
+func runtimeReceiptID(invocationID string, index uint64) (string, error) {
+	invocationID = strings.TrimSpace(invocationID)
+	if invocationID == "" {
+		return "", invalidRuntimePayload("runtime receipt summary is missing invocation_id", nil)
+	}
+	if strings.Contains(invocationID, "/") {
+		return "", invalidRuntimePayload("runtime receipt invocation_id must be owner-local for receipt_id", nil)
+	}
+	return fmt.Sprintf("%s:%d", invocationID, index), nil
 }
 
 func (r RuntimeReceipt) HasCausalAnchor() bool {
@@ -1629,34 +1698,35 @@ func validateRuntimeReceiptAuthorityBindingShape(binding map[string]any, field s
 	if err != nil {
 		return err
 	}
+	// Kind is the compound "<relation>+<evidence>" tag produced by the
+	// daemon's authority-binding JSON projection — see RFC
+	// 001-authority-binding-relation-evidence.md in EasyNet-Axon.
+	// "credential_of+attestation" is deliberately NOT a recognized kind
+	// here: it is reserved/inadmissible in v1, so it falls through to
+	// the noncanonical-kind rejection below like any other unknown tag.
 	switch kind {
-	case "self":
-		return requireRuntimeReceiptExactKeys(binding, field, "kind", "principal_ura")
-	case "delegation":
+	case "self+identity":
+		return requireRuntimeReceiptExactKeys(binding, field, "kind", "authority_ura")
+	case "delegated_by+delegation":
 		return requireRuntimeReceiptExactKeys(
 			binding,
 			field,
 			"kind",
+			"authority_ura",
 			"issuer_ura",
-			"subject_ura",
-			"caller_ura",
 			"audience",
 			"scopes",
 			"issued_at_ms",
 			"expires_at_ms",
 			"signature_base64",
 		)
-	case "capability":
-		return requireRuntimeReceiptExactKeys(binding, field, "kind", "capability_ura")
-	case "policy":
-		return requireRuntimeReceiptExactKeys(binding, field, "kind", "policy_ura")
-	case "session":
+	case "session_of+session":
 		return requireRuntimeReceiptExactKeys(
 			binding,
 			field,
 			"kind",
+			"authority_ura",
 			"issuer_ura",
-			"subject_ura",
 			"session_id",
 			"scopes",
 			"audiences",
@@ -1917,146 +1987,146 @@ func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {
 	return nil
 }
 
-func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv.AuthorityBinding, error) {
+// runtimeReceiptAuthorityBinding parses the daemon's authority-binding JSON
+// projection into the Axon Go SDK's AuthorityOrBootstrap shape. The "kind"
+// discriminator is the compound "<relation>+<evidence>" tag (e.g. "self+identity",
+// "delegated_by+delegation", "session_of+session"); Bootstrap stays a
+// separate top-level "bootstrap" kind — see RFC
+// 001-authority-binding-relation-evidence.md in EasyNet-Axon. Bare URA
+// strings on the wire (no profile sibling key) are parsed with
+// axoninv.ProfileStrictV2, matching axoninv.SelfAuthority's own
+// convention for the same case.
+func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv.AuthorityOrBootstrap, error) {
 	if value == nil {
-		return axoninv.AuthorityBinding{}, invalidRuntimePayload(
+		return axoninv.AuthorityOrBootstrap{}, invalidRuntimePayload(
 			"runtime receipt summary is missing "+field,
 			nil,
 		)
 	}
 	kind, err := requiredRuntimeReceiptObjectText(value, "kind", field+".kind")
 	if err != nil {
-		return axoninv.AuthorityBinding{}, err
+		return axoninv.AuthorityOrBootstrap{}, err
 	}
 	switch kind {
-	case "self":
-		principal, err := requiredRuntimeReceiptObjectText(value, "principal_ura", field+".principal_ura")
+	case "self+identity":
+		authority, err := requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.SelfAuthority(principal), nil
-	case "delegation":
+		return axoninv.AuthorityOrBootstrapFromBinding(axoninv.SelfAuthority(authority)), nil
+	case "delegated_by+delegation":
+		authority, err := requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")
+		if err != nil {
+			return axoninv.AuthorityOrBootstrap{}, err
+		}
 		issuer, err := requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		subject, err := requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		caller, err := requiredRuntimeReceiptObjectText(value, "caller_ura", field+".caller_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		audience, err := requiredRuntimeReceiptObjectText(value, "audience", field+".audience")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		scopes, err := runtimeReceiptTextList(value["scopes"], field+".scopes")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		issuedAt, err := runtimeReceiptNonNegativeInt64(value["issued_at_ms"], field+".issued_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		expiresAt, err := runtimeReceiptNonNegativeInt64(value["expires_at_ms"], field+".expires_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signatureText, err := requiredRuntimeReceiptObjectText(value, "signature_base64", field+".signature_base64")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signature, err := runtimeReceiptBase64(signatureText, field+".signature_base64", 64, false)
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.DelegatedAuthority(axoninv.DelegationProof{
-			IssuerURA:   issuer,
-			SubjectURA:  subject,
-			CallerURA:   caller,
-			Audience:    audience,
-			Scopes:      scopes,
-			IssuedAtMs:  issuedAt,
-			ExpiresAtMs: expiresAt,
-			Signature:   signature,
-		}), nil
-	case "capability":
-		capability, err := requiredRuntimeReceiptObjectText(value, "capability_ura", field+".capability_ura")
+		binding := axoninv.DelegatedAuthority(
+			axoninv.NewAgentIdentity(authority, axoninv.ProfileStrictV2),
+			axoninv.DelegationEvidence{
+				Issuer:      axoninv.NewAgentIdentity(issuer, axoninv.ProfileStrictV2),
+				Scopes:      scopes,
+				Audience:    audience,
+				IssuedAtMs:  issuedAt,
+				ExpiresAtMs: expiresAt,
+				Signature:   signature,
+			},
+		)
+		return axoninv.AuthorityOrBootstrapFromBinding(binding), nil
+	case "session_of+session":
+		authority, err := requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.CapabilityAuthority(capability), nil
-	case "policy":
-		policy, err := requiredRuntimeReceiptObjectText(value, "policy_ura", field+".policy_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		return axoninv.PolicyAuthority(policy), nil
-	case "session":
 		issuer, err := requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		subject, err := requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		sessionID, err := requiredRuntimeReceiptObjectText(value, "session_id", field+".session_id")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		scopes, err := runtimeReceiptTextList(value["scopes"], field+".scopes")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		audiences, err := runtimeReceiptTextList(value["audiences"], field+".audiences")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		issuedAt, err := runtimeReceiptNonNegativeInt64(value["issued_at_ms"], field+".issued_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		expiresAt, err := runtimeReceiptNonNegativeInt64(value["expires_at_ms"], field+".expires_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signatureText, err := requiredRuntimeReceiptObjectText(value, "signature_base64", field+".signature_base64")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signature, err := runtimeReceiptBase64(signatureText, field+".signature_base64", 64, false)
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
-			BackendURA:  issuer,
-			UserURA:     subject,
-			SessionID:   sessionID,
-			Scopes:      scopes,
-			Audiences:   audiences,
-			IssuedAtMs:  issuedAt,
-			ExpiresAtMs: expiresAt,
-			Signature:   signature,
-		}), nil
+		binding := axoninv.SessionAuthority(
+			axoninv.NewAgentIdentity(authority, axoninv.ProfileStrictV2),
+			axoninv.SessionEvidence{
+				Issuer:      axoninv.NewAgentIdentity(issuer, axoninv.ProfileStrictV2),
+				SessionID:   sessionID,
+				Scopes:      scopes,
+				Audiences:   audiences,
+				IssuedAtMs:  issuedAt,
+				ExpiresAtMs: expiresAt,
+				Signature:   signature,
+			},
+		)
+		return axoninv.AuthorityOrBootstrapFromBinding(binding), nil
 	case "bootstrap":
 		principal, err := requiredRuntimeReceiptObjectText(value, "principal_ura", field+".principal_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		realm, err := requiredRuntimeReceiptObjectText(value, "realm", field+".realm")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		ability, err := requiredRuntimeReceiptObjectText(value, "ability", field+".ability")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.BootstrapAuthority(principal, realm, ability), nil
+		return axoninv.AuthorityOrBootstrapFromBootstrap(
+			axoninv.BootstrapAuthority(principal, realm, ability),
+		), nil
 	default:
-		return axoninv.AuthorityBinding{}, invalidRuntimePayload(
+		return axoninv.AuthorityOrBootstrap{}, invalidRuntimePayload(
 			fmt.Sprintf("%s is not canonical: %q", field+".kind", kind),
 			nil,
 		)
@@ -2323,7 +2393,15 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	if err != nil {
 		return InvocationResult{}, err
 	}
+	admissionReceipt, err = runtimeReceiptSummaryJSON(admissionReceiptSummary)
+	if err != nil {
+		return InvocationResult{}, err
+	}
 	terminalReceiptSummary, err := decodeRuntimeReceiptSummary(terminalReceipt)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	terminalReceipt, err = runtimeReceiptSummaryJSON(terminalReceiptSummary)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -2372,7 +2450,7 @@ func normalizedInvocationOutputJSON(
 	if !runtimeResultContentTypeIsJSON(outputContentType) || strings.TrimSpace(outputBase64) == "" {
 		return append(json.RawMessage(nil), raw...), nil
 	}
-	payload, err := base64.StdEncoding.DecodeString(strings.TrimSpace(outputBase64))
+	payload, err := base64.StdEncoding.Strict().DecodeString(strings.TrimSpace(outputBase64))
 	if err != nil {
 		return nil, invalidRuntimePayload("output_base64 must be valid base64 for JSON invocation output", err)
 	}
@@ -2602,6 +2680,18 @@ func decodeRuntimeReceiptSummary(raw json.RawMessage) (*RuntimeReceipt, error) {
 	return &receipt, nil
 }
 
+func runtimeReceiptSummaryJSON(receipt *RuntimeReceipt) (json.RawMessage, error) {
+	if receipt == nil {
+		return nil, nil
+	}
+	raw := receipt.RawProjection()
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, invalidRuntimePayload("encode runtime receipt canonical projection", err)
+	}
+	return json.RawMessage(encoded), nil
+}
+
 func cloneRuntimeReceipt(receipt *RuntimeReceipt) *RuntimeReceipt {
 	if receipt == nil {
 		return nil
@@ -2724,6 +2814,9 @@ func newInvocationCancelFromJSON(raw []byte, expectedControl *InvocationControlC
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return InvocationCancel{}, invalidRuntimePayload(fmt.Sprintf("decode invocation cancel JSON: %v", err), err)
+	}
+	if err := rejectUnknownRuntimeProjectionFields(raw, "invocation cancel", "handle_id", "request_accepted", "deduplicated", "cancelled", "state", "terminal"); err != nil {
+		return InvocationCancel{}, err
 	}
 	if dto.HandleID == 0 {
 		return InvocationCancel{}, invalidRuntimePayload("handle_id is required", nil)

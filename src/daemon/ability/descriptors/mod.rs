@@ -453,7 +453,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
+    const LOCAL_SYSTEM_AGENT_URA: &str =
+        "easynet:///r/default/agent/device.local.runtime-introspection";
 
     #[test]
     fn schema_hash_is_stable_under_object_key_order() {
@@ -467,7 +468,7 @@ mod tests {
     fn descriptor_hash_changes_when_version_changes() {
         let descriptor = AbilityDescriptor::new(
             "fs.read",
-            LOCAL_DEVICE_URA,
+            LOCAL_SYSTEM_AGENT_URA,
             Visibility::Scoped,
             AdmissionAction::Invoke,
         )

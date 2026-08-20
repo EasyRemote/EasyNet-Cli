@@ -127,7 +127,7 @@ impl<'a> SkillInventoryBuilder<'a> {
             let workspace = self
                 .snapshot
                 .registered_agent_workspace(&name, "skill.list")?;
-            self.collect_managed_installs(&workspace)?;
+            self.collect_managed_installs(&name, &workspace)?;
             self.collect_global_pools(&name, workspace.skill_layout())?;
         }
         self.retain_skill_name_filter();
@@ -142,6 +142,7 @@ impl<'a> SkillInventoryBuilder<'a> {
 
     fn collect_managed_installs(
         &mut self,
+        agent_name: &str,
         workspace: &AgentRegisteredWorkspace,
     ) -> anyhow::Result<()> {
         let skills_dir = managed_skill_dir_for(workspace.root_path(), workspace.skill_layout());
@@ -152,30 +153,51 @@ impl<'a> SkillInventoryBuilder<'a> {
             return Ok(());
         };
         for dir_entry in read.flatten() {
-            self.collect_managed_install_record(&dir_entry.path());
+            self.collect_agent_skill_record(agent_name, workspace, &dir_entry.path())?;
         }
         Ok(())
     }
 
-    fn collect_managed_install_record(&mut self, skill_dir: &Path) {
+    fn collect_agent_skill_record(
+        &mut self,
+        agent_name: &str,
+        workspace: &AgentRegisteredWorkspace,
+        skill_dir: &Path,
+    ) -> anyhow::Result<()> {
         let record_path = skill_dir.join(".easynet").join("install.json");
-        if !record_path.exists() {
-            return;
-        }
-        match crate::daemon::resources::skills::store::read_install_record(&record_path) {
-            Ok(record) => self.rows.push(record),
-            Err(err) => {
-                let path_display = format!("{}", skill_dir.display());
-                let err_msg = format!("{err}");
-                crate::op_event!(
-                    component = skill_list,
-                    kind = entry_skipped,
-                    level = "warn",
-                    path = path_display,
-                    error = err_msg,
-                );
+        if record_path.exists() {
+            match crate::daemon::resources::skills::store::read_install_record(&record_path) {
+                Ok(record) => self.rows.push(record),
+                Err(err) => {
+                    let path_display = format!("{}", skill_dir.display());
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = skill_list,
+                        kind = entry_skipped,
+                        level = "warn",
+                        path = path_display,
+                        error = err_msg,
+                    );
+                }
             }
+            return Ok(());
         }
+
+        let runtime_label = match workspace.skill_layout() {
+            AgentSkillLayout::ClaudeCode => "claude-project",
+            AgentSkillLayout::Codex => "codex-project",
+            AgentSkillLayout::External => "external-project",
+        };
+        if let Some(record) =
+            crate::daemon::resources::skills::store::native_project_skill_record_from_dir(
+                agent_name,
+                runtime_label,
+                skill_dir,
+            )?
+        {
+            self.rows.push(record);
+        }
+        Ok(())
     }
 
     fn collect_global_pools(
@@ -543,6 +565,67 @@ mod tests {
     }
 
     #[test]
+    fn list_handler_includes_bootstrapped_codex_project_skills_without_install_record() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let agent_name = "codex-native";
+        let agent_ura = "easynet:///r/acme/agent/u1.codex-native";
+        let agent_root = crate::daemon::persistence::config::agents_root().join(agent_name);
+        let skill_dir = agent_root
+            .join(".agents")
+            .join("skills")
+            .join("easynet-collaborate");
+        std::fs::create_dir_all(&skill_dir).expect("native skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: easynet-collaborate\ndescription: Collaborate through EasyNet\n---\n",
+        )
+        .expect("native skill manifest");
+
+        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
+        let mut agent = crate::daemon::persistence::agent_registry::AgentEntry::new(
+            crate::core::agent::spec::RuntimeKind::Codex,
+            None,
+        );
+        agent.root_path = Some(agent_root);
+        registry
+            .agents
+            .insert(format!("default/{agent_name}"), agent);
+        crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
+        crate::daemon::persistence::local_agents::save(
+            &crate::daemon::persistence::local_agents::LocalAgentsFile {
+                host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
+                hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
+                    profile: "llm".to_string(),
+                    name: agent_name.to_string(),
+                    agent_ura: agent_ura.to_string(),
+                    signing_authority: "hosted_by:easynet:///r/acme/device/dev-1".to_string(),
+                    first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+                }],
+            },
+        )
+        .expect("save local agents");
+
+        let response = handle(json!({
+            "owner_agent_id": agent_name,
+            "agent_ura": agent_ura
+        }))
+        .expect("skill list");
+        let items = response["items"].as_array().expect("items");
+        let native = items
+            .iter()
+            .find(|item| item["name"] == "easynet-collaborate")
+            .expect("bootstrapped native skill must be visible");
+        assert_eq!(native["agent_id"], agent_name);
+        assert_eq!(native["description"], "Collaborate through EasyNet");
+        assert_eq!(native["source"]["kind"], "custom");
+        assert_eq!(native["source"]["identifier"], "codex-project");
+        assert_eq!(
+            native["resource_ura"],
+            "easynet:///r/acme/resource/agent.u1.codex-native/skill/easynet-collaborate"
+        );
+    }
+
+    #[test]
     fn global_skill_pool_cache_scans_once_and_projects_per_agent() {
         let dir = tempfile::tempdir().expect("tempdir");
         let skill_dir = dir.path().join("summarize");
@@ -631,12 +714,12 @@ mod tests {
         std::fs::create_dir_all(&alice_root).expect("alice root");
         std::fs::create_dir_all(&bob_root).expect("bob root");
         let mut alice = crate::daemon::persistence::agent_registry::AgentEntry::new(
-            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+            crate::core::agent::spec::RuntimeKind::ClaudeCode,
             None,
         );
         alice.root_path = Some(alice_root);
         let mut bob = crate::daemon::persistence::agent_registry::AgentEntry::new(
-            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+            crate::core::agent::spec::RuntimeKind::ClaudeCode,
             None,
         );
         bob.root_path = Some(bob_root);
@@ -712,7 +795,7 @@ mod tests {
 
         let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         let mut agent = crate::daemon::persistence::agent_registry::AgentEntry::new(
-            crate::daemon::persistence::agent_registry::AgentType::Codex,
+            crate::core::agent::spec::RuntimeKind::Codex,
             None,
         );
         agent.root_path = Some(agent_root);
@@ -720,7 +803,7 @@ mod tests {
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
         crate::daemon::persistence::local_agents::save(
             &crate::daemon::persistence::local_agents::LocalAgentsFile {
-                host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+                host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
                 hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
                     profile: "llm".to_string(),
                     name: "claude".to_string(),
@@ -770,7 +853,7 @@ mod tests {
     #[test]
     fn hosted_skill_owner_projection_resolves_rows_without_scanning_per_row() {
         let local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
                 profile: "llm".to_string(),
                 name: "claude".to_string(),

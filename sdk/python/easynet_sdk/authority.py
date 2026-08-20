@@ -16,6 +16,34 @@ from ._identity_guards import contains_all_zero_principal
 DELEGATION_METADATA_KEY = "x-runtime-delegation"
 SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority"
 _CANONICAL_SESSION_AUTHORITY_ID = re.compile(r"^[A-Za-z0-9.-]+$")
+_AUTHORITY_WIRE_FIELDS = frozenset(("payload", "signature"))
+_DELEGATION_PAYLOAD_FIELDS = frozenset(
+    (
+        "issuer_ura",
+        "subject_ura",
+        "caller_ura",
+        "audience",
+        "scopes",
+        "issued_at_ms",
+        "expires_at_ms",
+    )
+)
+_SESSION_AUTHORITY_PAYLOAD_FIELDS = frozenset(
+    (
+        "issuer_ura",
+        "session_id",
+        "session_owner_user_id",
+        "creator_principal_id",
+        "callee_ura",
+        "subject_ura",
+        "audience",
+        "scopes",
+        "allowed_actions",
+        "allowed_followup_abilities",
+        "issued_at_ms",
+        "expires_at_ms",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -135,7 +163,9 @@ class DelegationProof:
 
     @classmethod
     def from_metadata(cls, value: str) -> "DelegationProof":
-        payload, signature = _decode_authority_metadata(value, "delegation")
+        payload, signature = _decode_authority_metadata(
+            value, "delegation", _DELEGATION_PAYLOAD_FIELDS
+        )
         proof = cls(
             issuer_ura=_required_payload_string(payload, "issuer_ura", "delegation"),
             subject_ura=_required_payload_string(payload, "subject_ura", "delegation"),
@@ -196,7 +226,9 @@ class SessionAuthority:
 
     @classmethod
     def from_metadata(cls, value: str) -> "SessionAuthority":
-        payload, signature = _decode_authority_metadata(value, "session authority")
+        payload, signature = _decode_authority_metadata(
+            value, "session authority", _SESSION_AUTHORITY_PAYLOAD_FIELDS
+        )
         authority = cls(
             issuer_ura=_required_payload_string(
                 payload, "issuer_ura", "session authority"
@@ -474,7 +506,7 @@ def _audience_admits(audience: str, callee_ura: str) -> bool:
 
 
 def _decode_authority_metadata(
-    value: str, label: str
+    value: str, label: str, payload_fields: frozenset[str]
 ) -> tuple[Mapping[str, object], bytes]:
     if not isinstance(value, str) or not value.strip():
         raise _invalid_authority(f"{label} metadata value is required")
@@ -492,9 +524,13 @@ def _decode_authority_metadata(
         ) from exc
     if not isinstance(wire, dict):
         raise _invalid_authority(f"{label} metadata JSON must be an object")
+    _reject_noncanonical_authority_fields(wire, _AUTHORITY_WIRE_FIELDS, label)
     payload = wire.get("payload")
     if not isinstance(payload, dict):
         raise _invalid_authority(f"{label} metadata payload is required")
+    _reject_noncanonical_authority_fields(
+        payload, payload_fields, f"{label} metadata payload"
+    )
     signature_value = wire.get("signature")
     if not isinstance(signature_value, str) or not signature_value.strip():
         raise _invalid_authority(f"{label} metadata signature is required")
@@ -507,6 +543,14 @@ def _decode_authority_metadata(
     if not signature:
         raise _invalid_authority(f"{label} metadata signature is required")
     return payload, signature
+
+
+def _reject_noncanonical_authority_fields(
+    value: Mapping[str, object], allowed: frozenset[str], label: str
+) -> None:
+    for key in value:
+        if key not in allowed:
+            raise _invalid_authority(f"{label} contains noncanonical field {key}")
 
 
 def _authority_metadata_projection(
@@ -920,6 +964,8 @@ def _decode_base64(value: str, label: str) -> bytes:
         decoded = base64.b64decode(value, validate=True)
     except binascii.Error as exc:
         raise _invalid_authority(f"{label} base64 decode failed: {exc}", exc) from exc
+    if base64.b64encode(decoded).decode("ascii") != value:
+        raise _invalid_authority(f"{label} must be canonical base64")
     if not decoded:
         raise _invalid_authority(f"{label} is required")
     return decoded

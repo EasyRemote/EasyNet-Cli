@@ -185,12 +185,12 @@ pub fn resolved_local_uds_path_with_env_override() -> PathBuf {
 /// Ensure the local daemon has at least the minimal device-mode config
 /// needed to boot its gRPC/session sidecar.
 ///
-/// Idempotent: if the canonical config file already exists in device
-/// mode, only the credential-derived identity fields (`realm`,
-/// `hub_endpoint`) are synchronized. Operator-authored fields such as
-/// custom `uds_path` and `federated_peers` survive intact. Hub/both
-/// mode configs are left untouched because they describe a different
-/// deployment topology.
+/// Idempotent: if the canonical config file already exists, the runtime role
+/// and credential-derived identity fields (`mode`, `realm`, `hub_endpoint`)
+/// are synchronized to the joined device epoch. Operator-authored generic
+/// fields such as custom `uds_path`, `ledger_dir`, `federated_peers`, and quota
+/// survive intact. Hub-only listener fields are removed because device mode
+/// must not bind public TCP.
 pub fn ensure_minimal_device_config(
     creds: &crate::daemon::persistence::config::Credentials,
 ) -> anyhow::Result<()> {
@@ -308,10 +308,6 @@ fn sync_existing_device_config_toml(
         })?;
     let mode = DaemonMode::parse_config_value(mode_raw)
         .ok_or_else(|| anyhow::anyhow!("[daemon].mode has unsupported value {mode_raw:?}"))?;
-    if mode != DaemonMode::Device {
-        return Ok(raw.to_string());
-    }
-
     let realm = if creds.realm.trim().is_empty() {
         "localhost"
     } else {
@@ -320,6 +316,10 @@ fn sync_existing_device_config_toml(
     let hub_endpoint = creds.hub_endpoint.trim();
     let mut changed = false;
 
+    if mode != DaemonMode::Device {
+        daemon_table.insert("mode", value(DaemonMode::Device.as_str()));
+        changed = true;
+    }
     if daemon_table.get("realm").and_then(|item| item.as_str()) != Some(realm) {
         daemon_table.insert("realm", value(realm));
         changed = true;
@@ -331,6 +331,11 @@ fn sync_existing_device_config_toml(
     {
         daemon_table.insert("hub_endpoint", value(hub_endpoint));
         changed = true;
+    }
+    for hub_only_field in ["listen_tcp", "tls_cert_pem", "tls_key_pem"] {
+        if daemon_table.remove(hub_only_field).is_some() {
+            changed = true;
+        }
     }
 
     if changed {
@@ -1234,7 +1239,7 @@ uds_path = "/tmp/custom.sock"
     }
 
     #[test]
-    fn ensure_minimal_device_config_does_not_rewrite_hub_mode_config() {
+    fn ensure_minimal_device_config_converges_hub_mode_config_to_device_epoch() {
         let _g = HomeGuard::new();
         let creds = crate::daemon::persistence::config::Credentials {
             node_id: "node-1".into(),
@@ -1257,12 +1262,27 @@ realm = "hub-realm"
 listen_tcp = "0.0.0.0:50443"
 tls_cert_pem = "/tmp/cert.pem"
 tls_key_pem = "/tmp/key.pem"
+uds_path = "/tmp/operator.sock"
+
+[daemon.federated_peers]
+"tenant-b" = "https://hub-b:50443"
 "#;
         std::fs::write(&path, raw).expect("write hub config");
 
-        ensure_minimal_device_config(&creds).expect("hub mode left alone");
-        let unchanged = std::fs::read_to_string(&path).expect("read hub config");
-        assert_eq!(unchanged, raw);
+        ensure_minimal_device_config(&creds).expect("hub config converged to device");
+        let converged = std::fs::read_to_string(&path).expect("read converged config");
+        assert!(converged.contains("mode = \"device\""));
+        assert!(converged.contains("realm = \"tenant-a\""));
+        assert!(converged.contains("hub_endpoint = \"https://127.0.0.1:50443\""));
+        assert!(converged.contains("uds_path = \"/tmp/operator.sock\""));
+        assert!(converged.contains("\"tenant-b\" = \"https://hub-b:50443\""));
+        assert!(!converged.contains("listen_tcp"));
+        assert!(!converged.contains("tls_cert_pem"));
+        assert!(!converged.contains("tls_key_pem"));
+
+        let cfg = DaemonConfig::load(&path).expect("converged device config must load");
+        assert_eq!(cfg.mode(), DaemonMode::Device);
+        assert!(cfg.listen_tcp().is_none());
     }
 
     #[test]

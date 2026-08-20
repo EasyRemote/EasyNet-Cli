@@ -14,7 +14,7 @@ use anyhow::Context as _;
 
 use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentityError};
 
-use super::{home_relative, try_default_socket_path};
+use super::{home_relative, try_default_owner_path, try_default_socket_path};
 
 // A fresh vault performs the production Argon2id derivation before binding its
 // socket. Debug builds and contended edge devices can legitimately cross five
@@ -32,6 +32,57 @@ pub enum KeyServiceStartup {
     Spawned,
 }
 
+/// RAII ownership for key-service use by a short-lived bootstrap command.
+///
+/// Attached daemon custody is never stopped. A service spawned by the current
+/// command is synchronously reaped on [`Self::release`] and is also reclaimed
+/// best-effort on early-return paths through `Drop`.
+pub struct KeyServiceBootstrapLease {
+    owns_service: bool,
+}
+
+impl KeyServiceBootstrapLease {
+    pub fn acquire() -> anyhow::Result<Self> {
+        ensure_bootstrap_key_service_running().map(Self::from_startup)
+    }
+
+    pub fn from_startup(startup: KeyServiceStartup) -> Self {
+        Self {
+            owns_service: startup == KeyServiceStartup::Spawned,
+        }
+    }
+
+    pub fn release(mut self) -> anyhow::Result<()> {
+        if !self.owns_service {
+            return Ok(());
+        }
+        shutdown_bootstrap_key_service()?;
+        self.owns_service = false;
+        Ok(())
+    }
+}
+
+impl Drop for KeyServiceBootstrapLease {
+    fn drop(&mut self) {
+        if self.owns_service {
+            let _ = shutdown_bootstrap_key_service();
+            self.owns_service = false;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyServiceOwnershipIntent {
+    /// A short-lived command may attach to a daemon-owned service. When no
+    /// service exists it temporarily owns one and must release it before the
+    /// command exits or forks the runtime daemon.
+    Bootstrap,
+    /// The runtime daemon is the lifecycle authority. It may only attach to a
+    /// service already owned by this process; a service owned by another live
+    /// process is a conflicting runtime, not a valid dependency.
+    Daemon,
+}
+
 /// Observable lifecycle state for the process-local key-service supervisor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyServiceLifecycleState {
@@ -43,24 +94,36 @@ pub enum KeyServiceLifecycleState {
 
 static KEY_SERVICE_MANAGER: OnceLock<KeyServiceManager> = OnceLock::new();
 
-/// Attach to the canonical key service or start it exactly once.
+/// Attach to daemon-owned custody or start a temporary bootstrap service.
 ///
-/// The startup lease serializes concurrent CLI/daemon boots.  Private key
-/// material remains in `easynet-keyring`; this function only owns process
-/// lifecycle and readiness.
-pub fn ensure_key_service_running() -> anyhow::Result<KeyServiceStartup> {
+/// Callers that receive [`KeyServiceStartup::Spawned`] own a short-lived
+/// service and must call [`shutdown_bootstrap_key_service`] before exiting or
+/// spawning the runtime daemon.
+pub fn ensure_bootstrap_key_service_running() -> anyhow::Result<KeyServiceStartup> {
+    key_service_manager()?.ensure_running(KeyServiceOwnershipIntent::Bootstrap)
+}
+
+/// Establish custody owned by the current runtime daemon.
+///
+/// Unlike bootstrap access, daemon startup never attaches to a service owned
+/// by another live process. Doing so would make signer availability depend on
+/// that process's lifetime and publish a false Ready state.
+pub fn ensure_daemon_key_service_running() -> anyhow::Result<KeyServiceStartup> {
+    key_service_manager()?.ensure_running(KeyServiceOwnershipIntent::Daemon)
+}
+
+fn key_service_manager() -> anyhow::Result<&'static KeyServiceManager> {
     if let Some(manager) = KEY_SERVICE_MANAGER.get() {
-        return manager.ensure_running();
+        return Ok(manager);
     }
     let manager = KeyServiceManager::try_default()?;
     let _ = KEY_SERVICE_MANAGER.set(manager);
     KEY_SERVICE_MANAGER
         .get()
-        .context("daemon key service manager initialized")?
-        .ensure_running()
+        .context("daemon key service manager initialized")
 }
 
-/// Current supervisor state when this process has attached to the service.
+/// Current lifecycle state observed by this process.
 pub fn key_service_lifecycle_state() -> Option<KeyServiceLifecycleState> {
     KEY_SERVICE_MANAGER
         .get()
@@ -211,36 +274,27 @@ impl KeyServiceManagerState {
 impl KeyServiceManager {
     /// One process-wide critical section owns the complete transition:
     /// inspect/attach/spawn, transfer `Child` ownership, publish state, and
-    /// install the supervisor. This closes the race where a concurrent
-    /// caller could win supervisor installation while another caller dropped
-    /// the process it had spawned.
-    fn ensure_running(&'static self) -> anyhow::Result<KeyServiceStartup> {
+    /// install the supervisor for an owned child. Attached services retain
+    /// their existing lifecycle owner and are never supervised by a consumer.
+    fn ensure_running(
+        &'static self,
+        intent: KeyServiceOwnershipIntent,
+    ) -> anyhow::Result<KeyServiceStartup> {
         let mut state = self.lock_state();
-        let transition = self.transition_to_running(&mut state, 1);
-        let supervisor = self.install_supervisor(&mut state);
-
-        match (transition, supervisor) {
-            (Ok(startup), Ok(())) => Ok(startup),
-            (Err(transition_error), Ok(())) => Err(transition_error),
-            (Ok(_), Err(supervisor_error)) => {
-                let cleanup = state.terminate_owned_child();
-                let error = combine_lifecycle_errors(supervisor_error, cleanup.err());
-                state.phase = KeyServiceManagerPhase::Failed {
-                    message: error.to_string(),
-                };
-                Err(error)
-            }
-            (Err(transition_error), Err(supervisor_error)) => {
-                let error = anyhow::anyhow!(
-                    "daemon key service transition failed: {transition_error}; \
-                     install lifecycle supervisor: {supervisor_error}"
-                );
-                state.phase = KeyServiceManagerPhase::Failed {
-                    message: error.to_string(),
-                };
-                Err(error)
-            }
+        let startup = self.transition_to_running(&mut state, 1, intent)?;
+        if state.child.is_none() {
+            debug_assert_eq!(startup, KeyServiceStartup::Attached);
+            return Ok(startup);
         }
+        if let Err(supervisor_error) = self.install_supervisor(&mut state) {
+            let cleanup = state.terminate_owned_child();
+            let error = combine_lifecycle_errors(supervisor_error, cleanup.err());
+            state.phase = KeyServiceManagerPhase::Failed {
+                message: error.to_string(),
+            };
+            return Err(error);
+        }
+        Ok(startup)
     }
 
     fn snapshot(&self) -> Option<KeyServiceLifecycleState> {
@@ -306,8 +360,9 @@ impl KeyServiceManager {
         &self,
         state: &mut KeyServiceManagerState,
         attempt: u32,
+        intent: KeyServiceOwnershipIntent,
     ) -> anyhow::Result<KeyServiceStartup> {
-        let result = self.try_transition_to_running(state, attempt);
+        let result = self.try_transition_to_running(state, attempt, intent);
         if let Err(error) = &result {
             state.phase = KeyServiceManagerPhase::Failed {
                 message: error.to_string(),
@@ -320,6 +375,7 @@ impl KeyServiceManager {
         &self,
         state: &mut KeyServiceManagerState,
         attempt: u32,
+        intent: KeyServiceOwnershipIntent,
     ) -> anyhow::Result<KeyServiceStartup> {
         anyhow::ensure!(
             !state.shutdown_requested,
@@ -335,7 +391,34 @@ impl KeyServiceManager {
                     state.phase = KeyServiceManagerPhase::Running;
                     return Ok(KeyServiceStartup::Attached);
                 }
-                Ok(false) => state.terminate_owned_child()?,
+                Ok(false) => {
+                    // A live owned custody process can transiently refuse the
+                    // UDS health probe while the listener is rebinding or the
+                    // accept loop is saturated. Treat that as a bounded
+                    // recovery window, not as proof that the child is dead.
+                    //
+                    // Killing immediately here races foreground daemon boot:
+                    // `daemon-key-service` can report ready, the supervisor can
+                    // observe one missed probe, and `daemon-invocation-transport`
+                    // then sees `Connection refused` while the supervisor
+                    // restarts the signer service. The process state machine
+                    // must instead distinguish:
+                    //
+                    //   Running -> Restarting (transient, owned child alive)
+                    //   Restarting -> Running (health restored)
+                    //   Restarting -> Failed (child exits or readiness times out)
+                    state.phase = KeyServiceManagerPhase::Restarting { attempt };
+                    let readiness_deadline = Instant::now() + self.lifecycle.ready_timeout;
+                    if let Err(readiness_error) =
+                        self.lifecycle
+                            .wait_ready(state, &client, readiness_deadline)
+                    {
+                        let cleanup = state.terminate_owned_child().err();
+                        return Err(combine_lifecycle_errors(readiness_error, cleanup));
+                    }
+                    state.phase = KeyServiceManagerPhase::Running;
+                    return Ok(KeyServiceStartup::Attached);
+                }
                 Err(probe_error) => {
                     let cleanup = state.terminate_owned_child().err();
                     return Err(combine_lifecycle_errors(
@@ -347,7 +430,7 @@ impl KeyServiceManager {
         }
 
         state.phase = KeyServiceManagerPhase::Restarting { attempt };
-        let startup = self.lifecycle.ensure_running(state)?;
+        let startup = self.lifecycle.ensure_running(state, intent)?;
         state.phase = if state.child.is_some() {
             KeyServiceManagerPhase::Running
         } else {
@@ -389,7 +472,11 @@ impl KeyServiceManager {
                 if state.shutdown_requested {
                     return;
                 }
-                self.transition_to_running(&mut state, restart_attempt)
+                self.transition_to_running(
+                    &mut state,
+                    restart_attempt,
+                    KeyServiceOwnershipIntent::Daemon,
+                )
             };
 
             match result {
@@ -418,6 +505,7 @@ struct KeyServiceLifecycle {
     binary_path: PathBuf,
     log_path: PathBuf,
     lease_path: PathBuf,
+    owner_path: PathBuf,
     ready_timeout: Duration,
 }
 
@@ -428,6 +516,7 @@ impl KeyServiceLifecycle {
             binary_path: resolve_key_service_binary(),
             log_path: home_relative(".easynet/logs/easynet-keyring.log")?,
             lease_path: home_relative(".easynet/keyring.start.lock")?,
+            owner_path: try_default_owner_path()?,
             ready_timeout: DEFAULT_READY_TIMEOUT,
         })
     }
@@ -439,6 +528,7 @@ impl KeyServiceLifecycle {
             binary_path: PathBuf::from("easynet-keyring"),
             log_path: super::home_relative_from(".easynet/logs/easynet-keyring.log", home)?,
             lease_path: super::home_relative_from(".easynet/keyring.start.lock", home)?,
+            owner_path: super::home_relative_from(".easynet/keyring.owner.json", home)?,
             ready_timeout: DEFAULT_READY_TIMEOUT,
         })
     }
@@ -446,10 +536,14 @@ impl KeyServiceLifecycle {
     fn ensure_running(
         &self,
         state: &mut KeyServiceManagerState,
+        intent: KeyServiceOwnershipIntent,
     ) -> anyhow::Result<KeyServiceStartup> {
         let client = KeyringClient::new(&self.socket_path).with_timeout(Duration::from_secs(2));
         if probe_ready(&client)? {
-            return Ok(KeyServiceStartup::Attached);
+            if self.ready_service_is_attachable(intent)? {
+                return Ok(KeyServiceStartup::Attached);
+            }
+            self.retire_orphaned_ready_service()?;
         }
 
         reap_stale_lease(&self.lease_path)?;
@@ -460,7 +554,10 @@ impl KeyServiceLifecycle {
                     // A preceding process can become ready between our first
                     // probe and lease acquisition.
                     if probe_ready(&client)? {
-                        return Ok(KeyServiceStartup::Attached);
+                        if self.ready_service_is_attachable(intent)? {
+                            return Ok(KeyServiceStartup::Attached);
+                        }
+                        self.retire_orphaned_ready_service()?;
                     }
                     anyhow::ensure!(
                         state.child.is_none(),
@@ -481,7 +578,12 @@ impl KeyServiceLifecycle {
                     }
                     return Ok(KeyServiceStartup::Spawned);
                 }
-                None if probe_ready(&client)? => return Ok(KeyServiceStartup::Attached),
+                None if probe_ready(&client)? => {
+                    if self.ready_service_is_attachable(intent)? {
+                        return Ok(KeyServiceStartup::Attached);
+                    }
+                    self.retire_orphaned_ready_service()?;
+                }
                 None if Instant::now() >= lease_wait_deadline => {
                     anyhow::bail!(
                         "daemon key service startup lease remained busy at {}",
@@ -491,6 +593,50 @@ impl KeyServiceLifecycle {
                 None => std::thread::sleep(PROBE_INTERVAL),
             }
         }
+    }
+
+    fn ready_service_is_attachable(
+        &self,
+        intent: KeyServiceOwnershipIntent,
+    ) -> anyhow::Result<bool> {
+        let owner = load_key_service_owner_fact(&self.owner_path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "healthy key service at {} has no lifecycle owner fact",
+                self.socket_path.display()
+            )
+        })?;
+        if owner.owner_pid == std::process::id() {
+            return Ok(true);
+        }
+        if !process_is_alive(owner.owner_pid) {
+            return Ok(false);
+        }
+        match intent {
+            KeyServiceOwnershipIntent::Bootstrap => Ok(true),
+            KeyServiceOwnershipIntent::Daemon => anyhow::bail!(
+                "key service pid={} is owned by live process pid={}; runtime daemon refuses \
+                 foreign signer custody",
+                owner.key_service_pid,
+                owner.owner_pid
+            ),
+        }
+    }
+
+    fn retire_orphaned_ready_service(&self) -> anyhow::Result<()> {
+        let owner = load_key_service_owner_fact(&self.owner_path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "daemon key service at {} is ready but has no owner fact",
+                self.socket_path.display()
+            )
+        })?;
+        terminate_foreign_key_service(owner.key_service_pid).with_context(|| {
+            format!(
+                "terminate orphaned key service pid={} dead_owner_pid={} before owned restart",
+                owner.key_service_pid, owner.owner_pid
+            )
+        })?;
+        let _ = std::fs::remove_file(&self.owner_path);
+        self.remove_stale_transport()
     }
 
     fn remove_stale_transport(&self) -> anyhow::Result<()> {
@@ -521,8 +667,8 @@ impl KeyServiceLifecycle {
         let mut command = Command::new(&self.binary_path);
         // The child is session-detached so arbitrary daemon descendants never
         // inherit it. It still has one lifecycle owner: this daemon process.
-        // The keyring watches that parent and exits if a crash bypasses the
-        // daemon's orderly shutdown guard.
+        // The keyring watches that explicit owner PID and exits if a crash
+        // bypasses the daemon's orderly shutdown guard.
         command.env(KEY_SERVICE_OWNER_PID_ENV, std::process::id().to_string());
         command.stdin(Stdio::null());
         if let Ok(stdout) = log.try_clone() {
@@ -584,6 +730,94 @@ impl KeyServiceLifecycle {
             std::thread::sleep(PROBE_INTERVAL);
         }
     }
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    matches!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM)
+    )
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(_pid: u32) -> bool {
+    true
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct KeyServiceOwnerFact {
+    protocol_version: u32,
+    key_service_pid: u32,
+    owner_pid: u32,
+}
+
+fn load_key_service_owner_fact(path: &Path) -> anyhow::Result<Option<KeyServiceOwnerFact>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read key service owner fact {}", path.display()));
+        }
+    };
+    let fact: KeyServiceOwnerFact = serde_json::from_slice(&bytes)
+        .with_context(|| format!("decode key service owner fact {}", path.display()))?;
+    anyhow::ensure!(
+        fact.protocol_version == 1,
+        "unsupported key service owner fact version {} at {}",
+        fact.protocol_version,
+        path.display()
+    );
+    anyhow::ensure!(
+        fact.key_service_pid > 1 && fact.owner_pid > 1,
+        "invalid key service owner fact at {}",
+        path.display()
+    );
+    Ok(Some(fact))
+}
+
+#[cfg(unix)]
+fn terminate_foreign_key_service(pid: u32) -> anyhow::Result<()> {
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| anyhow::anyhow!("key service pid is not representable as pid_t: {pid}"))?;
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == -1 {
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::ESRCH)) {
+            return Err(error).context("send SIGTERM to foreign key service");
+        }
+        return Ok(());
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if unsafe { libc::kill(pid, 0) } == -1
+            && matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            )
+        {
+            return Ok(());
+        }
+        std::thread::sleep(PROBE_INTERVAL);
+    }
+    if unsafe { libc::kill(pid, libc::SIGKILL) } == -1 {
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::ESRCH)) {
+            return Err(error).context("send SIGKILL to foreign key service");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate_foreign_key_service(_pid: u32) -> anyhow::Result<()> {
+    anyhow::bail!("foreign key-service retirement is unsupported on this platform")
 }
 
 fn supervisor_backoff(attempt: u32) -> Duration {
@@ -675,8 +909,8 @@ fn resolve_key_service_binary() -> PathBuf {
 mod tests {
     use super::{
         supervisor_backoff, KeyServiceLifecycle, KeyServiceLifecycleState, KeyServiceManager,
-        KeyServiceManagerPhase, KeyServiceManagerState, KeyringClient, StartupLease,
-        SUPERVISOR_MAX_BACKOFF,
+        KeyServiceManagerPhase, KeyServiceManagerState, KeyServiceOwnershipIntent, KeyringClient,
+        StartupLease, SUPERVISOR_MAX_BACKOFF,
     };
     use std::time::{Duration, Instant};
 
@@ -814,6 +1048,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("key-service.log"),
                 lease_path: directory.path().join("key-service.start.lock"),
+                owner_path: directory.path().join("key-service.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState {
@@ -852,6 +1087,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("key-service.log"),
                 lease_path: directory.path().join("key-service.start.lock"),
+                owner_path: directory.path().join("key-service.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState {
@@ -890,6 +1126,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("key-service.log"),
                 lease_path: directory.path().join("key-service.start.lock"),
+                owner_path: directory.path().join("key-service.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState::default()),
@@ -905,6 +1142,146 @@ mod tests {
             "service process exit must leave socket cleanup to the next lifecycle spawn boundary"
         );
         drop(listener);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn healthy_service_with_live_foreign_owner_is_attached_without_supervision_or_retirement() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::net::UnixListener;
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+        use std::sync::Mutex;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let socket_path = directory.path().join("key-service.sock");
+        let owner_path = directory.path().join("key-service.owner.json");
+        let listener = UnixListener::bind(&socket_path).expect("bind fake key service");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept health probe");
+            let mut length = [0_u8; 4];
+            stream.read_exact(&mut length).expect("read request length");
+            let mut request = vec![0_u8; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut request).expect("read request body");
+            let response = br#"{"result":"health","protocol_version":2}"#;
+            stream
+                .write_all(&(response.len() as u32).to_be_bytes())
+                .expect("write response length");
+            stream.write_all(response).expect("write response body");
+        });
+
+        let mut foreign_owner = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn foreign owner");
+        let mut foreign_service = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn foreign service");
+        std::fs::write(
+            &owner_path,
+            serde_json::json!({
+                "protocol_version": 1,
+                "key_service_pid": foreign_service.id(),
+                "owner_pid": foreign_owner.id(),
+            })
+            .to_string(),
+        )
+        .expect("write owner fact");
+
+        let manager = Box::leak(Box::new(KeyServiceManager {
+            lifecycle: KeyServiceLifecycle {
+                socket_path,
+                binary_path: PathBuf::from("unused"),
+                log_path: directory.path().join("unused.log"),
+                lease_path: directory.path().join("unused.lock"),
+                owner_path,
+                ready_timeout: Duration::from_secs(1),
+            },
+            state: Mutex::new(KeyServiceManagerState::default()),
+        }));
+
+        let startup = manager
+            .ensure_running(KeyServiceOwnershipIntent::Bootstrap)
+            .expect("consumer attaches to live daemon-owned service");
+        server.join().expect("fake key service joins");
+        assert_eq!(startup, super::KeyServiceStartup::Attached);
+        {
+            let state = manager.lock_state();
+            assert_eq!(state.phase, KeyServiceManagerPhase::Attached);
+            assert!(state.child.is_none());
+            assert!(
+                state.supervisor.is_none(),
+                "an attached consumer must not supervise another process's service"
+            );
+        }
+        assert!(
+            super::process_is_alive(foreign_service.id()),
+            "attachment must not terminate the live foreign service"
+        );
+
+        foreign_service.kill().expect("kill foreign service");
+        foreign_service.wait().expect("reap foreign service");
+        foreign_owner.kill().expect("kill foreign owner");
+        foreign_owner.wait().expect("reap foreign owner");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_refuses_signer_custody_owned_by_another_live_process() {
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let owner_path = directory.path().join("key-service.owner.json");
+        let lifecycle = KeyServiceLifecycle {
+            socket_path: directory.path().join("key-service.sock"),
+            binary_path: PathBuf::from("unused"),
+            log_path: directory.path().join("unused.log"),
+            lease_path: directory.path().join("unused.lock"),
+            owner_path: owner_path.clone(),
+            ready_timeout: Duration::from_secs(1),
+        };
+        let mut foreign_owner = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn foreign owner");
+        std::fs::write(
+            owner_path,
+            serde_json::json!({
+                "protocol_version": 1,
+                "key_service_pid": foreign_owner.id(),
+                "owner_pid": foreign_owner.id(),
+            })
+            .to_string(),
+        )
+        .expect("write owner fact");
+
+        assert!(
+            lifecycle
+                .ready_service_is_attachable(KeyServiceOwnershipIntent::Bootstrap)
+                .expect("bootstrap may attach"),
+            "bootstrap access may consume daemon-owned custody"
+        );
+        let error = lifecycle
+            .ready_service_is_attachable(KeyServiceOwnershipIntent::Daemon)
+            .expect_err("daemon must reject foreign custody");
+        assert!(
+            error.to_string().contains("refuses foreign signer custody"),
+            "unexpected error: {error:#}"
+        );
+
+        foreign_owner.kill().expect("kill foreign owner");
+        foreign_owner.wait().expect("reap foreign owner");
     }
 
     #[cfg(unix)]
@@ -948,6 +1325,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("unused.log"),
                 lease_path: directory.path().join("unused.lock"),
+                owner_path: directory.path().join("unused.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState::default()),
@@ -958,7 +1336,7 @@ mod tests {
         };
 
         let error = manager
-            .try_transition_to_running(&mut state, 1)
+            .try_transition_to_running(&mut state, 1, KeyServiceOwnershipIntent::Daemon)
             .expect_err("an unhealthy owned endpoint must fail this transition");
         server.join().expect("fake key service joins");
 
@@ -981,6 +1359,7 @@ mod tests {
             binary_path: PathBuf::from("unused"),
             log_path: directory.path().join("key-service.log"),
             lease_path: directory.path().join("key-service.start.lock"),
+            owner_path: directory.path().join("key-service.owner.json"),
             ready_timeout: Duration::from_secs(5),
         };
         let child = Command::new("sh")

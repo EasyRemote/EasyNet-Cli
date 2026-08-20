@@ -10,12 +10,11 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use rtc::media::Sample;
 use serde_json::json;
-use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::PeerConnection;
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
-use crate::daemon::persistence::resources::ResourceEntry;
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::media::native::{
     is_webrtc_sender_backpressure, latest_native_rtp_units, native_capture_dimensions,
@@ -23,10 +22,15 @@ use crate::daemon::plugins::remote_desktop::media::native::{
     NativeLatencyStats,
 };
 use crate::daemon::plugins::remote_desktop::screencapturekit_capture::{
-    target_for_entry, CapturedFrame, ScreenCaptureKitStream,
+    target_for_binding, CapturedFrame, ScreenCaptureKitStream,
 };
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, RemoteAppTargetError,
+};
+use crate::daemon::plugins::remote_desktop::transport::webrtc_media::DirectWebRtcMediaExecution;
 use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
@@ -37,6 +41,7 @@ use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEn
 pub(in crate::daemon::plugins::remote_desktop) struct NativeMediaInputs<'a> {
     track: &'a Arc<TrackLocalStaticSample>,
     ssrc: u32,
+    payload_type: u8,
     options: &'a ScreenCaptureOptions,
     config: &'a BuiltinH264Config,
 }
@@ -46,12 +51,14 @@ impl<'a> NativeMediaInputs<'a> {
     pub(in crate::daemon::plugins::remote_desktop) fn new(
         track: &'a Arc<TrackLocalStaticSample>,
         ssrc: u32,
+        payload_type: u8,
         options: &'a ScreenCaptureOptions,
         config: &'a BuiltinH264Config,
     ) -> Self {
         Self {
             track,
             ssrc,
+            payload_type,
             options,
             config,
         }
@@ -59,24 +66,22 @@ impl<'a> NativeMediaInputs<'a> {
 }
 
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native_stream(
-    sessions: &RemoteDesktopSessionStore,
+    execution: &mut DirectWebRtcMediaExecution<'_>,
     peer_connection: &Arc<dyn PeerConnection>,
     inputs: &NativeMediaInputs<'_>,
-    session_id: &str,
-    entry: &ResourceEntry,
-    done_rx: &mut webrtc::runtime::Receiver<()>,
-    stop_rx: &mut watch::Receiver<bool>,
+    target_binding: &RemoteAppTargetBinding,
 ) -> anyhow::Result<()> {
     use std::sync::Arc as StdArc;
 
     let NativeMediaInputs {
         track,
         ssrc,
+        payload_type,
         options,
         config,
     } = *inputs;
 
-    let capture_target = target_for_entry(entry)?;
+    let capture_target = target_for_binding(ABILITY_SET_DESCRIPTION, target_binding)?;
     let (req_width, req_height) =
         native_capture_dimensions(options, || Ok(capture_target.native_dimensions()))?;
     let fps = config.fps.max(1);
@@ -102,7 +107,15 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             let _ = encoder_for_sink.encode(&frame.image_buffer, pts, duration);
         });
 
-    let capture = ScreenCaptureKitStream::start(capture_target, req_width, req_height, fps, sink)?;
+    let capture = ScreenCaptureKitStream::start(
+        ABILITY_SET_DESCRIPTION,
+        capture_target,
+        req_width,
+        req_height,
+        fps,
+        sink,
+    )?;
+    let mut active_media_source_epoch = target_binding.media_source_epoch();
 
     let frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
     let mut written_units = 0_u64;
@@ -116,9 +129,16 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     let mut decoder_primed = false;
     let mut last_written_pts_ms: Option<u64> = None;
     loop {
-        if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
+        if execution.should_stop() {
             break;
         }
+        active_media_source_epoch = apply_pending_media_rebind(
+            execution.sessions(),
+            &capture,
+            execution.session_id(),
+            execution.epoch(),
+            active_media_source_epoch,
+        )?;
         let (units, stale_dropped) = latest_native_rtp_units(encoder.poll(), decoder_primed);
         rtp_stale_units_dropped = rtp_stale_units_dropped.saturating_add(stale_dropped as u64);
         for unit in units {
@@ -131,7 +151,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 native_rtp_sample_duration(last_written_pts_ms, unit.pts_ms, frame_dur);
             let rtp_write_started_ms = now_ms();
             let write_result = track
-                .sample_writer(ssrc)
+                .sample_writer(ssrc, payload_type)
                 .write_sample(&Sample {
                     data: Bytes::from(unit.annexb),
                     duration: sample_duration,
@@ -154,6 +174,9 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 now_ms(),
             );
             if is_keyframe {
+                if !decoder_primed {
+                    execution.mark_media_ready();
+                }
                 decoder_primed = true;
             }
             written_units = written_units.saturating_add(1);
@@ -184,47 +207,40 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     );
                 }
             }
-            record_media_pipeline_stats(
-                sessions,
-                session_id,
-                json!({
-                    "path": "native_webrtc",
-                    "backend_id": config.backend.backend_id(),
-                    "capture_api": config.backend.capture_api(),
-                    "encoder_name": config.backend.encoder(),
-                    "carrier": config.backend.carrier(),
-                    "target_fps": fps,
-                    "target_bitrate_kbps": config.bitrate_kbps,
-                    "width": req_width,
-                    "height": req_height,
-                    "adaptive_bitrate": {
-                        "current_kbps": bitrate_controller.current_kbps,
-                        "target_kbps": bitrate_controller.target_kbps,
-                        "min_kbps": bitrate_controller.min_kbps,
-                    },
-                    "webrtc_stats": webrtc_stats,
-                    "latency_stats": latency_stats.to_json(),
-                    "rtp_units_written": written_units,
-                    "rtp_keyframes_written": written_keyframes,
-                    "rtp_bytes_written": written_bytes,
-                    "rtp_stale_units_dropped": rtp_stale_units_dropped,
-                    "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
-                    "encoder_stats": {
-                        "submitted_frames": stats.submitted_frames,
-                        "input_dropped_frames": stats.input_dropped_frames,
-                        "output_dropped_units": stats.output_dropped_units,
-                        "emitted_units": stats.emitted_units,
-                        "queued_units": stats.queued_units,
-                        "in_flight_frames": stats.in_flight_frames,
-                        "max_in_flight_frames": stats.max_in_flight_frames,
-                        "configured_bitrate_kbps": stats.configured_bitrate_kbps,
-                    },
-                }),
-            );
+            execution.record_pipeline_stats(json!({
+                "path": "native_webrtc",
+                "backend_id": config.backend.backend_id(),
+                "capture_api": config.backend.capture_api(),
+                "encoder_name": config.backend.encoder(),
+                "carrier": config.backend.carrier(),
+                "target_fps": fps,
+                "target_bitrate_kbps": config.bitrate_kbps,
+                "width": req_width,
+                "height": req_height,
+                "adaptive_bitrate": {
+                    "current_kbps": bitrate_controller.current_kbps,
+                    "target_kbps": bitrate_controller.target_kbps,
+                    "min_kbps": bitrate_controller.min_kbps,
+                },
+                "webrtc_stats": webrtc_stats,
+                "latency_stats": latency_stats.to_json(),
+                "rtp_units_written": written_units,
+                "rtp_keyframes_written": written_keyframes,
+                "rtp_bytes_written": written_bytes,
+                "rtp_stale_units_dropped": rtp_stale_units_dropped,
+                "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
+                "encoder_stats": {
+                    "submitted_frames": stats.submitted_frames,
+                    "input_dropped_frames": stats.input_dropped_frames,
+                    "output_dropped_units": stats.output_dropped_units,
+                    "emitted_units": stats.emitted_units,
+                    "queued_units": stats.queued_units,
+                    "in_flight_frames": stats.in_flight_frames,
+                    "max_in_flight_frames": stats.max_in_flight_frames,
+                    "configured_bitrate_kbps": stats.configured_bitrate_kbps,
+                },
+            }));
             last_stats_at = Instant::now();
-        }
-        if stop_rx.has_changed().unwrap_or(false) && *stop_rx.borrow_and_update() {
-            break;
         }
         tokio::select! {
             _ = encoder_wakeup.notified() => {}
@@ -234,44 +250,182 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     capture.stop();
     let stats = encoder.stats();
     let (webrtc_stats, _) = webrtc_stats_snapshot(peer_connection).await;
-    record_media_pipeline_stats(
-        sessions,
-        session_id,
-        json!({
-            "path": "native_webrtc",
-            "backend_id": config.backend.backend_id(),
-            "terminal": true,
-            "rtp_units_written": written_units,
-            "rtp_keyframes_written": written_keyframes,
-            "rtp_bytes_written": written_bytes,
-            "rtp_stale_units_dropped": rtp_stale_units_dropped,
-            "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
-            "adaptive_bitrate": {
-                "current_kbps": bitrate_controller.current_kbps,
-                "target_kbps": bitrate_controller.target_kbps,
-                "min_kbps": bitrate_controller.min_kbps,
-            },
-            "webrtc_stats": webrtc_stats,
-            "latency_stats": latency_stats.to_json(),
-            "encoder_stats": {
-                "submitted_frames": stats.submitted_frames,
-                "input_dropped_frames": stats.input_dropped_frames,
-                "output_dropped_units": stats.output_dropped_units,
-                "emitted_units": stats.emitted_units,
-                "queued_units": stats.queued_units,
-                "in_flight_frames": stats.in_flight_frames,
-                "max_in_flight_frames": stats.max_in_flight_frames,
-                "configured_bitrate_kbps": stats.configured_bitrate_kbps,
-            },
-        }),
-    );
+    execution.record_pipeline_stats(json!({
+        "path": "native_webrtc",
+        "backend_id": config.backend.backend_id(),
+        "terminal": true,
+        "rtp_units_written": written_units,
+        "rtp_keyframes_written": written_keyframes,
+        "rtp_bytes_written": written_bytes,
+        "rtp_stale_units_dropped": rtp_stale_units_dropped,
+        "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
+        "adaptive_bitrate": {
+            "current_kbps": bitrate_controller.current_kbps,
+            "target_kbps": bitrate_controller.target_kbps,
+            "min_kbps": bitrate_controller.min_kbps,
+        },
+        "webrtc_stats": webrtc_stats,
+        "latency_stats": latency_stats.to_json(),
+        "encoder_stats": {
+            "submitted_frames": stats.submitted_frames,
+            "input_dropped_frames": stats.input_dropped_frames,
+            "output_dropped_units": stats.output_dropped_units,
+            "emitted_units": stats.emitted_units,
+            "queued_units": stats.queued_units,
+            "in_flight_frames": stats.in_flight_frames,
+            "max_in_flight_frames": stats.max_in_flight_frames,
+            "configured_bitrate_kbps": stats.configured_bitrate_kbps,
+        },
+    }));
     Ok(())
 }
 
-fn record_media_pipeline_stats(
+fn apply_pending_media_rebind(
+    sessions: &RemoteDesktopSessionStore,
+    capture: &ScreenCaptureKitStream,
+    session_id: &str,
+    epoch: TransportEpoch,
+    active_media_source_epoch: u64,
+) -> Result<u64, RemoteAppTargetError> {
+    let Some(next_binding) = sessions.pending_media_rebind_binding_for_session(
+        session_id,
+        epoch,
+        active_media_source_epoch,
+    ) else {
+        return Ok(active_media_source_epoch);
+    };
+    let next_target = target_for_binding(ABILITY_SET_DESCRIPTION, &next_binding)
+        .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
+    let capture_proof = capture
+        .update_content_filter(ABILITY_SET_DESCRIPTION, next_target)
+        .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
+    if sessions.commit_pending_media_rebind_for_session(
+        session_id,
+        epoch,
+        next_binding.binding_epoch(),
+        next_binding.media_source_epoch(),
+        capture_proof,
+    ) {
+        Ok(next_binding.media_source_epoch())
+    } else {
+        Ok(active_media_source_epoch)
+    }
+}
+
+fn fail_pending_media_rebind(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
-    stats: serde_json::Value,
-) {
-    sessions.record_media_pipeline_stats(session_id, stats);
+    epoch: TransportEpoch,
+    err: &RemoteAppTargetError,
+) -> RemoteAppTargetError {
+    sessions.fail_pending_media_rebind_for_session(
+        session_id,
+        epoch,
+        err.reason(),
+        err.to_string(),
+    );
+    err.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    use crate::daemon::plugins::remote_desktop::constants::{
+        direct_webrtc_endpoint_ura, TRANSPORT_WEBRTC,
+    };
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::target::{
+        AppWindowSetProof, TargetGeometry, TargetResolutionError,
+    };
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
+    use crate::daemon::plugins::remote_desktop::test_support::test_application_session_init;
+
+    #[test]
+    fn native_media_rebind_failure_projects_typed_target_lifecycle() {
+        let store = RemoteDesktopSessionStore::new();
+        let session_id = "rd-native-media-rebind-filter-failed";
+        let epoch = TransportEpoch::new(31);
+        let mut session = RemoteDesktopSession::new(test_application_session_init(
+            session_id,
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                "easynet:///r/acme/ability/remote-desktop.transport".into(),
+            )
+            .expect("local answer records");
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura(session_id));
+        assert!(
+            session
+                .record_target_observation(TargetObservation::ApplicationWindowSetChanged {
+                    app_window_set: AppWindowSetProof::new(
+                        42,
+                        Some("com.example.Editor".to_string()),
+                        Some(9001),
+                        vec![10, 11, 12],
+                    ),
+                    geometry: TargetGeometry {
+                        x: Some(10.0),
+                        y: Some(20.0),
+                        width: Some(320.0),
+                        height: Some(120.0),
+                    },
+                    target_identity_epoch: 100,
+                    target_geometry_revision: 4,
+                    observed_at_ms: 10,
+                })
+                .is_none(),
+            "application window-set drift rebind must not be reported as media loss"
+        );
+        let pending = session
+            .pending_media_rebind_binding()
+            .expect("pending media rebind")
+            .clone();
+        store.with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+
+        let err = RemoteAppTargetError::new(
+            ABILITY_SET_DESCRIPTION,
+            TargetResolutionError::ScreenCaptureKitFilterFailed,
+            "native content filter rejected pending application window set",
+        );
+        let returned = fail_pending_media_rebind(&store, session_id, epoch, &err);
+
+        assert_eq!(
+            returned.reason(),
+            TargetResolutionError::ScreenCaptureKitFilterFailed
+        );
+        store.with_sessions(|sessions| {
+            let session = sessions.get(session_id).expect("session stored");
+            assert_eq!(session.target_tracking_state()["status"], json!("lost"));
+            assert!(session.pending_media_rebind_binding().is_none());
+            let event = session
+                .events()
+                .into_iter()
+                .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+                .expect("target rebind failure event");
+            assert_eq!(
+                event["reason_code"],
+                json!("screencapturekit_filter_failed")
+            );
+            assert_eq!(event["payload"]["failure_domain"], json!("target"));
+            assert_eq!(
+                event["payload"]["frontend_action"],
+                json!("show_unsupported")
+            );
+            assert_eq!(
+                event["payload"]["pending_media_source_epoch"],
+                json!(pending.media_source_epoch())
+            );
+        });
+    }
 }

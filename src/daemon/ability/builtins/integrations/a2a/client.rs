@@ -86,7 +86,7 @@ pub fn register(
     // re-rooted the receipt DAG.
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_SEND_TASK,
-        OwnerKind::Device,
+        OwnerKind::a2a_integration_system(),
         Arc::new(
             move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
                 send_task_handler(args, &env, federation_resolver.as_ref())
@@ -106,7 +106,7 @@ fn causal_context_from_env(
     use axon_sdk::invocation::CausalContext;
 
     let projection = env.causal_context();
-    match projection.get("kind").and_then(Value::as_str) {
+    match projection.get("form").and_then(Value::as_str) {
         Some("none") => Ok(CausalContext::None),
         Some("scalar") => Ok(CausalContext::Scalar(receipt_ref_from_projection(
             projection,
@@ -134,8 +134,11 @@ fn causal_context_from_env(
             let proof_ura = required_ura(projection, "proof_ura", "merkle causal context")?;
             Ok(CausalContext::Merkle { root, proof_ura })
         }
-        Some(kind) => anyhow::bail!("unsupported causal context kind {kind:?}"),
-        None => anyhow::bail!("causal context is missing kind"),
+        Some(form) => anyhow::bail!("unsupported causal context form {form:?}"),
+        None if projection.get("kind").is_some() => {
+            anyhow::bail!("causal context uses retired kind field; use form")
+        }
+        None => anyhow::bail!("causal context is missing form"),
     }
 }
 
@@ -217,17 +220,11 @@ fn send_task_handler(
 
     #[cfg(feature = "axon-pb")]
     {
-        let target_ura =
-            match crate::daemon::invocation::routing::remote_invoke::parse_node_ura(&target_node) {
-                Ok(ura) => ura,
-                Err(e) => return Ok(error_response(&format!("parse target_node_ura: {e}"))),
-            };
-
         if let Some(message) = local_daemon_transport_error() {
             return Ok(error_response(&message));
         }
         let target_call = match resolve_a2a_target(
-            &target_ura,
+            &target_node,
             &agent_name,
             &skill_name,
             federation_resolver,
@@ -241,7 +238,7 @@ fn send_task_handler(
             Err(error) => {
                 return Ok(error_response(&format!(
                     "invalid admitted causal context: {error}"
-                )))
+                )));
             }
         };
         let request = match crate::daemon::invocation::routing::remote_invoke::RemoteChildInvocationIssuer::child_plan(
@@ -445,19 +442,17 @@ pub fn send_task_input_schema() -> Value {
 }
 
 fn target_node_field(args: &Value) -> Result<String, String> {
+    use crate::core::identity::RuntimeIdentityUra;
+    use crate::core::ura::URAKind;
+
     let target = required_nonempty_string(args, "target_node_ura")?;
-    let trimmed = target.trim();
-    let identity = crate::core::identity::RuntimeIdentityUra::parse(trimmed).map_err(|error| {
-        format!(
-            "`target_node_ura` must be a canonical Device or Authority URA, got {trimmed:?}: {error}"
-        )
+    let identity = RuntimeIdentityUra::parse(&target).map_err(|error| {
+        format!("parse `target_node_ura`: expected canonical Device or Authority URA: {error}")
     })?;
     match identity.kind() {
-        crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority => {
-            Ok(identity.into_string())
-        }
+        URAKind::Device | URAKind::Authority => Ok(identity.into_string()),
         other => Err(format!(
-            "`target_node_ura` must identify a Device or Authority, got kind={other}"
+            "parse `target_node_ura`: expected canonical Device or Authority URA, got kind={other}"
         )),
     }
 }
@@ -530,14 +525,14 @@ mod tests {
             ABILITY_SEND_TASK,
             "easynet:///r/acme/device/local",
         )
-        .with_causal_context(json!({"kind": "none"}));
+        .with_causal_context(json!({"form": "none"}));
         assert_eq!(
             causal_context_from_env(&none_env).expect("root context"),
             CausalContext::None
         );
 
         let scalar_env = none_env.clone().with_causal_context(json!({
-            "kind": "scalar",
+            "form": "scalar",
             "receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt",
             "receipt_hash": "aa".repeat(32),
         }));
@@ -549,7 +544,7 @@ mod tests {
         assert_eq!(scalar.receipt_hash, [0xaa; 32]);
 
         let list_env = none_env.with_causal_context(json!({
-            "kind": "list",
+            "form": "list",
             "receipts": [
                 {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt", "receipt_hash": "aa".repeat(32)},
                 {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r2/receipt", "receipt_hash": "bb".repeat(32)},
@@ -573,12 +568,25 @@ mod tests {
             ABILITY_SEND_TASK,
             "easynet:///r/acme/device/local",
         )
-        .with_causal_context(json!({"kind": "future-form"}));
+        .with_causal_context(json!({"form": "future-form"}));
 
         let error = causal_context_from_env(&env).expect_err("unknown causal form must fail");
         assert!(error
             .to_string()
-            .contains("unsupported causal context kind"));
+            .contains("unsupported causal context form"));
+    }
+
+    #[test]
+    fn retired_causal_context_kind_is_rejected_instead_of_becoming_root() {
+        let env = crate::daemon::ability::dispatch::EnvelopeContext::for_test_ability(
+            "easynet:///r/acme/device/local",
+            ABILITY_SEND_TASK,
+            "easynet:///r/acme/device/local",
+        )
+        .with_causal_context(json!({"kind": "none"}));
+
+        let error = causal_context_from_env(&env).expect_err("retired kind field must fail");
+        assert!(error.to_string().contains("retired kind field"));
     }
 
     #[test]
@@ -732,6 +740,30 @@ mod tests {
         assert!(
             !msg.contains("daemon not running"),
             "bare node id must not reach transport after local-realm synthesis: {msg}"
+        );
+    }
+
+    #[test]
+    fn send_task_accepts_authority_target_ura_at_ingress() {
+        let resp = send_task_handler(
+            json!({
+                "target_node_ura": "easynet:///r/acme/authority",
+                "agent_name": "claude",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+            &detached_resolver(),
+        )
+        .expect("validation response");
+
+        assert_eq!(resp["ok"], false);
+        let message = resp["error"].as_str().expect("validation error");
+        assert!(
+            message.contains("daemon")
+                || message.contains("federation")
+                || message.contains("credentials")
+                || message.contains("axon-pb"),
+            "Authority target must pass canonical target ingress and fail only at downstream transport/config in this unit test: {message}"
         );
     }
 

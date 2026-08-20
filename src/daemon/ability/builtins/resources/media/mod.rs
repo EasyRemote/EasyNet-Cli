@@ -59,6 +59,19 @@ pub mod mic_subscribe;
 pub mod resource_bootstrap;
 #[cfg(not(feature = "native-media"))]
 pub mod resource_bootstrap {
+    use crate::daemon::persistence::resources::ResourceEntry;
+
+    pub const REMOTE_TARGET_FRESHNESS_TTL_MS: u64 = 60_000;
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct RemoteTargetInventoryRefresh {
+        pub observed_at_ms: u64,
+        pub freshness_ttl_ms: u64,
+        pub resources: Vec<ResourceEntry>,
+        pub retired_count: usize,
+        pub screen_target_discovery_available: bool,
+    }
+
     /// Headless runtime builds do not probe host media devices. Public media
     /// descriptors remain registered by `abilities.rs` as unavailable stubs,
     /// so callers receive canonical invocation receipts instead of build-time
@@ -68,6 +81,26 @@ pub mod resource_bootstrap {
         _owner_agent: &str,
     ) -> anyhow::Result<usize> {
         Ok(0)
+    }
+
+    pub fn refresh_remote_targets(
+        _realm: &str,
+        _owner_agent: &str,
+    ) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+        Ok(RemoteTargetInventoryRefresh {
+            observed_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
+            freshness_ttl_ms: REMOTE_TARGET_FRESHNESS_TTL_MS,
+            resources: Vec::new(),
+            retired_count: 0,
+            screen_target_discovery_available: false,
+        })
+    }
+
+    pub fn watch_remote_target_inventory(
+        realm: &str,
+        owner_agent: &str,
+    ) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+        refresh_remote_targets(realm, owner_agent)
     }
 }
 pub mod resource_subject;

@@ -283,7 +283,7 @@ fn validate_local_state_purge_root(root: &Path) -> anyhow::Result<()> {
 
 #[derive(Debug)]
 enum ResetCredentialState {
-    Paired(config::Credentials),
+    Paired(Box<config::Credentials>),
     Missing,
     Invalid { reason: String },
 }
@@ -301,7 +301,7 @@ impl ResetCredentialState {
 
     fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
         match result {
-            Ok(Some(credentials)) => Self::Paired(credentials),
+            Ok(Some(credentials)) => Self::Paired(Box::new(credentials)),
             Ok(None) => Self::Missing,
             Err(error) => Self::Invalid {
                 reason: format!("{error:#}"),

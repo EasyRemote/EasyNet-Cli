@@ -50,6 +50,21 @@ pub enum DaemonError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to acquire daemon process lease at {path}: {source}")]
+    AcquireProcessLease {
+        path: PathBuf,
+        source: anyhow::Error,
+    },
+    #[error("daemon process lease at {path} is already held by {owner}")]
+    ProcessLeaseHeld { path: PathBuf, owner: String },
+    #[error(
+        "daemon pid {pid} is alive while runtime endpoints are unavailable: control={control}, invocation={invocation}"
+    )]
+    ProcessAliveEndpointsDown {
+        pid: u32,
+        control: PathBuf,
+        invocation: PathBuf,
+    },
     #[error("failed to probe daemon child pid {pid}: {source}")]
     ProbeChild { pid: u32, source: std::io::Error },
     #[error(
@@ -156,6 +171,7 @@ pub enum DaemonInvocationErrorProjection {
     DaemonDown,
     CallerSignerUnavailable,
     DescriptorOwnerOffline,
+    TransportEnvelopeExceeded,
     Status(tonic::Code),
     InvalidInvocation,
     Cancelled,
@@ -177,6 +193,16 @@ impl DaemonError {
                 if RuntimeFailureFacts::is_descriptor_owner_offline_status(*code, message) =>
             {
                 DaemonInvocationErrorProjection::DescriptorOwnerOffline
+            }
+            Self::InvokeStatus { code, message, .. }
+            | Self::InvokeStreamStatus { code, message, .. }
+            | Self::InvokeBidiStatus { code, message, .. }
+                if matches!(
+                    code,
+                    tonic::Code::OutOfRange | tonic::Code::ResourceExhausted
+                ) && message.contains("message length too large") =>
+            {
+                DaemonInvocationErrorProjection::TransportEnvelopeExceeded
             }
             Self::InvokeStatus { code, .. }
             | Self::InvokeStreamStatus { code, .. }
@@ -214,6 +240,20 @@ mod tests {
         let error = DaemonError::InvokeStatus {
             ability: "meta.list_abilities".to_string(),
             code: tonic::Code::Unavailable,
+            message: "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::DescriptorOwnerOffline
+        );
+    }
+
+    #[test]
+    fn route_text_does_not_project_descriptor_owner_offline() {
+        let error = DaemonError::InvokeStatus {
+            ability: "meta.list_abilities".to_string(),
+            code: tonic::Code::Unavailable,
             message: "ROUTE_NEGATIVE: namespace.resolve negative: \
                  NEGATIVE_REASON_NXDOMAIN: owner is not online"
                 .to_string(),
@@ -221,7 +261,7 @@ mod tests {
 
         assert_eq!(
             error.invocation_error_projection(),
-            DaemonInvocationErrorProjection::DescriptorOwnerOffline
+            DaemonInvocationErrorProjection::Status(tonic::Code::Unavailable)
         );
     }
 
@@ -236,6 +276,34 @@ mod tests {
         assert_eq!(
             error.invocation_error_projection(),
             DaemonInvocationErrorProjection::Status(tonic::Code::Unavailable)
+        );
+    }
+
+    #[test]
+    fn projects_decoded_message_overflow_as_transport_capacity() {
+        let error = DaemonError::InvokeStatus {
+            ability: "invocation.history.list".to_string(),
+            code: tonic::Code::OutOfRange,
+            message: "Error, decoded message length too large: found 6607756 bytes, the limit is: 4194304 bytes".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::TransportEnvelopeExceeded
+        );
+    }
+
+    #[test]
+    fn preserves_domain_out_of_range_as_status() {
+        let error = DaemonError::InvokeStatus {
+            ability: "media.seek".to_string(),
+            code: tonic::Code::OutOfRange,
+            message: "position exceeds media duration".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::Status(tonic::Code::OutOfRange)
         );
     }
 }

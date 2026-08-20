@@ -11,7 +11,10 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::daemon::ability::descriptors::AdmissionAction;
+use crate::daemon::ability::descriptors::{AbilityHints, AdmissionAction};
+use crate::daemon::ability::manifest::{
+    AbilityDedicatedSurface, AbilityExposure, AbilitySubjectContractKind,
+};
 use crate::daemon::ability::CallMode;
 use sha2::{Digest, Sha256};
 
@@ -71,6 +74,97 @@ impl PackageHash {
 /// name, product layer, bidi wire profile, description, and input schema. The
 /// package manifest is validated against this table at index time; generated
 /// descriptor TOMLs are projections of this table, not independent facts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuiltinPluginAbilityHints {
+    pub read_only: bool,
+    pub destructive: bool,
+    pub idempotent: bool,
+}
+
+impl BuiltinPluginAbilityHints {
+    pub const NONE: Self = Self {
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+    };
+    pub const READ_ONLY: Self = Self {
+        read_only: true,
+        destructive: false,
+        idempotent: false,
+    };
+    pub const READ_ONLY_IDEMPOTENT: Self = Self {
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+    };
+    pub const DESTRUCTIVE_IDEMPOTENT: Self = Self {
+        read_only: false,
+        destructive: true,
+        idempotent: true,
+    };
+
+    fn descriptor_hints(self) -> AbilityHints {
+        AbilityHints {
+            read_only: self.read_only,
+            destructive: self.destructive,
+            idempotent: self.idempotent,
+        }
+    }
+}
+
+/// Product execution contract published with a builtin plugin ability.
+///
+/// This belongs to the compiled ability row because the same row feeds both
+/// runtime registration and generated descriptor TOML. Product clients must
+/// never infer a lifecycle surface or subject policy from an ability name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuiltinPluginFrontendContract {
+    pub exposure: AbilityExposure,
+    pub dedicated_surface: AbilityDedicatedSurface,
+    pub subject_contract_kind: AbilitySubjectContractKind,
+    pub subject_contract_ura: Option<&'static str>,
+}
+
+pub const REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA: &str =
+    "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject";
+
+impl BuiltinPluginFrontendContract {
+    pub const INTERNAL_EXPLICIT_URA: Self = Self {
+        exposure: AbilityExposure::Internal,
+        dedicated_surface: AbilityDedicatedSurface::None,
+        subject_contract_kind: AbilitySubjectContractKind::ExplicitUra,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_BROWSER: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::Browser,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_MEDIA: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::Media,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_REMOTE_DESKTOP: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::RemoteDesktop,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::RemoteDesktop,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: Some(REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA),
+    };
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinPluginAbilitySpec {
     pub name: &'static str,
@@ -78,6 +172,9 @@ pub struct BuiltinPluginAbilitySpec {
     pub call_mode: CallMode,
     pub admission_action: AdmissionAction,
     pub bidi_wire_kind: Option<PluginBidiWireKind>,
+    pub subject_ura_kinds: &'static [&'static str],
+    pub hints: BuiltinPluginAbilityHints,
+    pub frontend_contract: BuiltinPluginFrontendContract,
     pub description: fn() -> &'static str,
     pub input_schema: fn() -> Value,
 }
@@ -99,7 +196,7 @@ impl BuiltinPluginAbilitySpec {
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        crate::daemon::ability::manifest::AbilityManifest::new(
+        let mut manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             verb,
             (self.description)(),
             (self.input_schema)(),
@@ -108,7 +205,33 @@ impl BuiltinPluginAbilitySpec {
         .map_err(|source| PluginHostError::DescriptorProjectionFailed {
             ability: self.name.to_string(),
             reason: source.to_string(),
-        })
+        })?;
+        manifest = manifest
+            .with_frontend_contract(
+                self.frontend_contract.exposure,
+                self.frontend_contract.dedicated_surface,
+                self.frontend_contract.subject_contract_kind,
+                self.frontend_contract
+                    .subject_contract_ura
+                    .map(str::to_string),
+            )
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.to_string(),
+                reason: source.to_string(),
+            })?;
+        if !self.subject_ura_kinds.is_empty() {
+            manifest = manifest
+                .with_subject_scope(
+                    crate::daemon::ability::manifest::ManifestSubjectScope::only_ura_kinds(
+                        self.subject_ura_kinds.iter().copied(),
+                    ),
+                )
+                .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                    ability: self.name.to_string(),
+                    reason: source.to_string(),
+                })?;
+        }
+        Ok(manifest)
     }
 }
 
@@ -125,6 +248,12 @@ pub struct PluginAbilityDescriptor {
     input_schema: Value,
     output_schema: Option<Value>,
     admission_action: AdmissionAction,
+    subject_ura_kinds: Vec<String>,
+    hints: AbilityHints,
+    exposure: AbilityExposure,
+    dedicated_surface: AbilityDedicatedSurface,
+    subject_contract_kind: AbilitySubjectContractKind,
+    subject_contract_ura: Option<String>,
 }
 
 impl PluginAbilityDescriptor {
@@ -155,6 +284,30 @@ impl PluginAbilityDescriptor {
 
     pub fn admission_action(&self) -> AdmissionAction {
         self.admission_action
+    }
+
+    pub fn subject_ura_kinds(&self) -> &[String] {
+        &self.subject_ura_kinds
+    }
+
+    pub fn hints(&self) -> &AbilityHints {
+        &self.hints
+    }
+
+    pub fn exposure(&self) -> AbilityExposure {
+        self.exposure
+    }
+
+    pub fn dedicated_surface(&self) -> AbilityDedicatedSurface {
+        self.dedicated_surface
+    }
+
+    pub fn subject_contract_kind(&self) -> AbilitySubjectContractKind {
+        self.subject_contract_kind
+    }
+
+    pub fn subject_contract_ura(&self) -> Option<&str> {
+        self.subject_contract_ura.as_deref()
     }
 
     /// Project this plugin descriptor into the daemon registry manifest shape.
@@ -191,6 +344,17 @@ impl PluginAbilityDescriptor {
             })?;
         manifest = manifest
             .with_admission_action(self.admission_action.as_str())
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.clone(),
+                reason: source.to_string(),
+            })?;
+        manifest = manifest
+            .with_frontend_contract(
+                self.exposure,
+                self.dedicated_surface,
+                self.subject_contract_kind,
+                self.subject_contract_ura.clone(),
+            )
             .map_err(|source| PluginHostError::DescriptorProjectionFailed {
                 ability: self.name.clone(),
                 reason: source.to_string(),
@@ -442,6 +606,11 @@ struct RawPluginAbilityDescriptor {
     name: String,
     descriptor_version: String,
     description: String,
+    exposure: AbilityExposure,
+    dedicated_surface: AbilityDedicatedSurface,
+    subject_contract_kind: AbilitySubjectContractKind,
+    #[serde(default)]
+    subject_contract_ura: Option<String>,
     admission_action: AdmissionAction,
     input_schema: Value,
     #[serde(default)]
@@ -470,6 +639,19 @@ fn builtin_descriptors(
                 input_schema: (spec.input_schema)(),
                 output_schema: None,
                 admission_action: spec.admission_action,
+                subject_ura_kinds: spec
+                    .subject_ura_kinds
+                    .iter()
+                    .map(|kind| (*kind).to_string())
+                    .collect(),
+                hints: spec.hints.descriptor_hints(),
+                exposure: spec.frontend_contract.exposure,
+                dedicated_surface: spec.frontend_contract.dedicated_surface,
+                subject_contract_kind: spec.frontend_contract.subject_contract_kind,
+                subject_contract_ura: spec
+                    .frontend_contract
+                    .subject_contract_ura
+                    .map(str::to_string),
             }),
         );
     }
@@ -513,7 +695,8 @@ fn validate_descriptor(
     expected_name: &str,
     raw: RawPluginAbilityDescriptor,
 ) -> Result<PluginAbilityDescriptor> {
-    if raw.schema_version != "2" {
+    if raw.schema_version != crate::daemon::ability::catalog::ability_toml::CONTRACT_SCHEMA_VERSION
+    {
         return Err(PluginHostError::InvalidAbilityDescriptor {
             path: path.to_path_buf(),
             reason: format!("unsupported schema_version {:?}", raw.schema_version),
@@ -555,6 +738,31 @@ fn validate_descriptor(
             reason: "output_schema, when present, must be a JSON object".to_string(),
         });
     }
+    crate::daemon::ability::manifest::AbilityManifest::new(
+        "plugin-descriptor",
+        &raw.description,
+        raw.input_schema.clone(),
+    )
+    .and_then(|manifest| {
+        manifest.with_frontend_contract(
+            raw.exposure,
+            raw.dedicated_surface,
+            raw.subject_contract_kind,
+            raw.subject_contract_ura.clone(),
+        )
+    })
+    .map_err(|source| PluginHostError::InvalidAbilityDescriptor {
+        path: path.to_path_buf(),
+        reason: source.to_string(),
+    })?;
+    if let Some(subject_contract_ura) = raw.subject_contract_ura.as_deref() {
+        crate::core::ura::parse_ura(subject_contract_ura).map_err(|source| {
+            PluginHostError::InvalidAbilityDescriptor {
+                path: path.to_path_buf(),
+                reason: format!("subject_contract_ura must be a canonical URA: {source}"),
+            }
+        })?;
+    }
     Ok(PluginAbilityDescriptor {
         name: raw.name,
         descriptor_version: raw.descriptor_version,
@@ -562,6 +770,12 @@ fn validate_descriptor(
         input_schema: raw.input_schema,
         output_schema: raw.output_schema,
         admission_action: raw.admission_action,
+        subject_ura_kinds: Vec::new(),
+        hints: AbilityHints::default(),
+        exposure: raw.exposure,
+        dedicated_surface: raw.dedicated_surface,
+        subject_contract_kind: raw.subject_contract_kind,
+        subject_contract_ura: raw.subject_contract_ura,
     })
 }
 
@@ -823,6 +1037,9 @@ pub(crate) mod tests {
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
+                subject_ura_kinds: &[],
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::INTERNAL_EXPLICIT_URA,
                 description,
                 input_schema,
             }]
@@ -1087,10 +1304,13 @@ session = "aqua"
         write_test_package(dir.path(), "0.1.0");
         std::fs::write(
             dir.path().join("abilities/test.echo.ability.toml"),
-            r#"schema_version = "2"
+            r#"schema_version = "3"
 name = "test.echo"
 descriptor_version = "1.2.3"
 description = "test descriptor for test.echo"
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
 admission_action = "invoke"
 retired_descriptor_hash = "sha256:retired"
 
@@ -1119,9 +1339,12 @@ additionalProperties = false
         write_test_package(dir.path(), "0.1.0");
         std::fs::write(
             dir.path().join("abilities/test.echo.ability.toml"),
-            r#"schema_version = "2"
+            r#"schema_version = "3"
 name = "test.echo"
 description = "test descriptor for test.echo"
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
 admission_action = "invoke"
 
 [input_schema]
@@ -1156,6 +1379,54 @@ additionalProperties = false
             .to_registry_manifest()
             .expect("registry projection");
         assert_eq!(manifest.descriptor_version(), "1.2.3");
+    }
+
+    #[test]
+    fn plugin_descriptor_projection_preserves_frontend_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::write(
+            dir.path().join("abilities/test.echo.ability.toml"),
+            r#"schema_version = "3"
+name = "test.echo"
+descriptor_version = "1.2.3"
+description = "test descriptor for test.echo"
+exposure = "operator"
+dedicated_surface = "browser"
+subject_contract_kind = "dedicated-surface"
+admission_action = "invoke"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#,
+        )
+        .expect("descriptor");
+
+        let package = PluginPackage::from_installed(dir.path(), None).expect("package");
+        let descriptor = package.ability_descriptor("test.echo").expect("descriptor");
+        assert_eq!(descriptor.exposure(), AbilityExposure::Operator);
+        assert_eq!(
+            descriptor.dedicated_surface(),
+            AbilityDedicatedSurface::Browser
+        );
+        assert_eq!(
+            descriptor.subject_contract_kind(),
+            AbilitySubjectContractKind::DedicatedSurface
+        );
+
+        let manifest = descriptor
+            .to_registry_manifest()
+            .expect("registry projection");
+        assert_eq!(manifest.exposure(), Some(AbilityExposure::Operator));
+        assert_eq!(
+            manifest.dedicated_surface(),
+            Some(AbilityDedicatedSurface::Browser)
+        );
+        assert_eq!(
+            manifest.subject_contract_kind(),
+            Some(AbilitySubjectContractKind::DedicatedSurface)
+        );
     }
 
     #[test]
@@ -1253,10 +1524,13 @@ call_mode = "rpc"
 
     pub(crate) fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "2"
+            r#"schema_version = "3"
 name = "{ability}"
 descriptor_version = "1.2.3"
 description = "test descriptor for {ability}"
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
 admission_action = "invoke"
 
 [input_schema]

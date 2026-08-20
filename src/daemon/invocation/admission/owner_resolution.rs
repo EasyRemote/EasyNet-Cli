@@ -9,16 +9,23 @@ use crate::daemon::persistence::config;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerFact {
-    pub owner_user_id: Option<String>,
+    pub owner_user_ura: Option<String>,
     pub owner_ura: Option<String>,
     pub authoritative: bool,
 }
 
 impl OwnerFact {
     #[must_use]
-    pub fn user(owner_user_id: impl Into<String>, owner_ura: impl Into<String>) -> Self {
+    pub fn user_ura(owner_user_ura: impl Into<String>, owner_ura: impl Into<String>) -> Self {
+        let owner_user_ura = owner_user_ura.into();
+        debug_assert!(
+            crate::core::ura::parse_ura(&owner_user_ura)
+                .ok()
+                .is_some_and(|parsed| parsed.kind == URAKind::User),
+            "OwnerFact owner_user_ura must be a canonical User URA"
+        );
         Self {
-            owner_user_id: Some(owner_user_id.into()),
+            owner_user_ura: Some(owner_user_ura),
             owner_ura: Some(owner_ura.into()),
             authoritative: true,
         }
@@ -57,10 +64,8 @@ pub(crate) fn local_device_owner_fact(ura: &str) -> anyhow::Result<Option<OwnerF
         return Ok(None);
     }
     let owner_user_id = credentials.user_id()?.to_string();
-    Ok(Some(OwnerFact::user(
-        owner_user_id.clone(),
-        user_ura(&credentials.realm, &owner_user_id),
-    )))
+    let owner_ura = user_ura(&credentials.realm, &owner_user_id);
+    Ok(Some(OwnerFact::user_ura(owner_ura.clone(), owner_ura)))
 }
 
 impl OwnerResolver {
@@ -83,21 +88,21 @@ impl OwnerResolver {
             let Some(fact) = fact.filter(|f| f.authoritative) else {
                 continue;
             };
-            let Some(owner_user_id) = fact.owner_user_id.clone().filter(|v| !v.trim().is_empty())
+            let Some(owner_user_ura) = fact.owner_user_ura.clone().filter(|v| !v.trim().is_empty())
             else {
                 audit_warnings.push(format!(
                     "{} owner fact did not project to an accountable user principal",
                     source.as_str()
                 ));
                 return OwnerResolution {
-                    owner_user_id: None,
+                    owner_user_ura: None,
                     owner_ura: fact.owner_ura.clone(),
                     owner_source: OwnerSource::Unresolved,
                     audit_warnings,
                 };
             };
             return OwnerResolution {
-                owner_user_id: Some(owner_user_id),
+                owner_user_ura: Some(owner_user_ura),
                 owner_ura: fact.owner_ura.clone(),
                 owner_source: source,
                 audit_warnings,
@@ -114,16 +119,16 @@ fn conflict_warnings(facts: &[(OwnerSource, &OwnerFact)]) -> Vec<String> {
         for j in (i + 1)..facts.len() {
             let (left_source, left) = facts[i];
             let (right_source, right) = facts[j];
-            if left.owner_user_id.is_some()
-                && right.owner_user_id.is_some()
-                && left.owner_user_id != right.owner_user_id
+            if left.owner_user_ura.is_some()
+                && right.owner_user_ura.is_some()
+                && left.owner_user_ura != right.owner_user_ura
             {
                 warnings.push(format!(
                     "owner conflict before precedence: {}={:?} {}={:?}",
                     left_source.as_str(),
-                    left.owner_user_id,
+                    left.owner_user_ura,
                     right_source.as_str(),
-                    right.owner_user_id
+                    right.owner_user_ura
                 ));
             }
         }
@@ -156,12 +161,21 @@ mod tests {
     #[test]
     fn subject_owner_wins_over_lower_precedence_sources() {
         let input = OwnerResolutionInput {
-            subject: Some(OwnerFact::user("alice", "easynet:///r/test/user/alice")),
-            callee: Some(OwnerFact::user("bob", "easynet:///r/test/user/bob")),
+            subject: Some(OwnerFact::user_ura(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/user/alice",
+            )),
+            callee: Some(OwnerFact::user_ura(
+                "easynet:///r/test/user/bob",
+                "easynet:///r/test/user/bob",
+            )),
             ..OwnerResolutionInput::default()
         };
         let got = OwnerResolver::resolve(&input);
-        assert_eq!(got.owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(
+            got.owner_user_ura.as_deref(),
+            Some("easynet:///r/test/user/alice")
+        );
         assert_eq!(got.owner_source, OwnerSource::Subject);
         assert!(
             got.audit_warnings
@@ -175,7 +189,7 @@ mod tests {
     fn device_owner_without_user_projection_is_unresolved() {
         let input = OwnerResolutionInput {
             device: Some(OwnerFact {
-                owner_user_id: None,
+                owner_user_ura: None,
                 owner_ura: Some("easynet:///r/test/device/dev-a".to_string()),
                 authoritative: true,
             }),
@@ -183,7 +197,7 @@ mod tests {
         };
         let got = OwnerResolver::resolve(&input);
         assert_eq!(got.owner_source, OwnerSource::Unresolved);
-        assert!(got.owner_user_id.is_none());
+        assert!(got.owner_user_ura.is_none());
     }
 
     #[test]
@@ -205,7 +219,10 @@ mod tests {
             .expect("valid credentials should project")
             .expect("owner fact");
 
-        assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(
+            owner.owner_user_ura.as_deref(),
+            Some("easynet:///r/test/user/alice")
+        );
         assert_eq!(
             owner.owner_ura.as_deref(),
             Some("easynet:///r/test/user/alice")

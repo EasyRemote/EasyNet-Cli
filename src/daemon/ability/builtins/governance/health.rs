@@ -40,7 +40,11 @@ pub const ABILITY_NAME: &str = crate::daemon::ability::names::governance::OBSERV
 /// Register the `observe.health` handler on the supplied registry.
 /// Called from `daemon::ability::catalog::build_registry`.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(ABILITY_NAME, OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner(
+        ABILITY_NAME,
+        OwnerKind::runtime_health_system(),
+        Arc::new(handler),
+    );
 }
 
 /// Health handler. Returns the Axon observe.health contract fields:

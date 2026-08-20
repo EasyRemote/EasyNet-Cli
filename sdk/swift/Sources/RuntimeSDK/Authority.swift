@@ -3,6 +3,30 @@ import Foundation
 public let authorityProfile = "authority"
 public let delegationMetadataKey = "x-runtime-delegation"
 public let sessionAuthorityMetadataKey = "x-runtime-session-authority"
+private let authorityWireFields: Set<String> = ["payload", "signature"]
+private let delegationAuthorityPayloadFields: Set<String> = [
+    "issuer_ura",
+    "subject_ura",
+    "caller_ura",
+    "audience",
+    "scopes",
+    "issued_at_ms",
+    "expires_at_ms",
+]
+private let sessionAuthorityPayloadFields: Set<String> = [
+    "issuer_ura",
+    "session_id",
+    "session_owner_user_id",
+    "creator_principal_id",
+    "callee_ura",
+    "subject_ura",
+    "audience",
+    "scopes",
+    "allowed_actions",
+    "allowed_followup_abilities",
+    "issued_at_ms",
+    "expires_at_ms",
+]
 
 public func runtimeStateReadSubjectURA(realm: String, userID: String) throws -> String {
     try RuntimeSubjects.runtimeStateReadSubjectURA(realm: realm, userID: userID)
@@ -69,7 +93,11 @@ public struct DelegationProof: Sendable, Equatable {
     }
 
     public static func fromMetadata(_ value: String) throws -> DelegationProof {
-        let decoded = try decodeAuthorityMetadata(value, label: "delegation")
+        let decoded = try decodeAuthorityMetadata(
+            value,
+            label: "delegation",
+            payloadFields: delegationAuthorityPayloadFields
+        )
         let payload = decoded.payload
         return try DelegationProof(
             issuerURA: requiredAuthorityString(payload, "issuer_ura"),
@@ -142,7 +170,11 @@ public struct SessionAuthority: Sendable, Equatable {
     }
 
     public static func fromMetadata(_ value: String) throws -> SessionAuthority {
-        let decoded = try decodeAuthorityMetadata(value, label: "session authority")
+        let decoded = try decodeAuthorityMetadata(
+            value,
+            label: "session authority",
+            payloadFields: sessionAuthorityPayloadFields
+        )
         let payload = decoded.payload
         return try SessionAuthority(
             issuerURA: requiredAuthorityString(payload, "issuer_ura"),
@@ -379,15 +411,43 @@ private struct DecodedAuthority {
     let signatureBase64: String
 }
 
-private func decodeAuthorityMetadata(_ value: String, label: String) throws -> DecodedAuthority {
+private func decodeAuthorityMetadata(
+    _ value: String,
+    label: String,
+    payloadFields: Set<String>
+) throws -> DecodedAuthority {
     let cleaned = try requiredAuthorityString(value, "metadata_value")
-    guard let data = Data(base64Encoded: cleaned) else {
+    let data: Data
+    do {
+        data = try canonicalBase64Data(cleaned, stage: "authority", field: "\(label) metadata")
+    } catch let error as SDKError {
+        if error.message.contains("canonical base64") {
+            throw invalidAuthority("\(label) metadata must be canonical base64 JSON")
+        }
         throw invalidAuthority("\(label) metadata must be base64 JSON")
     }
     let object = try decodeObject(data, label: "\(label) authority metadata")
+    try rejectNoncanonicalAuthorityFields(object, allowed: authorityWireFields, label: label)
     let payload = try requiredAuthorityObject(object, "payload")
+    try rejectNoncanonicalAuthorityFields(
+        payload,
+        allowed: payloadFields,
+        label: "\(label) metadata payload"
+    )
     let signature = try requiredAuthorityBase64(requiredAuthorityString(object, "signature"), "signature")
     return DecodedAuthority(payload: payload, signatureBase64: signature)
+}
+
+private func rejectNoncanonicalAuthorityFields(
+    _ value: [String: JSONValue],
+    allowed: Set<String>,
+    label: String
+) throws {
+    for key in value.keys {
+        if !allowed.contains(key) {
+            throw invalidAuthority("\(label) contains noncanonical field \(key)")
+        }
+    }
 }
 
 private func validateAuthorityMetadataEnvelope(kind: String, key: String) throws {
@@ -555,6 +615,7 @@ private struct InvocationAuthorityBindingValidator {
             "callee_ura": tuple.callee,
             "subject_ura": tuple.subject,
             "descriptor_ref": tuple.descriptorRef,
+            "descriptor_action": ability.action,
         ]
     }
 
@@ -607,9 +668,9 @@ private struct InvocationAuthorityBindingValidator {
             "session authority audience does not admit invocation callee_ura"
         )
         try require(
-            listAdmits(authority.allowedActions, "invoke"),
+            actionListAdmits(authority.allowedActions, ability.action),
             .authorityDenied,
-            "session authority allowed_actions do not admit invoke"
+            "session authority allowed_actions do not admit \(ability.action)"
         )
         try require(
             scopesAdmit(authority.allowedFollowupAbilities, ability),
@@ -646,8 +707,11 @@ private func scopesAdmit(_ patterns: [String], _ ability: RuntimeAbilityProjecti
     return false
 }
 
-private func listAdmits(_ patterns: [String], _ value: String) -> Bool {
-    patterns.contains { scopeMatches($0, value) }
+private func actionListAdmits(_ actions: [String], _ value: String) -> Bool {
+    let expected = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !expected.isEmpty && actions.contains {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines) == expected
+    }
 }
 
 private func scopeMatches(_ pattern: String, _ value: String) -> Bool {
@@ -668,7 +732,12 @@ private func scopeMatches(_ pattern: String, _ value: String) -> Bool {
 
 private func requiredAuthorityBase64(_ value: String, _ field: String) throws -> String {
     let cleaned = try requiredAuthorityString(value, field)
-    guard Data(base64Encoded: cleaned) != nil else {
+    do {
+        _ = try canonicalBase64Data(cleaned, stage: "authority", field: field)
+    } catch let error as SDKError {
+        if error.message.contains("canonical base64") {
+            throw invalidAuthority("\(field) must be canonical base64")
+        }
         throw invalidAuthority("\(field) must be base64")
     }
     return cleaned

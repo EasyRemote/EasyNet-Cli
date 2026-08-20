@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 /// frames. This mirrors the stable fields of Axon `Error` without making the
 /// product session wire depend on prost's generated message serde behavior.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SessionFailure {
     pub code: String,
     pub message: String,
@@ -109,6 +110,26 @@ mod tests {
                 || message.contains("stage")
                 || message.contains("security_class"),
             "missing typed failure facts must be surfaced as a schema failure: {message}"
+        );
+    }
+
+    #[test]
+    fn session_failure_wire_rejects_unknown_fields() {
+        let legacy = serde_json::json!({
+            "code": "TARGET_OFFLINE",
+            "message": "target device is offline",
+            "retryable": true,
+            "stage": 3,
+            "security_class": 1,
+            "state_code": "legacy"
+        });
+
+        let error = serde_json::from_value::<SessionFailure>(legacy)
+            .expect_err("session failure wire must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "decode error should name the noncanonical field: {error}"
         );
     }
 

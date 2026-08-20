@@ -13,16 +13,19 @@
 //! registers those. Phase 2 only ensures the runtime exists and is
 //! reachable from the dispatch service.
 
-use std::sync::Arc;
 #[cfg(test)]
 use std::{collections::HashMap, sync::Mutex};
+use std::{path::PathBuf, sync::Arc};
 
+#[cfg(feature = "axon-pb")]
+use axon_sdk::invocation::persistence::PersistentLog;
 #[cfg(any(test, feature = "axon-pb"))]
 use axon_sdk::invocation::AxonError;
 #[cfg(test)]
 use axon_sdk::invocation::{
-    authority_proof_expected_hash, sha256, AgentIdentity, AuthorityBinding, CalleeSignature,
-    DescriptorBoundEnvelope, InvocationAuthorityProof, ReceiptSigningAuthority,
+    authority_proof_expected_hash, canonical_host_attestation_bytes, sha256, AgentIdentity,
+    AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap, AuthorityRelation, CalleeSignature,
+    DescriptorBoundEnvelope, InvocationAuthorityProof, ReceiptSigningAuthority, UraProfile,
     VerifiedAdmissionPolicy,
 };
 use axon_sdk::invocation::{
@@ -38,6 +41,56 @@ use crate::daemon::identity::local_invocation::CanonicalAdmissionKeyResolver;
 use crate::daemon::identity::receipt_signing::load_runtime_signing_authority_providers;
 #[cfg(feature = "axon-pb")]
 pub use crate::daemon::identity::receipt_signing::ProductionReceiptAuthorityConfig;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "axon-pb")]
+pub struct RuntimePersistenceConfig {
+    log_dir: PathBuf,
+}
+
+#[cfg(feature = "axon-pb")]
+impl RuntimePersistenceConfig {
+    #[must_use]
+    pub fn persistent(log_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            log_dir: log_dir.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn log_dir(&self) -> &std::path::Path {
+        &self.log_dir
+    }
+
+    fn into_persistent_log(self) -> PersistentLog {
+        PersistentLog::new(Some(self.log_dir))
+    }
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+pub(crate) fn isolated_test_runtime_persistence(label: &str) -> RuntimePersistenceConfig {
+    static RUNTIME_PERSISTENCE_SEQ: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let sanitized_label: String = label
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let seq = RUNTIME_PERSISTENCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "easynet-daemon-runtime-{}-{}-{}",
+        std::process::id(),
+        sanitized_label,
+        seq
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    RuntimePersistenceConfig::persistent(dir)
+}
 
 /// Immutable runtime admission composition shared by transport dispatch and
 /// Axon's signature verifier.
@@ -138,6 +191,9 @@ impl CanonicalReceiptProvider for RuntimeAdmissionCanonicalReceiptProvider {
 pub struct DaemonRuntimeAssembly {
     runtime: Arc<LocalRuntime>,
     admission_graph: Arc<DaemonRuntimeAdmissionGraph>,
+    invocation_verification_keys: Option<
+        Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
+    >,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -150,6 +206,13 @@ impl DaemonRuntimeAssembly {
     #[must_use]
     pub(crate) fn admission_graph(&self) -> Arc<DaemonRuntimeAdmissionGraph> {
         Arc::clone(&self.admission_graph)
+    }
+
+    pub(crate) fn invocation_verification_keys(
+        &self,
+    ) -> Option<Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>>
+    {
+        self.invocation_verification_keys.clone()
     }
 
     /// Bind the daemon's completed runtime admission facade to the handlers
@@ -180,12 +243,15 @@ impl DaemonRuntimeAssembly {
 pub fn build_production_local_runtime(
     config: ProductionReceiptAuthorityConfig,
     trusted_identities: Arc<dyn KeyResolver>,
+    runtime_persistence: RuntimePersistenceConfig,
 ) -> Result<DaemonRuntimeAssembly, AxonError> {
     let providers = load_runtime_signing_authority_providers(config)?;
     Ok(assemble_daemon_runtime(
         trusted_identities,
         providers.receipt,
         Some(providers.invocation),
+        Some(providers.invocation_verification),
+        runtime_persistence,
         None,
     ))
 }
@@ -202,9 +268,17 @@ pub fn build_production_local_runtime(
 pub fn build_daemon_runtime_with_receipt_provider(
     trusted_identities: Arc<dyn KeyResolver>,
     canonical_receipt_provider: Arc<dyn CanonicalReceiptProvider>,
+    runtime_persistence: RuntimePersistenceConfig,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
-    assemble_daemon_runtime(trusted_identities, canonical_receipt_provider, None, ledger)
+    assemble_daemon_runtime(
+        trusted_identities,
+        canonical_receipt_provider,
+        None,
+        None,
+        runtime_persistence,
+        ledger,
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -214,6 +288,10 @@ fn assemble_daemon_runtime(
     invocation_authority_provider: Option<
         Arc<dyn axon_sdk::invocation::InvocationSigningAuthorityProvider>,
     >,
+    invocation_verification_keys: Option<
+        Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
+    >,
+    runtime_persistence: RuntimePersistenceConfig,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
     let runtime_admission = Arc::new(
@@ -230,26 +308,34 @@ fn assemble_daemon_runtime(
     let bootstrap_candidate = Arc::new(
         crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider::default(),
     );
-    let admission_key_resolver = Arc::new(CanonicalAdmissionKeyResolver::new(
+    let mut admission_key_resolver = CanonicalAdmissionKeyResolver::new(
         trusted_identities,
         bootstrap_identities,
         bootstrap_candidate,
         Arc::clone(&receipt_provider),
-    ));
+    );
+    if let Some(provider) = invocation_verification_keys.as_ref() {
+        admission_key_resolver =
+            admission_key_resolver.with_invocation_verification_keys(Arc::clone(provider));
+    }
+    let admission_key_resolver = Arc::new(admission_key_resolver);
     let admission_graph = Arc::new(DaemonRuntimeAdmissionGraph::new(
         admission_key_resolver,
         runtime_admission,
     ));
     let runtime_resolver: Arc<dyn KeyResolver> = admission_graph.clone();
-    let runtime = LocalRuntime::new_with_authority_providers(
+    let runtime_persistence = Arc::new(runtime_persistence.into_persistent_log());
+    let runtime = LocalRuntime::new_with_authority_providers_and_persistence(
         runtime_resolver,
         invocation_authority_provider,
         receipt_provider,
+        runtime_persistence,
     );
     install_ledger_sink(&runtime, ledger);
     DaemonRuntimeAssembly {
         runtime,
         admission_graph,
+        invocation_verification_keys,
     }
 }
 
@@ -309,11 +395,13 @@ pub fn build_local_runtime(
 /// tests that stage runtime admission before entering the canonical runtime.
 pub(crate) fn build_test_daemon_runtime_assembly(
     key_resolver: Arc<dyn KeyResolver>,
+    runtime_persistence: RuntimePersistenceConfig,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
     build_daemon_runtime_with_receipt_provider(
         key_resolver,
         ephemeral_test_canonical_receipt_provider(),
+        runtime_persistence,
         ledger,
     )
 }
@@ -358,6 +446,14 @@ impl KeyResolver for EphemeralTestReceiptKeyResolver {
 }
 
 #[cfg(test)]
+fn sponsor_device_identity_for_system_agent(agent_ura: &str) -> Option<AgentIdentity> {
+    let parsed = crate::core::ura::parse_ura(agent_ura).ok()?;
+    let (device_id, _agent_id) = parsed.device_agent_ids()?;
+    let device_ura = crate::core::ura::device_ura(&parsed.realm, device_id);
+    Some(AgentIdentity::new(device_ura, UraProfile::StrictV2))
+}
+
+#[cfg(test)]
 #[derive(Default)]
 struct EphemeralTestCanonicalReceiptProvider {
     authorities: Mutex<HashMap<AgentIdentity, Arc<dyn ReceiptSigningAuthority>>>,
@@ -370,9 +466,14 @@ impl CanonicalReceiptProvider for EphemeralTestCanonicalReceiptProvider {
         &self,
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-        let binding = AuthorityBinding::Self_ {
-            principal_ura: envelope.envelope().caller.ura.clone(),
-        };
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
         let mut proof = InvocationAuthorityProof::new(
             "test-self-admission",
             Some(binding.clone()),
@@ -398,7 +499,7 @@ impl CanonicalReceiptProvider for EphemeralTestCanonicalReceiptProvider {
             return Ok(Arc::clone(authority));
         }
         let authority: Arc<dyn ReceiptSigningAuthority> = Arc::new(
-            EphemeralTestReceiptSigningAuthority::self_signed(callee.clone()),
+            EphemeralTestReceiptSigningAuthority::for_callee(callee.clone()),
         );
         authorities.insert(callee.clone(), Arc::clone(&authority));
         Ok(authority)
@@ -422,15 +523,41 @@ impl CanonicalReceiptProvider for EphemeralTestCanonicalReceiptProvider {
 #[cfg(test)]
 struct EphemeralTestReceiptSigningAuthority {
     callee_identity: AgentIdentity,
+    signer_identity: AgentIdentity,
     signing_key: SigningKey,
+    host_attestation: Vec<u8>,
 }
 
 #[cfg(test)]
 impl EphemeralTestReceiptSigningAuthority {
+    fn for_callee(callee_identity: AgentIdentity) -> Self {
+        if let Some(signer_identity) =
+            sponsor_device_identity_for_system_agent(&callee_identity.ura)
+        {
+            return Self::hosted(callee_identity, signer_identity);
+        }
+        Self::self_signed(callee_identity)
+    }
+
     fn self_signed(callee_identity: AgentIdentity) -> Self {
         Self {
             signing_key: SigningKey::from_bytes(&sha256(callee_identity.ura.as_bytes())),
+            signer_identity: callee_identity.clone(),
             callee_identity,
+            host_attestation: Vec::new(),
+        }
+    }
+
+    fn hosted(callee_identity: AgentIdentity, signer_identity: AgentIdentity) -> Self {
+        let signing_key = SigningKey::from_bytes(&sha256(signer_identity.ura.as_bytes()));
+        let attestation_bytes =
+            canonical_host_attestation_bytes(&callee_identity.ura, &signer_identity.ura);
+        let signature: Signature = signing_key.sign(&attestation_bytes);
+        Self {
+            callee_identity,
+            signer_identity,
+            signing_key,
+            host_attestation: signature.to_bytes().to_vec(),
         }
     }
 
@@ -447,11 +574,11 @@ impl ReceiptSigningAuthority for EphemeralTestReceiptSigningAuthority {
     }
 
     fn signer_identity(&self) -> &AgentIdentity {
-        &self.callee_identity
+        &self.signer_identity
     }
 
     fn host_attestation(&self) -> &[u8] {
-        &[]
+        &self.host_attestation
     }
 
     fn verifying_key(&self) -> VerifyingKey {
@@ -533,6 +660,37 @@ mod tests {
         assert!(Arc::strong_count(&rt) >= 1);
     }
 
+    #[tokio::test]
+    async fn ephemeral_receipt_provider_uses_sponsor_device_for_system_agent() {
+        let provider = ephemeral_test_canonical_receipt_provider();
+        let callee = AgentIdentity::new(
+            "easynet:///r/acme/agent/device.edge-01.runtime-governance",
+            UraProfile::StrictV2,
+        );
+
+        let authority = provider
+            .resolve_signing_authority(&callee)
+            .await
+            .expect("SystemAgent test receipt authority resolves");
+
+        assert_eq!(authority.callee_identity().ura, callee.ura);
+        assert_eq!(
+            authority.signer_identity().ura,
+            "easynet:///r/acme/device/edge-01"
+        );
+        let signer_key = provider
+            .resolve_signer_key("easynet:///r/acme/device/edge-01")
+            .expect("test receipt signer key resolves")
+            .expect("sponsor Device signer key is visible");
+        axon_sdk::invocation::verify_host_attestation(
+            &callee.ura,
+            "easynet:///r/acme/device/edge-01",
+            authority.host_attestation(),
+            &signer_key,
+        )
+        .expect("host attestation verifies against sponsor Device key");
+    }
+
     #[test]
     fn ledger_resolvers_use_axon_canonical_ura_helpers() {
         let caller = AgentIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2);
@@ -552,9 +710,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "liangbing.chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         assert_eq!(
@@ -596,9 +756,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "system.chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: fallback_caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: fallback_caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
         assert_eq!(
             ledger_route_ura("system.chat", &fallback_binding),
@@ -624,9 +786,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         let _ = ledger_route_ura("chat", &binding);
@@ -653,9 +817,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
         let caller_ability =
             crate::core::ura::owner_ability_ura(&binding.caller.ura, "chat").expect("ability URA");
@@ -684,9 +850,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
         let caller_ability =
             crate::core::ura::owner_ability_ura(&binding.caller.ura, "chat").expect("ability URA");
@@ -710,9 +878,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         let _ = ledger_route_ura("chat", &binding);
@@ -733,9 +903,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         let _ = ledger_invocation_ura("inv_123", &binding);

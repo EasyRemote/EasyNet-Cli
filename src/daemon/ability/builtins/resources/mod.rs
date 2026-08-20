@@ -9,6 +9,8 @@ pub mod files_store;
 pub mod list;
 pub mod media;
 pub mod pages;
+pub mod refresh_remote_targets;
 pub mod skills;
 pub mod voice;
 pub mod voice_contract;
+pub mod watch_remote_targets;

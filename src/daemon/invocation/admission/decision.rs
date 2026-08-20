@@ -29,9 +29,11 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalKind {
     User,
+    Agent,
     Token,
     Hub,
-    Device,
+    #[serde(rename = "device")]
+    DeviceCustody,
     Service,
     Automation,
 }
@@ -108,8 +110,10 @@ impl OwnerSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct OwnerResolution {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_user_id: Option<String>,
+    /// Runtime field is a canonical User URA. The serialized `owner_user_id`
+    /// key is retained only for durable/wire compatibility.
+    #[serde(rename = "owner_user_id", skip_serializing_if = "Option::is_none")]
+    pub owner_user_ura: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_ura: Option<String>,
     pub owner_source: OwnerSource,
@@ -121,7 +125,7 @@ impl OwnerResolution {
     #[must_use]
     pub fn unresolved(reason: impl Into<String>) -> Self {
         Self {
-            owner_user_id: None,
+            owner_user_ura: None,
             owner_ura: None,
             owner_source: OwnerSource::Unresolved,
             audit_warnings: vec![reason.into()],
@@ -142,6 +146,9 @@ pub enum PolicyDecisionOutcome {
 pub enum PolicyDecisionReason {
     OwnerAllow,
     ExplicitGrantAllow,
+    SystemRuleAllow,
+    AuthorityProofAllow,
+    InvocationLifecycleControlAllow,
     FederationForwardAllow,
     ExplicitDeny,
     HubTokenReadAllow,
@@ -160,14 +167,18 @@ pub enum PolicyDecisionReason {
 pub struct PolicyDecision {
     pub decision: PolicyDecisionOutcome,
     pub reason: PolicyDecisionReason,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_user_id: Option<String>,
+    /// Runtime field is a canonical User URA. The serialized `owner_user_id`
+    /// key is retained only for policy-decision wire compatibility.
+    #[serde(rename = "owner_user_id", skip_serializing_if = "Option::is_none")]
+    pub owner_user_ura: Option<String>,
     pub owner_source: OwnerSource,
     pub caller_ura: String,
     pub principal_kind: PrincipalKind,
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_class: Option<TokenClass>,
     pub callee_ura: String,
     pub subject_ura: String,
     pub ability_ura: String,
@@ -308,7 +319,10 @@ pub enum PermissionLifetime {
 #[serde(deny_unknown_fields)]
 pub struct PermissionRequest {
     pub request_id: String,
-    pub owner_user_id: String,
+    /// Runtime field is a canonical User URA. The serialized `owner_user_id`
+    /// key is retained only for permission-request durable/wire compatibility.
+    #[serde(rename = "owner_user_id")]
+    pub owner_user_ura: String,
     pub caller_ura: String,
     pub principal_kind: PrincipalKind,
     pub principal_id: String,
@@ -482,7 +496,7 @@ mod tests {
             "principal_id": "token-principal",
             "token_id": "token-1",
             "token_class": "hub_link",
-            "callee_ura": "easynet:///r/test/device/dev",
+            "callee_ura": "easynet:///r/test/agent/device.dev.terminal",
             "subject_ura": "easynet:///r/test/resource/user.alice/session/s1",
             "ability_ura": "terminal.attach",
             "action": "stream",

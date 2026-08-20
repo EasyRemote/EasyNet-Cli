@@ -10,12 +10,12 @@ import (
 
 const preparedFixture = `{
   "prepared_id": "prepared-example-1",
-  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+  "descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
   "expires_at_unix_ms": 1783000000000,
   "tuple": {
     "caller_ura": "easynet:///r/example/agent/alice.sdk",
-    "callee_ura": "easynet:///r/example/device/dev-a",
-    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+    "descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
     "subject_ura": "easynet:///r/example/device/dev-a",
     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
     "causal_context": {"form": "none"},
@@ -27,7 +27,7 @@ const preparedFixture = `{
     "algorithm": "ed25519",
     "canonical_bytes_base64": "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=",
     "args_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
-    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+    "descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
     "expires_at_unix_ms": 1783000000000
   },
   "submit_ready": false
@@ -50,6 +50,17 @@ func TestPreparedInvocationDecodesSigningMaterialFixture(t *testing.T) {
 	if prepared.SigningMaterial().DescriptorRef() != prepared.DescriptorRef() {
 		t.Fatalf("descriptor ref mismatch")
 	}
+	material := prepared.SigningMaterial()
+	if material.CallerURA() != "easynet:///r/example/agent/alice.sdk" ||
+		material.CalleeURA() != "easynet:///r/example/agent/device.dev-a.runtime-health" ||
+		material.SubjectURA() != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("signing identity URAs = (%q, %q, %q)", material.CallerURA(), material.CalleeURA(), material.SubjectURA())
+	}
+	if material.CallerProfile() != "axon-strict-v2" ||
+		material.CalleeProfile() != "axon-strict-v2" ||
+		material.SubjectProfile() != "axon-strict-v2" {
+		t.Fatalf("signing identity profiles = (%q, %q, %q)", material.CallerProfile(), material.CalleeProfile(), material.SubjectProfile())
+	}
 }
 
 func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {
@@ -58,8 +69,8 @@ func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {
 		"expires_at_unix_ms": 1783000000000,
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -71,7 +82,7 @@ func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {
 			"algorithm": "ed25519",
 			"canonical_bytes_base64": "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=",
 			"args_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		},
 		"submit_ready": false
@@ -92,8 +103,8 @@ func TestPreparedInvocationRejectsMissingCanonicalBytes(t *testing.T) {
 		"prepared_id": "prepared-example-1",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -118,8 +129,8 @@ func TestPreparedInvocationRejectsMaterialFieldsInTuple(t *testing.T) {
 		"prepared_id": "prepared-example-1",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -130,7 +141,7 @@ func TestPreparedInvocationRejectsMaterialFieldsInTuple(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))
@@ -149,15 +160,15 @@ func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 	prepared, err := NewPreparedInvocationFromJSON([]byte(`{
 		"prepared_id": "prepared-current-1",
 		"request_id": "req-1",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"descriptor_hash_hex": "aa",
 		"schema_hash_hex": "bb",
 		"canonical_hash_hex": "50d858e0985ecc7f60418aaf0cc5ab587f42c2570a884095a9e8ccacd0f6545c",
 		"expires_at_unix_ms": 1783000000000,
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -167,7 +178,7 @@ func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"signed_fields": ["caller_ura", "callee_ura"],
 			"signer_policy": {
@@ -294,8 +305,8 @@ func TestPreparedInvocationRejectsRequestIDOnlyPayload(t *testing.T) {
 		"expires_at_unix_ms": 1783000000000,
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -305,7 +316,7 @@ func TestPreparedInvocationRejectsRequestIDOnlyPayload(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))
@@ -325,8 +336,8 @@ func TestPreparedInvocationRejectsMissingSigningMaterialDescriptorRef(t *testing
 		"prepared_id": "prepared-example-1",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -352,8 +363,8 @@ func TestPreparedInvocationRejectsSigningMaterialDescriptorMismatch(t *testing.T
 		"prepared_id": "prepared-example-1",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -363,7 +374,7 @@ func TestPreparedInvocationRejectsSigningMaterialDescriptorMismatch(t *testing.T
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.status@1.0.0",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.status@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))
@@ -378,13 +389,13 @@ func TestPreparedInvocationRejectsSigningMaterialDescriptorMismatch(t *testing.T
 func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"prepared_id": "prepared-example-1",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"expires_at_unix_ms": 1783000000000,
 		"canonical_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -394,7 +405,7 @@ func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))
@@ -412,11 +423,11 @@ func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 func TestPreparedInvocationRejectsInvalidCanonicalBase64(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"prepared_id": "prepared-example-1",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -426,7 +437,7 @@ func TestPreparedInvocationRejectsInvalidCanonicalBase64(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "not valid base64",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))
@@ -443,8 +454,8 @@ func TestPreparedInvocationRejectsSubmitReadyPreparedPayload(t *testing.T) {
 		"prepared_id": "prepared-example-1",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"callee_ura": "easynet:///r/example/device/dev-a",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"subject_ura": "easynet:///r/example/device/dev-a",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
@@ -454,7 +465,7 @@ func TestPreparedInvocationRejectsSubmitReadyPreparedPayload(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		},
 		"submit_ready": true

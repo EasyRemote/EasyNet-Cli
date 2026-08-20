@@ -58,7 +58,6 @@ use tonic::transport::{Channel, Endpoint};
 #[cfg(test)]
 use crate::daemon::trust::anchor::RealmTrustAnchor;
 use crate::daemon::trust::cell::SharedTrustAnchor;
-use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 
 // Cross-hub peer trust source:
@@ -200,10 +199,13 @@ pub enum FederationClientError {
     /// peer's reject reason verbatim (e.g.
     /// `AXON_CALLER_SIGNATURE_INVALID` from cross-realm
     /// admission).
-    #[error("federation peer `{endpoint}` returned: {status}")]
+    #[error(
+        "federation peer `{endpoint}` returned: code={status_code:?} message={status_message}"
+    )]
     InnerInvokeFailed {
         endpoint: HubEndpoint,
-        status: String,
+        status_code: tonic::Code,
+        status_message: String,
     },
 
     /// Circuit-breaker open — the peer has had ≥ 3 consecutive
@@ -653,7 +655,7 @@ impl FederationClient for CrossHubDialer {
         };
 
         // ── 4. Inner Invoke wrapped in timeout (commit 4/N) ──
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let outcome = tokio::time::timeout(self.invoke_timeout, client.invoke(request)).await;
 
         match outcome {
@@ -669,7 +671,8 @@ impl FederationClient for CrossHubDialer {
                 );
                 Err(FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
-                    status: format!("code={:?} message={}", status.code(), status.message()),
+                    status_code: status.code(),
+                    status_message: status.message().to_string(),
                 })
             }
             Err(_elapsed) => {
@@ -737,7 +740,7 @@ impl FederationClient for CrossHubDialer {
         };
 
         // ── 4. Open the server-stream. ──────────────────────
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let target_hub_endpoint_owned = target_hub_endpoint.clone();
         let outcome =
             tokio::time::timeout(self.invoke_timeout, client.invoke_stream(request)).await;
@@ -766,7 +769,8 @@ impl FederationClient for CrossHubDialer {
                 );
                 Err(FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
-                    status: format!("code={:?} message={}", status.code(), status.message()),
+                    status_code: status.code(),
+                    status_message: status.message().to_string(),
                 })
             }
             Err(_elapsed) => {
@@ -857,7 +861,7 @@ mod tests {
     //!   gate + cache + plumbing surface.
 
     use super::*;
-    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedAgent};
     use axon_sdk::pb::axon::v1::ResponseHeader;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -908,7 +912,8 @@ mod tests {
                 )
                 .map_err(|status| FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
-                    status: status.message().to_string(),
+                    status_code: status.code(),
+                    status_message: status.message().to_string(),
                 })?
                 .to_string();
             let key = (target_hub_endpoint.clone(), function_name);
@@ -962,7 +967,7 @@ mod tests {
         TrustedAgent {
             agent_ura: crate::core::ura::hub_ura("peer-realm"),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some("peer-realm".to_string()),
             hub_endpoint: Some(target_hub_endpoint.to_string()),
@@ -1004,7 +1009,7 @@ mod tests {
         // it dialable.
         let target = "https://peer-hub.example:50443".to_string();
         let mut entry = fed_peer_entry(&target, PathBuf::from("/dev/null"));
-        entry.role = TrustedAgentRole::Backend;
+        entry.role = TrustAnchorRole::Backend;
         let anchor = anchor_with(entry);
 
         let dialer = dialer_with_anchor(anchor);

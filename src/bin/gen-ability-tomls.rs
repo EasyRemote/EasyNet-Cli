@@ -66,7 +66,7 @@ use easynet_cli::daemon::ability::catalog::{
     system_ability_descriptor_root, SYSTEM_ABILITY_DESCRIPTOR_ROOT,
 };
 use easynet_cli::daemon::plugins::{
-    PluginDescriptorProjector, PluginPackageIndex, PluginWireRegistry,
+    plugin_ability_contract, PluginDescriptorProjector, PluginPackageIndex, PluginWireRegistry,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,7 +146,7 @@ fn main() -> anyhow::Result<()> {
             .iter()
             .filter(|meta| live_plugin_names.contains(&meta.name))
         {
-            let contract = plugin_contract(meta);
+            let contract = plugin_ability_contract(meta);
             let body = ability_toml::render_ability_contract_toml(&contract);
             let path = plugin_wire
                 .ability_descriptor_path(&meta.name)
@@ -196,33 +196,6 @@ fn main() -> anyhow::Result<()> {
         println!("  deleted: {deleted:?}");
     }
     Ok(())
-}
-
-fn plugin_contract(
-    meta: &easynet_cli::daemon::plugins::PluginAbilityMetadata,
-) -> easynet_cli::daemon::ability::catalog::SystemAbilityContract {
-    use easynet_cli::daemon::ability::conformance::CapabilityState;
-    use easynet_cli::daemon::ability::descriptors::{ReceiptSemantics, ScopeRule, Visibility};
-    easynet_cli::daemon::ability::catalog::SystemAbilityContract {
-        name: meta.name.clone(),
-        descriptor_version: easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-            .to_string(),
-        description: meta.description.clone(),
-        input_schema: meta.input_schema.clone(),
-        output_receipt_schema: meta
-            .output_schema
-            .clone()
-            .unwrap_or_else(|| serde_json::json!({})),
-        call_mode: meta.call_mode,
-        admission_action: meta.admission_action,
-        receipt_semantics: ReceiptSemantics::Operational,
-        visibility: Visibility::Scoped,
-        scope_subjects: ScopeRule::Any,
-        scope_agents: ScopeRule::Any,
-        denied_agents: Vec::new(),
-        hints: meta.hints.clone(),
-        capability_state: CapabilityState::ProviderBacked,
-    }
 }
 
 fn delete_stale_descriptors(

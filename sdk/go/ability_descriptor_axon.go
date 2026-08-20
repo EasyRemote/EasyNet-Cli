@@ -10,5 +10,11 @@ func ParseAbilityDescriptorRef(raw string) (AbilityDescriptorRef, error) {
 	if err != nil {
 		return AbilityDescriptorRef{}, err
 	}
-	return AbilityDescriptorRef{Raw: ref.Raw, AbilityURA: ref.AbilityURA, Version: ref.Version}, nil
+	return AbilityDescriptorRef{
+		Raw:            ref.Raw,
+		AbilityURA:     ref.AbilityURA,
+		Version:        ref.Version,
+		DescriptorHash: ref.DescriptorHash,
+		Action:         ref.Action,
+	}, nil
 }

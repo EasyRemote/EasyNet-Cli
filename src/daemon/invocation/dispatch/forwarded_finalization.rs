@@ -210,14 +210,16 @@ pub(crate) struct ForwardedFinalizationVerifier {
 }
 
 pub(crate) async fn ensure_forwarded_receipt_signer_key(
+    resolver: &dyn KeyResolver,
     sync: Option<&Arc<DeviceTrustSync>>,
     execution_host_ura: &str,
     surface: &str,
 ) -> Result<(), Status> {
-    ensure_forwarded_receipt_signer_keys(sync, [execution_host_ura], surface).await
+    ensure_forwarded_receipt_signer_keys(resolver, sync, [execution_host_ura], surface).await
 }
 
 pub(crate) async fn ensure_forwarded_response_receipt_signer_keys(
+    resolver: &dyn KeyResolver,
     sync: Option<&Arc<DeviceTrustSync>>,
     response: &InvokeResponse,
     surface: &str,
@@ -232,17 +234,16 @@ pub(crate) async fn ensure_forwarded_response_receipt_signer_keys(
             .as_ref()
             .and_then(receipt_signer_ura),
     ];
-    ensure_forwarded_receipt_signer_keys(sync, signers.into_iter().flatten(), surface).await
+    ensure_forwarded_receipt_signer_keys(resolver, sync, signers.into_iter().flatten(), surface)
+        .await
 }
 
 async fn ensure_forwarded_receipt_signer_keys<'a>(
+    resolver: &dyn KeyResolver,
     sync: Option<&Arc<DeviceTrustSync>>,
     signer_uras: impl IntoIterator<Item = &'a str>,
     surface: &str,
 ) -> Result<(), Status> {
-    let Some(sync) = sync else {
-        return Ok(());
-    };
     let mut checked = Vec::<String>::new();
     for signer_ura in signer_uras {
         let signer_ura = signer_ura.trim();
@@ -250,6 +251,16 @@ async fn ensure_forwarded_receipt_signer_keys<'a>(
             continue;
         }
         checked.push(signer_ura.to_string());
+        match resolver.resolve_all(signer_ura) {
+            Ok(keys) if !keys.is_empty() => continue,
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        let Some(sync) = sync else {
+            return Err(Status::failed_precondition(format!(
+                "{surface}: remote receipt signer `{signer_ura}` cannot be trusted for forwarded receipt finalization: receipt signer is not present in the canonical receipt trust authority"
+            )));
+        };
         let status = sync.ensure_caller_key_status(signer_ura, None).await;
         if status.trusted() {
             continue;
@@ -345,6 +356,20 @@ impl ForwardedFinalizationVerifier {
         )
         .map_err(forwarded_finalization_error)?;
         ForwardedFinalizedInvocation::from_verified(&self.binding, verified)
+    }
+
+    /// Close a streamed/bidi lifecycle and prove that the carrier's terminal
+    /// result is exactly the payload signed into the terminal checkpoint.
+    pub(crate) fn finalize_with_carrier_result(
+        &mut self,
+        admission_on_terminal: Option<WireInvocationReceipt>,
+        terminal: WireInvocationReceipt,
+        carrier_payload: Vec<u8>,
+        carrier_result_content_type: String,
+    ) -> Result<ForwardedFinalizedInvocation, Status> {
+        let mut finalized = self.finalize(admission_on_terminal, terminal)?;
+        finalized.bind_carrier_result(carrier_payload, carrier_result_content_type)?;
+        Ok(finalized)
     }
 }
 
@@ -540,7 +565,7 @@ mod tests {
         causal_context, AgentIdentity, AuthorityBinding, CalleeSignature, CausalContext, Empty,
         EntityRef, InvocationAuthorityProof, SubjectIdentity,
     };
-    use ed25519_dalek::VerifyingKey;
+    use ed25519_dalek::{SigningKey, VerifyingKey};
 
     const CALLEE: &str = "easynet:///r/acme/device/callee";
 
@@ -565,6 +590,35 @@ mod tests {
             Err(axon_sdk::invocation::AxonError::permission_denied(
                 "test resolver rejects forged receipt",
             ))
+        }
+    }
+
+    struct SingleAgentResolver {
+        agent_ura: &'static str,
+        key: VerifyingKey,
+    }
+
+    impl SingleAgentResolver {
+        fn new(agent_ura: &'static str) -> Self {
+            Self {
+                agent_ura,
+                key: SigningKey::from_bytes(&[0x21; 32]).verifying_key(),
+            }
+        }
+    }
+
+    impl KeyResolver for SingleAgentResolver {
+        fn resolve(
+            &self,
+            agent_ura: &str,
+        ) -> Result<VerifyingKey, axon_sdk::invocation::AxonError> {
+            if agent_ura == self.agent_ura {
+                Ok(self.key)
+            } else {
+                Err(axon_sdk::invocation::AxonError::permission_denied(
+                    "test resolver rejects unknown receipt signer",
+                ))
+            }
         }
     }
 
@@ -776,5 +830,43 @@ mod tests {
 
         axon_sdk::invocation::wire::try_receipt_from_wire(terminal)
             .expect_err("forged wire receipt must not enter the trusted domain");
+    }
+
+    #[tokio::test]
+    async fn forwarded_receipt_signer_accepts_canonical_receipt_trust_authority() {
+        let authority_ura = "easynet:///r/acme/authority";
+        let resolver = SingleAgentResolver::new(authority_ura);
+
+        ensure_forwarded_receipt_signer_key(
+            &resolver,
+            None,
+            authority_ura,
+            "remote Invoke session escalation",
+        )
+        .await
+        .expect(
+            "authority signer present in receipt trust authority must pass without device sync",
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_receipt_signer_rejects_unknown_signer_without_sync() {
+        let resolver = SingleAgentResolver::new("easynet:///r/acme/authority");
+
+        let error = ensure_forwarded_receipt_signer_key(
+            &resolver,
+            None,
+            "easynet:///r/acme/device/unknown",
+            "remote Invoke session escalation",
+        )
+        .await
+        .expect_err("unknown receipt signer must fail closed when no sync source can attest it");
+
+        assert!(
+            error
+                .message()
+                .contains("canonical receipt trust authority"),
+            "unexpected diagnostic: {error}"
+        );
     }
 }

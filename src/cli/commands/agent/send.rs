@@ -141,6 +141,26 @@ fn prompt_session_picker(
     }
 }
 
+fn required_agent_reply(output: &serde_json::Value) -> anyhow::Result<String> {
+    let reply = match output {
+        serde_json::Value::Object(object) => object
+            .get("reply")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| object.get("output").and_then(serde_json::Value::as_str)),
+        serde_json::Value::String(text) => Some(text.as_str()),
+        _ => None,
+    }
+    .map(str::trim)
+    .filter(|text| !text.is_empty())
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent chat completed without a non-empty `reply` or `output`: {}",
+            output
+        )
+    })?;
+    Ok(reply.to_string())
+}
+
 /// Format an RFC3339 timestamp as a short relative-age string
 /// ("5m ago", "3h ago", "2d ago"). Used by the resume picker so
 /// each row stays scannable. Falls back to the raw timestamp if
@@ -168,7 +188,13 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Validate through the daemon's Axon ability surface so the CLI
     // does not own a parallel registry read path.
     let gateway = agent_read_gateway();
-    let _row = daemon_agent_row(gateway.as_ref(), &args.name)?;
+    let row = daemon_agent_row(gateway.as_ref(), &args.name)?;
+    let agent_ura = row.ura.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent.list omitted the canonical Agent URA for {:?}; refresh or restart the daemon before invoking it",
+            args.name
+        )
+    })?;
 
     // `--resume` is picker-only — single job, no prompt allowed.
     // Validate this BEFORE resolving the session id so we don't
@@ -261,21 +287,38 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     let eal_source =
         build_agent_send_eal_source(&args.name, &composed_prompt, resolved_session_id.as_deref())?;
 
-    let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura()?;
-    let value =
-        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
-        crate::daemon::ability::builtins::automation::mission::ABILITY_RUN,
+    let identity =
+        crate::support::platform::remote_device::PairedInvocationIdentity::load("agent send")?;
+    let value = crate::cli::daemon_client::remote_system_ability::invoke_agent_subject_mission_run(
+        identity.local_device_ura(),
+        identity.caller_user_ura(),
+        agent_ura,
         serde_json::json!({
             "source": eal_source,
             "label": format!("agent send {}", args.name),
         }),
-        &local_device_ura,
         std::time::Duration::from_secs(3600),
     )?;
     let result: crate::daemon::ability::builtins::automation::mission::MissionRunResponse =
         serde_json::from_value(value).map_err(|error| {
             anyhow::anyhow!("mission.run returned an invalid response: {error}")
         })?;
+    if !result.ok {
+        anyhow::bail!(
+            "agent send Mission {} failed (status={}, steps_failed={}, run_dir={})",
+            result.run_id,
+            result.meta.status,
+            result.meta.steps_failed,
+            result.run_dir
+        );
+    }
+    if !result.outputs.contains_key("__reply") {
+        anyhow::bail!(
+            "agent send Mission {} completed without required output __reply (run_dir={})",
+            result.run_id,
+            result.run_dir
+        );
+    }
 
     // Pull the agent's reply out of the mission's bound vars. The
     // mission ability returns a JSON object. Two shapes can appear:
@@ -289,18 +332,12 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
         Some(serde_json::Value::Object(obj)) => Some(obj.clone()),
         _ => None,
     };
-    let reply_text: String = match &reply_obj {
-        Some(obj) => obj
-            .get("reply")
-            .and_then(|v| v.as_str())
-            .or_else(|| obj.get("output").and_then(|v| v.as_str()))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| serde_json::Value::Object(obj.clone()).to_string()),
-        None => match result.outputs.get("__reply") {
-            Some(other) => other.to_string(),
-            None => String::new(),
-        },
-    };
+    let reply_text = required_agent_reply(
+        result
+            .outputs
+            .get("__reply")
+            .expect("required __reply output checked above"),
+    )?;
     // Server-minted session id (when caller passed none) or echoed-back
     // (when the caller pinned one via --follow / --session-id). Echoed
     // to the user so they can copy it for a later --session-id call.
@@ -366,8 +403,10 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // otherwise print raw text so piping into other tools stays clean.
     if console::Term::stdout().is_term() {
         let skin = build_markdown_skin();
-        let compact = compact_markdown(&reply_text);
-        skin.print_text(&compact);
+        let compact = crate::cli::source_highlighting::compact_markdown(&reply_text);
+        let stdout = std::io::stdout();
+        let mut stdout = stdout.lock();
+        crate::cli::source_highlighting::write_markdown(&mut stdout, &skin, &compact)?;
     } else {
         println!("{}", reply_text);
     }
@@ -502,28 +541,6 @@ fn build_markdown_skin() -> termimad::MadSkin {
     skin
 }
 
-/// Collapse consecutive blank lines down to a single blank line and strip
-/// leading/trailing blanks, so the rendered output stays compact without
-/// fighting termimad's layout engine.
-fn compact_markdown(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut prev_blank = true; // treat start-of-doc as already-blank
-    for line in src.lines() {
-        let is_blank = line.trim().is_empty();
-        if is_blank && prev_blank {
-            continue; // skip duplicate blank lines
-        }
-        out.push_str(line);
-        out.push('\n');
-        prev_blank = is_blank;
-    }
-    // Trim trailing blank line.
-    while out.ends_with("\n\n") {
-        out.pop();
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use crate::eal::parser::ast::{FieldValue, Statement, TargetKind};
@@ -574,5 +591,16 @@ mod tests {
             }
             value => panic!("session_id must be a string literal, got {value:?}"),
         }
+    }
+
+    #[test]
+    fn agent_send_reply_contract_rejects_empty_or_unstructured_output() {
+        assert_eq!(
+            required_agent_reply(&serde_json::json!({"reply": " hello "})).unwrap(),
+            "hello"
+        );
+        assert!(required_agent_reply(&serde_json::json!({"reply": ""})).is_err());
+        assert!(required_agent_reply(&serde_json::json!({"ok": true})).is_err());
+        assert!(required_agent_reply(&serde_json::Value::Null).is_err());
     }
 }

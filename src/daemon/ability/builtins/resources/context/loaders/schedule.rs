@@ -150,7 +150,8 @@ impl ContextLoader for ScheduleLoader {
 mod tests {
     use super::*;
     use crate::core::domain::{
-        AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
+        AgentId, DeferredInvocationAuthority, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId,
+        TenantId,
     };
 
     fn make_entry(id: &str, agent: &str, cron: &str, enabled: bool) -> ScheduleEntry {
@@ -159,11 +160,23 @@ mod tests {
             tenant: TenantId::default_v1(),
             target_node: NodeId::new("self"),
             target_agent: AgentId::new(agent),
+            authority: DeferredInvocationAuthority {
+                accountable_user_ura: crate::core::ura::user_ura("default", "test-user"),
+                creator_invocation_id: "test-schedule-create".to_string(),
+                controller_callee_ura: crate::core::ura::device_agent_ura(
+                    "default",
+                    "self",
+                    crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+                ),
+                target_callee_ura: crate::core::ura::agent_ura("default", "test-user", agent),
+                execution_host_ura: crate::core::ura::device_ura("default", "self"),
+            },
             cron_expr: cron.to_string(),
             misfire_policy: MisfirePolicy::Skip,
             catch_up_window_secs: None,
             enabled,
             prompt: "Summarize schedule {{schedule_id}}".to_string(),
+            fire_ledger: std::collections::BTreeMap::new(),
         }
     }
 

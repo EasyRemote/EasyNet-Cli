@@ -1,10 +1,12 @@
 package easynet
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -467,7 +469,7 @@ func newAuthoritySigningMaterial(raw []byte, wantKey string, wantKind AuthorityK
 		material.Payload == nil {
 		return AuthoritySigningMaterial{}, invalidProfilePayload(authorityProfile, "invalid authority signing material projection", nil)
 	}
-	if _, err := base64.StdEncoding.DecodeString(material.CanonicalBytesBase64); err != nil {
+	if _, err := base64.StdEncoding.Strict().DecodeString(material.CanonicalBytesBase64); err != nil {
 		return AuthoritySigningMaterial{}, invalidProfilePayload(authorityProfile, fmt.Sprintf("authority canonical bytes base64 decode failed: %v", err), err)
 	}
 	return material, nil
@@ -477,7 +479,7 @@ func authoritySignatureJSON(signature AuthoritySignature) ([]byte, error) {
 	if strings.TrimSpace(signature.SignatureBase64) == "" {
 		return nil, invalidProfilePayload(authorityProfile, "authority signature_base64 is required", nil)
 	}
-	if _, err := base64.StdEncoding.DecodeString(signature.SignatureBase64); err != nil {
+	if _, err := base64.StdEncoding.Strict().DecodeString(signature.SignatureBase64); err != nil {
 		return nil, invalidProfilePayload(authorityProfile, fmt.Sprintf("authority signature base64 decode failed: %v", err), err)
 	}
 	raw, err := json.Marshal(signature)
@@ -674,12 +676,12 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 	if value == "" {
 		return nil, invalidInvocation(label+" metadata value is required", nil)
 	}
-	wireJSON, err := base64.StdEncoding.DecodeString(value)
+	wireJSON, err := base64.StdEncoding.Strict().DecodeString(value)
 	if err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata base64 decode failed: %v", label, err), err)
 	}
 	var wire authorityWire
-	if err := json.Unmarshal(wireJSON, &wire); err != nil {
+	if err := decodeStrictJSON(wireJSON, &wire); err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata JSON parse failed: %v", label, err), err)
 	}
 	if len(wire.Payload) == 0 {
@@ -688,10 +690,10 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 	if strings.TrimSpace(wire.Signature) == "" {
 		return nil, invalidInvocation(label+" metadata signature is required", nil)
 	}
-	if err := json.Unmarshal(wire.Payload, payload); err != nil {
+	if err := decodeStrictJSON(wire.Payload, payload); err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata payload parse failed: %v", label, err), err)
 	}
-	signature, err := base64.StdEncoding.DecodeString(wire.Signature)
+	signature, err := base64.StdEncoding.Strict().DecodeString(wire.Signature)
 	if err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata signature base64 decode failed: %v", label, err), err)
 	}
@@ -699,6 +701,19 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 		return nil, invalidInvocation(label+" metadata signature is required", nil)
 	}
 	return signature, nil
+}
+
+func decodeStrictJSON(raw []byte, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var trailing struct{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("unexpected trailing JSON value")
+	}
+	return nil
 }
 
 func validateDelegationProof(proof DelegationProof) error {
@@ -774,7 +789,12 @@ func validateSessionAuthority(authority SessionAuthority) error {
 	if len(authority.Signature) == 0 {
 		return invalidInvocation("session authority signature is required", nil)
 	}
-	if err := validateSessionAuthoritySubjectBinding(authority.SubjectURA, authority.SessionOwnerUserID, authority.SessionID); err != nil {
+	if err := validateSessionAuthoritySubjectBinding(
+		authority.SubjectURA,
+		authority.SessionOwnerUserID,
+		authority.SessionID,
+		authority.AllowedFollowupAbilities,
+	); err != nil {
 		return err
 	}
 	return nil
@@ -784,9 +804,15 @@ type sessionAuthoritySubject struct {
 	kind        string
 	ownerUserID string
 	sessionID   string
+	ability     string
 }
 
-func validateSessionAuthoritySubjectBinding(subjectURA string, sessionOwnerUserID string, sessionID string) error {
+func validateSessionAuthoritySubjectBinding(
+	subjectURA string,
+	sessionOwnerUserID string,
+	sessionID string,
+	allowedFollowupAbilities []string,
+) error {
 	if err := validateCanonicalSessionAuthorityID(sessionID); err != nil {
 		return err
 	}
@@ -795,11 +821,14 @@ func validateSessionAuthoritySubjectBinding(subjectURA string, sessionOwnerUserI
 		return err
 	}
 	owner := strings.TrimSpace(sessionOwnerUserID)
-	if subject.ownerUserID != owner {
+	if subject.ownerUserID != "" && subject.ownerUserID != owner {
 		return invalidInvocation("session authority user subject must match session_owner_user_id", nil)
 	}
 	if subject.kind == "session" && subject.sessionID != strings.TrimSpace(sessionID) {
 		return invalidInvocation("session authority subject_ura owner/session must match session_owner_user_id and session_id", nil)
+	}
+	if subject.kind == "descriptor" && !containsExactAuthorityValue(allowedFollowupAbilities, subject.ability) {
+		return invalidInvocation("session authority descriptor-bound subject ability must be an exact allowed follow-up ability", nil)
 	}
 	return nil
 }
@@ -807,7 +836,7 @@ func validateSessionAuthoritySubjectBinding(subjectURA string, sessionOwnerUserI
 func canonicalSessionAuthoritySubject(subjectURA string) (sessionAuthoritySubject, error) {
 	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
 	if err != nil {
-		return sessionAuthoritySubject{}, invalidInvocation("session authority subject_ura must be a canonical user or session subject", err)
+		return sessionAuthoritySubject{}, invalidInvocation("session authority subject_ura must be a canonical User, Agent, or Resource", err)
 	}
 	switch parts.Kind {
 	case URAKindUser:
@@ -815,22 +844,66 @@ func canonicalSessionAuthoritySubject(subjectURA string) (sessionAuthoritySubjec
 			break
 		}
 		return sessionAuthoritySubject{kind: "user", ownerUserID: strings.TrimSpace(parts.UserID)}, nil
+	case URAKindAgent:
+		// User-owned Agents retain a provable accountable owner. A
+		// device-sponsored SystemAgent has no User encoded in its URA; its
+		// explicit session owner is attested by the typed Realm Authority
+		// adapter and revalidated by runtime admission.
+		return sessionAuthoritySubject{
+			kind:        "agent",
+			ownerUserID: strings.TrimSpace(parts.UserID),
+		}, nil
 	case URAKindResource:
-		ownerUserID := strings.TrimPrefix(strings.TrimSpace(parts.OwnerID), "user.")
-		if ownerUserID == strings.TrimSpace(parts.OwnerID) || ownerUserID == "" || strings.Contains(ownerUserID, ".") || strings.Contains(ownerUserID, "/") {
-			break
+		ownerID := strings.TrimSpace(parts.OwnerID)
+		ownerUserID := ""
+		switch {
+		case strings.HasPrefix(ownerID, "user."):
+			ownerUserID = strings.TrimPrefix(ownerID, "user.")
+			if ownerUserID == "" || strings.ContainsAny(ownerUserID, "./") {
+				return sessionAuthoritySubject{}, invalidInvocation("session authority resource has an invalid User owner", nil)
+			}
+		case strings.HasPrefix(ownerID, "agent."):
+			// Agent-owned resource identifiers may carry a stable product slug
+			// instead of the Principal UUID. The generic SDK cannot prove those
+			// namespaces equivalent; the Realm Authority adapter therefore binds
+			// the explicit accountable User and admission verifies the exact tuple.
 		}
-		sessionID, ok := strings.CutPrefix(strings.TrimSpace(parts.Path), "session/")
-		if !ok || strings.TrimSpace(sessionID) == "" || strings.Contains(sessionID, "/") {
+		path := strings.TrimSpace(parts.Path)
+		if ownerUserID != "" {
+			if sessionID, ok := strings.CutPrefix(path, "session/"); ok && strings.TrimSpace(sessionID) != "" && !strings.Contains(sessionID, "/") {
+				return sessionAuthoritySubject{
+					kind:        "session",
+					ownerUserID: ownerUserID,
+					sessionID:   strings.TrimSpace(sessionID),
+				}, nil
+			}
+			if ability, ok := strings.CutPrefix(path, "invoke/"); ok && strings.TrimSpace(ability) != "" && !strings.Contains(ability, "/") {
+				return sessionAuthoritySubject{
+					kind:        "descriptor",
+					ownerUserID: ownerUserID,
+					ability:     strings.TrimSpace(ability),
+				}, nil
+			}
+		}
+		if path == "" {
 			break
 		}
 		return sessionAuthoritySubject{
-			kind:        "session",
+			kind:        "resource",
 			ownerUserID: ownerUserID,
-			sessionID:   strings.TrimSpace(sessionID),
 		}, nil
 	}
-	return sessionAuthoritySubject{}, invalidInvocation("session authority subject_ura must be a canonical user or session subject", nil)
+	return sessionAuthoritySubject{}, invalidInvocation("session authority subject_ura must be a canonical User, Agent, or Resource", nil)
+}
+
+func containsExactAuthorityValue(values []string, want string) bool {
+	want = strings.TrimSpace(want)
+	for _, value := range values {
+		if strings.TrimSpace(value) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSessionAuthority(authority SessionAuthority) (SessionAuthority, error) {

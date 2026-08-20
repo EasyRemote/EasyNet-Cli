@@ -21,14 +21,25 @@ use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::ability::dispatch::StreamSource;
 use crate::daemon::plugins::errors::PluginHostError;
 
+fn sidecar_system_agent_ura(agent_id: &str) -> String {
+    crate::core::ura::device_agent_ura("acme", "mac", agent_id)
+}
+
+fn sidecar_system_ability_ura(agent_id: &str, public_name: &str) -> String {
+    crate::core::ura::owner_ability_ura(&sidecar_system_agent_ura(agent_id), public_name)
+        .expect("sidecar SystemAgent ability URA")
+}
+
 #[test]
 fn sidecar_open_frame_carries_daemon_invocation_envelope() {
+    let callee_ura = sidecar_system_agent_ura("test");
+    let ability_ura = sidecar_system_ability_ura("test", "test.echo");
     let frame = SidecarRequestFrame::Invoke {
         call_id: "call-1".to_string(),
         invocation: SidecarInvocationEnvelope {
             caller_ura: "easynet:///r/acme/user/alice".to_string(),
-            callee_ura: "easynet:///r/acme/device/mac".to_string(),
-            ability_ura: "easynet:///r/acme/ability/device.mac.test.echo".to_string(),
+            callee_ura: callee_ura.clone(),
+            ability_ura,
             subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
             invocation_nonce: vec![7; 16],
             causal_context: json!({"form": "none"}),
@@ -43,10 +54,7 @@ fn sidecar_open_frame_carries_daemon_invocation_envelope() {
         encoded["invocation"]["caller_ura"],
         json!("easynet:///r/acme/user/alice")
     );
-    assert_eq!(
-        encoded["invocation"]["callee_ura"],
-        json!("easynet:///r/acme/device/mac")
-    );
+    assert_eq!(encoded["invocation"]["callee_ura"], json!(callee_ura));
     assert_eq!(
         encoded["invocation"]["subject_ura"],
         json!("easynet:///r/acme/resource/display.primary")
@@ -147,7 +155,7 @@ fn sidecar_invocation_envelope_rejects_non_canonical_nonce_length() {
 fn sidecar_invocation_projects_dispatch_name_to_canonical_ability_ura() {
     let env = EnvelopeContext::for_test_targeted_ability(
         "easynet:///r/acme/user/alice",
-        "easynet:///r/acme/device/mac",
+        sidecar_system_agent_ura("media"),
         "media.synthetic_stream",
         "easynet:///r/acme/resource/display.primary",
     );
@@ -158,10 +166,11 @@ fn sidecar_invocation_projects_dispatch_name_to_canonical_ability_ura() {
 
     assert_eq!(
         invocation.ability_ura,
-        "easynet:///r/acme/ability/device.mac.media.synthetic_stream"
+        sidecar_system_ability_ura("media", "media.synthetic_stream")
     );
     assert_eq!(
-        invocation.callee_ura, "easynet:///r/acme/device/mac",
+        invocation.callee_ura,
+        sidecar_system_agent_ura("media"),
         "sidecar envelope must preserve admitted callee"
     );
     assert_eq!(
@@ -172,11 +181,14 @@ fn sidecar_invocation_projects_dispatch_name_to_canonical_ability_ura() {
 
 #[test]
 fn sidecar_invocation_preserves_descriptor_bound_ability_ura() {
-    let descriptor_ref = "easynet:///r/acme/ability/device.mac.media.synthetic_stream@1.0.0#0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef!stream";
+    let descriptor_ref = format!(
+        "{}@1.0.0#0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef!stream",
+        sidecar_system_ability_ura("media", "media.synthetic_stream")
+    );
     let env = EnvelopeContext::for_test_targeted_ability(
         "easynet:///r/acme/user/alice",
-        "easynet:///r/acme/device/mac",
-        descriptor_ref,
+        sidecar_system_agent_ura("media"),
+        descriptor_ref.clone(),
         "easynet:///r/acme/resource/display.primary",
     );
 
@@ -186,7 +198,7 @@ fn sidecar_invocation_preserves_descriptor_bound_ability_ura() {
 
     assert_eq!(
         invocation.ability_ura,
-        "easynet:///r/acme/ability/device.mac.media.synthetic_stream"
+        sidecar_system_ability_ura("media", "media.synthetic_stream")
     );
 }
 
@@ -243,8 +255,8 @@ printf '%s\n' '{{"type":"result","call_id":"call-1","value":{{"ok":true}}}}'
             "call-1",
             SidecarInvocationEnvelope {
                 caller_ura: "easynet:///r/acme/user/alice".to_string(),
-                callee_ura: "easynet:///r/acme/device/mac".to_string(),
-                ability_ura: "easynet:///r/acme/ability/device.mac.test.echo".to_string(),
+                callee_ura: sidecar_system_agent_ura("test"),
+                ability_ura: sidecar_system_ability_ura("test", "test.echo"),
                 subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
                 invocation_nonce: vec![9; 16],
                 causal_context: json!({"form": "none"}),
@@ -263,7 +275,7 @@ printf '%s\n' '{{"type":"result","call_id":"call-1","value":{{"ok":true}}}}'
     );
     assert_eq!(
         captured["invocation"]["callee_ura"],
-        json!("easynet:///r/acme/device/mac")
+        json!(sidecar_system_agent_ura("test"))
     );
     assert_eq!(
         captured["invocation"]["subject_ura"],
@@ -323,10 +335,7 @@ fn sidecar_stderr_capture_reports_reader_failure() {
     impl Read for FailingReader {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.emitted {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "synthetic stderr failure",
-                ));
+                return Err(io::Error::other("synthetic stderr failure"));
             }
             self.emitted = true;
             let bytes = b"partial diagnostic";
@@ -604,8 +613,8 @@ printf '%s\n' '{"type":"terminal","call_id":"call-1","reason":"second"}'
 fn test_invocation() -> SidecarInvocationEnvelope {
     SidecarInvocationEnvelope {
         caller_ura: "easynet:///r/acme/user/alice".to_string(),
-        callee_ura: "easynet:///r/acme/device/mac".to_string(),
-        ability_ura: "easynet:///r/acme/ability/device.mac.test.stream".to_string(),
+        callee_ura: sidecar_system_agent_ura("test"),
+        ability_ura: sidecar_system_ability_ura("test", "test.stream"),
         subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
         invocation_nonce: vec![1; 16],
         causal_context: json!({"form": "none"}),
@@ -616,8 +625,8 @@ fn test_invocation() -> SidecarInvocationEnvelope {
 fn canonical_sidecar_envelope_json() -> serde_json::Value {
     json!({
         "caller_ura": "easynet:///r/acme/user/alice",
-        "callee_ura": "easynet:///r/acme/device/mac",
-        "ability_ura": "easynet:///r/acme/ability/device.mac.test.echo",
+        "callee_ura": sidecar_system_agent_ura("test"),
+        "ability_ura": sidecar_system_ability_ura("test", "test.echo"),
         "subject_ura": "easynet:///r/acme/resource/display.primary",
         "invocation_nonce": vec![7; 16],
         "causal_context": {"form": "none"},

@@ -49,8 +49,10 @@ use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::conformance;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
+use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
+#[cfg(test)]
 use crate::daemon::federation::read_model::advertised_agents::{
-    AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
+    AdvertisedAgentRecord, AdvertisedAgentSigningAuthority,
 };
 use crate::daemon::federation::receipt_contract::{
     AdvertiseContract, AuthorityAbilitiesDiff, AuthorityAbilityEntry,
@@ -58,14 +60,15 @@ use crate::daemon::federation::receipt_contract::{
 #[cfg(test)]
 use crate::daemon::federation::resolver_contract::{GateResult, RecordType};
 use crate::daemon::federation::resolver_contract::{
-    NegativeReason, ResolveAnswerKind, ResolveType, ResolverReleaseProfile,
+    NegativeReason, ResolveAnswerKind, ResolverReleaseProfile,
 };
 pub use crate::daemon::federation::wire_contract::{
     DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
     ResolveAgentSummary, ResolveFilterRequest, ResolveKeyRequest, ResolveKeyResponse,
-    ResolveRequest, ResolveRequestIngressV1, ResolveResponse,
+    ResolveRequest, ResolveResponse,
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use crate::daemon::invocation::routing::route_resolver::NamespaceResolveQuery;
 
 const ED25519_PUBLIC_KEY_LEN: usize = 32;
 
@@ -334,102 +337,41 @@ pub fn derive_join_receipt_hash(caller_ura: &str, realm: &str) -> String {
 // ─── federation.advertise_agent ────────────────────────────────────
 
 /// Request payload for `federation.advertise_agent`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentRequest {
     /// URA of the agent being advertised.
     pub agent_ura: String,
-    /// Durable owner-cursor generation for this Agent incarnation.
-    pub generation: u64,
-    /// Canonical authority carrying hosted-agent signing custody.
-    pub signing_authority: AdvertiseSigningAuthorityRequest,
-    #[serde(default)]
-    pub public_key_hex: String,
-    /// Runtime node hosting the agent's canonical invocation endpoint.
-    #[serde(default)]
-    pub host_node_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AdvertiseSigningAuthorityRequest {
-    SelfSigned,
-    HostedBy { host_ura: String },
-}
-
-impl AdvertiseAgentRequest {
-    #[must_use]
-    pub(crate) fn signing_host_ura(&self) -> Option<&str> {
-        match &self.signing_authority {
-            AdvertiseSigningAuthorityRequest::HostedBy { host_ura } => Some(host_ura),
-            AdvertiseSigningAuthorityRequest::SelfSigned => None,
-        }
-    }
-
-    #[must_use]
-    fn to_record(&self) -> AdvertisedAgentRecord {
-        let signing_authority = match &self.signing_authority {
-            AdvertiseSigningAuthorityRequest::SelfSigned => {
-                AdvertisedAgentSigningAuthority::SelfSigned
-            }
-            AdvertiseSigningAuthorityRequest::HostedBy { host_ura } => {
-                AdvertisedAgentSigningAuthority::HostedBy {
-                    host_ura: host_ura.clone(),
-                }
-            }
-        };
-        AdvertisedAgentRecord {
-            agent_ura: self.agent_ura.clone(),
-            generation: self.generation,
-            public_key_hex: self.public_key_hex.clone(),
-            host_node_id: self.host_node_id.clone(),
-            signing_authority,
-        }
-    }
-
-    fn to_durable_record(
-        &self,
-    ) -> crate::daemon::persistence::federation_revoke::HostedAgentInventoryRecord {
-        use crate::daemon::persistence::federation_revoke::{
-            DurableSigningAuthority, HostedAgentInventoryRecord, InventoryLifecycle,
-        };
-        let signing_authority = match self.signing_host_ura() {
-            Some(host_ura) => DurableSigningAuthority::HostedBy {
-                host_ura: host_ura.to_string(),
-            },
-            None => DurableSigningAuthority::SelfSigned,
-        };
-        HostedAgentInventoryRecord {
-            agent_ura: self.agent_ura.clone(),
-            generation: self.generation,
-            public_key_hex: self.public_key_hex.clone(),
-            host_node_id: self.host_node_id.clone(),
-            signing_authority,
-            lifecycle: InventoryLifecycle::Active,
-        }
-    }
+    /// Device-persisted idempotency key for this hosted-Agent incarnation.
+    pub incarnation_id:
+        crate::daemon::federation::hosted_agent_publication::HostedAgentIncarnationId,
 }
 
 /// Response payload for `federation.advertise_agent`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentResponse {
     /// Always `true` when this wrapper returns; rejection paths run
     /// in the admission gate before this function is called.
     pub ack: bool,
+    /// Exact Hub-owned generation assignment for the submitted incarnation.
+    pub assignment:
+        crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment,
 }
 
-/// Handle a `federation.advertise_agent` invocation. Presence still
-/// owns liveness; the store just captures the host-device linkage so
-/// resolve can surface hosted agents.
-pub fn handle_advertise_agent(
-    request: &AdvertiseAgentRequest,
-    store: Option<&AdvertisedAgentStore>,
-) -> anyhow::Result<AdvertiseAgentResponse> {
-    crate::daemon::persistence::federation_revoke::register_agent(request.to_durable_record())?;
-    if let Some(store) = store {
-        store.upsert(request.to_record());
+pub(crate) fn register_advertised_agent(
+    command: crate::daemon::persistence::federation_revoke::HostedAgentRegistrationCommand,
+) -> anyhow::Result<crate::daemon::persistence::federation_revoke::HostedAgentRegistrationResult> {
+    crate::daemon::persistence::federation_revoke::register_agent(command)
+}
+
+pub(crate) fn advertise_agent_response(
+    registration: crate::daemon::persistence::federation_revoke::HostedAgentRegistrationResult,
+) -> AdvertiseAgentResponse {
+    AdvertiseAgentResponse {
+        ack: true,
+        assignment: registration.assignment,
     }
-    Ok(AdvertiseAgentResponse { ack: true })
 }
 
 // ─── federation.advertise_abilities ────────────────────────────────
@@ -441,14 +383,8 @@ pub fn handle_advertise_agent(
 pub(crate) type AdvertiseAbilitiesRequest =
     crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication;
 
-/// Response payload for `federation.advertise_abilities`. Matches the
-/// daemon-backed wrapper contract (`ack` + `count`), where `ack` is true
-/// only when the owner projection read model accepted the publication.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AdvertiseAbilitiesResponse {
-    pub ack: bool,
-    pub count: usize,
-}
+/// Shared response payload for `federation.advertise_abilities`.
+pub(crate) use crate::daemon::federation::advertise::AdvertiseAbilitiesResponse;
 
 /// Handle a `federation.advertise_abilities` invocation by updating the
 /// hub-side owner projection read model.
@@ -457,7 +393,7 @@ pub(crate) fn handle_advertise_abilities(
     request: &AdvertiseAbilitiesRequest,
     catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
 ) -> AdvertiseAbilitiesResponse {
-    let count = request.ability_summaries.len();
+    let count = request.ability_count();
     let stored = catalog
         .upsert_projection(
             crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
@@ -487,9 +423,9 @@ pub struct HeartbeatRequest {
     /// has a provider-backed diff source, the response explicitly echoes this
     /// revision with an empty diff instead of silently ignoring the field.
     pub since_abilities_revision: u64,
-    /// Owner URAs whose ability projection leases this heartbeat renews.
-    /// The device batches its own owners (device + hosted agents) here so
-    /// the hub keeps their projections live without a full re-advertise.
+    /// Retained wire field for older clients. New event-driven owner
+    /// projections are non-expiring and send this empty; admission restricts
+    /// any legacy refresh request to the caller's own Device projection.
     pub refresh_owner_uras: Vec<String>,
 }
 
@@ -519,12 +455,9 @@ pub(crate) fn handle_heartbeat(
     catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
     now_unix_ms: i64,
 ) -> HeartbeatResponse {
-    // RFC-005: heartbeat renews the owner projection lease only; it must
-    // not mutate projection contents, revision, or digest. Extend the
-    // lease for every owner the device batched into `refresh_owner_uras`
-    // so its device/hosted-agent abilities stay resolvable between full
-    // re-advertise cycles. Unknown owners are skipped (the device must
-    // `advertise_abilities` before its first projection exists).
+    // Compatibility for a legacy same-Device projection lease. Current owner
+    // projections publish lease=0 and `refresh_lease` deliberately preserves
+    // that non-expiring state, so heartbeat is no longer an existence signal.
     let new_expiry =
         crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(now_unix_ms);
     for owner_ura in &request.refresh_owner_uras {
@@ -588,20 +521,21 @@ pub(crate) fn handle_resolve_at(
     let prefix = request.effective_ura_prefix();
     let want_abilities = request.wants_abilities();
     let mut agents = std::collections::BTreeMap::<String, ResolveAgentSummary>::new();
+    let live_uras: std::collections::BTreeSet<String> = registry.snapshot().into_iter().collect();
 
-    for ura in registry.snapshot() {
+    for ura in &live_uras {
         if prefix.is_some_and(|p| !ura.starts_with(p)) {
             continue;
         }
         let abilities = if want_abilities {
-            resolved_owner_projection_values(catalog, local_publication, &ura, now_unix_ms)?
+            resolved_owner_projection_values(catalog, local_publication, ura, now_unix_ms)?
         } else {
             Vec::new()
         };
         agents.insert(
             ura.clone(),
             ResolveAgentSummary {
-                ura,
+                ura: ura.clone(),
                 status: "active".to_string(),
                 host_node_id: None,
                 abilities,
@@ -612,8 +546,8 @@ pub(crate) fn handle_resolve_at(
     if let Some(store) = advertised_agents {
         for record in store.snapshot() {
             let is_online = match record.host_ura() {
-                Some(host_ura) => registry.contains(host_ura),
-                None => registry.contains(&record.agent_ura),
+                Some(host_ura) => live_uras.contains(host_ura),
+                None => live_uras.contains(&record.agent_ura),
             };
             if !is_online {
                 continue;
@@ -650,9 +584,60 @@ pub(crate) fn handle_resolve_at(
         }
     }
 
+    for row in catalog.projection_rows_for_live_hosts_at(&live_uras, now_unix_ms) {
+        if prefix.is_some_and(|p| !row.owner_ura().starts_with(p)) {
+            continue;
+        }
+        let Some(host_node_id) =
+            device_sponsored_system_agent_host_node_id(row.owner_ura(), row.host_device_ura())
+        else {
+            continue;
+        };
+        let abilities = if want_abilities {
+            resolved_owner_projection_values(
+                catalog,
+                local_publication,
+                row.owner_ura(),
+                now_unix_ms,
+            )?
+        } else {
+            Vec::new()
+        };
+        agents
+            .entry(row.owner_ura().to_string())
+            .or_insert(ResolveAgentSummary {
+                ura: row.owner_ura().to_string(),
+                status: "active".to_string(),
+                host_node_id: Some(host_node_id),
+                abilities,
+            });
+    }
+
     Ok(ResolveResponse {
         agents: agents.into_values().collect(),
     })
+}
+
+fn device_sponsored_system_agent_host_node_id(
+    owner_ura: &str,
+    host_device_ura: &str,
+) -> Option<String> {
+    let owner = crate::core::ura::parse_ura(owner_ura).ok()?;
+    let host = crate::core::ura::parse_ura(host_device_ura).ok()?;
+    if host.kind != crate::core::ura::URAKind::Device || host.realm != owner.realm {
+        return None;
+    }
+    let host_device_id = host.device_id()?;
+    if owner.kind != crate::core::ura::URAKind::Agent {
+        return None;
+    }
+    let (owner_device_id, system_agent_id) = owner.device_agent_ids()?;
+    if !crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
+        system_agent_id,
+    ) {
+        return None;
+    }
+    (host_device_id == owner_device_id).then(|| host_device_id.to_string())
 }
 
 /// Handle RFC-005 `namespace.resolve` using daemon-owned runtime state.
@@ -697,22 +682,7 @@ pub(crate) fn handle_namespace_resolve_at(
 }
 
 fn validate_namespace_resolve_query(query: &Value) -> Result<(), String> {
-    let object = query
-        .as_object()
-        .ok_or_else(|| "namespace.resolve request must be a JSON object".to_string())?;
-    let qtype = object
-        .get("qtype")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|qtype| !qtype.is_empty())
-        .ok_or_else(|| "namespace.resolve request missing canonical qtype".to_string())?;
-    let parsed = ResolveType::from_str_name(qtype).ok_or_else(|| {
-        format!("namespace.resolve qtype {qtype:?} is not a canonical ResolveType enum string")
-    })?;
-    if parsed == ResolveType::Unspecified {
-        return Err("namespace.resolve qtype must not be RESOLVE_TYPE_UNSPECIFIED".to_string());
-    }
-    Ok(())
+    NamespaceResolveQuery::from_json(query).map(|_| ())
 }
 
 fn namespace_resolve_input_failure(query: &Value, detail: &str) -> Value {
@@ -886,7 +856,6 @@ fn all_user_keys_b64(
 /// for wrapping that as `Status::not_found` so the FederatedKey-
 /// Resolver can distinguish "URA is not in this hub's trust set"
 /// from a network-level failure.
-#[must_use]
 pub fn handle_resolve_key(
     request: &ResolveKeyRequest,
     trust_anchor: &crate::daemon::trust::anchor::RealmTrustAnchor,
@@ -1127,7 +1096,6 @@ impl<'de> Deserialize<'de> for ExplicitOptionalAbilityName {
 ///   surfaced here.
 /// - Real agent-profile URAs (`.../agent/<user>.<agent>`) are not
 ///   device sessions and are ignored here.
-#[must_use]
 pub fn handle_list_user_devices(
     request: &ListUserDevicesRequest,
     registry: &PresenceRegistry,
@@ -1241,7 +1209,7 @@ fn list_user_devices_presence_entry(
 // ─── federation.revoke ─────────────────────────────────────────────
 
 /// Request payload for `federation.revoke`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RevokeRequest {
     /// Canonical URA of the Device/Agent/User membership to revoke.
@@ -1294,6 +1262,26 @@ impl RevokeRequest {
             delivery_fence: require_purge_revoke_fact(self.delivery_fence, "delivery_fence")?,
         })
     }
+
+    pub(crate) fn bind_to_subject(self, subject_ura: &str) -> anyhow::Result<AdmittedRevokeIntent> {
+        let target_ura = self.canonical_target_ura()?;
+        let subject_ura = subject_ura.trim();
+        if subject_ura.is_empty() || subject_ura != target_ura {
+            anyhow::bail!(
+                "federation.revoke envelope subject must equal the canonical request target"
+            );
+        }
+        Ok(AdmittedRevokeIntent { request: self })
+    }
+}
+
+/// A revoke command whose mutable target is bound to the exact subject that
+/// passed envelope admission. Constructing this value is the only production
+/// path into the revoke handler, preventing policy-on-A / mutation-on-B
+/// confused-deputy calls.
+#[derive(Debug, Clone)]
+pub(crate) struct AdmittedRevokeIntent {
+    request: RevokeRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1341,6 +1329,7 @@ fn require_purge_revoke_text(value: Option<&str>, field: &str) -> anyhow::Result
 
 /// Response payload for `federation.revoke`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RevokeResponse {
     /// Always `true` when this wrapper returns; deterministic.
     pub ack: bool,
@@ -1360,16 +1349,65 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Presence side-effect policy for `federation.revoke`.
+///
+/// The ordinary administrative path removes the target presence immediately.
+/// A device revoking its own runtime over `session.open` is different: the same
+/// session is the only carrier for the canonical response. Destroying that
+/// transport before Axon returns the terminal checkpoint wedges the caller.
+/// In that self-revoke case the durable/read-model rows are still removed, and
+/// the session reverse-dispatch lifecycle removes presence after it has queued
+/// the canonical response frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RevokePresenceMode<'a> {
+    Immediate,
+    DeferCurrentCaller { caller_ura: &'a str },
+}
+
+impl<'a> RevokePresenceMode<'a> {
+    #[must_use]
+    pub(crate) fn defer_current_caller(caller_ura: &'a str) -> Self {
+        Self::DeferCurrentCaller { caller_ura }
+    }
+
+    #[must_use]
+    fn should_remove_presence(self, target_ura: &str) -> bool {
+        match self {
+            Self::Immediate => true,
+            Self::DeferCurrentCaller { caller_ura } => caller_ura != target_ura,
+        }
+    }
+}
+
 /// Handle a `federation.revoke` invocation. Forces removal of the
 /// target session and records whether the target was online at
 /// revoke time so the caller can distinguish a real revoke from a
 /// no-op.
-pub fn handle_revoke(
+#[cfg(test)]
+fn handle_revoke(
     request: &RevokeRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
     ability_catalog: &AbilityCatalogStore,
 ) -> anyhow::Result<RevokeResponse> {
+    let admitted = request.clone().bind_to_subject(&request.agent_ura)?;
+    handle_revoke_with_presence_mode(
+        &admitted,
+        registry,
+        advertised_agents,
+        ability_catalog,
+        RevokePresenceMode::Immediate,
+    )
+}
+
+pub(crate) fn handle_revoke_with_presence_mode(
+    admitted: &AdmittedRevokeIntent,
+    registry: &PresenceRegistry,
+    advertised_agents: Option<&AdvertisedAgentStore>,
+    ability_catalog: &AbilityCatalogStore,
+    presence_mode: RevokePresenceMode<'_>,
+) -> anyhow::Result<RevokeResponse> {
+    let request = &admitted.request;
     let intent = request.resolve_intent()?;
     let target_ura = intent.target_ura().to_string();
     let purge_generation = intent.generation();
@@ -1399,7 +1437,16 @@ pub fn handle_revoke(
         ..
     } = intent
     else {
-        let _displaced = registry.force_revoke(&target_ura);
+        if crate::daemon::persistence::federation_revoke::active_inventory_record(&target_ura)?
+            .is_some()
+        {
+            anyhow::bail!(
+                "hosted Agent revoke requires a durable transaction, generation, authority, protocol version, and delivery fence"
+            );
+        }
+        if presence_mode.should_remove_presence(&target_ura) {
+            let _displaced = registry.force_revoke(&target_ura);
+        }
         if let Some(store) = advertised_agents {
             let _removed = store.remove(&target_ura);
         }
@@ -1455,12 +1502,14 @@ pub fn handle_revoke(
             let _removed = store.remove_generation(&target_ura, generation);
         }
         let _removed = ability_catalog.remove_generation(&target_ura, generation);
-        if let Some(session_id) = outcome.presence_session_id {
+        if presence_mode.should_remove_presence(&target_ura) {
+            if let Some(session_id) = outcome.presence_session_id {
             let _removed = registry.remove_if_session(
                 &target_ura,
                 session_id,
                 crate::daemon::invocation::bidi::state::presence::OfflineReason::AdminRevoked,
             );
+            }
         }
     }
     Ok(RevokeResponse {
@@ -1497,7 +1546,6 @@ fn checked_revoke_now_unix_ms() -> anyhow::Result<u64> {
 /// Each in-registry URA projects to a `DirectoryAgentSummary` via
 /// the pure-data adapter; sorted iteration keeps deterministic bytes
 /// for deterministic state.
-#[must_use]
 pub fn build_subscribe_directory_v2_snapshot(
     registry: &PresenceRegistry,
 ) -> Result<crate::daemon::federation::directory::DirectoryEvent, String> {
@@ -1536,24 +1584,50 @@ mod tests {
         namespace: &str,
         local_name: &str,
     ) -> crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
+        let public_name = if namespace.is_empty() {
+            local_name.to_string()
+        } else {
+            format!("{namespace}.{local_name}")
+        };
+        let descriptor_revision = format!("sha256:{}", "a".repeat(64));
+        let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+            "{ability_ura}@1.0.0#{}!read",
+            "a".repeat(64)
+        ))
+        .expect("test descriptor_ref");
+        let mut callable_summary =
+            crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
+                public_name,
+            );
+        callable_summary.mode_geometry.push(
+            crate::daemon::federation::read_model::owner_projection::AbilityCallModeGeometry {
+                call_mode: crate::daemon::ability::CallMode::Rpc,
+                descriptor_ref,
+                descriptor_version: "1.0.0".to_string(),
+                descriptor_revision: descriptor_revision.clone(),
+                admission_action: "read".to_string(),
+                schema_hash: format!("sha256:{}", "b".repeat(64)),
+                policy_ref: "visibility:SCOPED".to_string(),
+                policy_hash: format!("sha256:{}", "c".repeat(64)),
+                description: local_name.to_string(),
+                receipt_semantics: crate::daemon::ability::ReceiptSemantics::Operational,
+                input_fields: Vec::new(),
+                flags: crate::daemon::federation::read_model::owner_projection::AbilityCallableFlags::default(),
+                tags: vec!["class:unary".to_string()],
+            },
+        );
         crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
             ability_ura: ability_ura.to_string(),
             owner_ura: owner_ura.to_string(),
             namespace: namespace.to_string(),
             local_name: local_name.to_string(),
-            descriptor_revision: "sha256:descriptor".to_string(),
+            descriptor_revision,
             schema_ref: None,
             schema_hash: None,
             policy_ref: "visibility:SCOPED".to_string(),
             route_summary_ref: Some(format!("route-ref::{ability_ura}")),
             tags: vec!["class:unary".to_string()],
-            callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
-                if namespace.is_empty() {
-                    local_name.to_string()
-                } else {
-                    format!("{namespace}.{local_name}")
-                },
-            ),
+            callable_summary,
         }
     }
 
@@ -1572,6 +1646,36 @@ mod tests {
             4_102_444_800_000,
             summaries,
         )
+    }
+
+    fn hosted_agent_registration(
+        agent_ura: &str,
+        host_device_ura: &str,
+        incarnation_hex: &str,
+    ) -> crate::daemon::persistence::federation_revoke::HostedAgentRegistrationCommand {
+        crate::daemon::persistence::federation_revoke::HostedAgentRegistrationCommand {
+            agent_ura: agent_ura.to_string(),
+            incarnation_id: crate::daemon::federation::hosted_agent_publication::HostedAgentIncarnationId::parse(
+                incarnation_hex,
+            )
+            .unwrap(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".to_string()),
+            signing_authority:
+                crate::daemon::persistence::federation_revoke::DurableSigningAuthority::HostedBy {
+                    host_ura: host_device_ura.to_string(),
+                },
+        }
+    }
+
+    fn register_into_read_model(
+        command: crate::daemon::persistence::federation_revoke::HostedAgentRegistrationCommand,
+        store: &AdvertisedAgentStore,
+    ) -> AdvertiseAgentResponse {
+        let registration = register_advertised_agent(command).expect("Hub registration");
+        let outcome = store.upsert(registration.record.clone().into());
+        assert!(outcome.is_stored(), "authoritative result projection");
+        advertise_agent_response(registration)
     }
 
     #[test]
@@ -1754,58 +1858,132 @@ mod tests {
     }
 
     #[test]
-    fn handle_advertise_agent_returns_typed_ack() {
+    fn register_advertised_agent_returns_exact_generation_assignment() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let store = AdvertisedAgentStore::new();
-        let req = AdvertiseAgentRequest {
-            agent_ura: "easynet:///r/realm/agent/user.n1".to_string(),
-            generation: 1,
-            signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
-                host_ura: "easynet:///r/realm/device/dev-1".to_string(),
-            },
-            public_key_hex: String::new(),
-            host_node_id: Some("dev-1".to_string()),
-        };
-        let resp = handle_advertise_agent(&req, Some(&store)).expect("advertise agent succeeds");
-        assert!(resp.ack);
-        let stored = store
-            .get("easynet:///r/realm/agent/user.n1")
-            .expect("advertised agent must be stored");
-        assert_eq!(stored.host_ura(), Some("easynet:///r/realm/device/dev-1"));
-    }
-
-    #[test]
-    fn advertise_agent_request_rejects_retired_top_level_host_ura() {
-        let legacy = serde_json::json!({
-            "agent_ura": "easynet:///r/realm/agent/user.n1",
-            "generation": 1,
-            "public_key_hex": "",
-            "host_ura": "easynet:///r/realm/device/dev-1",
-            "host_node_id": "dev-1"
-        });
-
-        let error = serde_json::from_value::<AdvertiseAgentRequest>(legacy)
-            .expect_err("retired top-level host_ura must not be repaired");
-        assert!(
-            error.to_string().contains("host_ura"),
-            "rejection must name retired host_ura field: {error}"
+        let agent_ura = "easynet:///r/realm/agent/user.n1";
+        let host_ura = "easynet:///r/realm/device/dev-1";
+        let incarnation_id = "11111111111111111111111111111111";
+        let resp = register_into_read_model(
+            hosted_agent_registration(agent_ura, host_ura, incarnation_id),
+            &store,
         );
+        assert!(resp.ack);
+        assert_eq!(resp.assignment.agent_ura, agent_ura);
+        assert_eq!(resp.assignment.host_device_ura, host_ura);
+        assert_eq!(resp.assignment.incarnation_id.as_str(), incarnation_id);
+        assert_eq!(resp.assignment.generation, 1);
+        let stored = store
+            .get(agent_ura)
+            .expect("advertised agent must be stored");
+        assert_eq!(stored.host_ura(), Some(host_ura));
+        assert_eq!(stored.generation, resp.assignment.generation);
     }
 
     #[test]
-    fn advertise_agent_request_requires_signing_authority() {
-        let missing_authority = serde_json::json!({
+    fn advertise_agent_request_is_exactly_agent_and_incarnation() {
+        let canonical = serde_json::json!({
             "agent_ura": "easynet:///r/realm/agent/user.n1",
-            "generation": 1,
-            "public_key_hex": "",
-            "host_node_id": "dev-1"
+            "incarnation_id": "11111111111111111111111111111111"
         });
+        serde_json::from_value::<AdvertiseAgentRequest>(canonical.clone())
+            .expect("canonical request");
 
-        let error = serde_json::from_value::<AdvertiseAgentRequest>(missing_authority)
-            .expect_err("advertise_agent must require signing_authority");
-        assert!(
-            error.to_string().contains("signing_authority"),
-            "rejection must name required signing_authority: {error}"
+        for retired in [
+            "generation",
+            "public_key_hex",
+            "host_ura",
+            "host_node_id",
+            "signing_authority",
+        ] {
+            let mut legacy = canonical.clone();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .insert(retired.to_string(), serde_json::json!(1));
+            let error = serde_json::from_value::<AdvertiseAgentRequest>(legacy)
+                .expect_err("sender-assigned host/generation facts must fail closed");
+            assert!(error.to_string().contains(retired));
+        }
+    }
+
+    #[test]
+    fn advertise_agent_request_requires_strict_incarnation_id() {
+        let missing_incarnation = serde_json::json!({
+            "agent_ura": "easynet:///r/realm/agent/user.n1",
+        });
+        let error = serde_json::from_value::<AdvertiseAgentRequest>(missing_incarnation)
+            .expect_err("advertise_agent must require incarnation_id");
+        assert!(error.to_string().contains("incarnation_id"));
+
+        for invalid in ["A".repeat(32), "a".repeat(31), "g".repeat(32)] {
+            let error = serde_json::from_value::<AdvertiseAgentRequest>(serde_json::json!({
+                "agent_ura": "easynet:///r/realm/agent/user.n1",
+                "incarnation_id": invalid
+            }))
+            .expect_err("invalid incarnation id must fail at wire decode");
+            assert!(error.to_string().contains("lowercase hexadecimal"));
+        }
+    }
+
+    #[test]
+    fn advertise_agent_response_is_closed_and_reuses_the_assignment_value_object() {
+        let canonical = serde_json::json!({
+            "ack": true,
+            "assignment": {
+                "agent_ura": "easynet:///r/realm/agent/user.n1",
+                "host_device_ura": "easynet:///r/realm/device/dev-1",
+                "incarnation_id": "11111111111111111111111111111111",
+                "generation": 1
+            }
+        });
+        serde_json::from_value::<AdvertiseAgentResponse>(canonical.clone())
+            .expect("canonical assignment response");
+
+        let mut unknown = canonical.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("generation".to_string(), serde_json::json!(1));
+        assert!(serde_json::from_value::<AdvertiseAgentResponse>(unknown).is_err());
+
+        let mut invalid_incarnation = canonical;
+        invalid_incarnation["assignment"]["incarnation_id"] =
+            serde_json::json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        assert!(serde_json::from_value::<AdvertiseAgentResponse>(invalid_incarnation).is_err());
+    }
+
+    #[test]
+    fn advertise_agent_descriptor_pins_the_breaking_closed_wire_contract() {
+        let descriptor: toml::Value = toml::from_str(include_str!(
+            "../../../../ability-descriptors/system/federation/federation.advertise_agent.ability.toml"
+        ))
+        .expect("advertise_agent descriptor TOML");
+        assert_eq!(descriptor["descriptor_version"].as_str(), Some("2.0.0"));
+
+        let input = descriptor["input_schema"].as_table().unwrap();
+        assert_eq!(input["additionalProperties"].as_bool(), Some(false));
+        let required = input["required"].as_array().unwrap();
+        assert_eq!(required.len(), 2);
+        assert_eq!(required[0].as_str(), Some("agent_ura"));
+        assert_eq!(required[1].as_str(), Some("incarnation_id"));
+        assert_eq!(input["properties"].as_table().unwrap().len(), 2);
+
+        let output: serde_json::Value =
+            serde_json::from_str(descriptor["output_receipt_schema_json"].as_str().unwrap())
+                .expect("advertise_agent output schema JSON");
+        assert_eq!(output["additionalProperties"], false);
+        assert_eq!(
+            output["properties"]["assignment"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            output["properties"]["assignment"]["properties"]["incarnation_id"]["pattern"],
+            "^[0-9a-f]{32}$"
+        );
+        assert_eq!(
+            output["properties"]["assignment"]["properties"]["generation"]["minimum"],
+            1
         );
     }
 
@@ -1935,19 +2113,19 @@ mod tests {
 
     #[test]
     fn handle_heartbeat_renews_owner_projection_lease() {
-        // The exact production bug: a device's projection is published with
-        // a lease, the lease expires, and `terminal.list` (and every other
-        // device-owned ability) silently drops out of `namespace.resolve`
-        // with NODATA. Heartbeat must renew the lease so the projection
-        // stays resolvable without a full re-advertise.
+        // The exact production bug: a DeviceProfileProjection row is published
+        // with a lease, the lease expires, and migration/local projection
+        // abilities silently drop out of `namespace.resolve` with NODATA.
+        // Heartbeat must renew the lease so the projection stays resolvable
+        // without a full re-advertise.
         let registry = PresenceRegistry::new();
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let owner_ura = "easynet:///r/realm/device/a";
         insert_presence(&registry, owner_ura.to_string());
 
-        let ability_ura =
-            crate::core::ura::owner_ability_ura(owner_ura, "terminal.list").expect("ability ura");
+        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, "device_profile.cursor")
+            .expect("ability ura");
         let publish_at = 1_000_i64;
         let lease = crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(
             publish_at,
@@ -1963,8 +2141,8 @@ mod tests {
                 vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
                     ability_ura: ability_ura.clone(),
                     owner_ura: owner_ura.to_string(),
-                    namespace: "terminal".to_string(),
-                    local_name: "list".to_string(),
+                    namespace: "device_profile".to_string(),
+                    local_name: "cursor".to_string(),
                     descriptor_revision: "sha256:desc".to_string(),
                     schema_ref: None,
                     schema_hash: None,
@@ -1973,7 +2151,7 @@ mod tests {
                     tags: Vec::new(),
                     callable_summary:
                         crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
-                            "terminal.list",
+                            "device_profile.cursor",
                         ),
                 }],
             ),
@@ -1991,13 +2169,13 @@ mod tests {
         let resp = handle_heartbeat(&req, &registry, &catalog, after_expiry);
         assert_eq!(resp.authority_abilities_diff.revision, 11);
 
-        // ...and the device-owned ability is resolvable again, with its
-        // contents and revision unchanged (lease-only refresh).
+        // ...and the DeviceProfileProjection ability is resolvable again, with
+        // its contents and revision unchanged (lease-only refresh).
         let got = catalog
             .get_at(owner_ura, after_expiry)
             .expect("lease renewed");
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0]["local_name"], "list");
+        assert_eq!(got[0]["local_name"], "cursor");
         let row = catalog.projection_for_owner(owner_ura).unwrap();
         assert_eq!(row.projection_revision(), 1);
         assert_eq!(row.projection_digest(), "sha256:digest");
@@ -2110,15 +2288,14 @@ mod tests {
     }
 
     #[test]
-    fn handle_resolve_includes_device_owned_ability_routes_for_live_devices() {
+    fn handle_resolve_keeps_device_profile_projection_inventory_empty() {
         let registry = PresenceRegistry::new();
         let self_device_ura = "easynet:///r/realm/device/dev-1";
         insert_presence(&registry, self_device_ura.to_string());
 
-        let local_publication = crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot::from_owner_public_names(
-            self_device_ura,
-            &["agent.list", "skill.list", "plugin.dynamic"],
-        );
+        let local_publication =
+            crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot::default(
+            );
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let resp = handle_resolve_at(
@@ -2142,16 +2319,8 @@ mod tests {
             })
             .collect();
         assert!(
-            names.contains("agent.list"),
-            "device route summary must include agent.list; got {names:?}"
-        );
-        assert!(
-            names.contains("skill.list"),
-            "device route summary must include skill.list; got {names:?}"
-        );
-        assert!(
-            names.contains("plugin.dynamic"),
-            "live dynamic publication must be visible; got {names:?}"
+            names.is_empty(),
+            "DeviceProfileProjection is an empty migration cursor, got {names:?}"
         );
     }
 
@@ -2227,6 +2396,87 @@ mod tests {
     }
 
     #[test]
+    fn handle_resolve_includes_device_sponsored_system_agent_when_host_device_is_online() {
+        let registry = PresenceRegistry::new();
+        let host_device_ura = "easynet:///r/realm/device/dev-1";
+        let owner_ura = crate::core::ura::device_agent_ura(
+            "realm",
+            "dev-1",
+            crate::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID,
+        );
+        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "observe.health")
+            .expect("runtime-health SystemAgent ability ura");
+        insert_presence(&registry, host_device_ura.to_string());
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
+        catalog.upsert_projection(projection_row_for(
+            &owner_ura,
+            vec![projection_summary(
+                &owner_ura,
+                &ability_ura,
+                "observe",
+                "health",
+            )],
+        ));
+
+        let resp = handle_resolve_at(
+            &ResolveRequest::with_filter(Some(owner_ura.clone()), true),
+            &registry,
+            None,
+            &catalog,
+            None,
+            1_714_493_100_000,
+        )
+        .expect("resolve");
+
+        assert_eq!(resp.agents.len(), 1);
+        assert_eq!(resp.agents[0].ura, owner_ura);
+        assert_eq!(resp.agents[0].host_node_id.as_deref(), Some("dev-1"));
+        assert_eq!(resp.agents[0].abilities.len(), 1);
+        assert_eq!(resp.agents[0].abilities[0]["local_name"], "health");
+        assert_eq!(resp.agents[0].abilities[0]["ability_ura"], ability_ura);
+        assert!(
+            !registry.contains(&resp.agents[0].ura),
+            "SystemAgent visibility must be driven by host Device presence, not an independent SystemAgent presence row"
+        );
+    }
+
+    #[test]
+    fn handle_resolve_does_not_surface_service_projection_as_device_hosted_agent() {
+        let registry = PresenceRegistry::new();
+        insert_presence(&registry, "easynet:///r/realm/device/dev-1".to_string());
+        let service_ura = crate::core::ura::service_ura("realm", "user-dev", "pages");
+        let ability_ura = crate::core::ura::owner_ability_ura(&service_ura, "project_list")
+            .expect("legacy Service ability URA");
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
+        catalog.upsert_projection(projection_row_for(
+            &service_ura,
+            vec![projection_summary(
+                &service_ura,
+                &ability_ura,
+                "project",
+                "list",
+            )],
+        ));
+
+        let resp = handle_resolve_at(
+            &ResolveRequest::with_filter(Some(service_ura), true),
+            &registry,
+            None,
+            &catalog,
+            None,
+            1_714_493_100_000,
+        )
+        .expect("resolve");
+
+        assert!(
+            resp.agents.is_empty(),
+            "Service owner projections are not Agent/SystemAgent presence rows"
+        );
+    }
+
+    #[test]
     fn handle_resolve_does_not_surface_expired_owner_projection() {
         let registry = PresenceRegistry::new();
         insert_presence(&registry, "easynet:///r/realm/device/dev-1".to_string());
@@ -2275,24 +2525,29 @@ mod tests {
     }
 
     #[test]
-    fn namespace_resolve_returns_typed_final_route_for_device_ability() {
+    fn namespace_resolve_returns_typed_final_route_for_system_agent_ability() {
         let registry = PresenceRegistry::new();
-        let owner_ura = "easynet:///r/realm/device/dev-1";
-        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, "agent.list")
-            .expect("device ability ura");
-        insert_presence(&registry, owner_ura.to_string());
+        let host_device_ura = "easynet:///r/realm/device/dev-1";
+        let owner_ura = crate::core::ura::device_agent_ura(
+            "realm",
+            "dev-1",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
+        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "meta.list")
+            .expect("SystemAgent ability ura");
+        insert_presence(&registry, host_device_ura.to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         catalog.upsert_projection(projection_row_for(
-            owner_ura,
-            vec![projection_summary(owner_ura, &ability_ura, "agent", "list")],
+            &owner_ura,
+            vec![projection_summary(&owner_ura, &ability_ura, "meta", "list")],
         ));
 
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
                 "query_name": owner_ura,
                 "qtype": "RESOLVE_TYPE_ROUTE",
-                "ability_name": "agent.list",
+                "ability_name": "meta.list",
             }),
             &registry,
             None,
@@ -2302,7 +2557,8 @@ mod tests {
 
         assert_eq!(
             answer["answer_kind"],
-            ResolveAnswerKind::FinalRoute.as_str_name()
+            ResolveAnswerKind::FinalRoute.as_str_name(),
+            "{answer:#}"
         );
         assert_eq!(answer["owner_ura"], owner_ura);
         assert_eq!(answer["ability_ura"], ability_ura);
@@ -2311,8 +2567,8 @@ mod tests {
             ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
         );
         assert_eq!(
-            answer["next_hop"]["local_device_ability"]["dispatch_name"],
-            "agent.list"
+            answer["next_hop"]["hosted_agent_via_device"]["dispatch_name"],
+            "meta.list"
         );
         assert_eq!(
             answer["selected_route"]["gates"]["ability"],
@@ -2324,10 +2580,26 @@ mod tests {
     #[test]
     fn namespace_resolve_returns_typed_negative_when_ability_absent() {
         let registry = PresenceRegistry::new();
-        let owner_ura = "easynet:///r/realm/device/dev-1";
-        insert_presence(&registry, owner_ura.to_string());
+        let host_device_ura = "easynet:///r/realm/device/dev-1";
+        let owner_ura = crate::core::ura::device_agent_ura(
+            "realm",
+            "dev-1",
+            crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        insert_presence(&registry, host_device_ura.to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
+        let published_ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "agent.start")
+            .expect("system-agent ability URA");
+        catalog.upsert_projection(projection_row_for(
+            &owner_ura,
+            vec![projection_summary(
+                &owner_ura,
+                &published_ability_ura,
+                "agent",
+                "start",
+            )],
+        ));
 
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
@@ -2496,12 +2768,12 @@ mod tests {
     #[test]
     fn handle_resolve_key_returns_pubkey_when_present_in_anchor() {
         use crate::daemon::trust::anchor::{
-            RealmTrustAnchor, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
+            RealmTrustAnchor, TrustAnchorRole, TrustedAgent, TrustedPrincipalOwner,
         };
         let entry = TrustedAgent {
             agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -2580,7 +2852,7 @@ mod tests {
 
     #[test]
     fn handle_resolve_key_user_role_pins_the_presented_pubkey() {
-        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
 
         let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
@@ -2588,7 +2860,7 @@ mod tests {
         let entries = [pk_a, pk_b].into_iter().map(|pk| TrustedAgent {
             agent_ura: alice.to_string(),
             public_key_b64: pk.to_string(),
-            role: TrustedAgentRole::User,
+            role: TrustAnchorRole::User,
             added_at_unix_ms: 1_714_000_000_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -2638,7 +2910,7 @@ mod tests {
 
     #[test]
     fn handle_resolve_key_single_key_roles_pin_presented_pubkey() {
-        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
 
         let pk = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         let other = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
@@ -2646,7 +2918,7 @@ mod tests {
         let anchor = RealmTrustAnchor::from_entries(vec![TrustedAgent {
             agent_ura: device.to_string(),
             public_key_b64: pk.to_string(),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1_714_000_000_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -3028,6 +3300,46 @@ mod tests {
     }
 
     #[test]
+    fn self_revoke_defers_presence_removal_until_response_carrier_closes() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let ura = "easynet:///r/realm/device/n1".to_string();
+        insert_presence(&registry, ura.clone());
+        catalog.upsert_projection(projection_row_for(&ura, Vec::new()));
+
+        let admitted = RevokeRequest {
+            agent_ura: ura.clone(),
+            purge_transaction_id: None,
+            generation: None,
+            reason: None,
+            authority_ura: None,
+            protocol_version: None,
+            delivery_fence: None,
+        }
+        .bind_to_subject(&ura)
+        .expect("self-revoke target is bound to its admitted subject");
+        let resp = handle_revoke_with_presence_mode(
+            &admitted,
+            &registry,
+            None,
+            &catalog,
+            RevokePresenceMode::defer_current_caller(&ura),
+        )
+        .unwrap();
+
+        assert!(resp.ack);
+        assert!(resp.was_active);
+        assert!(
+            registry.contains(&ura),
+            "self-revoke must not destroy the session carrying its own response"
+        );
+        assert!(
+            catalog.get(&ura).is_none(),
+            "self-revoke still removes the advertised ability owner projection"
+        );
+    }
+
+    #[test]
     fn revoke_request_rejects_retired_target_ura_alias() {
         let error = serde_json::from_value::<RevokeRequest>(serde_json::json!({
             "target_ura": "easynet:///r/realm/device/n1"
@@ -3037,6 +3349,53 @@ mod tests {
             error.to_string().contains("unknown field `target_ura`"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn revoke_request_serializes_only_the_canonical_agent_target() {
+        let request = RevokeRequest {
+            agent_ura: "easynet:///r/realm/agent/user.worker".to_string(),
+            purge_transaction_id: Some("11111111111111111111111111111111".to_string()),
+            generation: Some(2),
+            reason: Some("agent.purge".to_string()),
+            authority_ura: Some("easynet:///r/realm/device/dev-1".to_string()),
+            protocol_version: Some(
+                crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
+            ),
+            delivery_fence: Some(3),
+        };
+
+        let wire = serde_json::to_vec(&request).expect("serialize canonical revoke request");
+        let value: serde_json::Value = serde_json::from_slice(&wire).expect("revoke json");
+        assert_eq!(
+            value.get("agent_ura").and_then(serde_json::Value::as_str),
+            Some("easynet:///r/realm/agent/user.worker")
+        );
+        assert!(value.get("target_ura").is_none());
+        serde_json::from_slice::<RevokeRequest>(&wire)
+            .expect("sender-produced revoke request must satisfy the receiver contract");
+    }
+
+    #[test]
+    fn revoke_intent_binds_mutation_target_to_admitted_subject() {
+        let request = RevokeRequest {
+            agent_ura: "easynet:///r/realm/agent/user.worker".to_string(),
+            purge_transaction_id: None,
+            generation: None,
+            reason: None,
+            authority_ura: None,
+            protocol_version: None,
+            delivery_fence: None,
+        };
+
+        request
+            .clone()
+            .bind_to_subject("easynet:///r/realm/agent/user.worker")
+            .expect("exact admitted subject binds the revoke target");
+        let error = request
+            .bind_to_subject("easynet:///r/realm/agent/user.other")
+            .expect_err("policy-on-A / mutation-on-B must fail closed");
+        assert!(error.to_string().contains("envelope subject must equal"));
     }
 
     #[test]
@@ -3147,6 +3506,51 @@ mod tests {
     }
 
     #[test]
+    fn immediate_revoke_cannot_bypass_durable_hosted_agent_retirement() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let agent_ura = "easynet:///r/realm/agent/user.alice";
+        let host_ura = "easynet:///r/realm/device/dev-1";
+        crate::daemon::persistence::federation_revoke::register_agent(
+            crate::daemon::persistence::federation_revoke::HostedAgentRegistrationCommand {
+                agent_ura: agent_ura.to_string(),
+                incarnation_id: crate::daemon::federation::hosted_agent_publication::HostedAgentIncarnationId::parse(
+                    "1".repeat(32),
+                )
+                .unwrap(),
+                public_key_hex: String::new(),
+                host_node_id: Some("dev-1".to_string()),
+                signing_authority: crate::daemon::persistence::federation_revoke::DurableSigningAuthority::HostedBy {
+                    host_ura: host_ura.to_string(),
+                },
+            },
+        )
+        .unwrap();
+        let error = handle_revoke(
+            &RevokeRequest {
+                agent_ura: agent_ura.to_string(),
+                purge_transaction_id: None,
+                generation: Some(1),
+                reason: Some("agent.stop".to_string()),
+                authority_ura: Some(host_ura.to_string()),
+                protocol_version: Some(
+                    crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
+                ),
+                delivery_fence: Some(1),
+            },
+            &PresenceRegistry::new(),
+            None,
+            &AbilityCatalogStore::new(),
+        )
+        .expect_err("hosted Agent revoke must use the durable transaction FSM");
+        assert!(error.to_string().contains("requires a durable transaction"));
+        assert!(
+            crate::daemon::persistence::federation_revoke::active_inventory_record(agent_ura)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn purge_revoke_replay_returns_durable_result_and_reapplies_removal() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let registry = PresenceRegistry::new();
@@ -3164,19 +3568,10 @@ mod tests {
                 host_ura: host_ura.to_string(),
             },
         };
-        handle_advertise_agent(
-            &AdvertiseAgentRequest {
-                agent_ura: agent_ura.to_string(),
-                generation: 1,
-                signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
-                    host_ura: host_ura.to_string(),
-                },
-                public_key_hex: String::new(),
-                host_node_id: Some("dev-1".into()),
-            },
-            Some(&advertised),
-        )
-        .unwrap();
+        register_into_read_model(
+            hosted_agent_registration(agent_ura, host_ura, "11111111111111111111111111111111"),
+            &advertised,
+        );
         catalog.upsert_projection(projection_row_for(agent_ura, Vec::new()));
         let request = RevokeRequest {
             agent_ura: agent_ura.to_string(),
@@ -3222,16 +3617,9 @@ mod tests {
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let agent_ura = "easynet:///r/realm/agent/user.aba";
         let host_ura = "easynet:///r/realm/device/dev-1";
-        let advertise = |generation| AdvertiseAgentRequest {
-            agent_ura: agent_ura.to_string(),
-            generation,
-            signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
-                host_ura: host_ura.to_string(),
-            },
-            public_key_hex: String::new(),
-            host_node_id: Some("dev-1".into()),
-        };
-        handle_advertise_agent(&advertise(1), Some(&advertised)).unwrap();
+        let advertise =
+            |incarnation_hex| hosted_agent_registration(agent_ura, host_ura, incarnation_hex);
+        register_into_read_model(advertise("11111111111111111111111111111111"), &advertised);
         let request = RevokeRequest {
             agent_ura: agent_ura.to_string(),
             purge_transaction_id: Some("11111111111111111111111111111111".into()),
@@ -3254,8 +3642,21 @@ mod tests {
         };
         crate::daemon::persistence::federation_revoke::prepare_revoke(&command, 1, false, None, 1)
             .unwrap();
+        let (durable_old_revoke, replayed) =
+            crate::daemon::persistence::federation_revoke::apply_prepared_revoke(
+                &command.transaction_id,
+                1,
+                2,
+            )
+            .unwrap();
+        assert!(!replayed);
+        assert_eq!(
+            durable_old_revoke.disposition,
+            crate::daemon::persistence::federation_revoke::FederationRevokeDisposition::Retired,
+            "the old incarnation must be durably retired before a new one can register"
+        );
 
-        handle_advertise_agent(&advertise(2), Some(&advertised)).unwrap();
+        register_into_read_model(advertise("22222222222222222222222222222222"), &advertised);
         catalog.upsert_projection(
             crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
                 agent_ura.into(),
@@ -3270,10 +3671,13 @@ mod tests {
         insert_presence(&registry, agent_ura.to_string());
 
         let response = handle_revoke(&request, &registry, Some(&advertised), &catalog)
-            .expect("old prepared revoke completes as superseded");
+            .expect("old applied revoke replays through generation-fenced read-model cleanup");
+        assert!(response.replayed);
         assert_eq!(
             response.disposition,
-            Some(crate::daemon::persistence::federation_revoke::FederationRevokeDisposition::SupersededByNewIncarnation)
+            Some(
+                crate::daemon::persistence::federation_revoke::FederationRevokeDisposition::Retired
+            )
         );
         assert_eq!(advertised.get(agent_ura).unwrap().generation, 2);
         assert!(catalog.get(agent_ura).is_some());

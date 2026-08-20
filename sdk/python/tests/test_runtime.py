@@ -31,6 +31,7 @@ from test_signing import PREPARED_FIXTURE, signer_with_signature
 class MemoryRuntimeTransport:
     def __init__(self) -> None:
         self.seen_draft: dict[str, object] | None = None
+        self.seen_governance_read: dict[str, object] | None = None
         self.seen_options: dict[str, object] | None = None
         self.seen_signed: dict[str, object] | None = None
         self.seen_streams: list[dict[str, object]] | None = None
@@ -70,9 +71,29 @@ class MemoryRuntimeTransport:
             sort_keys=True,
         ).encode("utf-8")
 
+    def governance_read(self, draft_json: bytes) -> bytes:
+        self.seen_governance_read = json.loads(draft_json.decode("utf-8"))
+        admission, terminal = canonical_runtime_receipt_pair("inv-governance")
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_governance_read,
+                "invocation_id": "inv-governance",
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_json": {"ready": True},
+                "elapsed_ms": 1,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
         self.seen_descriptor_request = json.loads(request_json.decode("utf-8"))
-        return b'{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"}'
+        return b'{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"}'
 
     def open_stream(self, draft_json: bytes):
         self.seen_draft = json.loads(draft_json.decode("utf-8"))
@@ -190,9 +211,9 @@ def complete_draft():
     return (
         InvocationBuilder()
         .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-        .with_callee_ura("easynet:///r/example/device/dev-a")
+        .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
         .with_descriptor_ref(
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         )
         .with_subject_ura("easynet:///r/example/device/dev-a")
         .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -230,7 +251,7 @@ def canonical_runtime_receipt(
             "profile": "axon-strict-v2",
         },
         "callee_binding": {
-            "ura": "easynet:///r/example/device/dev-a",
+            "ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "profile": "axon-strict-v2",
         },
         "subject_binding": {
@@ -245,16 +266,16 @@ def canonical_runtime_receipt(
             "signature_base64": base64.b64encode(bytes([0x71]) * 64).decode(),
         },
         "signer_binding": {
-            "ura": "easynet:///r/example/device/dev-a",
+            "ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "profile": "axon-strict-v2",
         },
         "authority_binding_kind": "self",
         "authority_binding": {
             "kind": "self",
-            "principal_ura": "easynet:///r/example/device/dev-a",
+            "principal_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
         },
         "ability_binding": (
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         ),
         "host_attestation_base64": "",
         "usage": {
@@ -277,12 +298,12 @@ def canonical_runtime_receipt(
             "binding_kind": "self",
             "binding": {
                 "kind": "self",
-                "principal_ura": "easynet:///r/example/device/dev-a",
+                "principal_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             },
             "proof_payload_base64": base64.b64encode(proof_payload).decode(),
             "proof_hash_hex": hashlib.sha256(proof_payload).hexdigest(),
             "issuer": {
-                "ura": "easynet:///r/example/device/dev-a",
+                "ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                 "profile": "axon-strict-v2",
             },
             "signature": {
@@ -366,7 +387,7 @@ class RuntimeTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as raised:
             client.resolve_descriptor_ref(
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 ability="observe.health",
                 call_mode="  ",
             )
@@ -380,19 +401,19 @@ class RuntimeTests(unittest.TestCase):
         client = RuntimeClient(transport)
 
         descriptor_ref = client.resolve_descriptor_ref(
-            callee_ura=" easynet:///r/example/device/dev-a ",
+            callee_ura=" easynet:///r/example/agent/device.dev-a.runtime-health ",
             ability=" observe.health ",
             call_mode=" read ",
         )
 
         self.assertEqual(
             descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
         self.assertEqual(
             transport.seen_descriptor_request,
             {
-                "callee_ura": "easynet:///r/example/device/dev-a",
+                "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                 "ability": "observe.health",
                 "call_mode": "read",
             },
@@ -408,14 +429,14 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "call_mode": "read",
                 },
                 "ability is required",
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "observe.health",
                 },
                 "call_mode is required",
@@ -444,7 +465,7 @@ class RuntimeTests(unittest.TestCase):
         cases = [
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "invocation.history.list",
                     "call_mode": "read",
                     "subject_ura": "easynet:///r/example/device/dev-a",
@@ -454,7 +475,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -464,7 +485,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/request",
@@ -475,7 +496,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "invocation.history.list",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -486,7 +507,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -497,7 +518,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -507,7 +528,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_resources",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -517,7 +538,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -528,7 +549,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_resources",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -539,7 +560,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "observe.health",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -550,18 +571,18 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
-                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "subject_ura": "easynet:///r/example/authority",
                     "provider": "ability_descriptor",
                 },
-                "subject_ura must be an Authority URA",
+                "subject_ura must be a runtime governance read subject",
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "invocation.history.list",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -588,7 +609,7 @@ class RuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         base_request: dict[str, object] = {
-            "callee_ura": "easynet:///r/example/device/dev-a",
+            "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "ability": "invocation.history.list",
             "call_mode": "read",
             "caller_ura": "easynet:///r/example/user/alice",
@@ -631,7 +652,7 @@ class RuntimeTests(unittest.TestCase):
         assert transport.seen_draft is not None
         self.assertEqual(
             transport.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
 
     def test_invocation_result_derives_json_output_from_canonical_payload(self) -> None:
@@ -712,10 +733,15 @@ class RuntimeTests(unittest.TestCase):
         }
         result = InvocationResult.from_json(json.dumps(payload))
 
-        self.assertEqual(result.admission_receipt, admission)
+        expected_admission = dict(admission)
+        expected_terminal = dict(terminal)
+        expected_admission["receipt_id"] = "inv-1:0"
+        expected_terminal["receipt_id"] = "inv-1:1"
+        self.assertEqual(result.admission_receipt, expected_admission)
         assert result.terminal_receipt_summary is not None
         self.assertEqual(result.terminal_receipt_summary.index, 1)
-        self.assertEqual(result.terminal_receipt, terminal)
+        self.assertEqual(result.terminal_receipt_summary.receipt_id, "inv-1:1")
+        self.assertEqual(result.terminal_receipt, expected_terminal)
 
         payload.pop("terminal_receipt")
         payload["receipt"] = {"index": 1, "state": "Completed"}
@@ -957,6 +983,17 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(SDKError) as raised:
             RuntimeReceipt.from_mapping(receipt)
         self.assertIn("proof_payload_base64", raised.exception.message)
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        proof["proof_payload_base64"] = "AQIDBAUGBwgJCgsMDQ4PEB=="
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(receipt)
+        self.assertIn(
+            "authority_proof.proof_payload_base64 must be canonical base64",
+            raised.exception.message,
+        )
 
         receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         proof = receipt["authority_proof"]
@@ -1380,7 +1417,9 @@ class RuntimeTests(unittest.TestCase):
         assert isinstance(proof, dict)
         proof["proof_payload_base64"] = ""
         proof["proof_hash_hex"] = authority_binding_proof_hash(
-            AuthorityBinding.self_("easynet:///r/example/device/dev-a")
+            AuthorityBinding.self_(
+                "easynet:///r/example/agent/device.dev-a.runtime-health"
+            )
         ).hex()
 
         receipt = RuntimeReceipt.from_mapping(complete)
@@ -1414,7 +1453,7 @@ class RuntimeTests(unittest.TestCase):
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             ],
             "issued_at_ms": 1,
             "expires_at_ms": 2,
@@ -1442,7 +1481,7 @@ class RuntimeTests(unittest.TestCase):
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             ],
             "issued_at_ms": 1,
             "expires_at_ms": 2,
@@ -1463,7 +1502,7 @@ class RuntimeTests(unittest.TestCase):
             RuntimeReceipt.from_mapping(retired)
         self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIn(
-            "authority_binding contains noncanonical field",
+            "authority_binding contains noncanonical field backend_ura",
             raised.exception.message,
         )
 
@@ -1516,6 +1555,69 @@ class RuntimeTests(unittest.TestCase):
                     "content_type": "application/json",
                     "ordering": "ordered",
                     "stream_id": 1,
+                }
+            ],
+        )
+
+    def test_open_signed_stream_projects_canonical_invocation(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        stream = client.open_signed_stream(signed_fixture())
+
+        self.assertEqual(stream.stream_id, "stream-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(
+            transport.seen_draft["caller_signature"],
+            {
+                "algorithm": "ed25519",
+                "key_id_hint": "caller-key",
+                "signature_base64": "c2lnbmF0dXJl",
+            },
+        )
+        self.assertNotIn("policy", transport.seen_draft)
+        self.assertNotIn("prepared", transport.seen_draft)
+        self.assertNotIn("signature", transport.seen_draft)
+
+    def test_open_signed_bidi_projects_canonical_invocation_and_streams(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        session = client.open_signed_bidi(
+            signed_fixture(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=9,
+                    content_type="application/json",
+                    ordering="ordered",
+                ),
+            ),
+        )
+
+        self.assertEqual(session.session_id, "bidi-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["caller_signature"],
+            {
+                "algorithm": "ed25519",
+                "key_id_hint": "caller-key",
+                "signature_base64": "c2lnbmF0dXJl",
+            },
+        )
+        self.assertNotIn("policy", transport.seen_draft)
+        self.assertNotIn("prepared", transport.seen_draft)
+        self.assertNotIn("signature", transport.seen_draft)
+        self.assertEqual(
+            transport.seen_streams,
+            [
+                {
+                    "content_type": "application/json",
+                    "ordering": "ordered",
+                    "stream_id": 9,
                 }
             ],
         )
@@ -1627,6 +1729,16 @@ class RuntimeTests(unittest.TestCase):
             "runtime-bound invocation control capability is required",
             str(caught.exception),
         )
+        with self.assertRaises(SDKError) as drift:
+            InvocationCancel.from_json(
+                b'{"handle_id":7,"request_accepted":false,"deduplicated":true,'
+                b'"cancelled":false,"state":"Completed","terminal":true,'
+                b'"state_code":"C440"}'
+            )
+        self.assertIn(
+            "invocation cancel contains noncanonical field state_code",
+            str(drift.exception),
+        )
 
     def test_bound_object_graph_delegates_full_lifecycle(self) -> None:
         transport = MemoryRuntimeTransport()
@@ -1640,9 +1752,9 @@ class RuntimeTests(unittest.TestCase):
         builder = (
             client.new_invocation()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1684,9 +1796,9 @@ class RuntimeTests(unittest.TestCase):
         draft = (
             client.new_invocation()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1750,9 +1862,9 @@ class RuntimeTests(unittest.TestCase):
         builder = (
             InvocationBuilder()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1776,9 +1888,9 @@ class RuntimeTests(unittest.TestCase):
         builder = (
             InvocationBuilder()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1814,48 +1926,7 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             transport.seen_signed["prepared"]["tuple"]["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
-        )
-
-    def test_open_signed_stream_preserves_signature(self) -> None:
-        transport = MemoryRuntimeTransport()
-        client = RuntimeClient(transport)
-
-        stream = client.open_signed_stream(signed_fixture())
-
-        self.assertEqual(stream.stream_id, "stream-1")
-        assert transport.seen_draft is not None
-        self.assertEqual(transport.seen_draft["signer_id"], "caller-key")
-        self.assertEqual(
-            transport.seen_draft["signature"]["signature_base64"],
-            "c2lnbmF0dXJl",
-        )
-
-    def test_open_signed_bidi_preserves_signature_and_streams(self) -> None:
-        transport = MemoryRuntimeTransport()
-        client = RuntimeClient(transport)
-
-        session = client.open_signed_bidi(
-            signed_fixture(),
-            (
-                BidiStreamDescriptor(
-                    stream_id=9,
-                    content_type="application/json",
-                    ordering="ordered",
-                ),
-            ),
-        )
-
-        self.assertEqual(session.session_id, "bidi-1")
-        assert transport.seen_draft is not None
-        self.assertEqual(transport.seen_draft["signer_id"], "caller-key")
-        self.assertEqual(
-            transport.seen_draft["signature"]["signature_base64"],
-            "c2lnbmF0dXJl",
-        )
-        self.assertEqual(
-            transport.seen_streams,
-            [{"content_type": "application/json", "ordering": "ordered", "stream_id": 9}],
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
 
     def test_public_handle_json_does_not_grant_control_authority(self) -> None:

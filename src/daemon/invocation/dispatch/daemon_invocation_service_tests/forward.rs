@@ -3,8 +3,8 @@ use super::*;
 use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
 use axon_sdk::pb::axon::v1::{causal_context, Empty};
 
-const CALLER: &str = "easynet:///r/test-realm/device/caller";
-const CALLEE: &str = "easynet:///r/test-realm/device/target";
+const CALLER: &str = "easynet:///r/test-realm/user/caller";
+const CALLEE: &str = "easynet:///r/test-realm/agent/device.target.locomotion";
 
 fn complete_request() -> InvokeRequest {
     let descriptor_ref = test_descriptor_ref(CALLEE, "echo");
@@ -89,7 +89,7 @@ fn descriptor_owner_mismatch_fails_closed() {
         .callee
         .as_mut()
         .unwrap()
-        .ura = "easynet:///r/other-realm/device/other".to_string();
+        .ura = "easynet:///r/other-realm/agent/device.other.locomotion".to_string();
     let status = require_complete_signed_remote_request(&request).unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("complete descriptor ref"));

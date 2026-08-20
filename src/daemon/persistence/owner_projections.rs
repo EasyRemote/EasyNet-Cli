@@ -1,11 +1,17 @@
 // EasyNet CLI — Owner Projection Cursor Store (AXON-RFC-005 Phase C)
 // ==================================================================
 //
-// Owns ~/.easynet/owner-projections.json. The file is intentionally
-// only a publication cursor: protocol semantics such as ability
-// summaries, descriptor hashes, and projection digests live in
+// Owns ~/.easynet/owner-projections.json. The file is intentionally only a
+// publication cursor: protocol semantics such as ability summaries, descriptor
+// hashes, and projection digests live in
 // daemon::federation::read_model::owner_projection. Keeping this layer dumb
 // prevents the on-disk schema from becoming a second resolver implementation.
+//
+// Ontology boundary: `owner_ura` is the public descriptor owner for Agent,
+// Service, and Authority rows. A Device URA is accepted only for the
+// same-device DeviceProfileProjection migration cursor/high-water mark; it is
+// not a target architecture Agent identity and must not be used to reintroduce
+// public Device-owned callable surfaces.
 
 use std::fs;
 use std::path::PathBuf;
@@ -92,10 +98,16 @@ pub(crate) fn validate_owner_projection_host_binding(
             }
             Ok(())
         }
+        URAKind::Service => {
+            if host.kind != URAKind::Device {
+                return Err("Service owner projections must be hosted by a Device URA".to_string());
+            }
+            Ok(())
+        }
         URAKind::Device => {
             if host.kind != URAKind::Device || owner_ura != host_device_ura {
                 return Err(
-                    "Device owner projections must be hosted by the same Device URA".to_string(),
+                    "DeviceProfileProjection migration cursors must be hosted by the same Device URA".to_string(),
                 );
             }
             Ok(())
@@ -109,10 +121,13 @@ pub(crate) fn validate_owner_projection_host_binding(
             }
             Ok(())
         }
-        _ => Err("owner_ura must be a canonical Agent, Device, or Authority URA".to_string()),
+        _ => Err(
+            "owner_ura must be a canonical Agent, Service, Authority, or same-device DeviceProfileProjection URA".to_string(),
+        ),
     }
 }
 
+#[cfg(test)]
 pub(crate) fn load() -> anyhow::Result<OwnerProjectionCursorFile> {
     let _thread_guard = lock_store();
     let data_path = path();
@@ -324,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn save_load_round_trip_preserves_owner_cursor() {
+    fn save_load_round_trip_preserves_device_profile_projection_migration_cursor() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = OwnerProjectionCursorFile::default();
         file.upsert(OwnerProjectionCursor {
@@ -341,6 +356,26 @@ mod tests {
 
         replace(&file).expect("save cursor");
         assert_eq!(load().expect("load cursor"), file);
+    }
+
+    #[test]
+    fn save_load_round_trip_preserves_user_service_owner_projection_cursor() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = OwnerProjectionCursorFile::default();
+        file.upsert(OwnerProjectionCursor {
+            owner_ura: "easynet:///r/acme/service/user-1.pages".into(),
+            host_device_ura: "easynet:///r/acme/device/01DEV".into(),
+            generation: 1,
+            lifecycle: OwnerProjectionCursorLifecycle::Active,
+            projection_revision: 7,
+            projection_digest: "abc".into(),
+            content_fingerprint: "def".into(),
+            lease_expires_unix_ms: 0,
+            updated_at: "2026-06-07T00:00:00Z".into(),
+        });
+
+        replace(&file).expect("save Service cursor");
+        assert_eq!(load().expect("load Service cursor"), file);
     }
 
     #[test]
@@ -466,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn load_rejects_contradictory_owner_projection_cursor_host_binding() {
+    fn load_rejects_contradictory_device_profile_projection_cursor_host_binding() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let data_path = path();
         fs::create_dir_all(data_path.parent().unwrap()).unwrap();
@@ -489,12 +524,12 @@ mod tests {
         )
         .unwrap();
 
-        let error = load().expect_err("contradictory owner/host binding must fail closed");
+        let error = load().expect_err("contradictory migration cursor binding must fail closed");
 
         assert!(
-            error
-                .to_string()
-                .contains("Device owner projections must be hosted by the same Device URA"),
+            error.to_string().contains(
+                "DeviceProfileProjection migration cursors must be hosted by the same Device URA"
+            ),
             "unexpected error: {error}"
         );
     }

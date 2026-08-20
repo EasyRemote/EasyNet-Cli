@@ -52,6 +52,8 @@ type CanonicalURABuildRequest struct {
 type CanonicalDescriptorRefBuildRequest struct {
 	AbilityURA        string         `json:"ability_ura"`
 	DescriptorVersion string         `json:"descriptor_version"`
+	DescriptorHash    string         `json:"descriptor_hash"`
+	Action            string         `json:"action"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
@@ -64,6 +66,8 @@ type AddressingProjection struct {
 	DescriptorRef     string         `json:"descriptor_ref,omitempty"`
 	AbilityURA        string         `json:"ability_ura,omitempty"`
 	DescriptorVersion string         `json:"descriptor_version,omitempty"`
+	DescriptorHash    string         `json:"descriptor_hash,omitempty"`
+	Action            string         `json:"action,omitempty"`
 	Profile           string         `json:"profile"`
 	Components        map[string]any `json:"components"`
 	Metadata          map[string]any `json:"metadata"`
@@ -180,10 +184,16 @@ func (a *CanonicalAddressing) BuildDescriptorRef(ctx context.Context, req Canoni
 	}
 	abilityURA := strings.TrimSpace(req.AbilityURA)
 	version := strings.TrimSpace(req.DescriptorVersion)
-	if abilityURA == "" || version == "" {
-		return AddressingProjection{}, invalidProfilePayload(addressingProfile, "ability_ura and descriptor_version are required", nil)
+	descriptorHash := strings.TrimSpace(req.DescriptorHash)
+	action := strings.TrimSpace(req.Action)
+	if abilityURA == "" || version == "" || descriptorHash == "" || action == "" {
+		return AddressingProjection{}, invalidProfilePayload(
+			addressingProfile,
+			"ability_ura, descriptor_version, descriptor_hash, and action are required",
+			nil,
+		)
 	}
-	ref, err := ParseAbilityDescriptorRef(abilityURA + "@" + version)
+	ref, err := ParseAbilityDescriptorRef(abilityURA + "@" + version + "#" + descriptorHash + "!" + action)
 	if err != nil {
 		return AddressingProjection{}, invalidProfilePayload(addressingProfile, fmt.Sprintf("build descriptor_ref: %v", err), err)
 	}
@@ -222,18 +232,26 @@ func (a *CanonicalAddressing) OwnerURAForAbility(ctx context.Context, abilityURA
 }
 
 func (a *CanonicalAddressing) OwnerAbilityDescriptorRef(ctx context.Context, ownerURA string, abilityName string, descriptorVersion string) (string, error) {
-	abilityURA, err := a.OwnerAbilityURA(ctx, ownerURA, abilityName)
-	if err != nil {
+	if _, err := a.OwnerAbilityURA(ctx, ownerURA, abilityName); err != nil {
 		return "", err
 	}
-	return a.CanonicalAbilityDescriptorRef(ctx, abilityURA, descriptorVersion)
+	_ = descriptorVersion
+	return "", invalidProfilePayload(
+		addressingProfile,
+		"descriptor_hash and action are required to build a descriptor_ref; resolve the descriptor from the runtime provider or call BuildDescriptorRef with complete facts",
+		nil,
+	)
 }
 
 func (a *CanonicalAddressing) CanonicalAbilityDescriptorRef(ctx context.Context, value string, descriptorVersion string) (string, error) {
 	var projection AddressingProjection
 	var err error
-	if version := strings.TrimSpace(descriptorVersion); version != "" {
-		projection, err = a.BuildDescriptorRef(ctx, CanonicalDescriptorRefBuildRequest{AbilityURA: value, DescriptorVersion: version})
+	if strings.TrimSpace(descriptorVersion) != "" {
+		return "", invalidProfilePayload(
+			addressingProfile,
+			"descriptor_hash and action are required to build a descriptor_ref; resolve the descriptor from the runtime provider or call BuildDescriptorRef with complete facts",
+			nil,
+		)
 	} else {
 		projection, err = a.ProjectDescriptorRef(ctx, CanonicalDescriptorRefRequest{DescriptorRef: value})
 	}
@@ -275,10 +293,14 @@ func descriptorRefProjection(ref AbilityDescriptorRef) AddressingProjection {
 		DescriptorRef:     ref.Raw,
 		AbilityURA:        ref.AbilityURA,
 		DescriptorVersion: ref.Version,
+		DescriptorHash:    ref.DescriptorHash,
+		Action:            ref.Action,
 		Profile:           uraProfileStrictV2,
 		Components: map[string]any{
 			"ability_ura":            ref.AbilityURA,
 			"descriptor_version":     ref.Version,
+			"descriptor_hash":        ref.DescriptorHash,
+			"action":                 ref.Action,
 			"owner_ura":              ownerURAFromAbilityParts(parts),
 			"owner_kind":             string(parts.AbilityOwner.Kind),
 			"public_name":            publicName,
@@ -304,6 +326,10 @@ func addressingComponents(parts ParsedURA) map[string]any {
 			components["user_id"] = parts.UserID
 		}
 		components["agent_id"] = parts.AgentID
+	case URAKindService:
+		components["owner_kind"] = "service"
+		components["principal_id"] = parts.UserID
+		components["service_id"] = parts.ServiceID
 	case URAKindAbility:
 		publicName := parts.AbilityID
 		components["owner_ura"] = ownerURAFromAbilityParts(parts)
@@ -324,6 +350,10 @@ func ownerURAFromAbilityParts(parts ParsedURA) string {
 	switch parts.AbilityOwner.Kind {
 	case AbilityOwnerAgent:
 		return AgentURA(parts.Realm, parts.AbilityOwner.UserID, parts.AbilityOwner.AgentID)
+	case AbilityOwnerService:
+		return ServiceURA(parts.Realm, parts.AbilityOwner.UserID, parts.AbilityOwner.ServiceID)
+	case abilityOwnerSystemAgent:
+		return DeviceAgentURA(parts.Realm, parts.AbilityOwner.OwnerID, parts.AbilityOwner.AgentID)
 	case abilityOwnerDevice:
 		return DeviceURA(parts.Realm, parts.AbilityOwner.OwnerID)
 	case abilityOwnerAuthority:
@@ -350,6 +380,8 @@ func canonicalOwnerResourceURA(ownerURA string, path string) (string, error) {
 		} else {
 			ownerID = "agent." + parts.UserID + "." + parts.AgentID
 		}
+	case URAKindService:
+		ownerID = "service." + parts.UserID + "." + parts.ServiceID
 	case URAKindAuthority:
 		ownerID = "authority"
 	default:

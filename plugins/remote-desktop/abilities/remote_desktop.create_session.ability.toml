@@ -1,13 +1,16 @@
-schema_version = "2"
+schema_version = "3"
 name = "remote_desktop.create_session"
 descriptor_version = "1.0.0"
 description = "Create a remote desktop control session for a display/window/application resource. Subject MUST be the resource_ura in the invocation envelope. The session advertises WebRTC as the production media transport and exposes quality targets; preview paths stay marked as diagnostic transports."
+exposure = "operator"
+dedicated_surface = "remote_desktop"
+subject_contract_kind = "dedicated-surface"
 call_mode = "rpc"
 capability_state = "provider_backed"
 admission_action = "manage"
 visibility = "SCOPED"
-scope_subjects_kind = "any"
-scope_subjects_uras = []
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
 scope_agents_kind = "any"
 scope_agents_uras = []
 denied_agents = []
@@ -17,7 +20,13 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
+required = ["consent_ticket"]
 additionalProperties = false
+
+[input_schema.properties.consent_ticket]
+type = "string"
+minLength = 64
+maxLength = 64
 
 [input_schema.properties.input]
 type = "object"

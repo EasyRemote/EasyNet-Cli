@@ -2,17 +2,14 @@
 // ==========================
 //
 // File: src/cli/groups/device.rs
-// Description: `easynet device …` — manage *hosting substrates*.
+// Description: `easynet device …` — manage and invoke Device runtimes.
 //
-// Ontology note (interpretation C, see ARCHITECTURE.md §6):
+// Runtime model
 //
-//   A device is NOT a network first-class entity. The only network
-//   first-class objects are Agents (network actors) and Abilities (their
-//   public methods). A device is the *physical substrate* on which agents
-//   are hosted — analogous to an OS to a process. Devices are visible to
-//   the CLI for diagnostic and lifecycle reasons (pairing, hardware
-//   inventory, capacity), but they are NOT addressable as the "to" of an
-//   ability call from outside.
+//   A Device is a canonical runtime owner and execution target. Network
+//   operations still address a descriptor-bound Ability URA; device commands
+//   are typed sugar that derives those Ability URAs and submits the complete
+//   invocation tuple through the shared runtime.
 //
 // Verbs:
 //   join <token>      Pair THIS host as a substrate                       (-> cli::join)
@@ -21,8 +18,11 @@
 //                     (semantically belongs to `runtime config`; physical
 //                      command stays here for now — see ARCHITECTURE.md §8 #6)
 //   list              List substrates known to the federation             (-> cli::devices)
-//   show <id>         Inspect one substrate (hardware, hosted abilities)  (NEW)
-//   remove <id>       Drain + deregister a remote substrate               (NEW)
+//   show <id>         Inspect one substrate (hardware, hosted abilities)
+//   abilities <id>    List a substrate's invocation-backed ability catalog
+//   exec <id> -- cmd  Execute process.exec through canonical invocation
+//   terminal <id>     Interactive session-authority-backed PTY lifecycle
+//   remove <id>       Drain + deregister a remote substrate
 //
 // Verbs DELIBERATELY ABSENT:
 //
@@ -40,10 +40,10 @@ use console::style;
 use serde_json::{json, Value};
 
 use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
-use crate::cli::commands::{config_cmd, devices, join, reset};
+use crate::cli::commands::{abilities, config_cmd, devices, exec, join, reset};
 use crate::cli::daemon_client::remote_system_ability::{
     invoke_remote_device_system_ability, invoke_remote_device_system_ability_as_caller,
-    RemoteDeviceSystemAbility,
+    RemoteTargetSystemAbility,
 };
 use crate::support::platform::local_invoke::LocalRuntimeDeviceDirectoryReadIssuer;
 use crate::support::platform::output::{self, OutputFormat};
@@ -57,7 +57,7 @@ pub struct DeviceArgs {
 #[derive(Debug, Subcommand)]
 pub enum DeviceAction {
     /// Pair this host as a hosting substrate (registers credentials).
-    Join(join::JoinArgs),
+    Join(Box<join::JoinArgs>),
     /// Un-pair this host (delete local credentials and state).
     Reset(reset::ResetArgs),
     /// Show or update local runtime settings (will move to `runtime config` in a future release).
@@ -66,6 +66,12 @@ pub enum DeviceAction {
     List(devices::DevicesArgs),
     /// Show one substrate's hardware and hosted abilities.
     Show(ShowArgs),
+    /// List a substrate's invocation-backed ability catalog.
+    Abilities(DeviceAbilitiesArgs),
+    /// Run a one-shot command through process.exec on a device.
+    Exec(exec::ExecArgs),
+    /// Open an interactive invocation-backed PTY session.
+    Terminal(TerminalArgs),
     /// Drain in-flight work on a remote substrate, then deregister it
     /// from the federation (the device disappears from
     /// `device list`). Irreversible without a fresh pairing token —
@@ -89,6 +95,26 @@ pub struct ShowArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct DeviceAbilitiesArgs {
+    /// Target substrate: `local`, this device's node id, this device's URA,
+    /// or a canonical remote Device URA.
+    pub node_id: String,
+    /// Glob pattern to filter by ability name.
+    #[arg(long, default_value = "")]
+    pub pattern: String,
+    /// Output format — table (human, default) or json.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalArgs {
+    /// Target substrate: `local`, this device's node id, this device's URA,
+    /// or a canonical remote Device URA.
+    pub node_id: String,
+}
+
+#[derive(Debug, Args)]
 pub struct RemoveArgs {
     /// Target substrate node id.
     pub node_id: String,
@@ -106,13 +132,49 @@ pub struct RemoveArgs {
 
 pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
     match args.action {
-        DeviceAction::Join(a) => join::run(a),
+        DeviceAction::Join(a) => join::run(*a),
         DeviceAction::Reset(a) => reset::run(a),
         DeviceAction::Config(a) => config_cmd::run(a),
         DeviceAction::List(a) => devices::run(a),
         DeviceAction::Show(a) => run_show(a),
+        DeviceAction::Abilities(a) => run_abilities(a),
+        DeviceAction::Exec(a) => exec::run(a),
+        DeviceAction::Terminal(a) => run_terminal(a),
         DeviceAction::Remove(a) => run_remove(a),
     }
+}
+
+fn run_abilities(args: DeviceAbilitiesArgs) -> anyhow::Result<()> {
+    abilities::run(abilities::AbilitiesArgs {
+        agent: None,
+        agent_ura: None,
+        subject_ura: None,
+        node: Some(resolve_device_catalog_target_arg(&args.node_id)?),
+        pattern: args.pattern,
+        format: args.format,
+    })
+}
+
+fn run_terminal(args: TerminalArgs) -> anyhow::Result<()> {
+    crate::cli::commands::device_terminal::run(&args.node_id)
+}
+
+fn resolve_device_catalog_target_arg(raw_target: &str) -> anyhow::Result<String> {
+    if is_local_device_target(raw_target) {
+        Ok("local".to_string())
+    } else {
+        crate::support::platform::remote_device::resolve_target_device_ura(raw_target)
+    }
+}
+
+fn is_local_device_target(raw_target: &str) -> bool {
+    let target = raw_target.trim();
+    if target.is_empty() || target.eq_ignore_ascii_case("local") {
+        return true;
+    }
+    load_local_device_identity("device target")
+        .map(|identity| target == identity.node_id || target == identity.device_ura())
+        .unwrap_or(false)
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
@@ -209,9 +271,9 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     eprintln!(
         "  {}",
         style(
-            "Reminder: this substrate is not network-addressable on its own. \
-             Network calls always target an agent's published ability; the \
-             substrate is the place where that ability happens to run."
+            "Network calls bind a published Ability descriptor to this Device \
+             runtime; the Device is the execution target, while the Ability URA \
+             identifies the callable contract."
         )
         .dim()
     );
@@ -388,7 +450,7 @@ fn describe_target(node_id: &str, authority: bool) -> anyhow::Result<Value> {
 fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
     invoke_remote_device_system_ability(
         node,
-        RemoteDeviceSystemAbility::NodeDescribe,
+        RemoteTargetSystemAbility::NodeDescribe,
         serde_json::json!({"node_id": "local"}),
         &format!("describing remote device {node:?}"),
     )
@@ -397,7 +459,7 @@ fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
 fn invoke_remote_describe_as_caller(target_ura: &str, caller_ura: &str) -> anyhow::Result<Value> {
     invoke_remote_device_system_ability_as_caller(
         target_ura,
-        RemoteDeviceSystemAbility::NodeDescribe,
+        RemoteTargetSystemAbility::NodeDescribe,
         serde_json::json!({"node_id": "local"}),
         caller_ura,
     )
@@ -568,6 +630,26 @@ mod tests {
         assert!(
             message.contains("easynet:///r/<realm>/device/<id>"),
             "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn device_catalog_target_preserves_local_selector_and_rejects_bare_remote_id() {
+        assert_eq!(
+            resolve_device_catalog_target_arg("local").expect("local catalogue target"),
+            "local"
+        );
+
+        let error = resolve_device_catalog_target_arg("386b1258-3c89-494a-90a2-2321c29bf992")
+            .expect_err("bare remote ids must not be repaired from directory state");
+        let message = error.to_string();
+        assert!(
+            message.contains("not a canonical URA"),
+            "wrong error: {message}"
+        );
+        assert!(
+            message.contains("easynet:///r/<realm>/device/<id>"),
+            "wrong recovery guidance: {message}"
         );
     }
 

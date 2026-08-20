@@ -13,8 +13,9 @@
 // - Every returned identity field is copied from the Axon ledger
 //   record: invocation_ura, caller_ura, callee_ura, subject_ura,
 //   ability_ura. This module does not build URAs.
-// - Payload bodies remain digest-or-sealed records. The history
-//   surface never unwraps encrypted event content.
+// - List returns a bounded summary only. Digest/sealed payload metadata,
+//   diagnostics, causal links, visibility, and receipt facts remain on the
+//   complete record returned by invocation.history.get.
 // - Missing ledger file is a valid empty history state.
 
 use std::collections::HashSet;
@@ -22,13 +23,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::invocation::dispatch::attempt_audit::{
     attempt_ledger_path, InvocationAttemptLedger, InvocationAttemptRecord,
 };
-use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::daemon_config::{
     default_config_path, default_ledger_dir, DaemonConfig,
 };
@@ -45,6 +46,9 @@ pub const ABILITY_HISTORY_PATH: &str =
     crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH;
 pub const ABILITY_INVOCATION_RECORD_GET: &str =
     crate::daemon::ability::names::governance::INVOCATION_RECORD_GET;
+
+const LEDGER_OWNER_BINDING_INVARIANT: &str =
+    "catalog ledger governance authority must project to a canonical ledger resource";
 
 fn record_query_from_args(args: &Value) -> anyhow::Result<InvocationLedgerQuery> {
     if let Some(request_id) = args.get("request_id").and_then(non_empty_str) {
@@ -63,10 +67,52 @@ const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 const HISTORY_CURSOR_PREFIX: &str = "receipt-history:v1:";
 const MAX_HISTORY_CURSOR_LEN: usize = 4096;
+// A list is a navigation read model, not a ledger export. Keep the complete
+// JSON result comfortably below the unary transport envelope after the
+// canonical terminal receipt binds the same output. Full records are fetched
+// individually through invocation.history.get.
+const MAX_HISTORY_LIST_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_HISTORY_SUMMARY_IDENTITY_BYTES: usize = 4096;
+const MAX_HISTORY_SUMMARY_NAME_BYTES: usize = 512;
+const MAX_HISTORY_ERROR_SOURCE_BYTES: usize = 128;
+const MAX_HISTORY_ERROR_CODE_BYTES: usize = 128;
+const MAX_HISTORY_ERROR_MESSAGE_BYTES: usize = 1024;
+
+#[derive(Debug, Serialize)]
+struct InvocationHistorySummary {
+    invocation_ura: String,
+    request_id: String,
+    trace_id: String,
+    span_id: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    ability_ura: String,
+    ability_name: String,
+    state: String,
+    started_unix_ms: i64,
+    completed_unix_ms: Option<i64>,
+    elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<InvocationHistoryErrorSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct InvocationHistoryErrorSummary {
+    source: String,
+    code: String,
+    message: String,
+    retryable: bool,
+    truncated: bool,
+}
 
 pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
-    let reader = Arc::new(InvocationLedgerReader::new(ledger));
-    register_for_owner(reg, reg.ledger_governance_owner(), reader);
+    let governance = reg.ledger_governance_authority();
+    let reader = Arc::new(
+        InvocationLedgerReader::new(ledger, governance.runtime_owner_ura())
+            .expect(LEDGER_OWNER_BINDING_INVARIANT),
+    );
+    register_for_owner(reg, governance.owner().clone(), reader);
 }
 
 fn register_for_owner(
@@ -133,11 +179,15 @@ fn register_for_owner(
 
 struct InvocationLedgerReader {
     shared: Option<Arc<InvocationLedger>>,
+    ledger_ura: String,
 }
 
 impl InvocationLedgerReader {
-    fn new(shared: Option<Arc<InvocationLedger>>) -> Self {
-        Self { shared }
+    fn new(shared: Option<Arc<InvocationLedger>>, runtime_owner_ura: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            shared,
+            ledger_ura: ledger_resource_ura_from_runtime_owner_ura(runtime_owner_ura)?,
+        })
     }
 
     fn list_history(&self, args: Value) -> anyhow::Result<Value> {
@@ -150,7 +200,10 @@ impl InvocationLedgerReader {
         // applied. The SDK treats the cursor as opaque; only this provider
         // decodes the anchor and decides the next page boundary.
         let query = query_from_args(&args)?.limit(0);
-        let compact = args
+        // `compact` remains accepted at the public input boundary, but list is
+        // now always a bounded summary surface. Callers requiring the complete
+        // canonical record must use invocation.history.get.
+        let _compact_requested = args
             .get("compact")
             .and_then(Value::as_bool)
             .unwrap_or(false);
@@ -162,39 +215,29 @@ impl InvocationLedgerReader {
         let mut records = self.fetch_records(&path, query)?;
         retain_by_ability_ura_sets(&mut records, &include_ability_uras, &exclude_ability_uras);
         apply_history_cursor(&mut records, cursor_anchor.as_deref())?;
-        let next_cursor = next_history_cursor(&mut records, requested_limit);
+        let (summary_records, next_cursor) =
+            history_summary_page(self.ledger_ura.as_str(), &records, requested_limit)?;
         let diagnostic_records = if include_attempts {
             let attempts = filtered_attempt_records(&args, requested_limit)?;
             Some(merged_diagnostic_records(
-                &records,
+                &records[..summary_records.len()],
                 &attempts,
                 requested_limit,
             )?)
         } else {
             None
         };
-        let records = if compact && include_attempts {
-            diagnostic_records
-                .clone()
-                .unwrap_or_else(|| Value::Array(Vec::new()))
-        } else if compact {
-            compact_records(&records)?
-        } else {
-            json!(records)
-        };
         let mut response = json!({
-            "ledger_ura": ledger_resource_ura()?,
-            "ledger_path": path.display().to_string(),
-            "records": records,
+            "ledger_ura": self.ledger_ura.as_str(),
+            "records": summary_records,
         });
         if let Some(diagnostics) = diagnostic_records {
             response["diagnostic_records"] = diagnostics;
-            response["attempt_ledger_path"] =
-                Value::String(attempt_ledger_path_from_config().display().to_string());
         }
         if let Some(cursor) = next_cursor {
             response["next_cursor"] = Value::String(cursor);
         }
+        enforce_history_response_budget(&mut response)?;
         Ok(response)
     }
 
@@ -207,7 +250,7 @@ impl InvocationLedgerReader {
         let path = ledger_path_from_config();
         let record = self.fetch_one(&path, query)?;
         Ok(json!({
-            "ledger_ura": ledger_resource_ura()?,
+            "ledger_ura": self.ledger_ura.as_str(),
             "ledger_path": path.display().to_string(),
             "record": record,
         }))
@@ -238,7 +281,7 @@ impl InvocationLedgerReader {
         let graph = self.trace_graph(&path, &trace_id)?;
 
         Ok(json!({
-            "ledger_ura": ledger_resource_ura()?,
+            "ledger_ura": self.ledger_ura.as_str(),
             "ledger_path": path.display().to_string(),
             "trace_id": graph.trace_id,
             "nodes": graph.records,
@@ -250,7 +293,7 @@ impl InvocationLedgerReader {
     fn get_path(&self, _args: Value) -> anyhow::Result<Value> {
         let path = ledger_path_from_config();
         Ok(json!({
-            "ledger_ura": ledger_resource_ura()?,
+            "ledger_ura": self.ledger_ura.as_str(),
             "ledger_path": path.display().to_string(),
         }))
     }
@@ -341,54 +384,156 @@ fn apply_history_cursor(
     Ok(())
 }
 
-fn next_history_cursor(
-    records: &mut Vec<InvocationLedgerRecord>,
+fn history_summary_page(
+    ledger_ura: &str,
+    records: &[InvocationLedgerRecord],
     requested_limit: usize,
-) -> Option<String> {
-    if records.len() <= requested_limit {
-        return None;
+) -> anyhow::Result<(Vec<Value>, Option<String>)> {
+    let count_limit = requested_limit.min(records.len());
+    let mut summaries = Vec::with_capacity(count_limit);
+
+    for record in records.iter().take(count_limit) {
+        summaries.push(serde_json::to_value(history_summary(record)?)?);
+        let has_more = records.len() > summaries.len();
+        let cursor = has_more.then(|| history_cursor_for(record));
+        let candidate = history_list_response_value(ledger_ura, &summaries, cursor.as_deref());
+        if serde_json::to_vec(&candidate)?.len() > MAX_HISTORY_LIST_RESPONSE_BYTES {
+            summaries.pop();
+            break;
+        }
     }
-    let next = records
-        .get(requested_limit.saturating_sub(1))
-        .map(history_cursor_for);
-    records.truncate(requested_limit);
-    next
+
+    if summaries.is_empty() && !records.is_empty() {
+        anyhow::bail!(
+            "invocation.history.list summary exceeds the {} byte response budget",
+            MAX_HISTORY_LIST_RESPONSE_BYTES
+        );
+    }
+    let next_cursor = (records.len() > summaries.len())
+        .then(|| history_cursor_for(&records[summaries.len().saturating_sub(1)]));
+    Ok((summaries, next_cursor))
 }
 
-fn compact_records(records: &[InvocationLedgerRecord]) -> anyhow::Result<Value> {
-    let mut out = Vec::with_capacity(records.len());
-    for record in records {
-        let value = serde_json::to_value(record)?;
-        out.push(compact_record_value(value));
+fn history_list_response_value(
+    ledger_ura: &str,
+    records: &[Value],
+    next_cursor: Option<&str>,
+) -> Value {
+    let mut response = json!({
+        "ledger_ura": ledger_ura,
+        "records": records,
+    });
+    if let Some(cursor) = next_cursor {
+        response["next_cursor"] = Value::String(cursor.to_string());
     }
-    Ok(Value::Array(out))
+    response
 }
 
-fn compact_record_value(mut value: Value) -> Value {
-    if let Some(object) = value.as_object_mut() {
-        // List views only need routing, timing, state, and error
-        // summaries. Full payload envelopes, diagnostics, causal links,
-        // receipt-chain, and privacy metadata remain available through
-        // invocation.history.get for a single record, avoiding
-        // multi-megabyte list payloads on active nodes.
-        object.remove("args");
-        object.remove("result");
-        object.remove("diagnostics");
-        object.remove("causal_links");
-        object.remove("receipt_chain");
-        object.remove("visibility");
+fn history_summary(record: &InvocationLedgerRecord) -> anyhow::Result<InvocationHistorySummary> {
+    let error = record.error.as_ref().map(|error| {
+        let (source, source_truncated) =
+            truncate_history_text(&error.source, MAX_HISTORY_ERROR_SOURCE_BYTES);
+        let (code, code_truncated) =
+            truncate_history_text(&error.code, MAX_HISTORY_ERROR_CODE_BYTES);
+        let (message, message_truncated) =
+            truncate_history_text(&error.message, MAX_HISTORY_ERROR_MESSAGE_BYTES);
+        InvocationHistoryErrorSummary {
+            source,
+            code,
+            message,
+            retryable: error.retryable,
+            truncated: source_truncated
+                || code_truncated
+                || message_truncated
+                || !error.context.is_empty(),
+        }
+    });
+    Ok(InvocationHistorySummary {
+        invocation_ura: bounded_history_identity("invocation_ura", &record.invocation_ura)?,
+        request_id: bounded_history_identity("request_id", &record.request_id)?,
+        trace_id: bounded_history_identity("trace_id", &record.trace_id)?,
+        span_id: bounded_history_identity("span_id", &record.span_id)?,
+        caller_ura: bounded_history_identity("caller_ura", &record.caller_ura)?,
+        callee_ura: bounded_history_identity("callee_ura", &record.callee_ura)?,
+        subject_ura: bounded_history_identity("subject_ura", &record.subject_ura)?,
+        ability_ura: bounded_history_identity("ability_ura", &record.ability_ura)?,
+        ability_name: bounded_history_name("ability_name", &record.ability_name)?,
+        state: bounded_history_name("state", &record.state)?,
+        started_unix_ms: record.started_unix_ms,
+        completed_unix_ms: record.completed_unix_ms,
+        elapsed_ms: record.elapsed_ms,
+        error,
+    })
+}
+
+fn bounded_history_identity(field: &str, value: &str) -> anyhow::Result<String> {
+    bounded_history_field(field, value, MAX_HISTORY_SUMMARY_IDENTITY_BYTES)
+}
+
+fn bounded_history_name(field: &str, value: &str) -> anyhow::Result<String> {
+    bounded_history_field(field, value, MAX_HISTORY_SUMMARY_NAME_BYTES)
+}
+
+fn bounded_history_field(field: &str, value: &str, max_bytes: usize) -> anyhow::Result<String> {
+    if value.len() > max_bytes {
+        anyhow::bail!(
+            "invocation.history.list ledger field `{field}` exceeds the {max_bytes} byte summary bound"
+        );
     }
-    value
+    Ok(value.to_string())
+}
+
+fn truncate_history_text(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    const MARKER: &str = "…[truncated]";
+    let content_limit = max_bytes.saturating_sub(MARKER.len());
+    let mut boundary = content_limit.min(value.len());
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    (format!("{}{}", &value[..boundary], MARKER), true)
+}
+
+fn enforce_history_response_budget(response: &mut Value) -> anyhow::Result<()> {
+    // Attempt diagnostics are optional supplementary rows. Trim them first so
+    // the canonical invocation summaries and their cursor remain authoritative.
+    loop {
+        if serde_json::to_vec(response)?.len() <= MAX_HISTORY_LIST_RESPONSE_BYTES {
+            return Ok(());
+        }
+        let Some(diagnostics) = response
+            .get_mut("diagnostic_records")
+            .and_then(Value::as_array_mut)
+        else {
+            anyhow::bail!(
+                "invocation.history.list response exceeds the {} byte budget",
+                MAX_HISTORY_LIST_RESPONSE_BYTES
+            );
+        };
+        diagnostics.pop();
+        if diagnostics.is_empty() {
+            response
+                .as_object_mut()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("invocation.history.list response must be an object")
+                })?
+                .remove("diagnostic_records");
+        }
+    }
 }
 
 fn canonical_diagnostic_record(record: &InvocationLedgerRecord) -> anyhow::Result<Value> {
-    let mut value = compact_record_value(serde_json::to_value(record)?);
+    let mut value = serde_json::to_value(history_summary(record)?)?;
+    let raw_summary = record
+        .error
+        .as_ref()
+        .map(|error| error.message.as_str())
+        .unwrap_or_else(|| record.state.as_str());
+    let summary = truncate_history_text(raw_summary, MAX_HISTORY_ERROR_MESSAGE_BYTES).0;
     let diagnostic = json!({
-        "summary": record
-            .error
-            .as_ref()
-            .map(|error| error.message.clone())
-            .unwrap_or_else(|| format!("Invocation {}.", record.state)),
+        "summary": summary,
         "suggested_action": canonical_suggested_action(record),
         "route_ura": Value::Null,
         "execution_host_ura": Value::Null,
@@ -477,10 +622,26 @@ fn canonical_ura(value: &str, field: &str) -> anyhow::Result<String> {
     Ok(value.to_string())
 }
 
-fn canonical_principal_ura(value: &str, field: &str) -> anyhow::Result<String> {
+fn canonical_caller_ura(value: &str, field: &str) -> anyhow::Result<String> {
     let value = value.trim();
     let parsed = crate::core::ura::parse_ura(value)
-        .map_err(|error| anyhow::anyhow!("{field} must be a canonical principal URA: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("{field} must be a canonical caller URA: {error}"))?;
+    if !matches!(
+        parsed.kind,
+        crate::core::ura::URAKind::User
+            | crate::core::ura::URAKind::Agent
+            | crate::core::ura::URAKind::Device
+            | crate::core::ura::URAKind::Authority
+    ) {
+        anyhow::bail!("{field} must be a canonical User, Agent, Device, or Authority URA");
+    }
+    Ok(value.to_string())
+}
+
+fn canonical_callee_ura(value: &str, field: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    let parsed = crate::core::ura::parse_ura(value)
+        .map_err(|error| anyhow::anyhow!("{field} must be a canonical callee URA: {error}"))?;
     if !matches!(
         parsed.kind,
         crate::core::ura::URAKind::Agent
@@ -574,7 +735,7 @@ fn apply_filter_object(
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
     validate_filter_keys(object)?;
-    if let Some(caller) = optional_principal_ura_filter_string(object, "caller_ura")? {
+    if let Some(caller) = optional_caller_ura_filter_string(object, "caller_ura")? {
         query = query.caller_ura(caller);
     }
     let callee_ura = scoped_callee_ura(object)?;
@@ -608,7 +769,7 @@ fn validate_filter_keys(object: &serde_json::Map<String, Value>) -> anyhow::Resu
 }
 
 fn scoped_callee_ura(object: &serde_json::Map<String, Value>) -> anyhow::Result<Option<String>> {
-    optional_principal_ura_filter_string(object, "callee_ura")
+    optional_callee_ura_filter_string(object, "callee_ura")
 }
 
 fn non_empty_str(value: &Value) -> Option<&str> {
@@ -627,14 +788,24 @@ fn optional_filter_string<'a>(
         .ok_or_else(|| anyhow::anyhow!("filter.{key} must be a non-empty string"))
 }
 
-fn optional_principal_ura_filter_string(
+fn optional_caller_ura_filter_string(
     object: &serde_json::Map<String, Value>,
     key: &'static str,
 ) -> anyhow::Result<Option<String>> {
     let Some(value) = optional_filter_string(object, key)? else {
         return Ok(None);
     };
-    canonical_principal_ura(value, &format!("filter.{key}")).map(Some)
+    canonical_caller_ura(value, &format!("filter.{key}")).map(Some)
+}
+
+fn optional_callee_ura_filter_string(
+    object: &serde_json::Map<String, Value>,
+    key: &'static str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = optional_filter_string(object, key)? else {
+        return Ok(None);
+    };
+    canonical_callee_ura(value, &format!("filter.{key}")).map(Some)
 }
 
 fn optional_ability_ura_filter_string(
@@ -820,63 +991,23 @@ fn attempt_state_matches(expected: Option<&str>, attempt: &InvocationAttemptReco
             ))
 }
 
-fn ledger_resource_ura() -> anyhow::Result<Option<String>> {
-    let hosted_identity =
-        AgentAggregateRepository::load_hosted_identity_status().map_err(|error| {
-            anyhow::anyhow!("invocation.history ledger owner projection unavailable: {error:#}")
-        })?;
-    ledger_resource_ura_from_host_device_agent_ura(hosted_identity.host_device_agent_ura())
-}
-
-fn ledger_resource_ura_from_host_device_agent_ura(
-    host_device_agent_ura: Option<&str>,
-) -> anyhow::Result<Option<String>> {
-    let Some(host_device_agent_ura) = host_device_agent_ura
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
-    let parsed = crate::core::ura::parse_ura(host_device_agent_ura).map_err(|error| {
+fn ledger_resource_ura_from_runtime_owner_ura(runtime_owner_ura: &str) -> anyhow::Result<String> {
+    let runtime_owner_ura = runtime_owner_ura.trim();
+    if runtime_owner_ura.is_empty() {
+        anyhow::bail!("invocation.history ledger governance authority must not be empty");
+    }
+    crate::core::ura::parse_ura(runtime_owner_ura).map_err(|error| {
         anyhow::anyhow!(
-            "invocation.history ledger owner projection has invalid host_device_agent_ura {host_device_agent_ura:?}: {error}"
+            "invocation.history ledger governance authority is not a canonical runtime owner \
+             {runtime_owner_ura:?}: {error}"
         )
     })?;
-    let owner = match parsed.kind {
-        crate::core::ura::URAKind::Device => {
-            let device_id = parsed.device_id().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "invocation.history ledger owner projection device URA missing device id"
-                )
-            })?;
-            format!("device.{device_id}")
-        }
-        crate::core::ura::URAKind::User => {
-            let user_id = parsed.user_id().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "invocation.history ledger owner projection user URA missing user id"
-                )
-            })?;
-            format!("{user_id}.invocations")
-        }
-        crate::core::ura::URAKind::Agent => {
-            // DEC-F048 / RFC gap: `agent_ids()` is None for
-            // device-sponsored System Agents, and that None is the
-            // declared outcome — no resource_dot owner shape exists
-            // for them yet, and we do not invent one (RFC-007/008
-            // agenda; F-047 verdict).
-            let Some((user_id, _)) = parsed.agent_ids() else {
-                return Ok(None);
-            };
-            format!("{user_id}.invocations")
-        }
-        _ => return Ok(None),
-    };
-    Ok(Some(crate::core::ura::resource_dot_ura(
-        &parsed.realm,
-        &owner,
-        "billing/invocations",
-    )))
+    crate::core::ura::invocation_ledger_resource_ura(runtime_owner_ura).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invocation.history ledger governance authority does not support runtime owner \
+             {runtime_owner_ura:?}"
+        )
+    })
 }
 
 fn fetch_records_from_path(
@@ -913,9 +1044,9 @@ fn trace_graph_from_path(
 }
 
 pub fn list_history_description() -> &'static str {
-    "List recent invocation ledger records for this device. Returns \
-     complete URAs from the persisted envelope plus digest/sealed \
-     payload metadata for audit and billing."
+    "List bounded summaries of recent invocation ledger records for this \
+     runtime owner. Fetch one record through invocation.history.get for \
+     payload, diagnostic, causal, visibility, and receipt details."
 }
 
 pub fn get_history_description() -> &'static str {
@@ -948,7 +1079,11 @@ pub fn list_history_input_schema() -> Value {
                 "maxLength": MAX_HISTORY_CURSOR_LEN,
                 "description": "Opaque receipt history cursor returned by the previous invocation.history.list page."
             },
-            "compact": { "type": "boolean" },
+            "compact": {
+                "type": "boolean",
+                "deprecated": true,
+                "description": "Accepted for request compatibility. List records are always bounded summaries; use invocation.history.get for complete records."
+            },
             "include_attempts": {
                 "type": "boolean",
                 "description": "When true, include pre-runtime invocation attempts and row diagnostics for UI history views."
@@ -1058,10 +1193,24 @@ fn filter_schema() -> Value {
 mod tests {
     use super::*;
 
+    const TEST_RUNTIME_OWNER_URA: &str = "easynet:///r/test/device/invocation-history";
+    const TEST_CALLER_URA: &str = "easynet:///r/test/user/alice";
+    const TEST_CALLEE_URA: &str = "easynet:///r/test/agent/alice.history";
+
+    fn history_agent_ability_ura(public_name: &str) -> String {
+        crate::core::ura::owner_ability_ura(TEST_CALLEE_URA, public_name)
+            .expect("history test Agent ability URA")
+    }
+
     fn invocation_history_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_test_metadata_for_device_authority(
-            "easynet:///r/test/device/invocation-history",
-        )
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_RUNTIME_OWNER_URA)
+    }
+
+    fn invocation_history_test_reader(
+        ledger: Option<Arc<InvocationLedger>>,
+    ) -> InvocationLedgerReader {
+        InvocationLedgerReader::new(ledger, TEST_RUNTIME_OWNER_URA)
+            .expect("test runtime owner must project to a ledger resource")
     }
 
     #[test]
@@ -1160,8 +1309,42 @@ mod tests {
                 1,
                 "{ability} must publish exactly one daemon-local governance route"
             );
-            assert_eq!(rows[0].owner, OwnerKind::Device);
+            assert_eq!(rows[0].owner, OwnerKind::runtime_governance_system());
         }
+    }
+
+    #[test]
+    fn authority_runtime_binds_history_reader_to_authority_ledger() {
+        let authority_ura = crate::core::ura::hub_ura("history-test");
+        let authority =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+                &authority_ura,
+            )
+            .expect("realm authority context");
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let mut reg =
+            AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority);
+
+        register(&mut reg, None);
+
+        let response = reg
+            .get_rpc(ABILITY_HISTORY_PATH)
+            .expect("history path handler")(json!({}))
+        .expect("authority ledger path response");
+        assert_eq!(
+            response["ledger_ura"],
+            "easynet:///r/history-test/resource/authority.invocations/billing/invocations"
+        );
+        let rows = reg
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .filter(|row| row.name == ABILITY_HISTORY_PATH)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].owner, OwnerKind::RealmAuthority);
     }
 
     #[test]
@@ -1199,7 +1382,7 @@ mod tests {
 
     #[test]
     fn get_history_rejects_attempt_id_key() {
-        let reader = InvocationLedgerReader::new(None);
+        let reader = invocation_history_test_reader(None);
         let err = reader
             .get_history(json!({ "key": { "attempt_id": "att-retired" } }))
             .expect_err("attempt_id must not route into the attempt ledger");
@@ -1249,7 +1432,7 @@ mod tests {
         let record = sample_record("req-shared");
         ledger.put(&record).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let fetched = reader
             .fetch_one(
                 &path,
@@ -1269,9 +1452,11 @@ mod tests {
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         ledger.put(&sample_record("req-list-json")).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let value = reader.list_history(json!({ "limit": 5 })).unwrap();
         assert!(value.get("ledger_ura").is_some());
+        assert!(value.get("ledger_path").is_none());
+        assert!(value.get("attempt_ledger_path").is_none());
         let records = value
             .get("records")
             .and_then(Value::as_array)
@@ -1285,69 +1470,147 @@ mod tests {
     }
 
     #[test]
-    fn ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity() {
-        assert_eq!(
-            ledger_resource_ura_from_host_device_agent_ura(None).expect("unjoined state"),
-            None
-        );
-        assert_eq!(
-            ledger_resource_ura_from_host_device_agent_ura(Some("   ")).expect("blank state"),
-            None
-        );
+    fn ledger_resource_ura_projection_requires_canonical_runtime_owner() {
+        let blank = ledger_resource_ura_from_runtime_owner_ura("   ")
+            .expect_err("blank governance authority has no ledger owner");
+        assert!(blank.to_string().contains("must not be empty"));
 
-        let device =
-            ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/device/dev-1"))
-                .expect("device ledger URA")
-                .expect("joined device ledger URA");
+        let device = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/device/dev-1")
+            .expect("device ledger URA");
         assert_eq!(
             device,
             "easynet:///r/test/resource/device.dev-1/billing/invocations"
         );
 
-        let user =
-            ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/user/alice"))
-                .expect("user ledger URA")
-                .expect("joined user ledger URA");
+        let user = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/user/alice")
+            .expect("user ledger URA");
         assert_eq!(
             user,
             "easynet:///r/test/resource/alice.invocations/billing/invocations"
         );
 
-        let agent = ledger_resource_ura_from_host_device_agent_ura(Some(
-            "easynet:///r/test/agent/alice.ops",
-        ))
-        .expect("agent ledger URA")
-        .expect("joined agent ledger URA");
+        let agent = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/agent/alice.ops")
+            .expect("agent ledger URA");
         assert_eq!(
             agent,
             "easynet:///r/test/resource/alice.invocations/billing/invocations"
         );
 
-        let error = ledger_resource_ura_from_host_device_agent_ura(Some("not-a-ura"))
-            .expect_err("malformed hosted identity must fail closed");
+        let authority = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/authority")
+            .expect("authority ledger URA");
+        assert_eq!(
+            authority,
+            "easynet:///r/test/resource/authority.invocations/billing/invocations"
+        );
+
+        let error = ledger_resource_ura_from_runtime_owner_ura("not-a-ura")
+            .expect_err("malformed runtime owner must fail closed");
         assert!(
-            error.to_string().contains("invalid host_device_agent_ura"),
+            error.to_string().contains("not a canonical runtime owner"),
             "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn compact_record_value_removes_heavy_list_only_fields() {
-        let value = compact_record_value(json!({
-            "invocation_ura": "easynet:///r/test/resource/alice.invocations/req",
-            "request_id": "req",
-            "args": { "kind": "digest" },
-            "result": { "kind": "digest" },
-            "receipt_chain": { "anchors": [] },
-            "visibility": { "args": { "policy": "digest_only" } }
-        }));
+    fn history_summary_omits_details_and_bounds_error_diagnostics() {
+        let mut record = sample_record("req-summary");
+        record.error = Some(axon_sdk::invocation::LedgerErrorRecord {
+            source: "runtime".repeat(64),
+            code: "ABILITY_FAILED".repeat(32),
+            message: "remote failure diagnostic ".repeat(256),
+            retryable: false,
+            context: [(
+                "upstream_response".to_string(),
+                "large private diagnostic".repeat(1024),
+            )]
+            .into_iter()
+            .collect(),
+        });
 
-        assert!(value.get("invocation_ura").is_some());
-        assert!(value.get("request_id").is_some());
-        assert!(value.get("args").is_none());
-        assert!(value.get("result").is_none());
-        assert!(value.get("receipt_chain").is_none());
-        assert!(value.get("visibility").is_none());
+        let value = serde_json::to_value(history_summary(&record).expect("summary projection"))
+            .expect("summary JSON");
+
+        for detail_field in [
+            "args",
+            "result",
+            "diagnostics",
+            "causal_links",
+            "receipt_chain",
+            "visibility",
+        ] {
+            assert!(
+                value.get(detail_field).is_none(),
+                "{detail_field} belongs to invocation.history.get"
+            );
+        }
+        let error = value.get("error").expect("bounded error summary");
+        assert!(error.get("context").is_none());
+        assert_eq!(error.get("truncated").and_then(Value::as_bool), Some(true));
+        assert!(
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .expect("error message")
+                .len()
+                <= MAX_HISTORY_ERROR_MESSAGE_BYTES
+        );
+    }
+
+    #[test]
+    fn history_summary_page_is_bounded_by_encoded_bytes_and_resumable() {
+        let records = (0..MAX_LIMIT)
+            .map(|index| {
+                let mut record = sample_record(&format!("req-summary-{index:04}"));
+                record.error = Some(axon_sdk::invocation::LedgerErrorRecord {
+                    source: "runtime".to_string(),
+                    code: "ABILITY_FAILED".to_string(),
+                    message: "bounded diagnostic ".repeat(256),
+                    retryable: false,
+                    context: Default::default(),
+                });
+                record
+            })
+            .collect::<Vec<_>>();
+        let (summaries, next_cursor) = history_summary_page(
+            "easynet:///r/test/resource/alice.invocations/billing/invocations",
+            &records,
+            MAX_LIMIT,
+        )
+        .expect("bounded summary page");
+
+        assert!(!summaries.is_empty());
+        assert!(summaries.len() < records.len());
+        let next_cursor = next_cursor.expect("remaining records require a cursor");
+        let response = history_list_response_value(
+            "easynet:///r/test/resource/alice.invocations/billing/invocations",
+            &summaries,
+            Some(&next_cursor),
+        );
+        assert!(
+            serde_json::to_vec(&response)
+                .expect("encoded response")
+                .len()
+                <= MAX_HISTORY_LIST_RESPONSE_BYTES
+        );
+    }
+
+    #[test]
+    fn supplementary_diagnostics_are_removed_before_summary_budget_fails() {
+        let mut response = json!({
+            "ledger_ura": "easynet:///r/test/resource/alice.invocations/billing/invocations",
+            "records": [],
+            "diagnostic_records": ["x".repeat(MAX_HISTORY_LIST_RESPONSE_BYTES)],
+        });
+
+        enforce_history_response_budget(&mut response).expect("trim supplementary diagnostics");
+
+        assert!(response.get("diagnostic_records").is_none());
+        assert!(
+            serde_json::to_vec(&response)
+                .expect("encoded response")
+                .len()
+                <= MAX_HISTORY_LIST_RESPONSE_BYTES
+        );
     }
 
     #[test]
@@ -1367,8 +1630,8 @@ mod tests {
             span_id: None,
             caller_ura: Some("easynet:///r/test/device/caller".to_string()),
             callee_ura: Some("easynet:///r/test/device/callee".to_string()),
-            subject_ura: Some("easynet:///r/test/agent/alice.pages".to_string()),
-            ability: Some("project_list".to_string()),
+            subject_ura: Some("easynet:///r/test/agent/alice.worker".to_string()),
+            ability: Some("task.list".to_string()),
             ability_ura: None,
             route_ura: None,
             execution_host_ura: None,
@@ -1406,19 +1669,19 @@ mod tests {
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let mut noisy = sample_record("req-noisy");
         noisy.ability_name = "terminal.read".to_string();
-        noisy.ability_ura = "easynet:///r/test/ability/device.dev.terminal.read".to_string();
+        noisy.ability_ura = history_agent_ability_ura("terminal.read");
         noisy.started_unix_ms = 3;
         let mut wanted = sample_record("req-wanted");
         wanted.started_unix_ms = 2;
         ledger.put(&noisy).unwrap();
         ledger.put(&wanted).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let value = reader
             .list_history(json!({
                 "limit": 1,
                 "compact": true,
-                "exclude_ability_uras": ["easynet:///r/test/ability/device.dev.terminal.read"]
+                "exclude_ability_uras": [history_agent_ability_ura("terminal.read")]
             }))
             .unwrap();
         let records = value
@@ -1448,7 +1711,7 @@ mod tests {
         ledger.put(&newest).unwrap();
         ledger.put(&middle).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let first = reader.list_history(json!({ "limit": 1 })).unwrap();
         let first_records = first["records"].as_array().expect("first records");
         assert_eq!(first_records.len(), 1);
@@ -1489,19 +1752,19 @@ mod tests {
         let path = dir.path().join("invocations.redb");
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let mut kept = sample_record("req-kept");
-        kept.ability_ura = "easynet:///r/test/ability/device.dev.kept".to_string();
+        kept.ability_ura = history_agent_ability_ura("kept");
         let mut excluded = sample_record("req-excluded");
-        excluded.ability_ura = "easynet:///r/test/ability/device.dev.excluded".to_string();
+        excluded.ability_ura = history_agent_ability_ura("excluded");
         ledger.put(&kept).unwrap();
         ledger.put(&excluded).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let err = reader
             .list_history(json!({
                 "limit": 1,
                 "cursor": history_cursor_for(&excluded),
                 "filter": {
-                    "ability_uras": ["easynet:///r/test/ability/device.dev.kept"]
+                    "ability_uras": [history_agent_ability_ura("kept")]
                 }
             }))
             .unwrap_err()
@@ -1514,7 +1777,7 @@ mod tests {
 
     #[test]
     fn list_history_rejects_malformed_cursor() {
-        let reader = InvocationLedgerReader::new(None);
+        let reader = invocation_history_test_reader(None);
         let err = reader
             .list_history(json!({
                 "cursor": "not-a-receipt-history-cursor"
@@ -1532,8 +1795,8 @@ mod tests {
         let query = query_from_args(&json!({
             "key": { "ura": "easynet:///r/test/resource/alice.invocations/req-test" },
             "filter": {
-                "caller_ura": "easynet:///r/test/device/caller",
-                "callee_ura": "easynet:///r/test/device/callee",
+                "caller_ura": TEST_CALLER_URA,
+                "callee_ura": TEST_CALLEE_URA,
                 "subject_ura": "easynet:///r/test/user/alice",
                 "ability_ura": "easynet:///r/test/ability/authority.observe.health",
                 "state": "completed"
@@ -1544,14 +1807,8 @@ mod tests {
             query.key,
             Some(InvocationLedgerFetchKey::InvocationUra(_))
         ));
-        assert_eq!(
-            query.caller_ura.as_deref(),
-            Some("easynet:///r/test/device/caller")
-        );
-        assert_eq!(
-            query.callee_ura.as_deref(),
-            Some("easynet:///r/test/device/callee")
-        );
+        assert_eq!(query.caller_ura.as_deref(), Some(TEST_CALLER_URA));
+        assert_eq!(query.callee_ura.as_deref(), Some(TEST_CALLEE_URA));
         assert!(query.subject_uras.contains("easynet:///r/test/user/alice"));
         assert_eq!(
             query.ability_ura.as_deref(),
@@ -1623,7 +1880,7 @@ mod tests {
     #[test]
     fn query_from_args_rejects_malformed_scope_uras_before_ledger_read() {
         for (field, value, expected) in [
-            ("caller_ura", json!("not-a-ura"), "canonical principal URA"),
+            ("caller_ura", json!("not-a-ura"), "canonical caller URA"),
             (
                 "callee_ura",
                 json!("easynet:///r/test/ability/authority.bad"),
@@ -1702,7 +1959,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
-        let reader = InvocationLedgerReader::new(Some(ledger));
+        let reader = invocation_history_test_reader(Some(ledger));
 
         let err = reader
             .list_history(json!({
@@ -1826,12 +2083,12 @@ mod tests {
             .request_id(request_id.to_string())
             .trace_id("trace-test".to_string())
             .span_id("span-test".to_string())
-            .caller_ura("easynet:///r/test/device/caller".to_string())
-            .callee_ura("easynet:///r/test/device/callee".to_string())
+            .caller_ura(TEST_CALLER_URA.to_string())
+            .callee_ura(TEST_CALLEE_URA.to_string())
             .subject_ura("easynet:///r/test/user/alice".to_string())
-            .ability_ura("easynet:///r/test/ability/authority.observe.health".to_string())
+            .ability_ura(history_agent_ability_ura("observe.health"))
             .ability_name("observe.health".to_string())
-            .authority_form("self".to_string())
+            .authority_form("self+identity".to_string())
             .state("completed".to_string())
             .started_unix_ms(1)
             .completed_unix_ms(2)
@@ -1862,12 +2119,12 @@ mod tests {
             .request_id(request_id.to_string())
             .trace_id(format!("trace-{request_id}"))
             .span_id(format!("span-{request_id}"))
-            .caller_ura("easynet:///r/test/device/caller".to_string())
-            .callee_ura("easynet:///r/test/device/callee".to_string())
+            .caller_ura(TEST_CALLER_URA.to_string())
+            .callee_ura(TEST_CALLEE_URA.to_string())
             .subject_ura("easynet:///r/test/user/alice".to_string())
             .ability_ura(ability_ura.to_string())
             .ability_name(ability_name.to_string())
-            .authority_form("self".to_string())
+            .authority_form("self+identity".to_string())
             .state("completed".to_string())
             .started_unix_ms(1)
             .args(axon_sdk::invocation::LedgerEventPayload::digest(
@@ -1887,7 +2144,7 @@ mod tests {
             .put(&record_with_ability(
                 "req-by-ura",
                 "liangbing.chat",
-                "easynet:///r/test/ability/device.dev.liangbing.chat",
+                &history_agent_ability_ura("liangbing.chat"),
             ))
             .unwrap();
         ledger
@@ -1901,10 +2158,10 @@ mod tests {
             .put(&record_with_ability(
                 "req-unrelated",
                 "observe.health",
-                "easynet:///r/test/ability/device.dev.observe.health",
+                &history_agent_ability_ura("observe.health"),
             ))
             .unwrap();
-        let reader = InvocationLedgerReader::new(Some(Arc::new(ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::new(ledger)));
 
         // ONE request carrying canonical Ability URAs; local registry names
         // are not query authority.
@@ -1913,7 +2170,7 @@ mod tests {
                 "limit": 50,
                 "filter": {
                     "ability_uras": [
-                        "easynet:///r/test/ability/device.dev.liangbing.chat",
+                        history_agent_ability_ura("liangbing.chat"),
                         "easynet:///r/test/ability/authority.liangbing.chat",
                     ]
                 },
@@ -1939,25 +2196,25 @@ mod tests {
     #[test]
     fn retain_by_ability_ura_sets_applies_include_then_exclude() {
         let mut records = vec![
-            record_with_ability("a", "chat", "easynet:///r/test/ability/device.a.chat"),
+            record_with_ability("a", "chat", &history_agent_ability_ura("chat")),
             record_with_ability(
                 "b",
                 "terminal.read",
-                "easynet:///r/test/ability/device.b.read",
+                &history_agent_ability_ura("terminal.read"),
             ),
             record_with_ability(
                 "c",
                 "observe.health",
-                "easynet:///r/test/ability/device.c.health",
+                &history_agent_ability_ura("observe.health"),
             ),
         ];
         let include: HashSet<String> = [
-            "easynet:///r/test/ability/device.a.chat".to_string(),
-            "easynet:///r/test/ability/device.b.read".to_string(),
+            history_agent_ability_ura("chat"),
+            history_agent_ability_ura("terminal.read"),
         ]
         .into_iter()
         .collect();
-        let exclude: HashSet<String> = ["easynet:///r/test/ability/device.b.read".to_string()]
+        let exclude: HashSet<String> = [history_agent_ability_ura("terminal.read")]
             .into_iter()
             .collect();
         retain_by_ability_ura_sets(&mut records, &include, &exclude);

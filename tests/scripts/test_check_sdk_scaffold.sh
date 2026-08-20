@@ -54,7 +54,7 @@ make_sandbox() {
     "$dir/tools/sdk-conformance-runner/src" \
     "$dir/tools/scripts"
   cp "$ROOT/include/easynet_cli.h" "$dir/include/easynet_cli.h"
-  cp "$ROOT/include/easynet_cli.exports.v6" "$dir/include/easynet_cli.exports.v6"
+  cp "$ROOT/include/easynet_cli.exports.v7" "$dir/include/easynet_cli.exports.v7"
   cp "$ROOT/tools/sdk-conformance-runner/Cargo.toml" "$dir/tools/sdk-conformance-runner/Cargo.toml"
   cp "$ROOT/tools/sdk-conformance-runner/src/main.rs" "$dir/tools/sdk-conformance-runner/src/main.rs"
   mkdir -p "$dir/src/ffi/features"
@@ -144,11 +144,11 @@ rm "$FIXTURE/sdk/SDK_INTERFACE_SPEC.md"
 expect_fail "$FIXTURE"
 cp "$ROOT/sdk/SDK_INTERFACE_SPEC.md" "$FIXTURE/sdk/SDK_INTERFACE_SPEC.md"
 
-rm "$FIXTURE/sdk/conformance/refresh_adapter_report_evidence.py"
+rm "$FIXTURE/sdk/conformance/refresh_conformance_report_evidence.py"
 expect_fail "$FIXTURE"
 cp \
-  "$ROOT/sdk/conformance/refresh_adapter_report_evidence.py" \
-  "$FIXTURE/sdk/conformance/refresh_adapter_report_evidence.py"
+  "$ROOT/sdk/conformance/refresh_conformance_report_evidence.py" \
+  "$FIXTURE/sdk/conformance/refresh_conformance_report_evidence.py"
 
 rm "$FIXTURE/include/easynet_cli.h"
 expect_fail "$FIXTURE"

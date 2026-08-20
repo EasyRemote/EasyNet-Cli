@@ -24,7 +24,7 @@ use serde_json::{json, Map, Value};
 
 use crate::core::domain::{AgentId, LoopId};
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::daemon::execution::loop_instance::LoopService;
 
 pub const ABILITY_CREATE: &str = crate::daemon::ability::names::automation::LOOP_CREATE;
@@ -33,32 +33,37 @@ pub const ABILITY_SUBSCRIBE: &str = crate::daemon::ability::names::automation::L
 pub const ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::LOOP_CANCEL;
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<LoopService>) {
+    let owner = OwnerKind::automation_system();
     let a = Arc::clone(&svc);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_envelope_and_owner(
         "loop.create",
-        OwnerKind::Device,
-        Arc::new(move |args| create_handler(&a, args)),
+        owner.clone(),
+        Arc::new(move |envelope, args| create_handler_with_envelope(&a, &envelope, args)),
     );
     let b = Arc::clone(&svc);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_envelope_and_owner(
         "loop.status",
-        OwnerKind::Device,
-        Arc::new(move |args| status_handler(&b, args)),
+        owner.clone(),
+        Arc::new(move |envelope, args| status_handler_with_envelope(&b, &envelope, args)),
     );
     let c = Arc::clone(&svc);
-    reg.register_stream_with_owner(
+    reg.register_stream_with_envelope_and_owner(
         "loop.subscribe",
-        OwnerKind::Device,
-        Arc::new(move |args| subscribe_handler(&c, args)),
+        owner.clone(),
+        Arc::new(move |envelope, args| subscribe_handler_with_envelope(&c, &envelope, args)),
     );
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_envelope_and_owner(
         "loop.cancel",
-        OwnerKind::Device,
-        Arc::new(move |args| cancel_handler(&svc, args)),
+        owner,
+        Arc::new(move |envelope, args| cancel_handler_with_envelope(&svc, &envelope, args)),
     );
 }
 
-fn create_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
+fn create_handler_with_authority(
+    svc: &Arc<LoopService>,
+    args: Value,
+    authority: crate::core::domain::DeferredInvocationAuthority,
+) -> anyhow::Result<Value> {
     let args = loop_args_object(
         "loop.create",
         &args,
@@ -72,6 +77,7 @@ fn create_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> 
         .unwrap_or_else(|| "Continue the loop task and return the current result.".to_string());
     let id = svc.create(
         AgentId::new(worker_agent),
+        authority,
         verify_expr,
         max_iters,
         body_prompt,
@@ -79,32 +85,148 @@ fn create_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> 
     Ok(json!({ "loop_id": id.as_str() }))
 }
 
-fn status_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
+fn create_handler_with_envelope(
+    svc: &Arc<LoopService>,
+    envelope: &EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let worker_agent = args
+        .get("worker_agent")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("loop.create: missing required string `worker_agent`"))?;
+    let identity = crate::daemon::execution::runtime_identity::LocalRuntimeInvocationIdentity::from_system_agent_callee(envelope.callee())?;
+    let authority = identity.deferred_user_authority(
+        envelope.caller(),
+        envelope.invocation_id(),
+        envelope.callee(),
+        worker_agent,
+        identity.local_node(),
+    )?;
+    create_handler_with_authority(svc, args, authority)
+}
+
+#[cfg(test)]
+fn create_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
+    let worker_agent = args
+        .get("worker_agent")
+        .and_then(Value::as_str)
+        .unwrap_or("worker")
+        .to_string();
+    create_handler_with_authority(
+        svc,
+        args,
+        crate::core::domain::DeferredInvocationAuthority {
+            accountable_user_ura: crate::core::ura::user_ura("test", "user-1"),
+            creator_invocation_id: "test-loop-create".to_string(),
+            controller_callee_ura: crate::core::ura::device_agent_ura(
+                "test",
+                "self",
+                crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+            ),
+            target_callee_ura: crate::core::ura::agent_ura("test", "user-1", &worker_agent),
+            execution_host_ura: crate::core::ura::device_ura("test", "self"),
+        },
+    )
+}
+
+#[cfg(test)]
+fn test_owner_envelope() -> EnvelopeContext {
+    test_owner_envelope_for("user-1")
+}
+
+#[cfg(test)]
+fn test_owner_envelope_for(user_id: &str) -> EnvelopeContext {
+    EnvelopeContext::for_test_targeted_ability(
+        crate::core::ura::user_ura("test", user_id),
+        crate::core::ura::device_agent_ura(
+            "test",
+            "self",
+            crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+        ),
+        ABILITY_STATUS,
+        crate::core::ura::user_ura("test", user_id),
+    )
+}
+
+fn accountable_user_from_envelope(
+    ability: &str,
+    envelope: &EnvelopeContext,
+) -> anyhow::Result<String> {
+    let caller = envelope.caller();
+    let parsed = crate::core::ura::parse_ura(caller).map_err(|error| {
+        anyhow::anyhow!("{ability}: caller must be a canonical User URA: {error}")
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::User || parsed.user_id().is_none() {
+        anyhow::bail!("{ability}: caller must be the accountable User Principal");
+    }
+    let canonical = crate::core::ura::user_ura(
+        &parsed.realm,
+        parsed
+            .user_id()
+            .expect("validated caller user id must exist"),
+    );
+    if canonical != caller {
+        anyhow::bail!("{ability}: caller User URA must be canonical");
+    }
+    Ok(caller.to_string())
+}
+
+fn status_handler_with_envelope(
+    svc: &Arc<LoopService>,
+    envelope: &EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<Value> {
     let args = loop_args_object("loop.status", &args, &["loop_id"])?;
     let id = loop_required_string_arg("loop.status", args, "loop_id")?;
     let display_id = id.clone();
-    match svc.status(&LoopId::new(id))? {
+    let owner = accountable_user_from_envelope("loop.status", envelope)?;
+    match svc.status_for_accountable_user(&LoopId::new(id), &owner)? {
         Some(inst) => Ok(serde_json::to_value(inst)?),
         None => anyhow::bail!("loop.status: loop {display_id} not found"),
     }
 }
 
-fn subscribe_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<StreamSource> {
+#[cfg(test)]
+fn status_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
+    status_handler_with_envelope(svc, &test_owner_envelope(), args)
+}
+
+fn subscribe_handler_with_envelope(
+    svc: &Arc<LoopService>,
+    envelope: &EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<StreamSource> {
     let args = loop_args_object("loop.subscribe", &args, &["loop_id"])?;
     let id = loop_required_string_arg("loop.subscribe", args, "loop_id")?;
     let loop_id = LoopId::new(id);
-    let (snapshot, live) = svc.subscribe(&loop_id)?;
+    let owner = accountable_user_from_envelope("loop.subscribe", envelope)?;
+    let (snapshot, live) = svc.subscribe_for_accountable_user(&loop_id, &owner)?;
     match live {
         Some(rx) => Ok(StreamSource::SnapshotThenLive(snapshot, rx)),
         None => Ok(StreamSource::Snapshot(snapshot)),
     }
 }
 
-fn cancel_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
+#[cfg(test)]
+fn subscribe_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<StreamSource> {
+    subscribe_handler_with_envelope(svc, &test_owner_envelope(), args)
+}
+
+fn cancel_handler_with_envelope(
+    svc: &Arc<LoopService>,
+    envelope: &EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<Value> {
     let args = loop_args_object("loop.cancel", &args, &["loop_id"])?;
     let id = loop_required_string_arg("loop.cancel", args, "loop_id")?;
-    svc.cancel(&LoopId::new(id))?;
+    let owner = accountable_user_from_envelope("loop.cancel", envelope)?;
+    svc.cancel_for_accountable_user(&LoopId::new(id), &owner)?;
     Ok(json!({ "ok": true }))
+}
+
+#[cfg(test)]
+fn cancel_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
+    cancel_handler_with_envelope(svc, &test_owner_envelope(), args)
 }
 
 fn loop_args_object<'a>(
@@ -219,16 +341,16 @@ pub fn create_description() -> &'static str {
 }
 
 pub fn status_description() -> &'static str {
-    "Fetch a loop instance's current state, current iteration, and metadata."
+    "Fetch a caller-owned loop instance's current state, current iteration, and metadata."
 }
 
 pub fn subscribe_description() -> &'static str {
-    "Subscribe to a loop's status stream. Replays any buffered per-iteration frames, then tails \
+    "Subscribe to a caller-owned loop's status stream. Replays any buffered per-iteration frames, then tails \
      live IterStarted / BodyChunk / VerifyChunk / IterFinished / Terminal frames while the loop is running."
 }
 
 pub fn cancel_description() -> &'static str {
-    "Cancel an in-flight loop. Already-terminal loops (Done / Exhausted / VerifyMalformed) are \
+    "Cancel a caller-owned in-flight loop. Already-terminal loops (Done / Exhausted / VerifyMalformed) are \
      untouched."
 }
 
@@ -251,6 +373,33 @@ mod tests {
         let s = status_handler(&svc, json!({"loop_id": id})).unwrap();
         assert_eq!(s["max_iters"], 3);
         assert_eq!(s["verify_expr"], "true");
+    }
+
+    #[test]
+    fn status_cancel_and_subscribe_are_scoped_to_accountable_user() {
+        let svc = fresh();
+        let alice = test_owner_envelope_for("user-1");
+        let bob = test_owner_envelope_for("user-2");
+        let id = create_handler(&svc, json!({"worker_agent": "alice", "max_iters": 3})).unwrap()
+            ["loop_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let bob_status =
+            status_handler_with_envelope(&svc, &bob, json!({"loop_id": id.clone()})).unwrap_err();
+        assert!(format!("{bob_status}").contains("not owned"));
+
+        let bob_subscribe =
+            subscribe_handler_with_envelope(&svc, &bob, json!({"loop_id": id.clone()}))
+                .unwrap_err();
+        assert!(format!("{bob_subscribe}").contains("not owned"));
+
+        let bob_cancel =
+            cancel_handler_with_envelope(&svc, &bob, json!({"loop_id": id.clone()})).unwrap_err();
+        assert!(format!("{bob_cancel}").contains("not owned"));
+
+        status_handler_with_envelope(&svc, &alice, json!({"loop_id": id})).unwrap();
     }
 
     #[test]

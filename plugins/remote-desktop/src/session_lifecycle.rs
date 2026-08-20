@@ -5,20 +5,17 @@
 // Description: Lease, liveness, terminal cleanup, and transport teardown.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::daemon::plugins::remote_desktop::constants::{
-    REASON_SESSION_EXPIRED, REASON_SESSION_TERMINAL,
-};
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::daemon::plugins::remote_desktop::session_access::{
     ensure_session_control_identity, ensure_session_resource_identity,
 };
+use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_access(
     plugin: &RemoteDesktopPlugin,
@@ -42,27 +39,43 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_access(
     ensure_session_liveness(plugin, ability, session)
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_audit_access(
+    plugin: &RemoteDesktopPlugin,
+    ability: &'static str,
+    env: &EnvelopeContext,
+    args: &Value,
+    session: &mut RemoteDesktopSession,
+) -> anyhow::Result<()> {
+    ensure_session_control_identity(ability, env, args, session)?;
+    let _ = expire_session_if_needed(plugin, session, now_ms());
+    Ok(())
+}
+
 fn ensure_session_liveness(
     plugin: &RemoteDesktopPlugin,
     ability: &'static str,
     session: &mut RemoteDesktopSession,
 ) -> anyhow::Result<()> {
     if expire_session_if_needed(plugin, session, now_ms()) {
-        anyhow::bail!(
-            "{ability}: session {:?} lease expired at {}; reason={REASON_SESSION_EXPIRED}",
-            session.session_id(),
-            session.lease_expires_at_ms()
-        );
+        return Err(RemoteDesktopError::SessionExpired {
+            ability,
+            session_id: session.session_id().to_string(),
+        }
+        .into());
     }
     ensure_not_terminal(ability, session)
 }
 
-fn ensure_not_terminal(ability: &str, session: &RemoteDesktopSession) -> anyhow::Result<()> {
+fn ensure_not_terminal(
+    ability: &'static str,
+    session: &RemoteDesktopSession,
+) -> anyhow::Result<()> {
     if session.is_terminal() {
-        anyhow::bail!(
-            "{ability}: session {:?} is terminal; reason={REASON_SESSION_TERMINAL}",
-            session.session_id()
-        );
+        return Err(RemoteDesktopError::SessionTerminal {
+            ability,
+            session_id: session.session_id().to_string(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -79,6 +92,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn stop_session_transports(
     session_id: &str,
     session: &mut RemoteDesktopSession,
 ) {
+    plugin.cancel_session_lease(session_id);
+    plugin.cancel_session_target_tracking(session_id);
     if let Some(stop_tx) = session.detach_preview_transport() {
         let _ = stop_tx.send(true);
     }
@@ -97,22 +112,6 @@ fn expire_session_if_needed(
     stop_session_transports(plugin, &session_id, session);
     session.expire(now);
     true
-}
-
-pub(in crate::daemon::plugins::remote_desktop) fn spawn_session_lease_watchdog(
-    plugin: Arc<RemoteDesktopPlugin>,
-    session_id: String,
-    lease_expires_at_ms: u64,
-) {
-    let delay_ms = lease_expires_at_ms.saturating_sub(now_ms());
-    let watchdog_plugin = Arc::downgrade(&plugin);
-    plugin.transport_manager().spawn(async move {
-        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-        let Some(plugin) = watchdog_plugin.upgrade() else {
-            return;
-        };
-        expire_session_from_watchdog(&plugin, &session_id, lease_expires_at_ms);
-    });
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn expire_session_from_watchdog(
@@ -136,20 +135,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn prune_inactive_sessions(
     sessions: &mut HashMap<String, RemoteDesktopSession>,
     now: u64,
 ) {
-    let mut removed = Vec::new();
-    sessions.retain(|session_id, session| {
-        let keep = !session.is_terminal() && !session.is_expired_at(now);
-        if !keep {
-            removed.push((session_id.clone(), session.detach_preview_transport()));
+    let expired: Vec<String> = sessions
+        .iter()
+        .filter(|(_, session)| !session.is_terminal() && session.is_expired_at(now))
+        .map(|(session_id, _)| session_id.clone())
+        .collect();
+    for session_id in expired {
+        if let Some(session) = sessions.get_mut(&session_id) {
+            stop_session_transports(plugin, &session_id, session);
+            session.expire(now);
         }
-        keep
-    });
-    for (session_id, preview_stop_tx) in removed {
-        if let Some(stop_tx) = preview_stop_tx {
-            let _ = stop_tx.send(true);
-        }
-        stop_direct_webrtc_endpoint(plugin, &session_id);
     }
+
+    let _ = RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
 }
 
 #[cfg(test)]
@@ -160,21 +158,20 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-    use crate::daemon::persistence::resources::{self, ResourceType, ResourcesFile};
-    use crate::daemon::plugins::remote_desktop::constants::TRANSPORT_WEBRTC;
-    use crate::daemon::plugins::remote_desktop::request::{
-        RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
+    use crate::daemon::persistence::resources::{self, ResourcesFile};
+    use crate::daemon::plugins::remote_desktop::constants::{
+        REASON_SESSION_EXPIRED, TRANSPORT_WEBRTC,
     };
     use crate::daemon::plugins::remote_desktop::session::{
-        RemoteDesktopSessionInit, RemoteDesktopState,
+        RemoteDesktopSession, RemoteDesktopState,
     };
-    use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
+    use crate::daemon::plugins::remote_desktop::session_store::MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION;
     use crate::daemon::plugins::remote_desktop::test_support::{
-        env_for, reset_store, seed_display, test_lock, test_plugin,
+        env_for, reset_store, seed_display, test_lock, test_plugin, test_session_init,
     };
 
     #[test]
-    fn expired_session_rejects_non_end_operations() {
+    fn expired_session_allows_audit_read_and_then_idempotent_end() {
         let _lock = test_lock();
         let plugin = test_plugin();
         reset_store(&plugin);
@@ -183,7 +180,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-expired-display");
         resources::save(&file).unwrap();
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({
@@ -203,13 +200,14 @@ mod tests {
             });
         }
 
-        let err = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
+        let shown = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({"session_id": "rd-expired-test", "session_token": token.clone()}),
         )
-        .unwrap_err();
-        assert!(err.to_string().contains(REASON_SESSION_EXPIRED));
+        .unwrap();
+        assert_eq!(shown["state"], json!("closed"));
+        assert_eq!(shown["end_reason"], json!(REASON_SESSION_EXPIRED));
 
         let ended = crate::daemon::plugins::remote_desktop::handlers::end_session::handle(
             Arc::clone(&plugin),
@@ -231,7 +229,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-expired-preview-display");
         resources::save(&file).unwrap();
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({
@@ -251,14 +249,14 @@ mod tests {
             });
         }
 
-        let err = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
+        let shown = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({"session_id": "rd-expired-preview-test", "session_token": token}),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains(REASON_SESSION_EXPIRED));
+        assert_eq!(shown["end_reason"], json!(REASON_SESSION_EXPIRED));
         assert!(
             *stop_rx.borrow_and_update(),
             "lease expiry must signal the preview worker stop channel"
@@ -275,7 +273,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-watchdog-display");
         resources::save(&file).unwrap();
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({
@@ -311,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn create_session_prunes_inactive_sessions_before_capacity_check() {
+    fn create_session_ignores_terminal_tombstones_for_capacity_check() {
         let _lock = test_lock();
         let plugin = test_plugin();
         reset_store(&plugin);
@@ -320,32 +318,27 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-capacity-display");
         resources::save(&file).unwrap();
         {
+            let mut stale_sessions = Vec::new();
+            for index in 0..plugin.config().max_sessions() {
+                let now = now_ms();
+                let session_id = format!("stale-{index}");
+                let mut session = RemoteDesktopSession::new(test_session_init(
+                    &session_id,
+                    &ura,
+                    vec![TRANSPORT_WEBRTC.to_string()],
+                ));
+                session.set_lease_expires_at_for_test(now.saturating_sub(1));
+                session.close("test_stale");
+                stale_sessions.push((session_id, session));
+            }
             plugin.session_store().with_sessions(|sessions| {
-                for index in 0..plugin.config().max_sessions() {
-                    let now = now_ms();
-                    let session_id = format!("stale-{index}");
-                    let mut session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
-                        session_id: session_id.clone(),
-                        session_token: format!("token-{index}"),
-                        creator_caller_ura: Some("easynet:///r/acme/user/test".to_string()),
-                        consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env_for(&ura)),
-                        subject_ura: ura.clone(),
-                        subject_type: ResourceType::Display,
-                        subject_display_name: "Test Display".to_string(),
-                        mode: "view_only".to_string(),
-                        lease_ttl_ms: 1,
-                        transport_preferences: vec![TRANSPORT_WEBRTC.to_string()],
-                        video: RemoteDesktopVideoConstraints::default(),
-                        input_policy: RemoteDesktopInputPolicy::default(),
-                    });
-                    session.set_lease_expires_at_for_test(now.saturating_sub(1));
-                    session.close("test_stale");
+                for (session_id, session) in stale_sessions {
                     sessions.insert(session_id, session);
                 }
             });
         }
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({
@@ -358,7 +351,19 @@ mod tests {
 
         assert_eq!(created["session_id"], json!("rd-after-prune"));
         plugin.session_store().with_sessions(|sessions| {
-            assert_eq!(sessions.len(), 1);
+            let active_sessions = sessions
+                .values()
+                .filter(|session| !session.is_terminal())
+                .count();
+            let terminal_rows = sessions
+                .values()
+                .filter(|session| session.is_terminal())
+                .count();
+            assert_eq!(active_sessions, 1);
+            assert!(
+                terminal_rows
+                    <= active_sessions.saturating_mul(MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION)
+            );
             assert!(sessions.contains_key("rd-after-prune"));
         });
     }

@@ -294,7 +294,8 @@ stateDiagram-v2
   "retry_after_unix_ms": 1780887355000,
   "evidence": {
     "target_ura": "easynet:///r/localhost/device/<id>",
-    "ability_ura": "easynet:///r/localhost/ability/device.<id>.terminal.list",
+    "callee_ura": "easynet:///r/localhost/agent/device.<id>.terminal",
+    "ability_ura": "easynet:///r/localhost/ability/system-agent.<id>.terminal.terminal.list",
     "trace": "<trace-id>",
     "span": "<span-id>"
   }
@@ -333,8 +334,9 @@ stateDiagram-v2
 {
   "answer_kind": "FinalRoute",
   "selected_route": {
-    "callee_ura": "easynet:///r/localhost/device/<device-id>",
-    "ability_ura": "easynet:///r/localhost/ability/device.<device-id>.terminal.list",
+    "callee_ura": "easynet:///r/localhost/agent/device.<device-id>.terminal",
+    "ability_ura": "easynet:///r/localhost/ability/system-agent.<device-id>.terminal.terminal.list",
+    "execution_host_ura": "easynet:///r/localhost/device/<device-id>",
     "route_ura": "easynet:///r/localhost/route/<route-id>",
     "dispatch_name": "terminal.list",
     "next_hop": {

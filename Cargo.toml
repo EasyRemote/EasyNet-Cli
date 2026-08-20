@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "0.96.8"
+version = "0.139.14"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -9,12 +9,13 @@ build = "build.rs"
 [workspace]
 members = [
     ".",
+    "plugins/browser",
     "plugins/remote-desktop",
     "tools/sdk-conformance-runner",
 ]
 
 [features]
-default = ["axon-pb", "remote-desktop", "native-media"]
+default = ["axon-pb", "browser-cdp", "remote-desktop", "native-media"]
 
 # Compile schemas/*.proto into Rust types via prost-build. Off by
 # default in v1 so developers without protoc installed can still
@@ -36,6 +37,11 @@ axon-pb = [
     "dep:tower",
     "dep:hyper-util",
 ]
+
+# Compile the provider-backed browser plugin and its version-tolerant CDP
+# transport. Browser commands/events remain application payloads carried by
+# Axon InvokeBidi; this feature does not add browser semantics to Axon.
+browser-cdp = ["dep:tokio-tungstenite", "dep:url"]
 
 # Compile the in-tree remote desktop plugin package and its media transport
 # stack. This is part of the current product surface: Frontend remote desktop,
@@ -131,6 +137,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 comfy-table = "7"
 console = "0.15"
+crossterm = "0.29"
 # Arrow-key TUI picker for `easynet agent send --resume` and any
 # future "pick from a list" surface. Thin wrapper over `console`
 # (already a direct dep), so adding `dialoguer` reuses the same
@@ -229,8 +236,8 @@ openh264 = { version = "0.9", optional = true }
 # Remote desktop production media transport. This is Rust-native WebRTC
 # signaling/media glue for device-side RTP/SRTP; EasyNet invocation carries
 # SDP/ICE only, not desktop media frames.
-webrtc = { version = "=0.20.0-rc.1", optional = true }
-rtc = { version = "0.20.0-alpha.1", optional = true }
+webrtc = { version = "=0.20.3", optional = true }
+rtc = { version = "=0.20.3", optional = true }
 toml = "0.8"
 toml_edit = "0.23"
 # Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.
@@ -238,6 +245,7 @@ toml_edit = "0.23"
 # features CLI needs directly for broadcast::channel and multi-thread
 # runtime (Commit 2 flips main.rs to #[tokio::main]).
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time", "net", "signal", "process"] }
+tokio-tungstenite = { version = "0.30", features = ["connect"], optional = true }
 # tokio-util LengthDelimitedCodec + Framed for IPC frame I/O
 # (4-byte LE length prefix + JSON payload). Plan v10.5 §架构决策
 # — 本机 IPC 接口.
@@ -247,6 +255,7 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+url = { version = "2.5.8", optional = true }
 # OpenAPI import accepts both JSON and YAML specifications.
 serde_yaml = "0.9"
 # Hidden password input for `easynet auth login` when --password
@@ -293,6 +302,19 @@ thiserror = "1"
 # permission rules) sits in plain Rust on top.
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
+tree-sitter-css = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-highlight = "0.25"
+tree-sitter-html = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-typescript = "0.23"
+tree-sitter-yaml = "0.7"
 
 # RFC-006-B v0.6 / Pages reference system — HTTP listener.
 #  - axum: in-daemon HTTP listener for `*.*.pages.localhost:<port>` (MVP). The
@@ -380,6 +402,10 @@ objc2-foundation = "0.3"
 objc2-av-foundation = { version = "0.3", features = [
     "AVCaptureOutputBase",
     "AVCapturePhotoOutput",
+] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSRunningApplication",
+    "libc",
 ] }
 objc2-core-media = "0.3"
 objc2-core-video = "0.3"

@@ -84,16 +84,17 @@ pub fn register<F>(
         Arc::new(registry_provider);
     let provider_for_list = Arc::clone(&provider);
     let local_registry_for_list = Arc::clone(&local_registry_handle);
+    let owner = OwnerKind::a2a_integration_system();
     reg.register_rpc_with_owner(
         ABILITY_LIST_SKILLS,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |_args: Value| {
             list_skills_handler(&provider_for_list, &local_registry_for_list)
         }),
     );
     reg.register_rpc_with_owner(
         ABILITY_SEND_TASK,
-        OwnerKind::Device,
+        owner,
         Arc::new(move |args: Value| send_task_handler(&provider, &local_registry_handle, args)),
     );
 }
@@ -287,7 +288,8 @@ pub fn send_task_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
     use std::sync::OnceLock;
 
     const TEST_DEVICE_URA: &str = "easynet:///r/test/device/device";
@@ -364,7 +366,7 @@ mod tests {
         let mut r = AgentRegistry::default();
         r.agents.insert(
             agent_name.to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         r
     }
@@ -421,7 +423,7 @@ mod tests {
 
         snapshot.lock().unwrap().agents.insert(
             "probe".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         let second = handler(json!({})).unwrap();
         assert_eq!(second["agents"].as_array().unwrap().len(), 0);

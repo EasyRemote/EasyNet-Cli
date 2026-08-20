@@ -17,8 +17,8 @@
 // (海峰 + 凉冰, 2026-05-03) collapses every cross-device dispatch
 // onto the canonical `Invocation::Invoke` RPC; for read-only directory
 // queries the canonical surface is `federation.discover`. One
-// helper, one path; the legacy `node.list` arm gets
-// removed in the cull phase.
+// helper, one path; the legacy `node.list` arm has been culled from
+// the daemon catalogue.
 //
 // Wire shape (post-cut)
 // ---------------------

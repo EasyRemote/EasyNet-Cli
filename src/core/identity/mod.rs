@@ -279,6 +279,18 @@ impl RuntimeGovernanceReadSubject {
                 realm: subject.realm,
             });
         }
+        if subject.kind == crate::core::ura::URAKind::Device
+            && callee.kind == crate::core::ura::URAKind::Agent
+            && subject.realm == callee.realm
+            && callee
+                .device_agent_ids()
+                .is_some_and(|(device_id, _)| subject.device_id() == Some(device_id))
+        {
+            return Ok(Self::RuntimeOwner {
+                subject_ura: subject_ura.to_string(),
+                realm: subject.realm,
+            });
+        }
         Err(RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead)
     }
 
@@ -494,6 +506,16 @@ mod tests {
         )
         .expect("device runtime-owner governance subject");
         assert_eq!(device_subject.as_str(), "easynet:///r/acme/device/dev-a");
+
+        let system_agent_host_subject = RuntimeGovernanceReadSubject::parse_for_callee(
+            "easynet:///r/acme/device/dev-a",
+            "easynet:///r/acme/agent/device.dev-a.runtime-introspection",
+        )
+        .expect("SystemAgent governance read uses its sponsoring Device as runtime subject");
+        assert_eq!(
+            system_agent_host_subject.as_str(),
+            "easynet:///r/acme/device/dev-a"
+        );
     }
 
     #[test]

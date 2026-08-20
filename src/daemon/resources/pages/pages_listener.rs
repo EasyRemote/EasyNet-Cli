@@ -835,6 +835,7 @@ mod tests {
             handle,
             crate::daemon::ability::builtins::resources::pages::PagesIdentity {
                 user: Some("alice".into()),
+                owner_user_id: Some("alice".into()),
                 realm: Some("easynet.run".into()),
                 listener_port: Some(8787),
             },

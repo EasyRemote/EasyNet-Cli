@@ -653,6 +653,14 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
     if !safe_path_segment(ext) {
         anyhow::bail!("record_capture: extension {ext:?} is not a safe file suffix");
     }
+    let device_identity = crate::core::ura::parse_ura(device)
+        .map_err(|error| anyhow::anyhow!("record_capture: device URA is invalid: {error}"))?;
+    if device_identity.kind != crate::core::ura::URAKind::Device {
+        anyhow::bail!(
+            "record_capture: storage owner must be a Device URA, got {}",
+            device_identity.kind
+        );
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now();
     // Timestamp prefix keeps `ls` of the folder chronologically sorted
@@ -686,16 +694,24 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
     Ok(entry)
 }
 
-/// Newest-first capture entries, optionally filtered to one ability,
-/// capped at `min(limit, LIST_CAPTURES_MAX)`.
-pub fn list_captures(ability: Option<&str>, limit: usize) -> anyhow::Result<Vec<CaptureEntry>> {
+/// Newest-first capture entries owned by one canonical device, optionally
+/// filtered to one ability, capped at `min(limit, LIST_CAPTURES_MAX)`.
+///
+/// Device ownership is part of the lookup key. Callers must derive it from
+/// an admitted envelope; an artifact id or ability name is never authority.
+pub fn list_captures(
+    device_ura: &str,
+    ability: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<CaptureEntry>> {
     let cap = limit.clamp(1, LIST_CAPTURES_MAX);
     let Some(content) = read_captures_log()? else {
         return Ok(Vec::new());
     };
     let mut entries: Vec<CaptureEntry> = parse_captures_log(&content)?
         .into_iter()
-        .filter(|e: &CaptureEntry| ability.is_none_or(|a| e.ability == a))
+        .filter(|entry| entry.device == device_ura)
+        .filter(|entry| ability.is_none_or(|name| entry.ability == name))
         .collect();
     entries.reverse();
     entries.truncate(cap);
@@ -704,12 +720,13 @@ pub fn list_captures(ability: Option<&str>, limit: usize) -> anyhow::Result<Vec<
 
 /// Distinct ability folder names present in the captures index,
 /// alphabetical. Drives the Context page's per-device folder list.
-pub fn list_capture_abilities() -> anyhow::Result<Vec<String>> {
+pub fn list_capture_abilities(device_ura: &str) -> anyhow::Result<Vec<String>> {
     let Some(content) = read_captures_log()? else {
         return Ok(Vec::new());
     };
     let mut abilities: Vec<String> = parse_captures_log(&content)?
         .into_iter()
+        .filter(|entry| entry.device == device_ura)
         .map(|e| e.ability)
         .collect();
     abilities.sort();
@@ -720,13 +737,19 @@ pub fn list_capture_abilities() -> anyhow::Result<Vec<String>> {
 /// Absolute path + entry for a stored capture. Same traversal posture
 /// as `clip_image_abs_path`: ids are ours, but the lookup still
 /// refuses separators so a crafted id can't escape.
-pub fn capture_abs_path(id: &str) -> anyhow::Result<Option<(PathBuf, CaptureEntry)>> {
+pub fn capture_abs_path(
+    device_ura: &str,
+    id: &str,
+) -> anyhow::Result<Option<(PathBuf, CaptureEntry)>> {
     if id.contains('/') || id.contains('\\') || id.contains("..") {
         return Ok(None);
     }
-    let Some(entry) = list_captures(None, LIST_CAPTURES_MAX)?
+    let Some(content) = read_captures_log()? else {
+        return Ok(None);
+    };
+    let Some(entry) = parse_captures_log(&content)?
         .into_iter()
-        .find(|e| e.id == id)
+        .find(|entry| entry.device == device_ura && entry.id == id)
     else {
         return Ok(None);
     };
@@ -1014,24 +1037,43 @@ mod tests {
         .unwrap();
 
         // newest-first, ability filter works
-        let all = list_captures(None, 10).unwrap();
+        let all = list_captures("easynet:///r/localhost/device/d1", None, 10).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].ability, "mic.subscribe", "newest first");
-        let screens = list_captures(Some("screen.snapshot"), 10).unwrap();
+        let screens = list_captures(
+            "easynet:///r/localhost/device/d1",
+            Some("screen.snapshot"),
+            10,
+        )
+        .unwrap();
         assert_eq!(screens.len(), 1);
         assert_eq!(screens[0].id, entry.id);
 
         // distinct folder names, alphabetical
         assert_eq!(
-            list_capture_abilities().unwrap(),
+            list_capture_abilities("easynet:///r/localhost/device/d1").unwrap(),
             vec!["mic.subscribe".to_string(), "screen.snapshot".to_string()]
         );
 
         // payload resolvable, traversal refused
-        let (path, got) = capture_abs_path(&entry.id).unwrap().unwrap();
+        let (path, got) = capture_abs_path("easynet:///r/localhost/device/d1", &entry.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"\xff\xd8fakejpeg");
         assert_eq!(got.content_type, "image/jpeg");
-        assert!(capture_abs_path("../evil").unwrap().is_none());
+        assert!(
+            capture_abs_path("easynet:///r/localhost/device/d1", "../evil")
+                .unwrap()
+                .is_none()
+        );
+        assert!(list_captures("easynet:///r/localhost/device/d2", None, 10)
+            .unwrap()
+            .is_empty());
+        assert!(
+            capture_abs_path("easynet:///r/localhost/device/d2", &entry.id)
+                .unwrap()
+                .is_none()
+        );
 
         // unsafe ability folder refused
         assert!(record_capture(CaptureRecord {
@@ -1066,9 +1108,9 @@ mod tests {
         .unwrap();
 
         for result in [
-            list_captures(None, 10).map(|_| ()),
-            list_capture_abilities().map(|_| ()),
-            capture_abs_path("good").map(|_| ()),
+            list_captures("easynet:///r/localhost/device/d1", None, 10).map(|_| ()),
+            list_capture_abilities("easynet:///r/localhost/device/d1").map(|_| ()),
+            capture_abs_path("easynet:///r/localhost/device/d1", "good").map(|_| ()),
         ] {
             let message = format!("{:#}", result.unwrap_err());
             assert!(

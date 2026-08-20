@@ -375,9 +375,18 @@ type principalAbilityInvoker interface {
 	Invoke(context.Context, RuntimeCallContext, string, any) (map[string]any, error)
 }
 
+// PrincipalInvocationContextFactory creates the complete Invocation context
+// after the typed PrincipalLifecycle operation is known. Authority-bearing
+// products use this seam when the authority subject is descriptor-bound to
+// the concrete principal.lifecycle.* ability.
+type PrincipalInvocationContextFactory interface {
+	ContextForPrincipalAbility(context.Context, string) (RuntimeCallContext, error)
+}
+
 type RuntimePrincipalProvider struct {
-	ability principalAbilityInvoker
-	call    RuntimeCallContext
+	ability     principalAbilityInvoker
+	call        RuntimeCallContext
+	callFactory PrincipalInvocationContextFactory
 }
 
 var _ PrincipalLifecycle = (*RuntimePrincipalProvider)(nil)
@@ -389,7 +398,27 @@ func NewRuntimePrincipalProvider(ability principalAbilityInvoker, call RuntimeCa
 	if strings.TrimSpace(call.CallerURA) == "" || strings.TrimSpace(call.CalleeURA) == "" || strings.TrimSpace(call.SubjectURA) == "" {
 		return nil, invalidPrincipal("runtime call context requires caller_ura, callee_ura and subject_ura", nil)
 	}
+	if err := validateRuntimeCallContext(call); err != nil {
+		return nil, err
+	}
 	return &RuntimePrincipalProvider{ability: ability, call: call}, nil
+}
+
+// NewRuntimePrincipalProviderWithContextFactory constructs a provider whose
+// complete call context is minted independently for each lifecycle operation.
+// The factory receives the exact generated ability name before any runtime
+// descriptor or authority lowering occurs.
+func NewRuntimePrincipalProviderWithContextFactory(
+	ability principalAbilityInvoker,
+	factory PrincipalInvocationContextFactory,
+) (*RuntimePrincipalProvider, error) {
+	if ability == nil {
+		return nil, invalidPrincipal("runtime ability client is required", nil)
+	}
+	if factory == nil {
+		return nil, invalidPrincipal("principal invocation context factory is required", nil)
+	}
+	return &RuntimePrincipalProvider{ability: ability, callFactory: factory}, nil
 }
 
 func (p *RuntimePrincipalProvider) Create(ctx context.Context, request CreatePrincipalRequest) (PrincipalSnapshot, error) {
@@ -459,7 +488,10 @@ func (p *RuntimePrincipalProvider) invoke(ctx context.Context, ability string, a
 	if p == nil || p.ability == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("runtime Principal provider is not initialized", nil)
 	}
-	call := p.call
+	call, err := p.callForAbility(ctx, ability)
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
 	metadata := clonePrincipalMetadata(call.Metadata)
 	metadata["profile"] = principalLifecycleProfile
 	metadata["system_ability"] = ability
@@ -473,6 +505,24 @@ func (p *RuntimePrincipalProvider) invoke(ctx context.Context, ability string, a
 		return PrincipalSnapshot{}, err
 	}
 	return principalSnapshotFromMap(principal)
+}
+
+func (p *RuntimePrincipalProvider) callForAbility(ctx context.Context, ability string) (RuntimeCallContext, error) {
+	call := p.call
+	if p.callFactory != nil {
+		var err error
+		call, err = p.callFactory.ContextForPrincipalAbility(ctx, ability)
+		if err != nil {
+			return RuntimeCallContext{}, err
+		}
+	}
+	if strings.TrimSpace(call.CallerURA) == "" || strings.TrimSpace(call.CalleeURA) == "" || strings.TrimSpace(call.SubjectURA) == "" {
+		return RuntimeCallContext{}, invalidPrincipal("runtime call context requires caller_ura, callee_ura and subject_ura", nil)
+	}
+	if err := validateRuntimeCallContext(call); err != nil {
+		return RuntimeCallContext{}, err
+	}
+	return call, nil
 }
 
 func principalCreateWire(request CreatePrincipalRequest) map[string]any {
@@ -1018,7 +1068,7 @@ func requiredPrincipalPublicKey(raw map[string]any, key string, path string) (ed
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil {
 		return nil, invalidPrincipal(path+" base64 decode failed", err)
 	}

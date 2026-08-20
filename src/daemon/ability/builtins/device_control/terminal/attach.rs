@@ -139,11 +139,14 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
             &env,
             attach_args.session_id(),
             "terminal.attach",
-            "stream",
         )?;
         attach_session(&pty_for_attach, attach_args)
     });
-    reg.register_bidi_with_envelope_and_owner("terminal.attach", OwnerKind::Device, handler);
+    reg.register_bidi_with_envelope_and_owner(
+        "terminal.attach",
+        OwnerKind::terminal_system(),
+        handler,
+    );
 }
 
 #[cfg(test)]
@@ -446,7 +449,7 @@ fn terminal_attach_reject_unknown_frame_fields(
 ) -> anyhow::Result<()> {
     let mut unknown = frame
         .keys()
-        .filter(|key| !allowed_keys.iter().any(|allowed| *allowed == key.as_str()))
+        .filter(|key| !allowed_keys.contains(&key.as_str()))
         .map(String::as_str)
         .collect::<Vec<_>>();
     if !unknown.is_empty() {

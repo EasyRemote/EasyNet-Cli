@@ -24,6 +24,38 @@ type InvocationTraceEdge = axoninv.InvocationTraceEdge
 type InvocationLedgerRecord = axoninv.InvocationLedgerRecord
 type InvocationTraceGraph = axoninv.InvocationTraceGraph
 
+// invocationHistorySummary is the bounded list projection returned by
+// invocation.history.list. Complete payloads, diagnostics, causal links,
+// visibility, usage, and receipt-chain facts belong to invocation.history.get
+// and therefore remain represented by InvocationLedgerRecord.
+type invocationHistorySummary struct {
+	InvocationURA   string                         `json:"invocation_ura"`
+	RequestID       string                         `json:"request_id"`
+	TraceID         string                         `json:"trace_id"`
+	SpanID          string                         `json:"span_id"`
+	CallerURA       string                         `json:"caller_ura"`
+	CalleeURA       string                         `json:"callee_ura"`
+	SubjectURA      string                         `json:"subject_ura"`
+	AbilityURA      string                         `json:"ability_ura"`
+	AbilityName     string                         `json:"ability_name"`
+	State           string                         `json:"state"`
+	StartedUnixMs   int64                          `json:"started_unix_ms"`
+	CompletedUnixMs *int64                         `json:"completed_unix_ms"`
+	ElapsedMs       *uint64                        `json:"elapsed_ms"`
+	Error           *invocationHistoryErrorSummary `json:"error,omitempty"`
+}
+
+// invocationHistoryErrorSummary is the bounded error projection embedded in
+// a list row. The complete provider-owned error object remains available from
+// invocation.history.get.
+type invocationHistoryErrorSummary struct {
+	Source    string `json:"source"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+	Truncated bool   `json:"truncated"`
+}
+
 // ReceiptReference is a runtime-issued locator plus the exact canonical
 // receipt hash. The runtime SDK validates and projects it; it never fabricates
 // a receipt URA.
@@ -438,6 +470,29 @@ func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRe
 	}, nil
 }
 
+func historySummaryAsLedgerRecord(summary invocationHistorySummary) InvocationLedgerRecord {
+	var errorJSON json.RawMessage
+	if summary.Error != nil {
+		errorJSON, _ = json.Marshal(summary.Error)
+	}
+	return InvocationLedgerRecord{
+		InvocationURA:   summary.InvocationURA,
+		RequestID:       summary.RequestID,
+		TraceID:         summary.TraceID,
+		SpanID:          summary.SpanID,
+		CallerURA:       summary.CallerURA,
+		CalleeURA:       summary.CalleeURA,
+		SubjectURA:      summary.SubjectURA,
+		AbilityURA:      summary.AbilityURA,
+		AbilityName:     summary.AbilityName,
+		State:           summary.State,
+		StartedUnixMs:   summary.StartedUnixMs,
+		CompletedUnixMs: summary.CompletedUnixMs,
+		ElapsedMs:       summary.ElapsedMs,
+		Error:           errorJSON,
+	}
+}
+
 func (p *RuntimeReceiptProvider) Get(ctx context.Context, request ReceiptGetRequest) (ReceiptGetResult, error) {
 	if err := p.requireReady(); err != nil {
 		return ReceiptGetResult{}, err
@@ -545,17 +600,61 @@ func parseReceiptRecords(value any) ([]InvocationLedgerRecord, error) {
 	}
 	records := make([]InvocationLedgerRecord, 0, len(rows))
 	for index, row := range rows {
-		record, err := parseReceiptRecord(row)
+		record, err := parseReceiptHistorySummary(row)
 		if err != nil {
 			return nil, invalidReceipt(fmt.Sprintf("decode Receipt history record %d", index), err)
 		}
-		records = append(records, record)
+		records = append(records, historySummaryAsLedgerRecord(record))
 	}
 	return records, nil
 }
 
+func parseReceiptHistorySummary(value any) (invocationHistorySummary, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return invocationHistorySummary{}, invalidReceipt("encode Receipt history summary", err)
+	}
+	var summary invocationHistorySummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return invocationHistorySummary{}, invalidReceipt("decode Receipt history summary", err)
+	}
+	if err := validateReceiptHistorySummary(summary); err != nil {
+		return invocationHistorySummary{}, err
+	}
+	return summary, nil
+}
+
+func validateReceiptHistorySummary(summary invocationHistorySummary) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "invocation_ura", value: summary.InvocationURA},
+		{name: "caller_ura", value: summary.CallerURA},
+		{name: "callee_ura", value: summary.CalleeURA},
+		{name: "subject_ura", value: summary.SubjectURA},
+		{name: "ability_ura", value: summary.AbilityURA},
+	} {
+		if _, err := ParseURAParts(strings.TrimSpace(field.value)); err != nil {
+			return invalidReceipt(field.name+" must be a canonical URA", err)
+		}
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "request_id", value: summary.RequestID},
+		{name: "ability_name", value: summary.AbilityName},
+		{name: "state", value: summary.State},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			return invalidReceipt(field.name+" is required", nil)
+		}
+	}
+	return nil
+}
+
 func parseReceiptRecord(value any) (InvocationLedgerRecord, error) {
-	value = unwrapReceiptRecordValue(value)
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return InvocationLedgerRecord{}, invalidReceipt("encode Axon invocation ledger record", err)
@@ -565,23 +664,6 @@ func parseReceiptRecord(value any) (InvocationLedgerRecord, error) {
 		return InvocationLedgerRecord{}, invalidReceipt("decode Axon invocation ledger record", err)
 	}
 	return record, nil
-}
-
-func unwrapReceiptRecordValue(value any) any {
-	row, ok := value.(map[string]any)
-	if !ok {
-		return value
-	}
-	for _, key := range []string{"record", "ledger_record"} {
-		nested, ok := row[key]
-		if !ok || nested == nil {
-			continue
-		}
-		if _, ok := nested.(map[string]any); ok {
-			return nested
-		}
-	}
-	return value
 }
 
 func receiptLedgerSource(output map[string]any) (ReceiptLedgerSource, error) {

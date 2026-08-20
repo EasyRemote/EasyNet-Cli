@@ -2,7 +2,8 @@
 // =================================
 //
 // File: src/daemon/ability/builtins/governance/api_key.rs
-// Description: ability family `<user>.api_key.{create, list, revoke}`
+// Description: Device-local API key governance abilities
+//              `<user>.api_key.{create, list, revoke}`.
 //              for OpenAI-compatibility-shaped API keys (RFC-006-C v0.1).
 //
 //              This is intentionally separate from the RFC-002
@@ -290,7 +291,7 @@ pub fn write_local_default_token(token: &str) -> anyhow::Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("local API key cache path has no parent"))?;
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(dir)?;
     let text = format!("default_token = \"{token}\"\n");
     fs::write(&path, text)?;
     // tighten perms — best effort
@@ -304,7 +305,7 @@ pub fn write_local_default_token(token: &str) -> anyhow::Result<()> {
 
 pub fn register(reg: &mut AxonAbilityCatalog, user: &str, realm: &str) {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let owner = OwnerKind::User(user.to_string());
+    let owner = OwnerKind::api_key_management_system();
     let user_owned = user.to_string();
     let realm_owned = realm.to_string();
     let u1 = user_owned.clone();

@@ -15,22 +15,52 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::anyhow;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 
-/// Resolve the explicit signing identity for a CLI-originated remote request.
+use crate::core::identity::RuntimeIdentityUra;
+use crate::core::ura::URAKind;
+
+/// Paired identities available to a CLI-originated accountable mutation.
 ///
-/// Remote dispatch has no synthetic caller. An unpaired or incomplete CLI
-/// identity is rejected before request construction because no canonical signer
-/// can own that invocation tuple.
-pub(crate) fn require_caller_device_ura_from_credentials() -> anyhow::Result<String> {
-    let credentials = crate::daemon::persistence::config::load_credentials().map_err(|error| {
-        anyhow!("remote invocation requires paired device credentials: {error}")
-    })?;
-    caller_device_ura(&credentials)
+/// The User is the signed caller/accountability root. The Device is only the
+/// local execution host used for locality decisions. Keeping both identities
+/// in one typed value prevents command-specific paths from silently replacing
+/// the User caller with Device custody.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairedInvocationIdentity {
+    caller_user_ura: String,
+    local_device_ura: String,
 }
 
-pub(crate) fn caller_device_ura(
+impl PairedInvocationIdentity {
+    pub(crate) fn load(surface: &str) -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials()
+            .with_context(|| format!("load paired credentials for {surface}"))?;
+        let caller_user_ura = match credentials.runtime_user_binding()? {
+            crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } => user_ura,
+            crate::daemon::persistence::config::RuntimeUserBinding::Unbound { reason } => {
+                anyhow::bail!(
+                    "{surface} requires an accountable User Principal caller; runtime user binding is {reason}"
+                )
+            }
+        };
+        let local_device_ura = caller_device_ura(&credentials)?;
+        Ok(Self {
+            caller_user_ura,
+            local_device_ura,
+        })
+    }
+
+    pub(crate) fn caller_user_ura(&self) -> &str {
+        &self.caller_user_ura
+    }
+
+    pub(crate) fn local_device_ura(&self) -> &str {
+        &self.local_device_ura
+    }
+}
+
+fn caller_device_ura(
     credentials: &crate::daemon::persistence::config::Credentials,
 ) -> anyhow::Result<String> {
     let realm = credentials.realm.trim();
@@ -43,7 +73,7 @@ pub(crate) fn caller_device_ura(
     Ok(crate::core::ura::device_ura(realm, node_id))
 }
 
-/// Resolve a CLI remote target argument into a canonical Device or Authority URA.
+/// Resolve a CLI remote target argument into a canonical Device URA.
 ///
 /// Public remote invocation ingress is URA-only. Bare node ids and product
 /// directory aliases are rejected before descriptor resolution so the caller
@@ -54,12 +84,19 @@ pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
     if trimmed.is_empty() {
         anyhow::bail!("remote device target must not be empty; pass a canonical Device URA");
     }
-    if crate::core::ura::parse_ura(trimmed).is_err() {
+    let identity = RuntimeIdentityUra::parse(trimmed).map_err(|error| {
+        anyhow!(
+            "remote device target {trimmed:?} is not a canonical URA: {error}; \
+             pass `easynet:///r/<realm>/device/<id>`"
+        )
+    })?;
+    if identity.kind() != URAKind::Device {
         anyhow::bail!(
-            "remote device target {trimmed:?} is not a canonical URA; pass `easynet:///r/<realm>/device/<id>`"
+            "remote device target {trimmed:?} has kind {}; expected a canonical Device URA",
+            identity.kind()
         );
     }
-    crate::daemon::invocation::routing::remote_invoke::parse_node_ura(trimmed)
+    Ok(identity.into_string())
 }
 
 /// Resolve a CLI device-target flag into a canonical Device URA.
@@ -81,7 +118,9 @@ pub(crate) fn resolve_cli_device_target_ura(
             .with_context(|| format!("resolve local {surface} target Device URA"));
     }
     resolve_target_device_ura(target).map_err(|error| {
-        anyhow!("{surface} target must be a canonical Device URA; failed to resolve {target:?}: {error}")
+        anyhow!(
+            "{surface} target must be a canonical Device URA; failed to resolve {target:?}: {error}"
+        )
     })
 }
 
@@ -108,6 +147,16 @@ mod tests {
         assert!(
             msg.contains("easynet:///r/<realm>/device/<id>"),
             "error must explain the canonical recovery path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn authority_ura_is_not_a_device_target() {
+        let err = resolve_target_device_ura("easynet:///r/peer/authority")
+            .expect_err("device-specific ingress must reject an Authority URA");
+        assert!(
+            err.to_string().contains("expected a canonical Device URA"),
+            "unexpected target-kind error: {err}"
         );
     }
 

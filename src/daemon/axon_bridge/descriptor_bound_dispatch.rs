@@ -280,7 +280,7 @@ pub struct RpcDispatchOutcome {
     /// when admission reached the runtime.
     pub admission_receipt: Option<axon_sdk::invocation::SignedInvocationReceipt>,
     /// Terminal execution receipt, when the runtime minted one —
-    /// carried back to the hub on carrier-v1 sessions (DEC-F004).
+    /// carried back to the hub on canonical sessions (DEC-F004).
     pub terminal_receipt: Option<axon_sdk::invocation::SignedInvocationReceipt>,
 }
 
@@ -345,6 +345,9 @@ async fn dispatch_rpc(
     cancellations: &crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
 ) -> RpcDispatchOutcome {
     let lifecycle_envelope = wire.envelope.clone();
+    let dispatch_ability = lifecycle_envelope.envelope().ability.clone();
+    let dispatch_callee = lifecycle_envelope.envelope().callee.ura.clone();
+    let dispatch_caller = lifecycle_envelope.envelope().caller.ura.clone();
     let prepared = match request_for_wire_dispatch(AxonInvocationCallMode::Rpc, wire) {
         Ok(prepared) => prepared,
         Err(err) => {
@@ -364,11 +367,26 @@ async fn dispatch_rpc(
             };
         }
     };
+    crate::op_event!(
+        component = daemon_invocation,
+        kind = axon_rpc_descriptor_bound_invoke_started,
+        ability = dispatch_ability.as_str(),
+        callee_ura = dispatch_callee.as_str(),
+        caller_ura = dispatch_caller.as_str(),
+    );
     let result = runtime
         .invoke_descriptor_bound_request_async(prepared.request)
         .await;
     match result {
         Ok((handle, _signed)) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_descriptor_bound_admitted,
+                ability = dispatch_ability.as_str(),
+                callee_ura = dispatch_callee.as_str(),
+                caller_ura = dispatch_caller.as_str(),
+                invocation_id = handle.invocation_id(),
+            );
             let lifecycle = match RegisteredInvocationLifecycle::register(
                 cancellations.clone(),
                 &lifecycle_envelope,
@@ -381,7 +399,25 @@ async fn dispatch_rpc(
                     return cancellation_error_outcome(err);
                 }
             };
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_descriptor_bound_finalization_wait_started,
+                ability = dispatch_ability.as_str(),
+                callee_ura = dispatch_callee.as_str(),
+                caller_ura = dispatch_caller.as_str(),
+                invocation_id = handle.invocation_id(),
+            );
             let outcome = drain_to_outcome(handle.clone()).await;
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_descriptor_bound_finalization_completed,
+                ability = dispatch_ability.as_str(),
+                callee_ura = dispatch_callee.as_str(),
+                caller_ura = dispatch_caller.as_str(),
+                invocation_id = handle.invocation_id(),
+                state = format!("{:?}", outcome.state),
+                has_error = outcome.error.is_some(),
+            );
             // The lifecycle token is the only authority allowed to retain the
             // canonical terminal transition in the cancellation registry.
             let _ = lifecycle.finalized().await;
@@ -409,6 +445,12 @@ async fn dispatch_rpc(
 fn cancellation_error_outcome(
     error: crate::daemon::invocation::dispatch::cancellation::InvocationCancellationError,
 ) -> RpcDispatchOutcome {
+    let detail = error.to_string();
+    crate::op_event!(
+        component = daemon_invocation,
+        kind = invocation_cancel_request_failed,
+        error = detail.as_str(),
+    );
     RpcDispatchOutcome {
         invocation_id: None,
         state: InvocationState::Failed,
@@ -793,9 +835,14 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let records = ledger.list_all().unwrap();
         assert_eq!(records.len(), 1);
+        let descriptor_ref = format!("{ability_ura}@{}", wire_test_descriptor_binding());
+        assert_eq!(records[0].ability_name, "test.echo");
+        assert_eq!(records[0].ability_ura, ability_ura);
+        assert_eq!(records[0].descriptor_ref, descriptor_ref);
+        assert_eq!(records[0].admission_action, "invoke");
         assert_eq!(
-            records[0].ability_name,
-            format!("{ability_ura}@{}", wire_test_descriptor_binding())
+            records[0].safe_read, false,
+            "invoke admission must not be projected as a safe read"
         );
         assert_eq!(records[0].state, "completed");
         assert_eq!(records[0].caller_ura, "easynet:///r/t/agent/u.alice");
@@ -864,8 +911,36 @@ mod tests {
             InvocationCancellationError::OwnershipDenied
         ));
 
+        let wrong_authority = cancellations
+            .request_cancel(
+                command.clone(),
+                "easynet:///r/t/agent/u.alice",
+                "easynet:///r/t/device/other",
+            )
+            .await
+            .expect_err("a different execution authority cannot cancel the target");
+        assert!(matches!(
+            wrong_authority,
+            InvocationCancellationError::AuthorityMismatch
+        ));
+
+        let wrong_invocation = InvocationCancelCommand::new(
+            &lifecycle_hash,
+            Some("inv_not_the_target".to_string()),
+            "operator stop",
+        )
+        .expect("valid cancel command");
+        let mismatch = cancellations
+            .request_cancel(wrong_invocation, "easynet:///r/t/agent/u.alice", callee_ura)
+            .await
+            .expect_err("a mismatched invocation id cannot cancel the target");
+        assert!(matches!(
+            mismatch,
+            InvocationCancellationError::TargetInvocationMismatch
+        ));
+
         let accepted = cancellations
-            .request_cancel(command, "easynet:///r/t/agent/u.alice", callee_ura)
+            .request_cancel(command.clone(), "easynet:///r/t/agent/u.alice", callee_ura)
             .await
             .expect("target owner can request cancellation");
         assert!(accepted.accepted);
@@ -889,6 +964,14 @@ mod tests {
             Some(target_id)
         );
         assert!(outcome.admission_receipt.is_some());
+
+        let replay = cancellations
+            .request_cancel(command, "easynet:///r/t/agent/u.alice", callee_ura)
+            .await
+            .expect("terminal cancellation replay is idempotent");
+        assert!(replay.accepted);
+        assert!(replay.already_terminal);
+        assert_eq!(replay.target_invocation_id, target_id);
     }
 
     #[tokio::test]
@@ -1173,10 +1256,12 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let records = ledger.list_all().unwrap();
         assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].ability_name,
-            format!("{ability_ura}@{}", wire_test_descriptor_binding())
-        );
+        let descriptor_ref = format!("{ability_ura}@{}", wire_test_descriptor_binding());
+        assert_eq!(records[0].ability_name, "demo.daemon_internal");
+        assert_eq!(records[0].ability_ura, ability_ura);
+        assert_eq!(records[0].descriptor_ref, descriptor_ref);
+        assert_eq!(records[0].admission_action, "invoke");
+        assert!(!records[0].safe_read);
         assert_eq!(records[0].state, "completed");
         assert_eq!(
             outcome.invocation_id.as_deref(),

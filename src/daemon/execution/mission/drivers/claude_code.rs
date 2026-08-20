@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::daemon::execution::mission::adapter::DriverCommand;
+use crate::daemon::execution::mission::adapter::{DriverCommand, DriverIsolation};
 use crate::daemon::execution::mission::dispatch::ToolCall;
 use crate::daemon::execution::mission::drivers::invocation_trace::{
     apply_tool_result_meta, parse_invocation_trace_metadata, text_to_json_value,
@@ -88,6 +88,11 @@ pub struct ClaudeOptions {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: Option<PathBuf>,
+    /// Structured system content supplied by the caller. Kept separate from
+    /// stdin and projected through Claude Code's native system-prompt flag.
+    pub system_prompt: Option<String>,
+    /// Ambient-context policy for this invocation.
+    pub isolation: DriverIsolation,
     /// PR-7 Commit 2: Timeline writer. When `Some`, each
     /// streamed stdout line is emitted as a `progress` event on
     /// the P1-P6 event log (and broadcast to any live
@@ -138,6 +143,8 @@ impl Default for ClaudeOptions {
             max_output_bytes: 1_048_576,
             env: BTreeMap::new(),
             cwd: None,
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
             command: DriverCommand::Default,
@@ -166,40 +173,9 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
-        // Auto-accept file edits within cwd (the isolated workspace).
-        // Writes outside cwd still require approval.
-        "--permission-mode".to_string(),
-        "acceptEdits".to_string(),
-        // Pre-authorise common read-only / launch shell commands so the
-        // agent doesn't stall waiting for approval on `open`, `ls`, etc.
-        // The trailing `mcp__easynet` (no parens, no glob) authorises
-        // every MCP tool exposed by the EasyNet workspace MCP server
-        // — i.e. fs.read / fs.write / process.exec / shell.run /
-        // http.request and the agent's own per-workspace abilities.
-        // Without this, the spawned `claude -p` runs in non-interactive
-        // mode and refuses to call MCP tools because no human is there
-        // to approve. Claude Code's CLI accepts `mcp__<server>` to
-        // mean "every tool from this MCP server is pre-allowed".
-        "--allowedTools".to_string(),
-        // Pre-authorise the EasyNet-shaped agent loop.
-        //
-        // `Bash(easynet:*)` is what a freshly-installed agent
-        // needs to actually run the steps its seeded skills teach
-        // (e.g. `easynet pages create`, `easynet ability deploy`)
-        // — without it, the agent reads `easynet-pages-author`
-        // SKILL.md and then stalls asking the (non-interactive)
-        // dispatcher to approve every shell call. `Bash(curl:*)`
-        // is included so the agent can verify its own deploy by
-        // hitting the URL it just published.
-        //
-        // The rest of the list is unchanged from the prior allow
-        // set (Bash safe-readers + Read/Write/Edit + the EasyNet
-        // MCP namespace).
-        "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
-         Bash(easynet:*) Bash(curl:*) \
-         Read Write Edit Glob Grep mcp__easynet"
-            .to_string(),
     ];
+
+    append_claude_policy_args(&mut args, &opts);
 
     if let Some(m) = &opts.model {
         args.push("--model".to_string());
@@ -232,13 +208,15 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     }
 
     // Explicitly load MCP config from the workspace.
-    if let Some(cwd) = &opts.cwd {
-        let mcp_json = cwd.join(".mcp.json");
-        if mcp_json.exists() {
-            args.push("--mcp-config".to_string());
-            args.push(mcp_json.to_string_lossy().to_string());
+    if opts.isolation == DriverIsolation::Agent {
+        if let Some(cwd) = &opts.cwd {
+            let mcp_json = cwd.join(".mcp.json");
+            if mcp_json.exists() {
+                args.push("--mcp-config".to_string());
+                args.push(mcp_json.to_string_lossy().to_string());
+            }
+            append_claude_workspace_plugin_dirs(&mut args, cwd);
         }
-        append_claude_workspace_plugin_dirs(&mut args, cwd);
     }
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -333,6 +311,42 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         anyhow::bail!(format_missing_final_result_event_error(&binary, &result));
     };
     Ok((text, final_stats))
+}
+
+fn append_claude_policy_args(args: &mut Vec<String>, opts: &ClaudeOptions) {
+    match opts.isolation {
+        DriverIsolation::Agent => {
+            // Preserve the registered agent's existing non-interactive tool
+            // policy for legacy calls.
+            args.extend([
+                "--permission-mode".to_string(),
+                "acceptEdits".to_string(),
+                "--allowedTools".to_string(),
+                "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
+                 Bash(easynet:*) Bash(curl:*) \
+                 Read Write Edit Glob Grep mcp__easynet"
+                    .to_string(),
+            ]);
+        }
+        DriverIsolation::Strict => {
+            // Safe mode suppresses CLAUDE.md, skills, hooks, plugins, MCP and
+            // other project/user customizations. An empty tool set prevents
+            // the benchmark turn from observing host files or network state.
+            args.extend([
+                "--safe-mode".to_string(),
+                "--tools".to_string(),
+                String::new(),
+                "--permission-mode".to_string(),
+                "dontAsk".to_string(),
+                "--no-session-persistence".to_string(),
+            ]);
+        }
+    }
+
+    if let Some(system_prompt) = &opts.system_prompt {
+        args.push("--append-system-prompt".to_string());
+        args.push(system_prompt.clone());
+    }
 }
 
 fn append_claude_workspace_plugin_dirs(args: &mut Vec<String>, cwd: &Path) {
@@ -706,6 +720,8 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 max_output_bytes: opts.max_output_bytes,
                 env: opts.env,
                 cwd: Some(opts.cwd),
+                system_prompt: opts.system_prompt,
+                isolation: opts.isolation,
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
                 // Honor `InvokeOpts::command` — dispatch converted
@@ -749,9 +765,10 @@ fn run_stats_to_usage(s: &RunStats) -> AgentUsage {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_claude_workspace_plugin_dirs, format_child_exit_error,
-        format_missing_final_result_event_error, handle_stream_line, RunStats,
+        append_claude_policy_args, append_claude_workspace_plugin_dirs, format_child_exit_error,
+        format_missing_final_result_event_error, handle_stream_line, ClaudeOptions, RunStats,
     };
+    use crate::daemon::execution::mission::adapter::DriverIsolation;
     use crate::daemon::execution::mission::process_runner::ChildResult;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -764,6 +781,30 @@ mod tests {
             duration: Duration::from_millis(1),
             truncated: false,
         }
+    }
+
+    #[test]
+    fn strict_policy_uses_native_system_prompt_and_disables_ambient_tools() {
+        let opts = ClaudeOptions {
+            system_prompt: Some("benchmark system".to_string()),
+            isolation: DriverIsolation::Strict,
+            ..ClaudeOptions::default()
+        };
+        let mut args = Vec::new();
+        append_claude_policy_args(&mut args, &opts);
+        assert!(args.iter().any(|arg| arg == "--safe-mode"));
+        assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
+        let tools = args.iter().position(|arg| arg == "--tools").unwrap();
+        assert_eq!(args.get(tools + 1).map(String::as_str), Some(""));
+        let system = args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(
+            args.get(system + 1).map(String::as_str),
+            Some("benchmark system")
+        );
+        assert!(!args.iter().any(|arg| arg.contains("mcp__easynet")));
     }
 
     #[test]
@@ -883,7 +924,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/device.dev-1.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/device/dev-1\"}}"}]}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/alice.docetl.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/agent/alice.docetl\"}}"}]}]}}"#,
             &final_text,
             &stats,
             start,
@@ -898,7 +939,7 @@ mod tests {
         assert_eq!(call.mcp_tool_name.as_deref(), Some("docetl_code_filter"));
         assert_eq!(
             call.ability_ura.as_deref(),
-            Some("easynet:///r/localhost/ability/device.dev-1.docetl.code_filter")
+            Some("easynet:///r/localhost/ability/alice.docetl.docetl.code_filter")
         );
         assert_eq!(
             call.invocation_ura.as_deref(),
@@ -906,7 +947,7 @@ mod tests {
         );
         assert_eq!(
             call.callee_ura.as_deref(),
-            Some("easynet:///r/localhost/device/dev-1")
+            Some("easynet:///r/localhost/agent/alice.docetl")
         );
     }
 

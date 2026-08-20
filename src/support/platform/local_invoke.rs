@@ -307,6 +307,25 @@ pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass {
 /// submission.
 pub struct LocalDaemonSystemAbilityIssuer;
 
+fn local_daemon_system_ability_target(
+    ability: &str,
+    execution_host_ura: &str,
+) -> anyhow::Result<LocalAbilityTarget> {
+    let execution_host = crate::core::ura::parse_ura(execution_host_ura)
+        .map_err(|error| anyhow::anyhow!("local daemon execution host URA is invalid: {error}"))?;
+    match execution_host.kind {
+        crate::core::ura::URAKind::Device => {
+            LocalAbilityTarget::for_device_sponsored_system_ability(ability, execution_host_ura)
+        }
+        crate::core::ura::URAKind::Authority => {
+            LocalAbilityTarget::new(ability, execution_host_ura)
+        }
+        other => anyhow::bail!(
+            "local daemon system ability execution host must be Device or Authority, got {other}"
+        ),
+    }
+}
+
 impl LocalDaemonSystemAbilityIssuer {
     #[cfg(feature = "axon-pb")]
     fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
@@ -340,6 +359,18 @@ impl LocalDaemonSystemAbilityIssuer {
         Self::invoke_root_for_subject_timeout(ability, args, &subject_ura, timeout)
     }
 
+    pub fn stream_root_for_local_daemon_identity_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        let subject_ura = Self::local_daemon_identity_subject_ura()?;
+        let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+        let target = local_daemon_system_ability_target(ability, &execution_host_ura)?;
+        Self::stream_target_root(&target, args, &subject_ura, timeout, max_frames)
+    }
+
     pub fn invoke_root_for_subject(
         ability: &str,
         args: Value,
@@ -359,12 +390,9 @@ impl LocalDaemonSystemAbilityIssuer {
         subject_ura: &str,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_root_for_subject_timeout(
-            ability,
-            args,
-            subject_ura,
-            timeout,
-        )
+        let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+        let target = local_daemon_system_ability_target(ability, &execution_host_ura)?;
+        Self::invoke_target_root_timeout(&target, args, subject_ura, timeout)
     }
 
     pub fn invoke_target_root_timeout(
@@ -378,6 +406,23 @@ impl LocalDaemonSystemAbilityIssuer {
             args,
             target.callee_ura(),
             subject_ura,
+            timeout,
+        )
+    }
+
+    pub(crate) fn invoke_target_root_with_authority_timeout(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject_ura: &str,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_root_with_authority_timeout(
+            target.dispatch_name(),
+            args,
+            target.callee_ura(),
+            subject_ura,
+            authority_metadata,
             timeout,
         )
     }
@@ -415,6 +460,30 @@ impl LocalDaemonSystemAbilityIssuer {
             timeout,
             max_frames,
         )
+    }
+}
+
+/// Key-service-backed canonical authority provider for daemon-local runtime
+/// callers.
+///
+/// This is the Rust peer of the Go/Python canonical authority transports. It
+/// owns no terminal or product semantics and never exposes private key bytes.
+pub(crate) struct LocalRuntimeAuthorityIssuer;
+
+impl LocalRuntimeAuthorityIssuer {
+    pub(crate) fn issue_session_authority(
+        request: crate::daemon::invocation::admission::authority_metadata::SessionAuthorityRequest,
+    ) -> anyhow::Result<
+        crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    > {
+        use crate::daemon::invocation::admission::authority_metadata::CanonicalSessionAuthorityIssuer;
+
+        let issuer_ura = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
+        CanonicalSessionAuthorityIssuer::issue(request, issuer_ura, |canonical| {
+            crate::daemon::identity::local_invocation::sign_system_canonical(canonical)
+                .map(|signature| signature.to_bytes().to_vec())
+        })
+        .map_err(anyhow::Error::new)
     }
 }
 
@@ -770,6 +839,57 @@ enum LocalRuntimeOwnerReadAttachment {
 }
 
 impl LocalRuntimeOwnerReadAttachment {
+    #[cfg(test)]
+    fn runtime_owner_from_discovery(
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
+        })?;
+        match identity.mode.trim() {
+            "hub" => {
+                let realm = identity.realm.trim();
+                if realm.is_empty() {
+                    anyhow::bail!("{error_prefix}: hub daemon identity has empty realm");
+                }
+                let authority = crate::core::ura::hub_ura(realm);
+                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                    &authority, &authority,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                })?;
+                Ok(Self::RuntimeOwner {
+                    subject_ura: authority,
+                })
+            }
+            "device" | "both" => {
+                let credentials = crate::daemon::persistence::config::load_credentials()
+                    .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?;
+                let identity = LocalRuntimeAttachmentIdentity::from_credentials_discovery(
+                    &credentials,
+                    discovery,
+                    error_prefix,
+                )?;
+                let device_ura = crate::core::ura::device_ura(&identity.realm, &identity.node_id);
+                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                    &device_ura,
+                    &device_ura,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                })?;
+                Ok(Self::RuntimeOwner {
+                    subject_ura: device_ura,
+                })
+            }
+            other => {
+                anyhow::bail!("{error_prefix}: daemon mode {other:?} cannot own runtime reads")
+            }
+        }
+    }
+
     fn from_discovery_file(
         signer_custody: &dyn RuntimeStateReadSignerCustody,
         error_prefix: &'static str,
@@ -968,21 +1088,23 @@ impl LocalRuntimeStateReadAttachment {
 
 /// Invoke a canonical local target with public-ingress tuple facts.
 ///
-/// This is the user-facing ability-invoke path: subject, nonce, and root
-/// causal placement are declared by the caller before daemon transport entry.
-pub fn invoke_local_target_explicit_root_timeout(
+/// This is the user-facing ability-invoke path: subject, nonce, and causal
+/// placement are declared by the caller before daemon transport entry.
+pub fn invoke_local_target_explicit_causal_timeout(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
 ) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_explicit_root_timeout(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_explicit_causal_timeout(
         target.dispatch_name(),
         args,
         target.callee_ura(),
         subject_ura,
         invocation_nonce,
+        causal_context,
         timeout,
     )
 }
@@ -998,7 +1120,11 @@ pub struct LocalRuntimeCatalogueReadIssuer;
 
 impl LocalRuntimeCatalogueReadIssuer {
     pub fn list_abilities(args: Value) -> anyhow::Result<Value> {
-        Self::list_abilities_timeout(args, std::time::Duration::from_secs(30))
+        Self::list_abilities_timeout(
+            args,
+            crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
     }
 
     pub fn list_abilities_timeout(
@@ -1013,7 +1139,11 @@ impl LocalRuntimeCatalogueReadIssuer {
     }
 
     pub fn list_resources(args: Value) -> anyhow::Result<Value> {
-        Self::list_resources_timeout(args, std::time::Duration::from_secs(30))
+        Self::list_resources_timeout(
+            args,
+            crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
     }
 
     pub fn list_resources_timeout(
@@ -1038,21 +1168,542 @@ impl LocalRuntimeCatalogueReadIssuer {
     }
 }
 
+/// Named issuer for daemon-local remote target inventory refresh/watch.
+///
+/// This is the mutable counterpart to [`LocalRuntimeCatalogueReadIssuer`].
+/// Target pickers that need live display/window/application rows must invoke
+/// `resource.refresh_remote_targets` or `resource.watch_remote_targets`
+/// through this issuer before presenting selectable resources.
+/// `meta.list_resources` intentionally remains a read-only cache projection.
+pub struct LocalRemoteTargetInventoryIssuer;
+
+impl LocalRemoteTargetInventoryIssuer {
+    pub fn refresh_remote_targets(args: Value) -> anyhow::Result<Value> {
+        Self::refresh_remote_targets_timeout(
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn refresh_remote_targets_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity_timeout(
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn watch_remote_targets(
+        args: Value,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        Self::watch_remote_targets_timeout(
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            max_frames,
+        )
+    }
+
+    pub fn watch_remote_targets_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        LocalDaemonSystemAbilityIssuer::stream_root_for_local_daemon_identity_timeout(
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            args,
+            timeout,
+            max_frames,
+        )
+    }
+}
+
+/// Named local surface for starting a remote desktop session from a selected
+/// live target resource.
+///
+/// Callers supply the selected `resource_ura`; this adapter binds that URA as
+/// the envelope subject for both consent and session creation. The
+/// `grant_consent` terminal receipt is carried into `create_session` through
+/// verified causal metadata, so product UI code does not construct Axon causal
+/// context itself.
+#[cfg(feature = "remote-desktop")]
+pub struct LocalRemoteDesktopSessionIssuer;
+
+/// Local control binding for one daemon-owned remote desktop session.
+///
+/// This is intentionally not a protocol or SDK abstraction. It is the CLI
+/// support-layer projection of the create-session response fields required to
+/// issue later lifecycle/signaling Invocations without hiding tuple facts:
+/// the envelope subject remains the session's selected Resource URA and the
+/// causal context carries the cryptographically verified consent receipt. Later
+/// wrappers import that proof from the create-session response metadata instead
+/// of trusting ability-payload JSON as a receipt proof.
+#[cfg(feature = "remote-desktop")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalRemoteDesktopSessionControlBinding {
+    subject_ura: String,
+    session_id: String,
+    session_token: String,
+    session_causal_parent: Value,
+}
+
+#[cfg(feature = "remote-desktop")]
+impl LocalRemoteDesktopSessionControlBinding {
+    pub fn from_create_session_response(value: &Value) -> anyhow::Result<Self> {
+        let session = value.get("session").ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote desktop session control binding requires create_session response.session"
+            )
+        })?;
+        let consent_invocation = value.get("consent_invocation").ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote desktop session control binding requires create_session response.consent_invocation"
+            )
+        })?;
+        let subject_ura = canonical_selected_remote_target_resource_ura(required_nonempty_string(
+            session,
+            "subject_ura",
+            "remote desktop session control binding",
+        )?)?;
+        let session_causal_parent =
+            crate::support::platform::local_daemon_grpc::import_verified_causal_parent_from_invocation_meta(
+                consent_invocation,
+                crate::daemon::plugins::remote_desktop::constants::ABILITY_GRANT_CONSENT,
+                &subject_ura,
+            )?;
+        Self::from_session_view_with_parent(session, subject_ura, session_causal_parent)
+    }
+
+    fn from_session_view_with_parent(
+        session: &Value,
+        subject_ura: String,
+        session_causal_parent: Value,
+    ) -> anyhow::Result<Self> {
+        let session_id = required_nonempty_string(
+            session,
+            "session_id",
+            "remote desktop session control binding",
+        )?;
+        let session_token = required_nonempty_string(
+            session,
+            "session_token",
+            "remote desktop session control binding",
+        )?;
+        Ok(Self {
+            subject_ura,
+            session_id: session_id.to_string(),
+            session_token: session_token.to_string(),
+            session_causal_parent,
+        })
+    }
+
+    pub fn subject_ura(&self) -> &str {
+        &self.subject_ura
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn session_token(&self) -> &str {
+        &self.session_token
+    }
+}
+
+#[cfg(feature = "remote-desktop")]
+impl LocalRemoteDesktopSessionIssuer {
+    pub fn create_session(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout(
+            selected_resource_ura,
+            create_session_args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    }
+
+    pub fn create_session_timeout(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        timeout: std::time::Duration,
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        let selected_resource_ura =
+            canonical_selected_remote_target_resource_ura(selected_resource_ura)?;
+        let grant_target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_GRANT_CONSENT,
+        )?;
+        let grant_context = LocalSystemInvocationIssuer::root_context(
+            selected_resource_ura.as_str(),
+            &[],
+            timeout,
+            trace_id,
+        )?;
+        let (grant, grant_meta) = invoke_local_target_with_invocation_meta(
+            &grant_target,
+            serde_json::json!({ "intent": "remote_desktop_session" }),
+            grant_context,
+        )?;
+        let consent_ticket = grant
+            .get("consent_ticket")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("remote_desktop.grant_consent did not return consent_ticket")
+            })?
+            .to_string();
+        let parent = grant_meta.causal_parent()?;
+        let create_args =
+            create_session_args_with_consent_ticket(create_session_args, &consent_ticket)?;
+        let causal_parents = vec![parent];
+        let create_target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
+        )?;
+        let create_context = LocalSystemInvocationIssuer::root_context(
+            selected_resource_ura,
+            &causal_parents,
+            timeout,
+            trace_id,
+        )?;
+        let (session, create_meta) =
+            invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)?;
+        Ok((session, create_meta, grant_meta))
+    }
+
+    pub fn set_description(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::set_description_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn set_description_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn show_session(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::show_session_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn show_session_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn add_ice_candidate(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::add_ice_candidate_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn add_ice_candidate_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_ADD_ICE_CANDIDATE,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn report_client_state(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::report_client_state_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn report_client_state_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_REPORT_CLIENT_STATE,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn watch_events(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        Self::watch_events_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            max_frames,
+        )
+    }
+
+    pub fn watch_events_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        let target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS,
+        )?;
+        let args = remote_desktop_session_control_args(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS,
+            binding,
+            args,
+        )?;
+        let causal_parents = vec![binding.session_causal_parent.clone()];
+        let context = LocalSystemInvocationIssuer::root_context(
+            binding.subject_ura(),
+            &causal_parents,
+            timeout,
+            None,
+        )?;
+        invoke_local_target_stream_with_invocation_context(&target, args, context, max_frames)
+    }
+}
+
+#[cfg(feature = "remote-desktop")]
+fn invoke_remote_desktop_session_control_rpc(
+    ability: &'static str,
+    binding: &LocalRemoteDesktopSessionControlBinding,
+    args: Value,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    let target = local_remote_desktop_ability_target(ability)?;
+    let args = remote_desktop_session_control_args(ability, binding, args)?;
+    let causal_parents = vec![binding.session_causal_parent.clone()];
+    let context = LocalSystemInvocationIssuer::root_context(
+        binding.subject_ura(),
+        &causal_parents,
+        timeout,
+        None,
+    )?;
+    let (response, _) = invoke_local_target_with_invocation_meta(&target, args, context)?;
+    Ok(response)
+}
+
+#[cfg(feature = "remote-desktop")]
+fn local_remote_desktop_ability_target(ability: &str) -> anyhow::Result<LocalAbilityTarget> {
+    let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    local_daemon_system_ability_target(ability, &execution_host_ura)
+}
+
+#[cfg(feature = "remote-desktop")]
+fn canonical_selected_remote_target_resource_ura(value: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    let parsed = crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map_err(|error| anyhow::anyhow!("selected remote desktop target resource_ura {error}"))?;
+    if parsed.kind() != crate::core::ura::URAKind::Resource {
+        anyhow::bail!("selected remote desktop target must be a Resource URA");
+    }
+    SelectedRemoteDesktopTargetSubjectKind::parse(value)?;
+    Ok(parsed.into_string())
+}
+
+#[cfg(feature = "remote-desktop")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectedRemoteDesktopTargetSubjectKind {
+    Display,
+    Window,
+    Application,
+}
+
+#[cfg(feature = "remote-desktop")]
+impl SelectedRemoteDesktopTargetSubjectKind {
+    fn parse(subject_ura: &str) -> anyhow::Result<Self> {
+        let parsed = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
+            anyhow::anyhow!("selected remote desktop target resource_ura is not canonical: {error}")
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Resource {
+            anyhow::bail!("selected remote desktop target must be a Resource URA");
+        }
+        let owner = parsed.resource_owner_id().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selected remote desktop target must be a device-owned display/window/application resource subject"
+            )
+        })?;
+        if !owner.starts_with("device.") {
+            anyhow::bail!(
+                "selected remote desktop target must be a device-owned display/window/application resource subject"
+            );
+        }
+        let path = parsed.resource_path().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selected remote desktop target must be a device stream display/window/application resource subject"
+            )
+        })?;
+        if path.starts_with("streams/display.") {
+            return Ok(Self::Display);
+        }
+        if path.starts_with("streams/window.") {
+            return Ok(Self::Window);
+        }
+        if path.starts_with("streams/application.") {
+            return Ok(Self::Application);
+        }
+        anyhow::bail!(
+            "selected remote desktop target must be a device stream display/window/application resource subject"
+        )
+    }
+}
+
+#[cfg(feature = "remote-desktop")]
+fn create_session_args_with_consent_ticket(
+    args: Value,
+    consent_ticket: &str,
+) -> anyhow::Result<Value> {
+    let mut object = match args {
+        Value::Object(object) => object,
+        _ => anyhow::bail!("remote_desktop.create_session args must be a JSON object"),
+    };
+    for forbidden in ["subject", "resource_ura"] {
+        if object.contains_key(forbidden) {
+            anyhow::bail!(
+                "remote_desktop.create_session {forbidden} MUST come from selected_resource_ura/envelope subject, not args"
+            );
+        }
+    }
+    if object.contains_key("consent_ticket") {
+        anyhow::bail!(
+            "remote_desktop.create_session consent_ticket is issued by grant_consent and must not be supplied by caller args"
+        );
+    }
+    object.insert(
+        "consent_ticket".to_string(),
+        Value::String(consent_ticket.to_string()),
+    );
+    Ok(Value::Object(object))
+}
+
+#[cfg(feature = "remote-desktop")]
+fn remote_desktop_session_control_args(
+    ability: &'static str,
+    binding: &LocalRemoteDesktopSessionControlBinding,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let mut object = match args {
+        Value::Object(object) => object,
+        _ => anyhow::bail!("{ability} args must be a JSON object"),
+    };
+    for forbidden in [
+        "subject",
+        "resource_ura",
+        "consent",
+        "consent_ticket",
+        "session_id",
+        "session_token",
+    ] {
+        if object.contains_key(forbidden) {
+            anyhow::bail!(
+                "{ability} {forbidden} MUST come from the session control binding/envelope, not args"
+            );
+        }
+    }
+    object.insert(
+        "session_id".to_string(),
+        Value::String(binding.session_id().to_string()),
+    );
+    object.insert(
+        "session_token".to_string(),
+        Value::String(binding.session_token().to_string()),
+    );
+    Ok(Value::Object(object))
+}
+
+fn required_nonempty_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+    context: &'static str,
+) -> anyhow::Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{context} requires non-empty {field}"))
+}
+
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
-pub fn invoke_local_target_stream_explicit_root(
+pub fn invoke_local_target_stream_explicit_causal(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalStreamFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_explicit_root(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_explicit_causal(
         target.dispatch_name(),
         args,
         target.callee_ura(),
         subject_ura,
         invocation_nonce,
+        causal_context,
         timeout,
         max_frames,
     )
@@ -1060,22 +1711,28 @@ pub fn invoke_local_target_stream_explicit_root(
 
 /// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
 /// session and drain a bounded number of down frames.
-pub fn invoke_local_target_bidi_json_frames_explicit_root(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public facade preserves the complete explicit invocation tuple for API compatibility"
+)]
+pub fn invoke_local_target_bidi_json_frames_explicit_causal(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
     input_frames: Vec<Value>,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalBidiFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_causal(
         crate::support::platform::local_daemon_grpc::LocalDaemonTargetedBidiRequest {
             function_name: target.dispatch_name(),
             payload_json: args,
             callee_ura: target.callee_ura(),
             subject_ura,
             invocation_nonce,
+            causal_context,
             timeout,
             input_frames,
             max_frames,
@@ -1095,6 +1752,49 @@ pub struct VerifiedLocalInvocationMeta(Value);
 impl VerifiedLocalInvocationMeta {
     pub fn as_value(&self) -> &Value {
         &self.0
+    }
+
+    /// Project the verified terminal receipt into the minimal causal-parent
+    /// shape accepted by [`LocalSystemInvocationIssuer`].
+    ///
+    /// This derives from Axon-verified invocation metadata, not ability
+    /// payloads, so product adapters can chain local invocations without
+    /// fabricating causal context.
+    pub fn causal_parent(&self) -> anyhow::Result<Value> {
+        let anchor = self
+            .0
+            .get("receipt")
+            .and_then(|receipt| receipt.get("anchor"))
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata is missing receipt anchor")
+            })?;
+        let receipt_ura = anchor
+            .get("receipt_ura")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata anchor is missing receipt_ura")
+            })?;
+        let receipt_hash = anchor
+            .get("receipt_hash")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata anchor is missing receipt_hash")
+            })?;
+        if hex::decode(receipt_hash)
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .is_none()
+        {
+            anyhow::bail!("verified invocation metadata anchor receipt_hash must be 32-byte hex");
+        }
+        Ok(serde_json::json!({
+            "receipt_ura": receipt_ura,
+            "receipt_hash": receipt_hash,
+        }))
     }
 }
 
@@ -1200,6 +1900,31 @@ pub fn invoke_local_target_with_invocation_meta(
     let (value, metadata) =
         crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta(request)?;
     Ok((value, VerifiedLocalInvocationMeta(metadata)))
+}
+
+/// Stream a canonical local Ability target with a named local-system
+/// invocation context.
+pub fn invoke_local_target_stream_with_invocation_context(
+    target: &LocalAbilityTarget,
+    args: Value,
+    context: LocalSystemInvocationContext<'_>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<LocalStreamFrame>> {
+    let request =
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            subject_ura: &context.subject_ura,
+            invocation_nonce: context.invocation_nonce,
+            causal_parents: context.causal_parents,
+            step_timeout: context.step_timeout,
+            trace_id: context.trace_id,
+        };
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_with_invocation_context(
+        request,
+        max_frames,
+    )
 }
 
 /// Invoke a canonical local target with explicit hosted-agent delegation.
@@ -1348,6 +2073,349 @@ mod tests {
             capability_flags: vec![],
             pages_port: None,
         }
+    }
+
+    #[test]
+    fn local_daemon_system_target_separates_device_host_from_system_agent_owner() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored runtime-introspection target");
+
+        assert_eq!(
+            target.callee_ura(),
+            crate::core::ura::device_agent_ura(
+                "acme",
+                "dev-a",
+                crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
+            )
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+        );
+    }
+
+    #[test]
+    fn local_catalogue_target_is_runtime_introspection_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored runtime-introspection target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.runtime-introspection"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES
+        );
+    }
+
+    #[test]
+    fn local_remote_target_inventory_target_is_media_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored media target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.media"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.media.resource.refresh_remote_targets"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS
+        );
+    }
+
+    #[test]
+    fn local_remote_target_inventory_watch_target_is_media_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored media stream target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.media"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.media.resource.watch_remote_targets"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS
+        );
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn local_remote_desktop_session_target_is_remote_desktop_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored remote desktop target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.remote-desktop"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.remote-desktop.remote_desktop.create_session"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION
+        );
+    }
+
+    #[test]
+    fn verified_invocation_meta_projects_causal_parent_from_receipt_anchor() {
+        let metadata = VerifiedLocalInvocationMeta(serde_json::json!({
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                    "receipt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "state": "completed",
+                }
+            }
+        }));
+
+        assert_eq!(
+            metadata.causal_parent().expect("causal parent"),
+            serde_json::json!({
+                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                "receipt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+            })
+        );
+    }
+
+    #[test]
+    fn verified_invocation_meta_rejects_malformed_causal_parent_hash() {
+        let metadata = VerifiedLocalInvocationMeta(serde_json::json!({
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                    "receipt_hash": "abc",
+                }
+            }
+        }));
+
+        let err = metadata
+            .causal_parent()
+            .expect_err("causal parent hash must be structurally verified");
+        assert!(err.to_string().contains("32-byte hex"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn selected_remote_desktop_target_must_be_capture_resource_subject() {
+        for subject in [
+            "easynet:///r/acme/resource/device.dev/streams/display.1",
+            "easynet:///r/acme/resource/device.dev/streams/window.7",
+            "easynet:///r/acme/resource/device.dev/streams/application.com.example",
+        ] {
+            assert_eq!(
+                canonical_selected_remote_target_resource_ura(subject)
+                    .expect("remote desktop target resource"),
+                subject
+            );
+        }
+
+        let err = canonical_selected_remote_target_resource_ura("easynet:///r/acme/device/dev")
+            .expect_err("Device URA must not be accepted as selected target");
+        assert!(err.to_string().contains("must be a Resource URA"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn selected_remote_desktop_target_rejects_non_capture_resources() {
+        for subject in [
+            "easynet:///r/acme/resource/device.dev/streams/mic.1",
+            "easynet:///r/acme/resource/resource-1",
+            "easynet:///r/acme/resource/user.alice/runtime-state/read",
+            "easynet:///r/acme/resource/user.alice/streams/display.1",
+        ] {
+            let err = canonical_selected_remote_target_resource_ura(subject)
+                .expect_err("non-capture resource must not enter remote desktop session workflow");
+            assert!(
+                err.to_string()
+                    .contains("device-owned display/window/application resource subject")
+                    || err
+                        .to_string()
+                        .contains("display/window/application resource subject"),
+                "{err}"
+            );
+        }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn create_session_args_injects_consent_ticket_without_subject_args() {
+        let args = create_session_args_with_consent_ticket(
+            serde_json::json!({
+                "mode": "view_only",
+                "transport_preferences": ["webrtc"],
+            }),
+            "ticket-1",
+        )
+        .expect("create args");
+
+        assert_eq!(args["consent_ticket"], serde_json::json!("ticket-1"));
+        assert!(args.get("subject").is_none());
+        assert!(args.get("resource_ura").is_none());
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn create_session_args_rejects_subject_and_external_consent_ticket() {
+        for args in [
+            serde_json::json!({"subject": "easynet:///r/acme/resource/device.dev/streams/window.7"}),
+            serde_json::json!({"resource_ura": "easynet:///r/acme/resource/device.dev/streams/window.7"}),
+            serde_json::json!({"consent_ticket": "caller-supplied"}),
+        ] {
+            let err = create_session_args_with_consent_ticket(args, "ticket-1")
+                .expect_err("caller must not supply tuple or consent fields");
+            let message = err.to_string();
+            assert!(
+                message.contains("MUST come from selected_resource_ura")
+                    || message.contains("consent_ticket is issued by grant_consent"),
+                "{message}"
+            );
+        }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_session_view_for_control() -> serde_json::Value {
+        serde_json::json!({
+            "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
+            "session_id": "rd-control",
+            "session_token": "token-control"
+        })
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_test_control_binding() -> LocalRemoteDesktopSessionControlBinding {
+        LocalRemoteDesktopSessionControlBinding::from_session_view_with_parent(
+            &remote_desktop_session_view_for_control(),
+            "easynet:///r/acme/resource/device.dev/streams/window.7".to_string(),
+            serde_json::json!({
+                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/create/receipt/4",
+                "receipt_hash": "3333333333333333333333333333333333333333333333333333333333333333"
+            }),
+        )
+        .expect("test control binding")
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_binding_requires_verified_consent_invocation() {
+        let response = serde_json::json!({
+            "session": remote_desktop_session_view_for_control(),
+        });
+        let err = LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+            .expect_err("session control binding must require invocation proof");
+
+        assert!(err.to_string().contains("response.consent_invocation"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_args_insert_session_fields_without_tuple_args() {
+        let binding = remote_desktop_test_control_binding();
+        let args = remote_desktop_session_control_args(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+            &binding,
+            serde_json::json!({
+                "side": "remote",
+                "description": {"type": "offer", "sdp": "v=0\r\n"}
+            }),
+        )
+        .expect("control args");
+
+        assert_eq!(args["session_id"], serde_json::json!("rd-control"));
+        assert_eq!(args["session_token"], serde_json::json!("token-control"));
+        assert!(args.get("subject").is_none());
+        assert!(args.get("resource_ura").is_none());
+        assert!(args.get("consent").is_none());
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_args_reject_caller_owned_binding_fields() {
+        let binding = remote_desktop_test_control_binding();
+        for (field, args) in [
+            ("subject", serde_json::json!({"subject": "bad"})),
+            ("resource_ura", serde_json::json!({"resource_ura": "bad"})),
+            ("consent", serde_json::json!({"consent": {}})),
+            (
+                "consent_ticket",
+                serde_json::json!({"consent_ticket": "bad"}),
+            ),
+            ("session_id", serde_json::json!({"session_id": "bad"})),
+            ("session_token", serde_json::json!({"session_token": "bad"})),
+        ] {
+            let err = remote_desktop_session_control_args(
+                crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+                &binding,
+                args,
+            )
+            .expect_err("caller-owned binding field must be rejected");
+            assert!(
+                err.to_string().contains(field),
+                "expected error to mention {field}: {err}"
+            );
+        }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_binding_rejects_session_only_payload_receipts() {
+        let response = serde_json::json!({
+            "session": {
+                "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
+                "session_id": "rd-control",
+                "session_token": "token-control",
+                "consent": {
+                    "approval_receipt": {
+                        "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/approve/receipt/1",
+                        "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222222"
+                    }
+                }
+            }
+        });
+        let err = LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+            .expect_err("payload receipt must not replace verified invocation proof");
+
+        assert!(err.to_string().contains("response.consent_invocation"));
+    }
+
+    #[test]
+    fn local_daemon_system_target_preserves_realm_authority_owner() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::federation::DISCOVER,
+            "easynet:///r/acme/authority",
+        )
+        .expect("realm Authority target");
+
+        assert_eq!(target.callee_ura(), "easynet:///r/acme/authority");
     }
 
     #[test]
@@ -1674,6 +2742,23 @@ mod tests {
             "runtime governance read subject unavailable",
         )
         .expect("device-only governance read subject must not require paired user signer custody")
+        .into_subject_ura()
+        .expect("device runtime-owner subject");
+
+        assert_eq!(subject, "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_owner_read_subject_uses_device_owner_for_bound_device_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(&runtime_state_read_credentials())
+            .expect("save bound device credentials");
+
+        let subject = LocalRuntimeOwnerReadAttachment::runtime_owner_from_discovery(
+            &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
+            "runtime agent inventory read subject unavailable",
+        )
+        .expect("runtime-owner read subject must not require paired user signer custody")
         .into_subject_ura()
         .expect("device runtime-owner subject");
 

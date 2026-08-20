@@ -42,6 +42,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
+use crate::daemon::ability::{insert_catalog_descriptor, CatalogDescriptorKey};
 use crate::daemon::federation::client::ability_contract::{
     AuthorityAbilitiesDiff, AuthorityAbilityEntry,
 };
@@ -57,14 +58,20 @@ pub struct AuthorityPublishedAbilityStore {
 
 #[derive(Debug, Default)]
 struct Inner {
-    /// Canonical name → descriptor. BTreeMap so iteration order is
-    /// stable across heartbeats — the meta-ability rendering is
-    /// easier to audit when entries don't shuffle on each tick.
-    entries: BTreeMap<String, AbilityDescriptor>,
+    /// Full canonical descriptor identity → descriptor. Public name alone is
+    /// insufficient because one ability may publish RPC/Stream/Bidi variants
+    /// and version is a receipt-bound invocation fact.
+    entries: BTreeMap<CatalogDescriptorKey, AbilityDescriptor>,
     /// Last Authority broadcast revision the cache reflects. Surfaced to the
     /// federation client as `since_abilities_revision` on the
     /// next heartbeat.
     revision: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AuthorityPublishedAbilitySnapshot {
+    pub(crate) revision: u64,
+    pub(crate) descriptors: Vec<AbilityDescriptor>,
 }
 
 impl AuthorityPublishedAbilityStore {
@@ -82,14 +89,13 @@ impl AuthorityPublishedAbilityStore {
         revision: u64,
         abilities: Vec<AuthorityAbilityEntry>,
     ) -> Result<(), String> {
-        let entries = validate_authority_ability_entries(abilities)?;
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.entries.clear();
-        for descriptor in entries {
-            inner
-                .entries
-                .insert(descriptor.public_name().to_string(), descriptor);
+        let descriptors = validate_authority_ability_entries(abilities)?;
+        let mut entries = BTreeMap::new();
+        for descriptor in descriptors {
+            insert_catalog_descriptor(&mut entries, descriptor, "Authority snapshot")?;
         }
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.entries = entries;
         inner.revision = revision;
         Ok(())
     }
@@ -99,19 +105,20 @@ impl AuthorityPublishedAbilityStore {
     /// heartbeat asks for "what's changed since the new value".
     /// Idempotent: replaying the same diff is a no-op.
     pub fn apply_diff(&self, diff: AuthorityAbilitiesDiff) -> Result<(), String> {
-        let added = validate_authority_ability_entries(diff.added)?;
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        for descriptor in added {
-            inner
-                .entries
-                .insert(descriptor.public_name().to_string(), descriptor);
+        if diff.revision <= inner.revision {
+            return Ok(());
         }
+        let added = validate_authority_ability_entries(diff.added)?;
+        let mut next_entries = inner.entries.clone();
         for name in diff.removed {
-            inner.entries.remove(&name);
+            next_entries.retain(|_, descriptor| descriptor.public_name() != name);
         }
-        if diff.revision >= inner.revision {
-            inner.revision = diff.revision;
+        for descriptor in added {
+            insert_catalog_descriptor(&mut next_entries, descriptor, "Authority heartbeat diff")?;
         }
+        inner.entries = next_entries;
+        inner.revision = diff.revision;
         Ok(())
     }
 
@@ -137,6 +144,18 @@ impl AuthorityPublishedAbilityStore {
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Atomically capture the revision and all rows it names. Callers that
+    /// expose a catalog snapshot must not pair two independent lock reads,
+    /// because a heartbeat could advance between them.
+    #[must_use]
+    pub(crate) fn snapshot_with_revision(&self) -> AuthorityPublishedAbilitySnapshot {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        AuthorityPublishedAbilitySnapshot {
+            revision: inner.revision,
+            descriptors: inner.entries.values().cloned().collect(),
+        }
     }
 
     /// Cardinality — used by tests and diagnostics. Matches
@@ -202,7 +221,7 @@ mod tests {
     fn descriptor(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name,
-            &crate::core::ura::hub_ura("test"),
+            crate::core::ura::hub_ura("test"),
             Visibility::Public,
             AdmissionAction::Read,
         )
@@ -281,12 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_diff_does_not_rewind_revision() {
-        // A late heartbeat reply with a stale revision must not
-        // rewind the cache's tracked revision — the federation
-        // client uses this value to ask for "what's new since
-        // here", and rewinding would re-fetch already-applied
-        // diffs.
+    fn apply_diff_ignores_complete_stale_transition() {
         let store = AuthorityPublishedAbilityStore::new();
         store
             .seed_from_snapshot(10, vec![])
@@ -299,9 +313,43 @@ mod tests {
             })
             .expect("canonical diff");
         assert_eq!(store.revision(), 10);
-        // The added entry still applies — late doesn't mean wrong,
-        // just that the rev counter shouldn't move backwards.
-        assert_eq!(store.len(), 1);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn snapshot_preserves_same_ability_rpc_and_stream_variants() {
+        let store = AuthorityPublishedAbilityStore::new();
+        let owner = crate::core::ura::hub_ura("test");
+        let rpc = AbilityDescriptor::new(
+            "test.chat",
+            &owner,
+            Visibility::Public,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_call_mode(crate::daemon::ability::CallMode::Rpc);
+        let stream = rpc
+            .clone()
+            .with_call_mode(crate::daemon::ability::CallMode::Stream);
+        store
+            .seed_from_snapshot(
+                4,
+                vec![
+                    AuthorityAbilityEntry {
+                        name: "test.chat".to_string(),
+                        descriptor: serde_json::to_value(rpc).unwrap(),
+                    },
+                    AuthorityAbilityEntry {
+                        name: "test.chat".to_string(),
+                        descriptor: serde_json::to_value(stream).unwrap(),
+                    },
+                ],
+            )
+            .expect("multi-mode snapshot");
+
+        let snapshot = store.snapshot_with_revision();
+        assert_eq!(snapshot.revision, 4);
+        assert_eq!(snapshot.descriptors.len(), 2);
     }
 
     #[test]

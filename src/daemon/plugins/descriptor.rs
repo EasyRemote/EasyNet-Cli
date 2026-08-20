@@ -6,7 +6,9 @@
 
 use serde_json::Value;
 
-use crate::daemon::ability::descriptors::AbilityHints;
+use crate::daemon::ability::catalog::SystemAbilityContract;
+use crate::daemon::ability::conformance::CapabilityState;
+use crate::daemon::ability::descriptors::{AbilityHints, ReceiptSemantics, ScopeRule, Visibility};
 use crate::daemon::plugins::errors::PluginHostError;
 use crate::daemon::plugins::errors::Result;
 use crate::daemon::plugins::index::PluginPackageIndex;
@@ -22,6 +24,43 @@ pub struct PluginAbilityMetadata {
     pub call_mode: crate::daemon::ability::CallMode,
     pub hints: AbilityHints,
     pub admission_action: crate::daemon::ability::descriptors::AdmissionAction,
+    pub subject_ura_kinds: Vec<String>,
+    pub exposure: crate::daemon::ability::manifest::AbilityExposure,
+    pub dedicated_surface: crate::daemon::ability::manifest::AbilityDedicatedSurface,
+    pub subject_contract_kind: crate::daemon::ability::manifest::AbilitySubjectContractKind,
+    pub subject_contract_ura: Option<String>,
+}
+
+/// Convert plugin discovery metadata into the canonical generated descriptor
+/// contract without losing builtin subject scope or behavioral hints.
+pub fn plugin_ability_contract(meta: &PluginAbilityMetadata) -> SystemAbilityContract {
+    SystemAbilityContract {
+        name: meta.name.clone(),
+        descriptor_version: meta.descriptor_version.clone(),
+        description: meta.description.clone(),
+        exposure: meta.exposure,
+        dedicated_surface: meta.dedicated_surface,
+        subject_contract_kind: meta.subject_contract_kind,
+        subject_contract_ura: meta.subject_contract_ura.clone(),
+        input_schema: meta.input_schema.clone(),
+        output_receipt_schema: meta
+            .output_schema
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({})),
+        call_mode: meta.call_mode,
+        admission_action: meta.admission_action,
+        receipt_semantics: ReceiptSemantics::Operational,
+        visibility: Visibility::Scoped,
+        scope_subjects: if meta.subject_ura_kinds.is_empty() {
+            ScopeRule::Any
+        } else {
+            ScopeRule::OnlyUraKinds(meta.subject_ura_kinds.clone())
+        },
+        scope_agents: ScopeRule::Any,
+        denied_agents: Vec::new(),
+        hints: meta.hints.clone(),
+        capability_state: CapabilityState::ProviderBacked,
+    }
 }
 
 /// Descriptor projector over package index state.
@@ -48,8 +87,13 @@ impl PluginDescriptorProjector {
                     input_schema: descriptor.input_schema().clone(),
                     output_schema: descriptor.output_schema().cloned(),
                     call_mode: ability.call_mode(),
-                    hints: AbilityHints::default(),
+                    hints: descriptor.hints().clone(),
                     admission_action: descriptor.admission_action(),
+                    subject_ura_kinds: descriptor.subject_ura_kinds().to_vec(),
+                    exposure: descriptor.exposure(),
+                    dedicated_surface: descriptor.dedicated_surface(),
+                    subject_contract_kind: descriptor.subject_contract_kind(),
+                    subject_contract_ura: descriptor.subject_contract_ura().map(str::to_string),
                 });
             }
         }
@@ -84,6 +128,7 @@ mod tests {
         assert_eq!(descriptor.input_schema["type"], "object");
         assert_eq!(descriptor.call_mode, crate::daemon::ability::CallMode::Rpc);
         assert_eq!(descriptor.hints, AbilityHints::default());
+        assert!(descriptor.subject_ura_kinds.is_empty());
         assert!(descriptor.output_schema.is_none());
     }
 
@@ -115,5 +160,75 @@ mod tests {
             crate::daemon::ability::CallMode::Stream
         );
         assert_eq!(attach.call_mode, crate::daemon::ability::CallMode::Bidi);
+        for descriptor in descriptors
+            .iter()
+            .filter(|descriptor| descriptor.name.starts_with("remote_desktop."))
+        {
+            assert_eq!(
+                descriptor.exposure,
+                crate::daemon::ability::manifest::AbilityExposure::Operator
+            );
+            assert_eq!(
+                descriptor.dedicated_surface,
+                crate::daemon::ability::manifest::AbilityDedicatedSurface::RemoteDesktop
+            );
+            assert_eq!(
+                descriptor.subject_contract_kind,
+                crate::daemon::ability::manifest::AbilitySubjectContractKind::DedicatedSurface
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "browser-cdp")]
+    fn browser_descriptor_projection_preserves_scope_and_hints() {
+        let index = crate::daemon::plugins::PluginPackageIndex::builtin()
+            .expect("builtin plugin index loads");
+        let descriptors = PluginDescriptorProjector::project(&index).expect("descriptors");
+        let show = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "browser.show_session")
+            .expect("browser show descriptor");
+        assert_eq!(show.subject_ura_kinds, vec!["resource"]);
+        assert_eq!(
+            show.hints,
+            AbilityHints {
+                read_only: true,
+                destructive: false,
+                idempotent: true,
+            }
+        );
+
+        let close = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "browser.close_session")
+            .expect("browser close descriptor");
+        assert!(close.hints.destructive);
+        assert!(close.hints.idempotent);
+
+        let browser = descriptors
+            .iter()
+            .filter(|descriptor| descriptor.name.starts_with("browser."))
+            .collect::<Vec<_>>();
+        assert_eq!(browser.len(), 7);
+        for descriptor in browser {
+            assert_eq!(
+                descriptor.exposure,
+                crate::daemon::ability::manifest::AbilityExposure::Operator
+            );
+            assert_eq!(
+                descriptor.dedicated_surface,
+                crate::daemon::ability::manifest::AbilityDedicatedSurface::Browser
+            );
+            assert_eq!(
+                descriptor.subject_contract_kind,
+                crate::daemon::ability::manifest::AbilitySubjectContractKind::DedicatedSurface
+            );
+            let generated = plugin_ability_contract(descriptor);
+            assert_eq!(
+                generated.dedicated_surface,
+                crate::daemon::ability::manifest::AbilityDedicatedSurface::Browser
+            );
+        }
     }
 }

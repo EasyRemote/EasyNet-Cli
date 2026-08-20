@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::decision::{AccessAction, PrincipalKind};
+use super::decision::{AccessAction, PrincipalKind, TokenClass};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -18,11 +18,16 @@ pub struct AuthorityProof {
     pub grant_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_request_id: Option<String>,
-    pub owner_user_id: String,
+    /// Runtime field is a canonical User URA.
+    /// `owner_user_id` is for RFC-014 durable/wire compatibility only; do not reinterpret it as a bare account id or Agent identity.
+    #[serde(rename = "owner_user_id")]
+    pub owner_user_ura: String,
     pub principal_kind: PrincipalKind,
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_class: Option<TokenClass>,
     pub callee_ura: String,
     pub subject_ura: String,
     pub ability_ura: String,
@@ -33,8 +38,13 @@ pub struct AuthorityProof {
     pub canonical_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_owner_user_id: Option<String>,
+    /// Runtime field is a canonical User URA for session-owner policy comparison.
+    /// `session_owner_user_id` is a compatibility wire name and must not be used as a runtime scalar helper name.
+    #[serde(
+        rename = "session_owner_user_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_owner_user_ura: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_followup_abilities: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,12 +58,12 @@ pub struct AuthorityProof {
 
 impl AuthorityProof {
     pub(crate) fn validate_identity_contract(&self) -> Result<(), &'static str> {
-        validate_nonzero_user_id(&self.owner_user_id, "owner_user_id")?;
+        validate_user_principal_ura(&self.owner_user_ura, "owner_user_id")?;
         if self.principal_kind == PrincipalKind::User {
-            validate_nonzero_user_id(&self.principal_id, "principal_id")?;
+            validate_user_principal_ura(&self.principal_id, "principal_id")?;
         }
-        if let Some(session_owner_user_id) = self.session_owner_user_id.as_deref() {
-            validate_nonzero_user_id(session_owner_user_id, "session_owner_user_id")?;
+        if let Some(session_owner_user_ura) = self.session_owner_user_ura.as_deref() {
+            validate_user_principal_ura(session_owner_user_ura, "session_owner_user_id")?;
         }
         for (field, value) in [
             ("callee_ura", self.callee_ura.as_str()),
@@ -76,7 +86,7 @@ impl AuthorityProof {
         let mut value = json!({
             "profile": "easynet-authority-proof-v0",
             "proof_id": self.proof_id,
-            "owner_user_id": self.owner_user_id,
+            "owner_user_id": self.owner_user_ura,
             "principal_kind": self.principal_kind,
             "principal_id": self.principal_id,
             "callee_ura": self.callee_ura,
@@ -95,13 +105,16 @@ impl AuthorityProof {
             self.permission_request_id.as_deref(),
         );
         insert_optional(&mut value, "token_id", self.token_id.as_deref());
+        if let Some(token_class) = self.token_class {
+            value["token_class"] = json!(token_class);
+        }
         insert_optional(&mut value, "nonce", self.nonce.as_deref());
         insert_optional(&mut value, "canonical_hash", self.canonical_hash.as_deref());
         insert_optional(&mut value, "session_id", self.session_id.as_deref());
         insert_optional(
             &mut value,
             "session_owner_user_id",
-            self.session_owner_user_id.as_deref(),
+            self.session_owner_user_ura.as_deref(),
         );
         if !abilities.is_empty() {
             value["allowed_followup_abilities"] = json!(abilities);
@@ -131,10 +144,11 @@ impl AuthorityProof {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorityProofVerificationContext<'a> {
-    pub owner_user_id: &'a str,
+    pub owner_user_ura: &'a str,
     pub principal_kind: PrincipalKind,
     pub principal_id: &'a str,
     pub token_id: Option<&'a str>,
+    pub token_class: Option<TokenClass>,
     pub callee_ura: &'a str,
     pub subject_ura: &'a str,
     pub ability_ura: &'a str,
@@ -143,7 +157,7 @@ pub struct AuthorityProofVerificationContext<'a> {
     pub canonical_hash: Option<&'a str>,
     pub audience_ura: &'a str,
     pub session_id: Option<&'a str>,
-    pub session_owner_user_id: Option<&'a str>,
+    pub session_owner_user_ura: Option<&'a str>,
     pub now: DateTime<Utc>,
 }
 
@@ -157,7 +171,7 @@ pub(crate) struct AuthorityProofRouteBinding<'a> {
 
 pub trait AuthorityProofIssuerResolver {
     fn verifying_key_for_issuer(&self, issuer_ura: &str) -> Option<VerifyingKey>;
-    fn issuer_authorized_for_owner(&self, issuer_ura: &str, owner_user_id: &str) -> bool;
+    fn issuer_authorized_for_owner_ura(&self, issuer_ura: &str, owner_user_ura: &str) -> bool;
     fn referenced_authority_active(&self, proof: &AuthorityProof) -> bool;
 }
 
@@ -204,7 +218,7 @@ impl AuthorityProofVerifier {
         verify_not_expired(proof, context.now)?;
         verify_invocation_binding(proof, context)?;
         verify_signature(proof, resolver)?;
-        if !resolver.issuer_authorized_for_owner(&proof.issuer_ura, &proof.owner_user_id) {
+        if !resolver.issuer_authorized_for_owner_ura(&proof.issuer_ura, &proof.owner_user_ura) {
             return Err(AuthorityProofDenyReason::AuthorityProofIssuerDenied);
         }
         if !resolver.referenced_authority_active(proof) {
@@ -217,14 +231,14 @@ impl AuthorityProofVerifier {
 fn validate_verification_context_identity(
     context: &AuthorityProofVerificationContext<'_>,
 ) -> Result<(), AuthorityProofDenyReason> {
-    validate_nonzero_user_id(context.owner_user_id, "owner_user_id")
+    validate_user_principal_ura(context.owner_user_ura, "owner_user_ura")
         .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
     if context.principal_kind == PrincipalKind::User {
-        validate_nonzero_user_id(context.principal_id, "principal_id")
+        validate_user_principal_ura(context.principal_id, "principal_id")
             .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
     }
-    if let Some(session_owner_user_id) = context.session_owner_user_id {
-        validate_nonzero_user_id(session_owner_user_id, "session_owner_user_id")
+    if let Some(session_owner_user_ura) = context.session_owner_user_ura {
+        validate_user_principal_ura(session_owner_user_ura, "session_owner_user_id")
             .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
     }
     for value in [
@@ -243,6 +257,15 @@ fn validate_verification_context_identity(
 
 fn validate_nonzero_user_id(value: &str, field: &'static str) -> Result<(), &'static str> {
     if value.trim().is_empty() || crate::core::identity::is_all_zero_principal_id(value) {
+        return Err(field);
+    }
+    Ok(())
+}
+
+fn validate_user_principal_ura(value: &str, field: &'static str) -> Result<(), &'static str> {
+    validate_nonzero_user_id(value, field)?;
+    let parsed = crate::core::ura::parse_ura(value).map_err(|_| field)?;
+    if parsed.kind != crate::core::ura::URAKind::User || parsed.user_id().is_none() {
         return Err(field);
     }
     Ok(())
@@ -282,10 +305,11 @@ fn verify_invocation_binding(
     if proof.audience_ura != context.audience_ura {
         return Err(AuthorityProofDenyReason::AuthorityProofAudienceMismatch);
     }
-    if proof.owner_user_id != context.owner_user_id
+    if proof.owner_user_ura != context.owner_user_ura
         || proof.principal_kind != context.principal_kind
         || proof.principal_id != context.principal_id
         || proof.token_id.as_deref() != context.token_id
+        || proof.token_class != context.token_class
         || !proof.matches_route_binding(&route_binding)
         || proof.action != context.action
     {
@@ -324,13 +348,13 @@ fn verify_session_binding_facts(
 ) -> Result<(), AuthorityProofDenyReason> {
     if proof.session_id.is_some() {
         let proof_owner = proof
-            .session_owner_user_id
+            .session_owner_user_ura
             .as_deref()
             .map(str::trim)
             .filter(|owner| !owner.is_empty())
             .ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
         let context_owner = context
-            .session_owner_user_id
+            .session_owner_user_ura
             .map(str::trim)
             .filter(|owner| !owner.is_empty())
             .ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
@@ -339,8 +363,8 @@ fn verify_session_binding_facts(
         }
         return Ok(());
     }
-    if proof.session_owner_user_id.as_deref().is_some()
-        && proof.session_owner_user_id.as_deref() != context.session_owner_user_id
+    if proof.session_owner_user_ura.as_deref().is_some()
+        && proof.session_owner_user_ura.as_deref() != context.session_owner_user_ura
     {
         return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
     }
@@ -412,16 +436,19 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use std::collections::BTreeMap;
 
+    const ALICE_USER_URA: &str = "easynet:///r/test/user/alice";
+
     #[test]
     fn canonical_material_sorts_and_deduplicates_followup_abilities() {
         let proof = AuthorityProof {
             proof_id: "proof-1".to_string(),
             grant_id: Some("grant-1".to_string()),
             permission_request_id: None,
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: ALICE_USER_URA.to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
+            token_class: Some(TokenClass::HubLink),
             callee_ura: "easynet:///r/test/device/dev".to_string(),
             subject_ura: crate::core::ura::resource_dot_ura("test", "user.alice", "session/s1"),
             ability_ura: "terminal.attach".to_string(),
@@ -429,7 +456,7 @@ mod tests {
             nonce: None,
             canonical_hash: Some("sha256:abc".to_string()),
             session_id: Some("s1".to_string()),
-            session_owner_user_id: Some("alice".to_string()),
+            session_owner_user_ura: Some(ALICE_USER_URA.to_string()),
             allowed_followup_abilities: vec![
                 "terminal.read".to_string(),
                 "terminal.attach".to_string(),
@@ -438,7 +465,7 @@ mod tests {
             session_expires_at: Some("2026-07-09T01:00:00Z".to_string()),
             issued_at: "2026-07-09T00:00:00Z".to_string(),
             expires_at: "2026-07-09T00:05:00Z".to_string(),
-            issuer_ura: "easynet:///r/test/user/alice".to_string(),
+            issuer_ura: ALICE_USER_URA.to_string(),
             audience_ura: "easynet:///r/test/device/dev".to_string(),
             signature: "sig".to_string(),
         };
@@ -446,6 +473,7 @@ mod tests {
             proof.canonical_material()["allowed_followup_abilities"],
             json!(["terminal.attach", "terminal.read"])
         );
+        assert_eq!(proof.canonical_material()["token_class"], json!("hub_link"));
     }
 
     #[test]
@@ -453,17 +481,18 @@ mod tests {
         let raw = json!({
             "proof_id": "proof-1",
             "grant_id": "grant-1",
-            "owner_user_id": "alice",
+            "owner_user_id": ALICE_USER_URA,
             "principal_kind": "token",
             "principal_id": "token-principal",
             "token_id": "token-1",
-            "callee_ura": "easynet:///r/test/device/dev",
+            "token_class": "hub_link",
+            "callee_ura": "easynet:///r/test/agent/device.dev.terminal",
             "subject_ura": "easynet:///r/test/resource/user.alice/session/s1",
             "ability_ura": "terminal.attach",
             "action": "stream",
             "canonical_hash": "sha256:abc",
             "session_id": "s1",
-            "session_owner_user_id": "alice",
+            "session_owner_user_id": ALICE_USER_URA,
             "allowed_followup_abilities": ["terminal.attach"],
             "session_expires_at": "2026-07-09T01:00:00Z",
             "issued_at": "2026-07-09T00:00:00Z",
@@ -493,7 +522,11 @@ mod tests {
             self.keys.get(issuer_ura).copied()
         }
 
-        fn issuer_authorized_for_owner(&self, _issuer_ura: &str, _owner_user_id: &str) -> bool {
+        fn issuer_authorized_for_owner_ura(
+            &self,
+            _issuer_ura: &str,
+            _owner_user_ura: &str,
+        ) -> bool {
             self.authorized
         }
 
@@ -504,15 +537,16 @@ mod tests {
 
     fn signed_proof() -> (AuthorityProof, TestIssuerResolver) {
         let signing_key = SigningKey::from_bytes(&[7; 32]);
-        let issuer = "easynet:///r/test/user/alice".to_string();
+        let issuer = ALICE_USER_URA.to_string();
         let mut proof = AuthorityProof {
             proof_id: "proof-1".to_string(),
             grant_id: Some("grant-1".to_string()),
             permission_request_id: None,
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: ALICE_USER_URA.to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
+            token_class: Some(TokenClass::HubLink),
             callee_ura: "easynet:///r/test/device/dev".to_string(),
             subject_ura: crate::core::ura::resource_dot_ura("test", "user.alice", "session/s1"),
             ability_ura: "terminal.attach".to_string(),
@@ -520,7 +554,7 @@ mod tests {
             nonce: None,
             canonical_hash: Some("sha256:abc".to_string()),
             session_id: Some("s1".to_string()),
-            session_owner_user_id: Some("alice".to_string()),
+            session_owner_user_ura: Some(ALICE_USER_URA.to_string()),
             allowed_followup_abilities: vec!["terminal.attach".to_string()],
             session_expires_at: Some("2026-07-09T01:00:00Z".to_string()),
             issued_at: "2026-07-09T00:00:00Z".to_string(),
@@ -559,10 +593,11 @@ mod tests {
 
     fn context() -> AuthorityProofVerificationContext<'static> {
         AuthorityProofVerificationContext {
-            owner_user_id: "alice",
+            owner_user_ura: ALICE_USER_URA,
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal",
             token_id: Some("token-1"),
+            token_class: Some(TokenClass::HubLink),
             callee_ura: "easynet:///r/test/device/dev",
             subject_ura: "easynet:///r/test/resource/user.alice/session/s1",
             ability_ura: "terminal.attach",
@@ -571,7 +606,7 @@ mod tests {
             canonical_hash: Some("sha256:abc"),
             audience_ura: "easynet:///r/test/device/dev",
             session_id: Some("s1"),
-            session_owner_user_id: Some("alice"),
+            session_owner_user_ura: Some(ALICE_USER_URA),
             now: DateTime::parse_from_rfc3339("2026-07-09T00:01:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
@@ -609,9 +644,43 @@ mod tests {
     }
 
     #[test]
+    fn verifier_rejects_bare_context_owner_user_id() {
+        let (proof, resolver) = signed_proof();
+        let mut context = context();
+        context.owner_user_ura = "alice";
+
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
+            .expect_err("runtime authority context owner must be a User URA");
+
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
+    fn verifier_rejects_bare_context_session_owner_user_id() {
+        let (proof, resolver) = signed_proof();
+        let mut context = context();
+        context.session_owner_user_ura = Some("alice");
+
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
+            .expect_err("runtime authority context session owner must be a User URA");
+
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
+    fn verifier_rejects_token_class_mismatch() {
+        let (proof, resolver) = signed_proof();
+        let mut context = context();
+        context.token_class = Some(TokenClass::BrowserSession);
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
+            .expect_err("token class mismatch");
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
     fn verifier_rejects_all_zero_owner_and_session_identity_facts() {
         let (mut proof, _resolver) = signed_proof();
-        proof.owner_user_id = crate::core::identity::ALL_ZERO_PRINCIPAL_ID.to_string();
+        proof.owner_user_ura = crate::core::identity::ALL_ZERO_PRINCIPAL_ID.to_string();
         let resolver = resign(&mut proof);
         assert_eq!(
             AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver),
@@ -619,7 +688,7 @@ mod tests {
         );
 
         let (mut proof, _resolver) = signed_proof();
-        proof.session_owner_user_id =
+        proof.session_owner_user_ura =
             Some(crate::core::identity::ALL_ZERO_PRINCIPAL_ID.to_string());
         let resolver = resign(&mut proof);
         assert_eq!(
@@ -641,7 +710,7 @@ mod tests {
     #[test]
     fn verifier_rejects_session_proof_without_session_owner_fact() {
         let (mut proof, _resolver) = signed_proof();
-        proof.session_owner_user_id = None;
+        proof.session_owner_user_ura = None;
         let resolver = resign(&mut proof);
         let err = AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver)
             .expect_err("session proof must bind session owner");
@@ -666,7 +735,7 @@ mod tests {
         proof.nonce = None;
         proof.canonical_hash = None;
         proof.session_id = None;
-        proof.session_owner_user_id = None;
+        proof.session_owner_user_ura = None;
         proof.allowed_followup_abilities.clear();
         proof.session_expires_at = None;
         let resolver = resign(&mut proof);

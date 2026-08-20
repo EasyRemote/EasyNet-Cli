@@ -77,21 +77,37 @@ impl LocalAbilityTarget {
         callee_ura: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let dispatch_name = dispatch_name.into();
+        Self::new_with_public_ability(dispatch_name.clone(), callee_ura, dispatch_name)
+    }
+
+    /// Build from already-resolved protocol identities when the public
+    /// descriptor name differs from the daemon-local handler key.
+    pub fn new_with_public_ability(
+        dispatch_name: impl Into<String>,
+        callee_ura: impl Into<String>,
+        public_ability: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let dispatch_name = dispatch_name.into();
         let callee_ura = callee_ura.into();
+        let public_ability = public_ability.into();
         if dispatch_name.trim().is_empty() {
             anyhow::bail!("local ability target dispatch_name must not be empty");
         }
         if callee_ura.trim().is_empty() {
             anyhow::bail!("local ability target callee_ura must not be empty");
         }
+        if public_ability.trim().is_empty() {
+            anyhow::bail!("local ability target public_ability must not be empty");
+        }
         crate::core::ura::parse_ura(&callee_ura).map_err(|error| {
             anyhow::anyhow!("local ability target callee_ura is invalid: {error}")
         })?;
-        let public_name = crate::core::ura::owner_local_ability_name(&callee_ura, &dispatch_name);
+        let public_name =
+            crate::core::ura::descriptor_public_ability_name(&callee_ura, &public_ability);
         let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, &public_name)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "local ability target cannot derive Ability URA for callee `{callee_ura}` and dispatch `{dispatch_name}`"
+                    "local ability target cannot derive Ability URA for callee `{callee_ura}` and public ability `{public_ability}`"
                 )
             })?;
         Ok(Self {
@@ -99,6 +115,53 @@ impl LocalAbilityTarget {
             dispatch_name,
             callee_ura,
         })
+    }
+
+    /// Project a Device execution host to the declared SystemAgent owner of
+    /// `public_ability`, then build the descriptor-bound local target.
+    pub fn for_device_sponsored_system_ability(
+        public_ability: impl Into<String>,
+        execution_host_device_ura: &str,
+    ) -> anyhow::Result<Self> {
+        let public_ability = public_ability.into();
+        Self::for_device_sponsored_system_ability_with_dispatch(
+            public_ability.clone(),
+            public_ability,
+            execution_host_device_ura,
+        )
+    }
+
+    /// Project a Device execution host to the declared SystemAgent owner of
+    /// `public_ability`, while preserving a distinct daemon-local dispatch
+    /// key for legacy handlers whose committed descriptor name is canonicalized
+    /// by their manifest.
+    pub fn for_device_sponsored_system_ability_with_dispatch(
+        public_ability: impl Into<String>,
+        dispatch_name: impl Into<String>,
+        execution_host_device_ura: &str,
+    ) -> anyhow::Result<Self> {
+        let public_ability = public_ability.into();
+        let dispatch_name = dispatch_name.into();
+        let host = crate::core::ura::parse_ura(execution_host_device_ura).map_err(|error| {
+            anyhow::anyhow!("local system ability execution host is invalid: {error}")
+        })?;
+        if host.kind != crate::core::ura::URAKind::Device {
+            anyhow::bail!("local system ability execution host must be a Device URA");
+        }
+        let device_id = host
+            .device_id()
+            .ok_or_else(|| anyhow::anyhow!("local system ability Device URA has no device id"))?;
+        let owner = crate::daemon::ability::catalog::ownership::device_sponsored_system_agent_owner_for_public_ability(
+            &public_ability,
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "local system ability {public_ability:?} has no declared SystemAgent owner"
+            )
+        })?;
+        let callee_ura =
+            crate::core::ura::device_agent_ura(&host.realm, device_id, owner.system_agent_id());
+        Self::new_with_public_ability(dispatch_name, callee_ura, public_ability)
     }
 
     /// Canonical Ability URA selected by the descriptor/control-plane route.
@@ -257,6 +320,7 @@ fn checked_subject_ura(subject: &str, field: &str) -> anyhow::Result<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DaemonSystemSubjectPolicy {
     RealmAuthorityAbilitySubject(String),
+    DeployedAbilitySubject(String),
     CalleeOwnerSubject(String),
 }
 
@@ -266,15 +330,33 @@ impl DaemonSystemSubjectPolicy {
             Ok(selector) if selector.owner_kind() == "authority" => {
                 Self::RealmAuthorityAbilitySubject(selector.ability_ura().to_string())
             }
+            Ok(selector)
+                if is_ability_management_system_agent_callee(callee_ura)
+                    && selector.owner_ura() == callee_ura =>
+            {
+                Self::DeployedAbilitySubject(selector.ability_ura().to_string())
+            }
+            Ok(_) if is_ability_management_system_agent_callee(callee_ura) => {
+                Self::CalleeOwnerSubject(callee_ura.to_string())
+            }
+            _ if is_ability_management_system_agent_callee(callee_ura) => {
+                match crate::core::ura::owner_ability_ura(callee_ura, ability) {
+                    Some(ability_ura) => Self::DeployedAbilitySubject(ability_ura),
+                    None => Self::CalleeOwnerSubject(callee_ura.to_string()),
+                }
+            }
+            _ if is_runtime_introspection_read(ability) => {
+                Self::CalleeOwnerSubject(runtime_introspection_subject_ura(callee_ura))
+            }
             _ => Self::CalleeOwnerSubject(callee_ura.to_string()),
         }
     }
 
     fn subject_ura(&self) -> &str {
         match self {
-            Self::RealmAuthorityAbilitySubject(subject) | Self::CalleeOwnerSubject(subject) => {
-                subject
-            }
+            Self::RealmAuthorityAbilitySubject(subject)
+            | Self::DeployedAbilitySubject(subject)
+            | Self::CalleeOwnerSubject(subject) => subject,
         }
     }
 }
@@ -283,6 +365,41 @@ fn daemon_system_subject_ura_for_descriptor(ability: &str, callee_ura: &str) -> 
     DaemonSystemSubjectPolicy::for_descriptor(ability, callee_ura)
         .subject_ura()
         .to_string()
+}
+
+fn is_runtime_introspection_read(ability: &str) -> bool {
+    let public_name = crate::core::ura::AbilitySelector::parse(ability)
+        .map(|selector| selector.public_name().to_string())
+        .unwrap_or_else(|_| ability.to_string());
+    matches!(
+        public_name.as_str(),
+        crate::daemon::ability::names::governance::META_DESCRIBE
+            | crate::daemon::ability::names::governance::META_LIST_ABILITIES
+            | crate::daemon::ability::names::resources::META_LIST_RESOURCES
+    )
+}
+
+fn runtime_introspection_subject_ura(callee_ura: &str) -> String {
+    let Ok(parsed) = crate::core::ura::parse_ura(callee_ura) else {
+        return callee_ura.to_string();
+    };
+    if let Some((device_id, agent_id)) = parsed.device_agent_ids() {
+        if agent_id
+            == crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID
+        {
+            return crate::core::ura::device_ura(&parsed.realm, device_id);
+        }
+    }
+    callee_ura.to_string()
+}
+
+fn is_ability_management_system_agent_callee(callee_ura: &str) -> bool {
+    let Ok(parsed) = crate::core::ura::parse_ura(callee_ura) else {
+        return false;
+    };
+    parsed.device_agent_ids().is_some_and(|(_, agent_id)| {
+        agent_id == crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID
+    })
 }
 
 /// Explicit subject binding state for a daemon-local runtime dispatch.
@@ -999,6 +1116,135 @@ mod tests {
     }
 
     #[test]
+    fn runtime_introspection_subject_projects_system_agent_callee_to_host_device() {
+        let runtime_introspection_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            &runtime_introspection_owner,
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(
+                "easynet:///r/acme/device/dev-a".to_string()
+            )
+        );
+        assert_eq!(policy.subject_ura(), "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_introspection_subject_accepts_canonical_ability_ura() {
+        let runtime_introspection_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
+        let ability_ura = crate::core::ura::owner_ability_ura(
+            &runtime_introspection_owner,
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+        )
+        .expect("runtime-introspection ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor(&ability_ura, &runtime_introspection_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(
+                "easynet:///r/acme/device/dev-a".to_string()
+            )
+        );
+        assert_eq!(policy.subject_ura(), "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_introspection_subject_keeps_non_introspection_system_agent_callee() {
+        let runtime_health_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID,
+        );
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            crate::daemon::ability::names::governance::OBSERVE_HEALTH,
+            &runtime_health_owner,
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(runtime_health_owner.clone())
+        );
+        assert_eq!(policy.subject_ura(), runtime_health_owner);
+    }
+
+    #[test]
+    fn deployed_dynamic_ability_subject_resolves_to_ability_ura_for_public_name() {
+        let ability_management_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let expected_ability_ura =
+            crate::core::ura::owner_ability_ura(&ability_management_owner, "er.generate")
+                .expect("deployed ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor("er.generate", &ability_management_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::DeployedAbilitySubject(expected_ability_ura.clone())
+        );
+        assert_eq!(policy.subject_ura(), expected_ability_ura);
+    }
+
+    #[test]
+    fn deployed_dynamic_ability_subject_accepts_canonical_ability_ura() {
+        let ability_management_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&ability_management_owner, "remote_desktop.attach")
+                .expect("easyremote dynamic ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor(&ability_ura, &ability_management_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::DeployedAbilitySubject(ability_ura.clone())
+        );
+        assert_eq!(policy.subject_ura(), ability_ura);
+    }
+
+    #[test]
+    fn deployed_dynamic_ability_subject_rejects_cross_owner_ability_ura() {
+        let ability_management_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let other_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-b",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&other_owner, "remote_desktop.attach")
+                .expect("other hosted ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor(&ability_ura, &ability_management_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(ability_management_owner.clone())
+        );
+        assert_eq!(policy.subject_ura(), ability_management_owner);
+    }
+
+    #[test]
     fn daemon_system_subject_resolves_to_ability_ura_for_realm_authority_owner() {
         let authority_ability =
             crate::core::ura::authority_ability_ura("acme", "federation.status");
@@ -1046,5 +1292,71 @@ mod tests {
             .resolved_subject_ura("easynet:///r/acme/device/dev-a")
             .expect_err("subject must be a URA");
         assert!(err.to_string().contains("InvocationTarget.subject"));
+    }
+
+    #[test]
+    fn local_system_target_projects_device_host_to_registry_owned_system_agent() {
+        let target = LocalAbilityTarget::for_device_sponsored_system_ability(
+            crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("agent.discover local system target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.agent-management"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.agent-management.agent.discover"
+        );
+    }
+
+    #[test]
+    fn local_terminal_target_preserves_namespace_when_owner_has_same_id() {
+        let target = LocalAbilityTarget::for_device_sponsored_system_ability(
+            "terminal.create",
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("terminal SystemAgent target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.terminal"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.terminal.terminal.create"
+        );
+    }
+
+    #[test]
+    fn local_service_target_can_separate_public_descriptor_from_dispatch_key() {
+        let target = LocalAbilityTarget::new_with_public_ability(
+            "project_list",
+            "easynet:///r/acme/service/user-a.pages",
+            "project_list",
+        )
+        .expect("pages list Service target");
+
+        assert_eq!(target.dispatch_name(), "project_list");
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/service/user-a.pages"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/service.user-a.pages.project_list"
+        );
+    }
+
+    #[test]
+    fn local_system_target_rejects_device_as_public_callee_for_unknown_ability() {
+        let error = LocalAbilityTarget::for_device_sponsored_system_ability(
+            "unknown.ability",
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect_err("unknown ability must not fall back to Device owner");
+        assert!(error.to_string().contains("no declared SystemAgent owner"));
     }
 }

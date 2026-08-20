@@ -21,21 +21,28 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use axon_sdk::invocation::CallMode;
+use serde_json::json;
 use tonic::Status;
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
-use crate::daemon::federation::resolver_contract::NegativeReason;
+use crate::daemon::federation::resolver_contract::{NegativeReason, ResolveAnswerKind};
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::child_invocation_builder::{
     ChildInvocationAuthority, ChildInvocationBuildFailure, ChildInvocationBuildInput,
     ChildInvocationBuilder, ExternallySignedChildInvocation, SelectedChildRoute,
 };
 use crate::daemon::invocation::admission::decision::{SignatureDecisionReason, TraceStage};
-use crate::daemon::invocation::dispatch::deps::{DirectoryPlane, FederationDial, IdentityPlane};
+use crate::daemon::invocation::bidi::session_wire::{RequestOutcome, SessionRequestError};
+use crate::daemon::invocation::dispatch::deps::{
+    DirectoryPlane, FederationDial, IdentityPlane, SessionPlane,
+};
+use crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_NAMESPACE_RESOLVE;
 use crate::daemon::invocation::routing::route_resolver::{
-    DaemonRouteResolver, ResolveRouteFailure, SelectedInvokeRoute,
+    CanonicalRouteSelection, DaemonRouteResolver, DelegatedInvokeRoute, ResolveRouteFailure,
+    SelectedInvokeRoute,
 };
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentLocalTargetProjection, HostedAgentTarget,
@@ -50,6 +57,7 @@ pub(crate) struct TargetGate {
     admission: AdmissionFacade,
     directory: DirectoryPlane,
     federation: FederationDial,
+    sessions: SessionPlane,
     identity: IdentityPlane,
     local_agent_targets: LocalAgentTargetIndex,
 }
@@ -59,12 +67,14 @@ impl TargetGate {
         admission: AdmissionFacade,
         directory: DirectoryPlane,
         federation: FederationDial,
+        sessions: SessionPlane,
         identity: IdentityPlane,
     ) -> Self {
         Self {
             admission,
             directory,
             federation,
+            sessions,
             identity,
             local_agent_targets: LocalAgentTargetIndex::load(),
         }
@@ -82,7 +92,8 @@ impl TargetGate {
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
             self.directory.ability_catalog.as_ref(),
-        );
+        )
+        .with_federated_directory(&self.directory.federated_directory);
         if let Some(local_realm) = self
             .identity
             .session_realm
@@ -101,6 +112,122 @@ impl TargetGate {
             }
         }
         resolver
+    }
+
+    pub(crate) async fn resolve_canonical_route(
+        &self,
+        target_ura: &str,
+        ability_ura: &str,
+        call_mode: CallMode,
+    ) -> Result<CanonicalRouteSelection, ResolveRouteFailure> {
+        let local_result =
+            self.route_resolver()
+                .await
+                .resolve_canonical_route(target_ura, ability_ura, call_mode);
+        match local_result {
+            Ok(selection) => Ok(selection),
+            Err(local_failure) => {
+                self.resolve_hub_session_route(target_ura, ability_ura, call_mode, local_failure)
+                    .await
+            }
+        }
+    }
+
+    async fn resolve_hub_session_route(
+        &self,
+        target_ura: &str,
+        ability_ura: &str,
+        call_mode: CallMode,
+        local_failure: ResolveRouteFailure,
+    ) -> Result<CanonicalRouteSelection, ResolveRouteFailure> {
+        let Some(escalation) = self.sessions.escalation.as_ref() else {
+            return Err(local_failure);
+        };
+        // Device mode owns no peer dialer. Its authenticated upstream Hub
+        // session is the route-provider boundary for both same-realm and
+        // federated targets: the Hub applies its own peer topology and
+        // returns either a same-realm FINAL_ROUTE or a cross-realm
+        // DELEGATION. The latter is forwarding authority for the upstream
+        // Hub, not an executable route for the Device.
+        let args = serde_json::to_vec(&namespace_route_query(target_ura, ability_ura)).map_err(
+            |error| {
+                ResolveRouteFailure::new(
+                    ability_ura,
+                    NegativeReason::Refused,
+                    format!("Hub route provider request encoding failed: {error}"),
+                )
+            },
+        )?;
+        let answer: serde_json::Value = match escalation
+            .escalate(ABILITY_NAMESPACE_RESOLVE.to_string(), args)
+            .await
+        {
+            RequestOutcome::Ok { result_bytes } => {
+                serde_json::from_slice(&result_bytes).map_err(|error| {
+                    ResolveRouteFailure::new(
+                        ability_ura,
+                        NegativeReason::Nodata,
+                        format!("Hub route provider returned unreadable JSON: {error}"),
+                    )
+                })?
+            }
+            RequestOutcome::Err { error } => {
+                return Err(session_request_error_route_failure(
+                    ability_ura,
+                    error,
+                    local_failure,
+                ))
+            }
+        };
+        match answer
+            .get("answer_kind")
+            .and_then(serde_json::Value::as_str)
+            .and_then(ResolveAnswerKind::from_str_name)
+        {
+            Some(ResolveAnswerKind::FinalRoute) => {
+                let selected_route = SelectedInvokeRoute::from_hub_final_route_answer_json(
+                    &answer,
+                    target_ura,
+                    ability_ura,
+                )?;
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = hub_session_final_route_selected,
+                    target_ura = target_ura,
+                    ability = ability_ura,
+                    route_ura = selected_route.route_ura.as_str(),
+                    execution_host_ura = selected_route.execution_host_ura.as_str(),
+                );
+                Ok(CanonicalRouteSelection::hub_session(
+                    call_mode,
+                    selected_route,
+                ))
+            }
+            Some(ResolveAnswerKind::Delegation) => {
+                let delegated_route = DelegatedInvokeRoute::from_hub_delegation_answer_json(
+                    &answer,
+                    target_ura,
+                    ability_ura,
+                )?;
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = upstream_hub_peer_delegation_selected,
+                    target_ura = target_ura,
+                    ability = ability_ura,
+                    peer_realm = delegated_route.realm.as_str(),
+                    peer_hub_ura = delegated_route.hub_ura.as_str(),
+                );
+                Ok(CanonicalRouteSelection::upstream_hub(
+                    call_mode,
+                    delegated_route,
+                ))
+            }
+            _ => Err(ResolveRouteFailure::new(
+                ability_ura,
+                NegativeReason::Noroute,
+                "Hub route provider returned a missing or unsupported answer_kind",
+            )),
+        }
     }
 
     /// Resolve whether `target_ura` names THIS daemon's own
@@ -155,7 +282,7 @@ impl TargetGate {
             return true;
         }
         if let Some(agent_target) = HostedAgentTarget::parse(target_ura) {
-            if self.local_agent_targets.hosts_target(&agent_target) {
+            if self.local_agent_targets.is_local_target(&agent_target) {
                 return true;
             }
 
@@ -206,23 +333,71 @@ impl TargetGate {
     }
 }
 
+fn namespace_route_query(target_ura: &str, ability_ura: &str) -> serde_json::Value {
+    let ability = ability_ura.trim();
+    if crate::core::ura::parse_ura(ability)
+        .is_ok_and(|parsed| parsed.kind == crate::core::ura::URAKind::Ability)
+    {
+        json!({
+            "query_name": ability,
+            "ability_name": "",
+            "qtype": "RESOLVE_TYPE_ROUTE",
+            "include_abilities": true,
+        })
+    } else {
+        json!({
+            "query_name": target_ura,
+            "ability_name": ability,
+            "qtype": "RESOLVE_TYPE_ROUTE",
+            "include_abilities": true,
+        })
+    }
+}
+
+fn session_request_error_route_failure(
+    query_name: &str,
+    error: SessionRequestError,
+    local_failure: ResolveRouteFailure,
+) -> ResolveRouteFailure {
+    match error {
+        SessionRequestError::TargetOffline => {
+            ResolveRouteFailure::owner_offline(query_name, NegativeReason::Noroute)
+        }
+        SessionRequestError::PermissionDenied { reason } => ResolveRouteFailure::new(
+            query_name,
+            NegativeReason::Refused,
+            format!("Hub route provider denied namespace.resolve: {reason}"),
+        ),
+        SessionRequestError::UpstreamFailure { reason } => ResolveRouteFailure::new(
+            query_name,
+            NegativeReason::Noroute,
+            format!(
+                "Hub route provider failed after local route miss `{}`: {reason}",
+                local_failure.detail
+            ),
+        ),
+        SessionRequestError::UpstreamTimeout => ResolveRouteFailure::new(
+            query_name,
+            NegativeReason::Noroute,
+            "Hub route provider timed out",
+        ),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalCredentialIdentity {
     realm: String,
     user_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum LocalCredentialIdentityState {
     Available(LocalCredentialIdentity),
+    #[default]
     Unpaired,
-    Unavailable { reason: String },
-}
-
-impl Default for LocalCredentialIdentityState {
-    fn default() -> Self {
-        Self::Unpaired
-    }
+    Unavailable {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -246,6 +421,12 @@ impl LocalAgentTargetIndex {
             }
             LocalAgentTargetProjectionState::Unavailable { .. } => false,
         }
+    }
+
+    fn is_local_target(&self, target: &HostedAgentTarget) -> bool {
+        self.hosts_target(target)
+            || (self.credentials_match_target(target)
+                && self.has_registered_agent_id(&target.agent_id))
     }
 
     fn credentials_match_target(&self, target: &HostedAgentTarget) -> bool {

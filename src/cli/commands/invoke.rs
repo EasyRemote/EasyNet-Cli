@@ -2,16 +2,16 @@
 // ===========
 //
 // File: src/cli/commands/invoke.rs
-// Description: `easynet ability invoke <ability-ura> [--args JSON] [--timeout SECS]`.
+// Description: `easynet ability invoke <ability-ura> --subject URA
+//              --nonce-hex HEX --causal-* [--args JSON] [--timeout SECS]`.
 //
 // Routing model after the AXON-RFC-001 P1.5 federation cull:
 //
-//   easynet ability invoke <ability-ura>        # Local Axon dispatch.
-//                                               # Derives the daemon
-//                                               # registry key from the
-//                                               # canonical Ability URA.
+//   easynet ability invoke <ability-ura>        # Local Axon dispatch with an
+//     --subject S --nonce-hex N --causal-root   # explicit public tuple.
 //
 //   easynet ability invoke <ability-ura> --node N
+//     --subject S --nonce-hex N --causal-root
 //                                               # Remote dispatch. The
 //                                               # ability argument is already
 //                                               # a canonical Ability URA; the
@@ -45,10 +45,10 @@ use serde_json::Value;
 #[cfg(not(feature = "axon-pb"))]
 use crate::cli::commands::invocation_tuple::remote_invocation_transport_unsupported;
 use crate::cli::commands::invocation_tuple::{
-    require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
+    required_causal_context, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_target_explicit_root_timeout, LocalAbilityTarget,
+    invoke_local_target_explicit_causal_timeout, LocalAbilityTarget,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -59,12 +59,10 @@ pub struct InvokeArgs {
     /// remote origin-caller proof generation to bind a known descriptor
     /// version.
     pub ability_ura: String,
-    /// Pin the invocation to a remote node: a canonical Device URA
-    /// (`easynet:///r/<realm>/device/<node_id>`) or Authority URA
-    /// (`easynet:///r/<realm>/authority`). The call routes through the
-    /// local daemon's canonical `Invocation::Invoke` RPC — the
-    /// cross-device main channel. Builds without canonical remote invocation
-    /// transport reject the flag with a re-build hint. Omit to dispatch locally.
+    /// Route through a Device placement locator, or pin the exact
+    /// Agent/SystemAgent/Service/Authority callee returned by the ability catalogue.
+    /// Exact callees must own the selected Ability URA. Builds without canonical
+    /// remote invocation transport reject the flag. Omit to dispatch locally.
     #[arg(long, short = 'n', value_name = "URA")]
     pub node: Option<String>,
     /// JSON object passed to the ability as its arguments — for
@@ -103,10 +101,16 @@ pub struct InvokeArgs {
     #[arg(long, value_name = "32_HEX")]
     pub nonce_hex: Option<String>,
     /// Declare that this public invocation has no causal parent. Required for
-    /// `--node` root calls; future child/resume surfaces should pass an
-    /// explicit non-root causal context instead of this flag.
+    /// root calls. Mutually exclusive with --causal-context-json.
     #[arg(long)]
     pub causal_root: bool,
+    /// Explicit non-root causal context JSON. Accepted forms are:
+    /// {"form":"scalar","receipt_hash_hex":"<64_HEX>","receipt_ura":"<URA>"},
+    /// {"form":"list","prior":[...]}, or
+    /// {"form":"merkle","root_hex":"<64_HEX>","proof_ura":"<URA>"}.
+    /// Root calls must use --causal-root so root placement has one encoding.
+    #[arg(long, value_name = "JSON")]
+    pub causal_context_json: Option<String>,
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
@@ -117,16 +121,23 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // `Invocation::Invoke` RPC via the descriptor-bound remote invoke helper.
     // Builds without `axon-pb` fail with the same canonical unsupported
     // transport error used by stream and bidi ingress.
-    let node_ura: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
+    let route_target: Option<
+        crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget,
+    > = match invoke_args.node.as_deref().map(str::trim) {
         None => None,
         Some("") => bail!(
             "--node was given but empty; omit the flag to dispatch locally, \
-             or pass a real `easynet:///r/<tenant>/device/<node>` URA"
+             or pass a Device placement or exact Agent/SystemAgent/Service/Authority callee URA"
         ),
         Some(node) => {
             #[cfg(feature = "axon-pb")]
             {
-                Some(crate::daemon::invocation::routing::remote_invoke::parse_node_ura(node)?)
+                Some(
+                    crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget::parse(
+                        node,
+                        ability_selector,
+                    )?,
+                )
             }
             #[cfg(not(feature = "axon-pb"))]
             {
@@ -149,35 +160,41 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // Cross-hub dispatch when `--node` is set; local dispatch
     // otherwise. Both paths surface the same unwrap-or-raw result
     // shape so a script piping to `jq` doesn't have to branch.
-    let (result, fulfilled_label) = match node_ura.as_deref() {
+    let (result, fulfilled_label) = match route_target.as_ref() {
         #[cfg(feature = "axon-pb")]
-        Some(target) => {
-            let credentials = crate::daemon::persistence::config::load_credentials()
-                .context("remote ability invoke requires paired device credentials")?;
-            let caller_ura =
-                crate::support::platform::remote_device::caller_device_ura(&credentials)?;
+        Some(route_target) => {
+            let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+                "remote ability invoke",
+            )?;
             let target_call = ability_ref
-                .remote_target_for_mode(target, crate::daemon::ability::CallMode::Rpc)?;
+                .remote_target_for_mode(route_target, crate::daemon::ability::CallMode::Rpc)?;
             let surface = "remote ability invoke with --node";
             let subject = required_subject(invoke_args.subject.as_deref(), surface)?.to_string();
             let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
-            require_causal_root(invoke_args.causal_root, surface)?;
+            let causal_context = required_causal_context(
+                invoke_args.causal_root,
+                invoke_args.causal_context_json.as_deref(),
+                surface,
+            )?;
             let request = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
                 &target_call,
-                caller_ura,
+                identity.caller_user_ura().to_string(),
                 subject,
                 invocation_nonce,
-                crate::daemon::invocation::routing::remote_invoke::declared_root_causal_context(),
+                causal_context,
                 arguments,
                 timeout,
             )?
             .into_request()?;
             let value =
                 crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request)?;
-            (value, format!("canonical Invoke target={target}"))
+            (
+                value,
+                format!("canonical Invoke target={}", route_target.as_str()),
+            )
         }
         // The `not(axon-pb)` arm of `--node` already returned above;
-        // this match is reachable only via `node_ura == None`.
+        // this match is reachable only via `route_target == None`.
         #[cfg(not(feature = "axon-pb"))]
         Some(_) => unreachable!("--node unsupported return handled before dispatch"),
         None => {
@@ -196,15 +213,20 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             let surface = "local ability invoke";
             let subject = required_subject(invoke_args.subject.as_deref(), surface)?;
             let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
-            require_causal_root(invoke_args.causal_root, surface)?;
+            let causal_context = required_causal_context(
+                invoke_args.causal_root,
+                invoke_args.causal_context_json.as_deref(),
+                surface,
+            )?;
             let dispatch_name = ability_selector.local_registry_ability();
             let target = LocalAbilityTarget::from_selector(ability_selector);
             debug_assert_eq!(target.dispatch_name(), dispatch_name);
-            let value = invoke_local_target_explicit_root_timeout(
+            let value = invoke_local_target_explicit_causal_timeout(
                 &target,
                 arguments,
                 subject,
                 invocation_nonce,
+                causal_context,
                 timeout,
             )?;
             (value, "local daemon".to_string())
@@ -267,26 +289,26 @@ mod tests {
 
     #[test]
     fn invoke_ability_ref_parses_plain_ability_ura() {
-        let parsed =
-            AbilityInvocationRef::parse("easynet:///r/acme/ability/device.node.observe.health")
-                .expect("plain ability URA");
+        let parsed = AbilityInvocationRef::parse(
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health",
+        )
+        .expect("plain ability URA");
 
         assert_eq!(
             parsed.selector().ability_ura(),
-            "easynet:///r/acme/ability/device.node.observe.health"
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health"
         );
         assert!(!parsed.is_descriptor_ref());
     }
 
     #[test]
     fn invoke_ability_ref_preserves_explicit_descriptor_ref() {
-        let descriptor_ref =
-            "easynet:///r/acme/ability/device.node.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        let descriptor_ref = "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
         let parsed = AbilityInvocationRef::parse(descriptor_ref).expect("descriptor ref");
 
         assert_eq!(
             parsed.selector().ability_ura(),
-            "easynet:///r/acme/ability/device.node.observe.health"
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health"
         );
         assert_eq!(parsed.descriptor_ref(), Some(descriptor_ref));
     }
@@ -299,7 +321,8 @@ mod tests {
         // rejected with a typed error before any IPC, so a typo
         // never accidentally hits the wire.
         let res = run(InvokeArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.local.runtime-health.observe.health".into(),
             node: Some("some-node-id".into()),
             args: None,
             timeout: 60,
@@ -307,16 +330,17 @@ mod tests {
             subject: None,
             nonce_hex: None,
             causal_root: false,
+            causal_context_json: None,
         });
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
-        // axon-pb on: parse_node_ura error mentions canonical URA
-        // shape. axon-pb off: the canonical unsupported transport error
+        // axon-pb on: the typed route-target parser reports the accepted
+        // placement/exact-callee forms. axon-pb off: the canonical unsupported transport error
         // mentions `--node`. Both are operator-actionable and neither
         // preserves the retired not-wired path.
         assert!(
             (msg.contains("--node") && msg.contains("unsupported"))
-                || msg.contains("canonical Axon Device or Authority URA"),
+                || msg.contains("canonical Device placement or exact callable"),
             "error must surface a canonical --node error, got: {msg}"
         );
         assert!(
@@ -330,7 +354,8 @@ mod tests {
         // `--node ""` is almost always an unset shell variable that
         // expanded to empty, not a deliberate intent. Reject loudly.
         let res = run(InvokeArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.local.runtime-health.observe.health".into(),
             node: Some("   ".into()),
             args: None,
             timeout: 60,
@@ -338,6 +363,7 @@ mod tests {
             subject: None,
             nonce_hex: None,
             causal_root: false,
+            causal_context_json: None,
         });
         let err = res.expect_err("must reject empty --node");
         assert!(format!("{err}").contains("empty"));
@@ -348,7 +374,8 @@ mod tests {
         // Operator-visible: a typo in --args should say "parse
         // --args JSON", not crash mid-IPC.
         let res = run(InvokeArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.local.runtime-health.observe.health".into(),
             node: None,
             args: Some("{not valid".into()),
             timeout: 60,
@@ -356,6 +383,7 @@ mod tests {
             subject: None,
             nonce_hex: None,
             causal_root: false,
+            causal_context_json: None,
         });
         let err = res.expect_err("must reject malformed JSON");
         assert!(format!("{err:#}").contains("parse --args JSON"));

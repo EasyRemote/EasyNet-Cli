@@ -200,7 +200,7 @@ pub(super) fn execute_step_with_retry(
                     completed_at,
                     retry_count: attempt,
                     retry_history,
-                    invocation,
+                    invocation: Box::new(invocation),
                 };
             }
             Err(e) => {
@@ -435,7 +435,7 @@ pub(super) fn process_step_result(
                 StepOutcome::Completed,
                 trace,
                 Some(result_bytes),
-                Some(invocation),
+                Some(*invocation),
             )
         }
         StepExecResult::Error {

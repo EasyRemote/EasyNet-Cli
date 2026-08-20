@@ -84,7 +84,7 @@ fn device_mode_registry_satisfies_device_baseline() {
 }
 
 /// Hub mode must expose its own `LocalRegistry` baseline without admitting
-/// Device-owned rows into the Hub authority plane.
+/// direct DeviceProfileProjection rows into the Hub authority plane.
 #[test]
 fn hub_mode_registry_satisfies_hub_local_registry_slice() {
     let _home = HomeGuard::new();

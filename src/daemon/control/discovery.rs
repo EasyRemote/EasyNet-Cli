@@ -127,6 +127,37 @@ pub struct DaemonIdentity {
     pub node_id: Option<String>,
 }
 
+impl DaemonIdentity {
+    /// Canonical owner used by one local daemon attachment for system catalog
+    /// and caller-authority operations. `both` is explicitly device-primary:
+    /// realm Authority rows remain addressable through realm-scoped catalog
+    /// queries, while local system Invocations bind to the device substrate.
+    pub(crate) fn runtime_owner_ura(&self) -> Result<String, String> {
+        let realm = self.realm.trim();
+        if realm.is_empty() {
+            return Err("control discovery daemon_identity.realm is empty".to_string());
+        }
+        match self.mode.trim() {
+            "hub" => Ok(crate::core::ura::hub_ura(realm)),
+            "device" | "both" => {
+                let node_id = self
+                    .node_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|node_id| !node_id.is_empty())
+                    .ok_or_else(|| {
+                        "control discovery device-primary daemon_identity.node_id is empty"
+                            .to_string()
+                    })?;
+                Ok(crate::core::ura::device_ura(realm, node_id))
+            }
+            other => Err(format!(
+                "control discovery daemon_identity.mode {other:?} cannot resolve a runtime owner URA"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct IpcVersionRange {
@@ -304,6 +335,34 @@ pub fn remove(path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_owner_identity_is_explicit_for_each_daemon_mode() {
+        let identity = |mode: &str, node_id: Option<&str>| DaemonIdentity {
+            mode: mode.to_string(),
+            realm: "acme".to_string(),
+            node_id: node_id.map(str::to_string),
+        };
+
+        assert_eq!(
+            identity("hub", None).runtime_owner_ura().unwrap(),
+            "easynet:///r/acme/authority"
+        );
+        assert_eq!(
+            identity("device", Some("dev-a"))
+                .runtime_owner_ura()
+                .unwrap(),
+            "easynet:///r/acme/device/dev-a"
+        );
+        assert_eq!(
+            identity("both", Some("dev-a")).runtime_owner_ura().unwrap(),
+            "easynet:///r/acme/device/dev-a"
+        );
+        assert!(identity("both", None)
+            .runtime_owner_ura()
+            .unwrap_err()
+            .contains("device-primary"));
+    }
 
     /// Produce a unique sandbox directory under the OS temp dir. We
     /// avoid `tempfile` as a dependency — the rest of this crate

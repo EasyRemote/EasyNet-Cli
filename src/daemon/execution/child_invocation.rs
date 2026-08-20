@@ -4,7 +4,7 @@
 //! between nested invocations are runtime facts: an admitted child envelope,
 //! its canonical invocation URA, and the signed terminal receipt anchor.
 
-use axon_sdk::invocation::{CausalContext, InvocationEnvelope};
+use axon_sdk::invocation::InvocationEnvelope;
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -71,7 +71,9 @@ impl ChildInvocationRecord {
             "ability": self.envelope.ability,
             "subject_ura": self.envelope.subject.ura,
             "invocation_nonce": hex::encode(self.envelope.invocation_nonce),
-            "causal_context": causal_context_projection(&self.envelope.causal_context),
+            "causal_context": crate::daemon::invocation::causal_context_projection::causal_context_projection(
+                &self.envelope.causal_context,
+            ),
             "dependency_receipts": self.dependency_receipts.iter()
                 .map(ChildInvocationReceiptAnchor::projection)
                 .collect::<Vec<_>>(),
@@ -107,7 +109,7 @@ impl ChildInvocationRecord {
             subject,
             axon_sdk::invocation::InvocationDerivationPolicy::Explicit {
                 invocation_nonce: [marker; 16],
-                causal_context: CausalContext::None,
+                causal_context: axon_sdk::invocation::CausalContext::None,
             },
         )
         .and_then(|builder| builder.invocation_envelope(ability, &[marker]))
@@ -125,27 +127,4 @@ impl ChildInvocationRecord {
 pub(crate) struct ChildInvocationOutcome {
     pub(crate) value: Value,
     pub(crate) invocation: ChildInvocationRecord,
-}
-
-fn causal_context_projection(causal: &CausalContext) -> Value {
-    match causal {
-        CausalContext::None => serde_json::json!({"kind": "none"}),
-        CausalContext::Scalar(receipt) => serde_json::json!({
-            "kind": "scalar",
-            "receipt_hash": hex::encode(receipt.receipt_hash),
-            "receipt_ura": receipt.receipt_ura,
-        }),
-        CausalContext::List(receipts) => serde_json::json!({
-            "kind": "list",
-            "receipts": receipts.iter().map(|receipt| serde_json::json!({
-                "receipt_hash": hex::encode(receipt.receipt_hash),
-                "receipt_ura": receipt.receipt_ura,
-            })).collect::<Vec<_>>(),
-        }),
-        CausalContext::Merkle { root, proof_ura } => serde_json::json!({
-            "kind": "merkle",
-            "root": hex::encode(root),
-            "proof_ura": proof_ura,
-        }),
-    }
 }

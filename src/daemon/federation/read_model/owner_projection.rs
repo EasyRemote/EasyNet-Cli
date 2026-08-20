@@ -20,7 +20,6 @@ use crate::daemon::persistence::owner_projections::{
     self, OwnerProjectionCursor, OwnerProjectionCursorFile, OwnerProjectionCursorLifecycle,
 };
 
-pub(crate) const OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT: usize = 64;
 #[cfg(feature = "axon-pb")]
 const OWNER_PROJECTION_LEASE_TTL_MS: i64 = 60_000;
 
@@ -94,6 +93,11 @@ impl AbilityCallableSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AbilityCallModeGeometry {
     pub call_mode: CallMode,
+    /// Canonical descriptor-bound Ability ref for this exact call-mode
+    /// variant. Remote origin-caller proof generation must consume this
+    /// value directly; a peer must not reconstruct it from a local system
+    /// catalogue that cannot know dynamically deployed/easyremote abilities.
+    pub descriptor_ref: String,
     pub descriptor_version: String,
     pub descriptor_revision: String,
     pub admission_action: String,
@@ -190,6 +194,14 @@ pub(crate) struct PurgeProjectionDelivery {
 }
 
 impl OwnerProjectionPublication {
+    /// Number of canonical Ability rows carried by this complete-set
+    /// projection. Multiple governed descriptor variants (for example RPC
+    /// and subscribe) are one Ability and live in that row's mode geometry.
+    #[must_use]
+    pub(crate) fn ability_count(&self) -> usize {
+        self.ability_summaries.len()
+    }
+
     pub(crate) fn canonical_digest(&self) -> String {
         projection_digest(
             &self.owner_ura,
@@ -204,14 +216,24 @@ impl OwnerProjectionPublication {
     /// Validate a received complete-set projection before it reaches the
     /// directory read model. One row represents one canonical Ability URA;
     /// its mode geometry preserves every governed descriptor variant. The
-    /// digest binds every routing and descriptor field, while the owner checks
-    /// prevent internally consistent payloads from smuggling abilities for a
-    /// different principal.
+    /// digest binds every routing and descriptor field, while the owner/host
+    /// checks prevent internally consistent payloads from smuggling abilities
+    /// for a different principal. A Device owner URA is accepted only as the
+    /// same-device DeviceProfileProjection migration cursor; Agent and
+    /// Authority rows remain the public descriptor owner classes.
     pub(crate) fn validate_integrity(&self) -> Result<(), String> {
         owner_projections::validate_owner_projection_host_binding(
             &self.owner_ura,
             &self.host_device_ura,
         )?;
+        let owner = crate::core::ura::parse_ura(&self.owner_ura)
+            .map_err(|error| format!("invalid owner_ura: {error}"))?;
+        if owner.kind == crate::core::ura::URAKind::Device && !self.ability_summaries.is_empty() {
+            return Err(
+                "DeviceProfileProjection migration cursor must not carry AbilityDescriptor rows"
+                    .to_string(),
+            );
+        }
         if self.projection_revision == 0 {
             return Err("projection_revision must be greater than zero".to_string());
         }
@@ -281,6 +303,13 @@ pub(crate) fn prepare_and_persist(
     host_device_ura: &str,
     descriptors: &[AbilityDescriptor],
 ) -> Result<OwnerProjectionPublication, String> {
+    let owner = crate::core::ura::parse_ura(owner_ura.trim())
+        .map_err(|error| format!("owner_ura is invalid: {error}"))?;
+    if owner.kind == crate::core::ura::URAKind::Agent && owner.agent_ids().is_some() {
+        return Err(
+            "user-owned Agent projections require a durable Hub generation assignment".to_string(),
+        );
+    }
     owner_projections::update(|file| {
         let prepared = prepare_at(owner_ura, host_device_ura, descriptors, file, now_unix_ms())
             .map_err(anyhow::Error::msg)?;
@@ -290,29 +319,54 @@ pub(crate) fn prepare_and_persist(
     .map_err(|e| format!("update owner projection cursor failed: {e}"))
 }
 
-/// Build a tombstone publication for `owner_ura` (empty ability set,
-/// revision bumped strictly past the prior cursor so the hub's D26
-/// fence accepts it) and drop the local cursor so the owner leaves the
-/// heartbeat refresh batch. Used on `agent.stop`: advertising the empty
-/// complete-set makes the hub remove every prior projected ability
-/// (complete-set REPLACE → `removed = old − ∅ = all`). Returns `None`
-/// when no prior cursor existed (nothing to tombstone). ISS-002.
-pub(crate) fn prepare_removal_and_persist(
+#[cfg(test)]
+pub(crate) fn prepare_hosted_and_persist_for_test(
     owner_ura: &str,
     host_device_ura: &str,
-) -> Result<Option<OwnerProjectionPublication>, String> {
+    descriptors: &[AbilityDescriptor],
+    generation: u64,
+) -> Result<OwnerProjectionPublication, String> {
+    let pending = crate::daemon::persistence::hosted_agent_publications::begin_registration(
+        owner_ura,
+        host_device_ura,
+        1,
+    )
+    .map_err(|error| error.to_string())?;
+    let assignment =
+        crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment {
+            agent_ura: owner_ura.to_string(),
+            host_device_ura: host_device_ura.to_string(),
+            incarnation_id: pending.incarnation_id().clone(),
+            generation,
+        };
+    crate::daemon::persistence::hosted_agent_publications::bind_assignment(&assignment, 2)
+        .map_err(|error| error.to_string())?;
+    prepare_and_persist_assigned(&assignment, descriptors)
+}
+
+/// Build a hosted-Agent projection using the generation allocated by the Hub.
+/// The Device is not a generation authority: the exact assignment must have
+/// crossed the local durable `RegistrationPending -> Active` boundary first.
+pub(crate) fn prepare_and_persist_assigned(
+    assignment: &crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment,
+    descriptors: &[AbilityDescriptor],
+) -> Result<OwnerProjectionPublication, String> {
+    crate::daemon::persistence::hosted_agent_publications::require_active_assignment(assignment)
+        .map_err(|error| format!("hosted Agent assignment is not active locally: {error}"))?;
     owner_projections::update(|file| {
-        if file.active_cursor_for(owner_ura).is_none() {
-            return Ok(None);
-        }
-        let prepared = prepare_at(owner_ura, host_device_ura, &[], file, now_unix_ms())
-            .map_err(anyhow::Error::msg)?;
-        let publication = prepared.publication;
+        let prepared = prepare_at_with_generation(
+            &assignment.agent_ura,
+            &assignment.host_device_ura,
+            descriptors,
+            file,
+            now_unix_ms(),
+            Some(assignment.generation),
+        )
+        .map_err(anyhow::Error::msg)?;
         file.upsert(prepared.cursor);
-        file.retire(owner_ura);
-        Ok(Some(publication))
+        Ok(prepared.publication)
     })
-    .map_err(|e| format!("update owner projection removal cursor failed: {e}"))
+    .map_err(|error| format!("update assigned owner projection cursor failed: {error}"))
 }
 
 /// Persist an empty complete-set cursor without retiring it. Destructive
@@ -335,12 +389,6 @@ pub(crate) fn prepare_journaled_removal(
         Ok(Some(publication))
     })
     .map_err(|e| format!("update owner projection tombstone cursor failed: {e}"))
-}
-
-pub(crate) fn publication_required(owner_ura: &str) -> Result<bool, String> {
-    owner_projections::load()
-        .map(|file| file.active_cursor_for(owner_ura).is_some())
-        .map_err(|e| format!("load owner projection cursor failed: {e}"))
 }
 
 /// Remove only the exact tombstone cursor already recorded in a committed
@@ -370,12 +418,6 @@ pub(crate) fn retire_removal_cursor(
     .map_err(|e| format!("retire owner projection tombstone cursor failed: {e}"))
 }
 
-pub(crate) fn heartbeat_refresh_owner_uras() -> Result<Vec<String>, String> {
-    let file = owner_projections::load()
-        .map_err(|e| format!("load owner projection cursor failed: {e}"))?;
-    Ok(heartbeat_refresh_owner_uras_from_file(&file))
-}
-
 fn prepare_at(
     owner_ura: &str,
     host_device_ura: &str,
@@ -383,18 +425,56 @@ fn prepare_at(
     cursors: &OwnerProjectionCursorFile,
     now_ms: i64,
 ) -> Result<PreparedProjection, String> {
+    prepare_at_with_generation(
+        owner_ura,
+        host_device_ura,
+        descriptors,
+        cursors,
+        now_ms,
+        None,
+    )
+}
+
+fn prepare_at_with_generation(
+    owner_ura: &str,
+    host_device_ura: &str,
+    descriptors: &[AbilityDescriptor],
+    cursors: &OwnerProjectionCursorFile,
+    now_ms: i64,
+    assigned_generation: Option<u64>,
+) -> Result<PreparedProjection, String> {
     let owner_ura = owner_ura.trim();
     let host_device_ura = host_device_ura.trim();
     owner_projections::validate_owner_projection_host_binding(owner_ura, host_device_ura)?;
 
     let previous = cursors.cursor_for(owner_ura);
-    let generation = match previous {
-        Some(cursor) if cursor.lifecycle == OwnerProjectionCursorLifecycle::Retired => cursor
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| "owner projection generation exhausted".to_string())?,
-        Some(cursor) => cursor.generation,
-        None => 1,
+    let generation = match assigned_generation {
+        Some(0) => return Err("assigned owner projection generation must be nonzero".to_string()),
+        Some(assigned) => match previous {
+            Some(cursor) if cursor.generation > assigned => {
+                return Err(format!(
+                    "Hub assignment generation {assigned} is stale behind local cursor generation {}",
+                    cursor.generation
+                ));
+            }
+            Some(cursor)
+                if cursor.generation == assigned
+                    && cursor.lifecycle == OwnerProjectionCursorLifecycle::Retired =>
+            {
+                return Err(format!(
+                    "retired owner projection generation {assigned} cannot be reactivated"
+                ));
+            }
+            _ => assigned,
+        },
+        None => match previous {
+            Some(cursor) if cursor.lifecycle == OwnerProjectionCursorLifecycle::Retired => cursor
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| "owner projection generation exhausted".to_string())?,
+            Some(cursor) => cursor.generation,
+            None => 1,
+        },
     };
     let summaries = summaries_from_descriptors(owner_ura, descriptors)?;
     let fingerprint = content_fingerprint(owner_ura, host_device_ura, generation, &summaries);
@@ -469,19 +549,6 @@ fn prepare_at(
     })
 }
 
-fn heartbeat_refresh_owner_uras_from_file(file: &OwnerProjectionCursorFile) -> Vec<String> {
-    let owners = file
-        .projections
-        .iter()
-        .filter(|cursor| cursor.lifecycle == OwnerProjectionCursorLifecycle::Active)
-        .map(|cursor| cursor.owner_ura.clone())
-        .collect::<BTreeSet<_>>();
-    owners
-        .into_iter()
-        .take(OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT)
-        .collect()
-}
-
 /// Lease expiry `OWNER_PROJECTION_LEASE_TTL_MS` after `now_ms`. Shared by
 /// projection publication and `federation.heartbeat` lease refresh so both
 /// renew to the same TTL and the lease window cannot drift between them.
@@ -533,8 +600,15 @@ pub(crate) fn summary_from_descriptor(
     tags.sort();
     tags.dedup();
     let callable_summary = callable_summary_from_descriptor(descriptor, &public_name);
+    let descriptor_ref = descriptor.descriptor_ref().map_err(|error| {
+        format!(
+            "cannot derive descriptor_ref for projection descriptor {}: {error}",
+            descriptor.name
+        )
+    })?;
     let mode_geometry = AbilityCallModeGeometry {
         call_mode: descriptor.call_mode(),
+        descriptor_ref,
         descriptor_version: descriptor.version.clone(),
         descriptor_revision: descriptor_revision.clone(),
         admission_action: descriptor.admission_action().as_str().to_string(),
@@ -815,6 +889,15 @@ fn validate_mode_geometry(summary: &AbilityProjectionSummary) -> Result<(), Stri
                 variant.descriptor_version
             ));
         }
+        let expected_descriptor_ref = descriptor_ref_for_summary_variant(summary, variant)
+            .map_err(|error| error.to_string())?;
+        if variant.descriptor_ref != expected_descriptor_ref {
+            return Err(format!(
+                "ability `{}` {} descriptor_ref does not match its governed descriptor geometry",
+                summary.ability_ura,
+                variant.call_mode.as_str()
+            ));
+        }
         for (field, value) in [
             ("descriptor_revision", variant.descriptor_revision.as_str()),
             ("schema_hash", variant.schema_hash.as_str()),
@@ -929,12 +1012,6 @@ pub(crate) fn descriptor_ref_for_summary_call_mode(
     summary: &AbilityProjectionSummary,
     call_mode: CallMode,
 ) -> anyhow::Result<String> {
-    let public_name = summary_public_name(summary).ok_or_else(|| {
-        anyhow::anyhow!(
-            "ability projection `{}` cannot derive a public ability name",
-            summary.ability_ura
-        )
-    })?;
     let variant = summary
         .callable_summary
         .mode_geometry
@@ -947,6 +1024,19 @@ pub(crate) fn descriptor_ref_for_summary_call_mode(
                 call_mode.as_str()
             )
         })?;
+    descriptor_ref_for_summary_variant(summary, variant)
+}
+
+fn descriptor_ref_for_summary_variant(
+    summary: &AbilityProjectionSummary,
+    variant: &AbilityCallModeGeometry,
+) -> anyhow::Result<String> {
+    let public_name = summary_public_name(summary).ok_or_else(|| {
+        anyhow::anyhow!(
+            "ability projection `{}` cannot derive a public ability name",
+            summary.ability_ura
+        )
+    })?;
     let descriptor_hash = prefixed_sha256_bytes(&variant.descriptor_revision)
         .map_err(|err| anyhow::anyhow!("ability projection `{}` {err}", summary.ability_ura))?;
     let descriptor_binding =
@@ -956,11 +1046,24 @@ pub(crate) fn descriptor_ref_for_summary_call_mode(
             &variant.admission_action,
         )
         .map_err(|err| anyhow::anyhow!("{err}"))?;
-    crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-        &summary.owner_ura,
-        &public_name,
-        &descriptor_binding,
-    )
+    let expected_ability_ura =
+        crate::core::ura::owner_ability_ura(&summary.owner_ura, &public_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "ability projection `{}` cannot derive its owner-bound Ability URA",
+                summary.ability_ura
+            )
+        })?;
+    if expected_ability_ura != summary.ability_ura {
+        anyhow::bail!(
+            "ability projection `{}` does not match owner `{}` and public name `{public_name}`",
+            summary.ability_ura,
+            summary.owner_ura
+        );
+    }
+    axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+        "{}@{}",
+        summary.ability_ura, descriptor_binding
+    ))
     .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
@@ -968,7 +1071,7 @@ fn is_prefixed_sha256(value: &str) -> bool {
     prefixed_sha256_bytes(value).is_ok()
 }
 
-fn prefixed_sha256_bytes(value: &str) -> Result<[u8; 32], String> {
+pub(crate) fn prefixed_sha256_bytes(value: &str) -> Result<[u8; 32], String> {
     let digest = value
         .strip_prefix("sha256:")
         .ok_or_else(|| format!("sha256 proof `{value}` must use sha256:<hex> form"))?;
@@ -1340,17 +1443,18 @@ mod tests {
     }
 
     #[test]
-    fn builds_device_owned_summary_with_public_device_namespace() {
-        let owner = "easynet:///r/acme/device/01DEV";
+    fn builds_system_agent_projection_summary() {
+        let owner = "easynet:///r/acme/agent/device.01DEV.locomotion";
+        let host = "easynet:///r/acme/device/01DEV";
         let descriptors = vec![descriptor("fs.read", owner)];
         let file = OwnerProjectionCursorFile::default();
         let prepared =
-            prepare_at(owner, owner, &descriptors, &file, 1_000).expect("prepare projection");
+            prepare_at(owner, host, &descriptors, &file, 1_000).expect("prepare projection");
         let summary = &prepared.publication.ability_summaries[0];
 
         assert_eq!(
             summary.ability_ura,
-            "easynet:///r/acme/ability/device.01DEV.fs.read"
+            "easynet:///r/acme/ability/system-agent.01DEV.locomotion.fs.read"
         );
         assert_eq!(summary.namespace, "fs");
         assert_eq!(summary.local_name, "read");
@@ -1396,6 +1500,11 @@ mod tests {
         .expect("multi-mode ability projection");
 
         assert_eq!(prepared.publication.ability_summaries.len(), 1);
+        assert_eq!(
+            prepared.publication.ability_count(),
+            1,
+            "acknowledgement counts canonical Ability rows, not descriptor variants"
+        );
         let summary = &prepared.publication.ability_summaries[0];
         assert_eq!(
             summary.ability_ura,
@@ -1502,6 +1611,36 @@ mod tests {
     }
 
     #[test]
+    fn system_agent_descriptor_ref_preserves_owner_local_namespace_once() {
+        let owner = "easynet:///r/acme/agent/device.dev-1.session";
+        let descriptor = descriptor("session.attach", owner).with_call_mode(CallMode::Stream);
+        let expected_ref = descriptor
+            .descriptor_ref()
+            .expect("governed descriptor ref");
+
+        let publication = prepare_at(
+            owner,
+            "easynet:///r/acme/device/dev-1",
+            &[descriptor],
+            &OwnerProjectionCursorFile::default(),
+            1_000,
+        )
+        .expect("SystemAgent projection must not normalize session.attach twice")
+        .publication;
+
+        assert_eq!(
+            publication.ability_summaries[0]
+                .callable_summary
+                .mode_geometry[0]
+                .descriptor_ref,
+            expected_ref
+        );
+        publication
+            .validate_integrity()
+            .expect("published descriptor geometry round-trips");
+    }
+
+    #[test]
     fn integrity_rejects_rehashed_mode_geometry_tampering() {
         let owner = "easynet:///r/acme/agent/alice.bot";
         let mut publication = prepare_at(
@@ -1519,7 +1658,16 @@ mod tests {
         publication.ability_summaries[0]
             .callable_summary
             .mode_geometry[1]
-            .descriptor_revision = format!("sha256:{}", "0".repeat(64));
+            .descriptor_revision = format!("sha256:{}", "1".repeat(64));
+        let tampered_descriptor_ref = descriptor_ref_for_summary_call_mode(
+            &publication.ability_summaries[0],
+            CallMode::Stream,
+        )
+        .expect("tampered stream descriptor_ref remains locally well-formed");
+        publication.ability_summaries[0]
+            .callable_summary
+            .mode_geometry[1]
+            .descriptor_ref = tampered_descriptor_ref;
         publication.projection_digest = publication.canonical_digest();
 
         let error = publication
@@ -1585,11 +1733,44 @@ mod tests {
     }
 
     #[test]
+    fn hosted_agent_projection_requires_exact_durable_hub_assignment() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let owner = "easynet:///r/acme/agent/alice.worker";
+        let host = "easynet:///r/acme/device/dev-1";
+        let pending = crate::daemon::persistence::hosted_agent_publications::begin_registration(
+            owner, host, 1,
+        )
+        .unwrap();
+        let assignment =
+            crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment {
+                agent_ura: owner.to_string(),
+                host_device_ura: host.to_string(),
+                incarnation_id: pending.incarnation_id().clone(),
+                generation: 7,
+            };
+
+        assert!(
+            prepare_and_persist_assigned(&assignment, &[descriptor("worker.chat", owner)]).is_err()
+        );
+        crate::daemon::persistence::hosted_agent_publications::bind_assignment(&assignment, 2)
+            .unwrap();
+
+        let publication =
+            prepare_and_persist_assigned(&assignment, &[descriptor("worker.chat", owner)]).unwrap();
+        assert_eq!(publication.generation, 7);
+
+        let mut stale = assignment;
+        stale.generation = 6;
+        assert!(prepare_and_persist_assigned(&stale, &[descriptor("worker.chat", owner)]).is_err());
+    }
+
+    #[test]
     fn journaled_removal_retains_exact_cursor_until_compare_and_retire() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let owner = "easynet:///r/acme/agent/alice.worker";
         let host = "easynet:///r/acme/device/dev-1";
-        prepare_and_persist(owner, host, &[descriptor("worker.chat", owner)]).unwrap();
+        prepare_hosted_and_persist_for_test(owner, host, &[descriptor("worker.chat", owner)], 1)
+            .unwrap();
 
         let tombstone = prepare_journaled_removal(owner)
             .unwrap()
@@ -1625,8 +1806,15 @@ mod tests {
         assert_eq!(cursor.projection_revision, tombstone.projection_revision);
         assert!(retired.active_cursor_for(owner).is_none());
 
-        let recreated = prepare_and_persist(owner, host, &[descriptor("worker.chat", owner)])
-            .expect("same URA may be recreated after purge");
+        crate::daemon::persistence::hosted_agent_publications::retire_generation(owner, 1, 3)
+            .unwrap();
+        let recreated = prepare_hosted_and_persist_for_test(
+            owner,
+            host,
+            &[descriptor("worker.chat", owner)],
+            2,
+        )
+        .expect("same URA may be recreated after purge");
         let active = owner_projections::load().unwrap();
         let recreated_cursor = active.active_cursor_for(owner).unwrap();
         assert!(recreated.projection_revision > tombstone.projection_revision);
@@ -1642,7 +1830,7 @@ mod tests {
         let host = "easynet:///r/acme/device/dev-1";
         let local_owner = owner.rsplit('.').next().unwrap();
         let ability = format!("{local_owner}.chat");
-        prepare_and_persist(&owner, host, &[descriptor(&ability, &owner)])
+        prepare_hosted_and_persist_for_test(&owner, host, &[descriptor(&ability, &owner)], 1)
             .expect("child writes owner projection under process lock");
     }
 
@@ -1677,7 +1865,7 @@ mod tests {
 
     #[test]
     fn filesystem_summary_publishes_callable_fields_without_host_paths() {
-        let owner = "easynet:///r/acme/device/01DEV";
+        let owner = "easynet:///r/acme/agent/device.01DEV.locomotion";
         let descriptor = descriptor("fs.read", owner)
             .with_description(
                 crate::daemon::ability::builtins::device_control::files::description_read(),
@@ -1718,8 +1906,8 @@ mod tests {
     #[test]
     fn summary_public_name_joins_namespace_and_local_name() {
         let summary = AbilityProjectionSummary {
-            ability_ura: "easynet:///r/acme/ability/device.01DEV.fs.read".into(),
-            owner_ura: "easynet:///r/acme/device/01DEV".into(),
+            ability_ura: "easynet:///r/acme/ability/system-agent.01DEV.locomotion.fs.read".into(),
+            owner_ura: "easynet:///r/acme/agent/device.01DEV.locomotion".into(),
             namespace: "fs".into(),
             local_name: "read".into(),
             descriptor_revision: "sha256:descriptor".into(),
@@ -1802,11 +1990,12 @@ mod tests {
 
     #[test]
     fn unchanged_content_reuses_revision_with_cancelled_lease() {
-        let owner = "easynet:///r/acme/device/01DEV";
+        let owner = "easynet:///r/acme/agent/device.01DEV.locomotion";
+        let host = "easynet:///r/acme/device/01DEV";
         let descriptors = vec![descriptor("fs.read", owner)];
         let first = prepare_at(
             owner,
-            owner,
+            host,
             &descriptors,
             &OwnerProjectionCursorFile::default(),
             1_000,
@@ -1815,7 +2004,7 @@ mod tests {
         let mut file = OwnerProjectionCursorFile::default();
         file.upsert(first.cursor);
 
-        let second = prepare_at(owner, owner, &descriptors, &file, 30_000).expect("second");
+        let second = prepare_at(owner, host, &descriptors, &file, 30_000).expect("second");
         assert_eq!(second.publication.projection_revision, 1);
         // C4: lease cancelled (ISS-002) — with lease=0 the digest no longer
         // drifts with the clock, so a re-publish of unchanged content keeps
@@ -1830,11 +2019,12 @@ mod tests {
 
     #[test]
     fn changed_content_bumps_revision() {
-        let owner = "easynet:///r/acme/device/01DEV";
+        let owner = "easynet:///r/acme/agent/device.01DEV.locomotion";
+        let host = "easynet:///r/acme/device/01DEV";
         let first_descriptors = vec![descriptor("fs.read", owner)];
         let first = prepare_at(
             owner,
-            owner,
+            host,
             &first_descriptors,
             &OwnerProjectionCursorFile::default(),
             1_000,
@@ -1847,7 +2037,7 @@ mod tests {
             descriptor("fs.read", owner),
             descriptor("skill.list", owner),
         ];
-        let second = prepare_at(owner, owner, &second_descriptors, &file, 30_000).expect("second");
+        let second = prepare_at(owner, host, &second_descriptors, &file, 30_000).expect("second");
         assert_eq!(second.publication.projection_revision, 2);
         assert_ne!(
             second.publication.projection_digest,
@@ -1855,37 +2045,6 @@ mod tests {
         );
         // C4: lease cancelled (ISS-002) — projections publish lease=0.
         assert_eq!(second.publication.lease_expires_unix_ms, 0);
-    }
-
-    #[test]
-    fn heartbeat_refresh_owner_uras_are_deduped_stable_and_bounded() {
-        let mut file = OwnerProjectionCursorFile::default();
-        file.upsert(cursor(
-            "easynet:///r/acme/device/z",
-            "easynet:///r/acme/device/z",
-            1,
-        ));
-        file.upsert(cursor(
-            "easynet:///r/acme/device/m",
-            "easynet:///r/acme/device/m",
-            1,
-        ));
-        file.upsert(cursor(
-            "easynet:///r/acme/device/z",
-            "easynet:///r/acme/device/z",
-            2,
-        ));
-        for idx in 0..70 {
-            let owner = format!("easynet:///r/acme/device/owner-{idx:02}");
-            file.upsert(cursor(&owner, &owner, 1));
-        }
-
-        let owners = heartbeat_refresh_owner_uras_from_file(&file);
-
-        assert_eq!(owners.len(), OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT);
-        assert_eq!(owners[0], "easynet:///r/acme/device/m");
-        assert!(owners.iter().all(|owner| !owner.trim().is_empty()));
-        assert!(owners.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
@@ -1907,19 +2066,51 @@ mod tests {
     }
 
     #[test]
-    fn integrity_rejects_device_owner_hosted_by_different_device() {
+    fn integrity_rejects_device_profile_projection_hosted_by_different_device() {
         let owner = "easynet:///r/acme/device/dev-1";
         let error = prepare_at(
             owner,
             "easynet:///r/acme/device/dev-2",
-            &[descriptor("fs.read", owner)],
+            &[],
             &OwnerProjectionCursorFile::default(),
             1_000,
         )
-        .expect_err("Device projection requires same Device host");
+        .expect_err("DeviceProfileProjection migration cursor requires same Device host");
 
         assert!(
-            error.contains("Device owner projections must be hosted by the same Device URA"),
+            error.contains(
+                "DeviceProfileProjection migration cursors must be hosted by the same Device URA"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn integrity_rejects_device_profile_projection_descriptor_rows() {
+        let device = "easynet:///r/acme/device/dev-1";
+        let mut publication = prepare_at(
+            device,
+            device,
+            &[],
+            &OwnerProjectionCursorFile::default(),
+            1_000,
+        )
+        .expect("empty migration cursor")
+        .publication;
+        publication.ability_summaries.push(
+            summary_from_descriptor(&descriptor(
+                "fs.read",
+                "easynet:///r/acme/agent/device.dev-1.locomotion",
+            ))
+            .expect("SystemAgent summary"),
+        );
+        publication.projection_digest = publication.canonical_digest();
+
+        let error = publication
+            .validate_integrity()
+            .expect_err("Device migration cursor cannot carry descriptor rows");
+        assert!(
+            error.contains("must not carry AbilityDescriptor rows"),
             "{error}"
         );
     }
@@ -1932,8 +2123,8 @@ mod tests {
     #[test]
     fn callable_summary_survives_projection_wire_roundtrip() {
         let summary = AbilityProjectionSummary {
-            ability_ura: "easynet:///r/acme/ability/device.01DEV.fs.read".into(),
-            owner_ura: "easynet:///r/acme/device/01DEV".into(),
+            ability_ura: "easynet:///r/acme/ability/system-agent.01DEV.locomotion.fs.read".into(),
+            owner_ura: "easynet:///r/acme/agent/device.01DEV.locomotion".into(),
             namespace: "fs".into(),
             local_name: "read".into(),
             descriptor_revision: "sha256:descriptor".into(),
@@ -1975,8 +2166,8 @@ mod tests {
         // 2. A proto-shaped discovery row without the extension is lossy and
         //    must fail before it can be treated as an owner publication row.
         let proto_shaped = json!({
-            "ability_ura": "easynet:///r/acme/ability/device.01DEV.fs.read",
-            "owner_ura": "easynet:///r/acme/device/01DEV",
+            "ability_ura": "easynet:///r/acme/ability/system-agent.01DEV.locomotion.fs.read",
+            "owner_ura": "easynet:///r/acme/agent/device.01DEV.locomotion",
             "namespace": "fs",
             "local_name": "read",
             "descriptor_revision": "sha256:descriptor",
@@ -1992,23 +2183,5 @@ mod tests {
             err.to_string().contains("callable_summary"),
             "unexpected missing-field error: {err}"
         );
-    }
-
-    fn cursor(
-        owner_ura: &str,
-        host_device_ura: &str,
-        projection_revision: u64,
-    ) -> OwnerProjectionCursor {
-        OwnerProjectionCursor {
-            owner_ura: owner_ura.into(),
-            host_device_ura: host_device_ura.into(),
-            generation: 1,
-            lifecycle: OwnerProjectionCursorLifecycle::Active,
-            projection_revision,
-            projection_digest: format!("digest-{owner_ura}-{projection_revision}"),
-            content_fingerprint: format!("fingerprint-{owner_ura}-{projection_revision}"),
-            lease_expires_unix_ms: 61_000,
-            updated_at: "1970-01-01T00:00:01.000Z".into(),
-        }
     }
 }

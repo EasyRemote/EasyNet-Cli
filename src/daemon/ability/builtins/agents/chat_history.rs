@@ -38,12 +38,12 @@ pub const ABILITY_GET: &str = crate::daemon::ability::names::agents::CHAT_HISTOR
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         ABILITY_LIST,
-        OwnerKind::Device,
+        OwnerKind::agent_management_system(),
         std::sync::Arc::new(list_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_GET,
-        OwnerKind::Device,
+        OwnerKind::agent_management_system(),
         std::sync::Arc::new(get_handler),
     );
 }

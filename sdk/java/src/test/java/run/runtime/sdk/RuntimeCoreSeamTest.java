@@ -16,9 +16,16 @@ import java.util.Map;
 
 public final class RuntimeCoreSeamTest {
   private static final String CALLER = "easynet:///r/example/agent/alice.sdk";
-  private static final String CALLEE = "easynet:///r/example/device/dev-a";
+  private static final String DEVICE_SUBJECT = "easynet:///r/example/device/dev-a";
+  private static final String CALLEE = "easynet:///r/example/agent/device.dev-a.runtime-health";
+  private static final String RUNTIME_INTROSPECTION_CALLEE =
+      "easynet:///r/example/agent/device.dev-a.runtime-introspection";
+  private static final String RUNTIME_GOVERNANCE_CALLEE =
+      "easynet:///r/example/agent/device.dev-a.runtime-governance";
+  private static final String PLUGIN_MANAGEMENT_CALLEE =
+      "easynet:///r/example/agent/device.dev-a.plugin-management";
   private static final String DESCRIPTOR =
-      "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0";
+      "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0";
   private static final String NONCE = "AQIDBAUGBwgJCgsMDQ4PEA==";
   private static final List<String> TEST_SELECTORS =
       List.of(
@@ -32,7 +39,9 @@ public final class RuntimeCoreSeamTest {
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "invocationAuthorityMetadataIsTupleBound",
           "runtimeAbilityProjectionIsCanonical",
+          "runtimeAbilityPublicPathDescriptorBindsUserSubjects",
           "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject",
+          "authorityMetadataRejectsNoncanonicalFields",
           "authorityMetadataRejectsAllZeroSessionOwners",
           "authorityMetadataBindsSessionAuthoritySubjects",
           "streamAndBidiLifecyclesAreBounded",
@@ -48,10 +57,15 @@ public final class RuntimeCoreSeamTest {
           "preparedInvocationRequiresExplicitExpiryFact",
           "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
+          "completeTupleRejectsNonCanonicalNonce",
           "completeTupleRejectsAllZeroPrincipals",
+          "runtimeCallContextRejectsMissingCausalContext",
           "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier",
           "completeTupleRejectsReceiptHistoryPublicInvocation",
           "completeTupleRejectsCatalogueReadPublicInvocation",
+          "generatedRuntimeGovernanceRoutesAreExact",
+          "runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects",
+          "runtimeDescriptorResolverRejectsNoncanonicalResponseFields",
           "runtimeAbilityDescriptorProviderUsesCatalogueProvider",
           "runtimeAbilityClientRejectsCatalogueReadPublicBuild",
           "preparedInvocationCannotBeSubmitted",
@@ -96,8 +110,12 @@ public final class RuntimeCoreSeamTest {
       case "invocationAuthorityMetadataIsTupleBound" ->
           invocationAuthorityMetadataIsTupleBound();
       case "runtimeAbilityProjectionIsCanonical" -> runtimeAbilityProjectionIsCanonical();
+      case "runtimeAbilityPublicPathDescriptorBindsUserSubjects" ->
+          runtimeAbilityPublicPathDescriptorBindsUserSubjects();
       case "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject" ->
           runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject();
+      case "authorityMetadataRejectsNoncanonicalFields" ->
+          authorityMetadataRejectsNoncanonicalFields();
       case "authorityMetadataRejectsAllZeroSessionOwners" ->
           authorityMetadataRejectsAllZeroSessionOwners();
       case "authorityMetadataBindsSessionAuthoritySubjects" ->
@@ -121,13 +139,22 @@ public final class RuntimeCoreSeamTest {
       case "preparedInvocationRejectsRequestIDOnlyAlias" ->
           preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
+      case "completeTupleRejectsNonCanonicalNonce" -> completeTupleRejectsNonCanonicalNonce();
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
+      case "runtimeCallContextRejectsMissingCausalContext" ->
+          runtimeCallContextRejectsMissingCausalContext();
       case "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier" ->
           completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier();
       case "completeTupleRejectsReceiptHistoryPublicInvocation" ->
           completeTupleRejectsReceiptHistoryPublicInvocation();
       case "completeTupleRejectsCatalogueReadPublicInvocation" ->
           completeTupleRejectsCatalogueReadPublicInvocation();
+      case "generatedRuntimeGovernanceRoutesAreExact" ->
+          generatedRuntimeGovernanceRoutesAreExact();
+      case "runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects" ->
+          runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects();
+      case "runtimeDescriptorResolverRejectsNoncanonicalResponseFields" ->
+          runtimeDescriptorResolverRejectsNoncanonicalResponseFields();
       case "runtimeAbilityDescriptorProviderUsesCatalogueProvider" ->
           runtimeAbilityDescriptorProviderUsesCatalogueProvider();
       case "runtimeAbilityClientRejectsCatalogueReadPublicBuild" ->
@@ -137,6 +164,21 @@ public final class RuntimeCoreSeamTest {
       case "streamOrderAndTerminalArePreserved" -> streamOrderAndTerminalArePreserved();
       default -> throw new IllegalArgumentException("unknown test selector: " + selector);
     }
+  }
+
+  private static void generatedRuntimeGovernanceRoutesAreExact() {
+    check(
+        RuntimeDescriptorRefRequest.RECEIPT_HISTORY_PROVIDER.equals(
+            RuntimeGovernanceRoutesGen.descriptorProvider("invocation.record.get")),
+        "invocation.record.get must use receipt_history");
+    check(
+        RuntimeGovernanceRoutesGen.descriptorProvider("invocation.history.delete").isBlank(),
+        "unregistered history verbs must not inherit a provider");
+	    check(
+	        "invocation.record.get".equals(
+	            RuntimeGovernanceRoutesGen.canonicalAbility(
+	                "system-agent.dev-a.runtime-governance.invocation.record.get")),
+	        "system-agent-qualified invocation.record.get must project canonically");
   }
 
   private static void productNeutralJarExportsOnlyGenericRuntimeConcepts() {
@@ -241,6 +283,20 @@ public final class RuntimeCoreSeamTest {
             InvocationCancel.fromJSON(
                 "{\"handle_id\":7,\"cancelled\":true,\"state\":\"Cancelled\",\"terminal\":true}"
                     .getBytes(StandardCharsets.UTF_8)));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "invocation cancel contains noncanonical field state_code",
+        () ->
+            InvocationCancel.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "handle_id", 7,
+                        "request_accepted", true,
+                        "deduplicated", false,
+                        "cancelled", true,
+                        "state", "Cancelled",
+                        "terminal", true,
+                        "state_code", "C440"))));
     InvocationHandle events = runtime.events(handle);
     check(events.terminal(), "invocation events snapshot");
     runtime.closeHandle(handle);
@@ -361,6 +417,22 @@ public final class RuntimeCoreSeamTest {
                         "Completed",
                         "receipt",
                         terminal))));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "invocation result contains noncanonical field state_code",
+        () ->
+            InvocationResult.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "ok",
+                        true,
+                        "terminal_state",
+                        "Completed",
+                        "terminal_receipt",
+                        terminal,
+                        "state_code",
+                        "J200"))));
 
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
@@ -521,6 +593,15 @@ public final class RuntimeCoreSeamTest {
         ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
         "proof_payload_base64",
         () -> RuntimeReceipt.fromMap(missingProofPayloadReceipt));
+
+    Map<String, Object> noncanonicalProofPayloadReceipt = new LinkedHashMap<>(complete);
+    Map<String, Object> noncanonicalProofPayload =
+        mutableAuthorityProof(noncanonicalProofPayloadReceipt);
+    noncanonicalProofPayload.put("proof_payload_base64", "AQIDBAUGBwgJCgsMDQ4PEB==");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof.proof_payload_base64 must be canonical base64",
+        () -> RuntimeReceipt.fromMap(noncanonicalProofPayloadReceipt));
 
     Map<String, Object> legacyProofIssuerReceipt = new LinkedHashMap<>(complete);
     Map<String, Object> legacyProofIssuer = mutableAuthorityProof(legacyProofIssuerReceipt);
@@ -847,6 +928,29 @@ public final class RuntimeCoreSeamTest {
         .subject("easynet:///r/example/resource/agent.alice.sdk/runtime-state/read")
         .authorityMetadata(scopedSession.metadata())
         .inspect();
+
+    String readDescriptor =
+        "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+    SessionAuthority invokeOnlySession =
+        SessionAuthority.fromMetadata(
+            sessionMetadataValue(List.of("observe.health"), List.of("invoke")));
+    expectSDKError(
+        ErrorCode.AUTHORITY_DENIED,
+        "session authority allowed_actions do not admit read",
+        () ->
+            completeBuilder()
+                .descriptor(readDescriptor)
+                .subject("easynet:///r/example/resource/user.alice/runtime-state/read")
+                .authorityMetadata(invokeOnlySession.metadata())
+                .inspect());
+    SessionAuthority readSession =
+        SessionAuthority.fromMetadata(
+            sessionMetadataValue(List.of("observe.health"), List.of("read")));
+    completeBuilder()
+        .descriptor(readDescriptor)
+        .subject("easynet:///r/example/resource/user.alice/runtime-state/read")
+        .authorityMetadata(readSession.metadata())
+        .inspect();
     expectSDKError(
         ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
         "session authority subject does not admit invocation subject_ura",
@@ -869,8 +973,8 @@ public final class RuntimeCoreSeamTest {
     List<String> admittedScopes =
         List.of(
             "observe.health",
-            "easynet:///r/example/ability/device.dev-a.observe.health",
-            "easynet:///r/example/ability/device.dev-a.*");
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.*");
     for (String scope : admittedScopes) {
       DelegationProof proof =
           DelegationProof.fromMetadata(delegationMetadataValue(List.of(scope)));
@@ -948,7 +1052,7 @@ public final class RuntimeCoreSeamTest {
                     "issuer_ura",
                     "easynet:///r/example/user/alice",
                     "subject_ura",
-                    CALLEE,
+                    DEVICE_SUBJECT,
                     "caller_ura",
                     CALLER,
                     "audience",
@@ -981,6 +1085,53 @@ public final class RuntimeCoreSeamTest {
                 .inspect());
   }
 
+  private static void runtimeAbilityPublicPathDescriptorBindsUserSubjects() {
+    MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
+    RuntimeAbilityClient ability = new RuntimeAbilityClient(new RuntimeClient(transport));
+    RuntimeCallContext call =
+        new RuntimeCallContext(
+            CALLER,
+            CALLEE,
+            "easynet:///r/example/user/alice",
+            NONCE,
+            Map.of("form", "none"),
+            Map.of("trace_id", "trace-1"));
+
+    InvocationDraft draft = ability.build(call, "observe.health", Map.of("probe", true));
+
+    check(
+        draft.inspectTuple()
+            .subject()
+            .equals("easynet:///r/example/resource/user.alice/invoke/observe.health"),
+        "runtime ability public path must descriptor-bind user subjects");
+    check(
+        transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/user/alice"),
+        "descriptor resolution must use caller-declared subject before descriptor-bound projection");
+
+    transport.resolvedDescriptorRef =
+        "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+    RuntimeCallContext authorityCall =
+        new RuntimeCallContext(
+            CALLER,
+            "easynet:///r/example/authority",
+            "easynet:///r/example/authority",
+            NONCE,
+            Map.of("form", "none"),
+            Map.of("trace_id", "trace-1"));
+    InvocationDraft authorityDraft =
+        ability.build(authorityCall, "namespace.resolve", Map.of("name", "alice"));
+
+    check(
+        authorityDraft
+            .inspectTuple()
+            .subject()
+            .equals("easynet:///r/example/resource/authority/invoke/namespace.resolve"),
+        "runtime ability public path must descriptor-bind authority subjects");
+    check(
+        transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/authority"),
+        "authority descriptor resolution must use caller-declared subject before projection");
+  }
+
   private static void runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject() {
     check(
         RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")
@@ -992,6 +1143,50 @@ public final class RuntimeCoreSeamTest {
         () ->
             RuntimeSubjects.runtimeStateReadSubjectURA(
                 "example", "00000000-0000-0000-0000-000000000000"));
+  }
+
+  private static void authorityMetadataRejectsNoncanonicalFields() {
+    Map<String, Object> delegationPayload = new LinkedHashMap<>();
+    delegationPayload.put("issuer_ura", "easynet:///r/example/user/alice");
+    delegationPayload.put("subject_ura", CALLEE);
+    delegationPayload.put("caller_ura", CALLER);
+    delegationPayload.put("audience", CALLEE);
+    delegationPayload.put("scopes", List.of("observe.health"));
+    delegationPayload.put("issued_at_ms", 10);
+    delegationPayload.put("expires_at_ms", 20);
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "delegation contains noncanonical field legacy_signature",
+        () ->
+            DelegationProof.fromMetadata(
+                authorityMetadataWireValue(delegationPayload, Map.of("legacy_signature", "opaque"))));
+
+    Map<String, Object> legacyDelegationPayload = new LinkedHashMap<>(delegationPayload);
+    legacyDelegationPayload.put("legacy_subject", CALLEE);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "delegation metadata payload contains noncanonical field legacy_subject",
+        () -> DelegationProof.fromMetadata(authorityMetadataValue(legacyDelegationPayload)));
+
+    Map<String, Object> sessionPayload = new LinkedHashMap<>();
+    sessionPayload.put("issuer_ura", CALLER);
+    sessionPayload.put("session_id", "session-1");
+    sessionPayload.put("session_owner_user_id", "alice");
+    sessionPayload.put("creator_principal_id", CALLER);
+    sessionPayload.put("callee_ura", CALLEE);
+    sessionPayload.put("subject_ura", "easynet:///r/example/user/alice");
+    sessionPayload.put("audience", CALLEE);
+    sessionPayload.put("scopes", List.of("invoke"));
+    sessionPayload.put("allowed_actions", List.of("invoke"));
+    sessionPayload.put("allowed_followup_abilities", List.of("observe.health"));
+    sessionPayload.put("issued_at_ms", 10);
+    sessionPayload.put("expires_at_ms", 20);
+    sessionPayload.put("backend_ura", CALLER);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "session authority metadata payload contains noncanonical field backend_ura",
+        () -> SessionAuthority.fromMetadata(authorityMetadataValue(sessionPayload)));
   }
 
   private static void authorityMetadataRejectsAllZeroSessionOwners() {
@@ -1303,7 +1498,22 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static void completeTupleRejectsMissingCaller() {
-    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new InvocationBuilder().callee(CALLEE).descriptor(DESCRIPTOR).subject(CALLEE).nonce(NONCE).causalContext("{\"form\":\"none\"}").argsJson("{}").inspect());
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new InvocationBuilder().callee(CALLEE).descriptor(DESCRIPTOR).subject(DEVICE_SUBJECT).nonce(NONCE).causalContext("{\"form\":\"none\"}").argsJson("{}").inspect());
+  }
+
+  private static void completeTupleRejectsNonCanonicalNonce() {
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "nonce_base64 must decode to 16 bytes",
+        () -> completeBuilder().nonce(Base64.getEncoder().encodeToString("nonce".getBytes(StandardCharsets.UTF_8))).inspect());
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "nonce_base64 must be canonical base64",
+        () -> completeBuilder().nonce("not-base64").inspect());
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "nonce_base64 must be canonical base64",
+        () -> completeBuilder().nonce("AQIDBAUGBwgJCgsMDQ4PEB==").inspect());
   }
 
   private static void completeTupleRejectsAllZeroPrincipals() {
@@ -1318,6 +1528,13 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         () -> completeBuilder().subject(placeholder).inspect());
+  }
+
+  private static void runtimeCallContextRejectsMissingCausalContext() {
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "causal_context is required",
+        () -> new RuntimeCallContext(CALLER, CALLEE, CALLEE, NONCE, null));
   }
 
   private static void completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier() {
@@ -1350,9 +1567,9 @@ public final class RuntimeCoreSeamTest {
                 .inspect());
   }
 
-  private static void completeTupleRejectsReceiptHistoryPublicInvocation() {
-    String historyDescriptor =
-        "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+	  private static void completeTupleRejectsReceiptHistoryPublicInvocation() {
+	    String historyDescriptor =
+	        "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         "RuntimeReceiptProvider",
@@ -1360,29 +1577,90 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static void completeTupleRejectsCatalogueReadPublicInvocation() {
-    String catalogueDescriptor =
-        "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
-    expectSDKError(
-        ErrorCode.INVALID_ARGUMENT,
-        "RuntimeAbilityDescriptorProvider",
-        () -> completeBuilder()
-            .callee("easynet:///r/example/authority")
-            .subject("easynet:///r/example/authority")
-            .descriptor(catalogueDescriptor)
-            .inspect());
+    for (String catalogueDescriptor :
+        List.of(
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read")) {
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "RuntimeAbilityDescriptorProvider",
+          () -> completeBuilder()
+              .callee(RUNTIME_INTROSPECTION_CALLEE)
+              .subject(RUNTIME_INTROSPECTION_CALLEE)
+              .descriptor(catalogueDescriptor)
+              .inspect());
+    }
   }
 
-  private static void runtimeAbilityDescriptorProviderUsesCatalogueProvider() {
+  private static void runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects() {
+    String runtimeStateSubject = RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice");
+	    new RuntimeDescriptorRefRequest(
+	        RUNTIME_INTROSPECTION_CALLEE,
+	        "meta.list_abilities",
+	        "rpc",
+	        CALLER,
+	        runtimeStateSubject,
+	        RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
+	    new RuntimeDescriptorRefRequest(
+	        RUNTIME_INTROSPECTION_CALLEE,
+	        "meta.list_resources",
+        "rpc",
+        CALLER,
+        runtimeStateSubject,
+        RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
+	    new RuntimeDescriptorRefRequest(
+	        RUNTIME_GOVERNANCE_CALLEE,
+	        "invocation.history.list",
+        "rpc",
+        CALLER,
+        runtimeStateSubject,
+        RuntimeDescriptorRefRequest.RECEIPT_HISTORY_PROVIDER);
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "runtime governance read subject",
+        () ->
+	            new RuntimeDescriptorRefRequest(
+	                RUNTIME_INTROSPECTION_CALLEE,
+                "meta.list_abilities",
+                "rpc",
+                CALLER,
+                "easynet:///r/example/authority",
+                RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "runtime governance read subject",
+        () ->
+	            new RuntimeDescriptorRefRequest(
+	                RUNTIME_INTROSPECTION_CALLEE,
+                "meta.list_resources",
+                "rpc",
+                CALLER,
+                "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+                RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER));
+  }
+
+  private static void runtimeDescriptorResolverRejectsNoncanonicalResponseFields() {
     MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
-    String catalogueDescriptor =
-        "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
-    String browserDescriptor =
-        "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke";
-    Map<String, Object> browserRow = new LinkedHashMap<>();
-    browserRow.put("ability_ura", "easynet:///r/example/ability/device.dev-a.browser.open_session");
-    browserRow.put("descriptor_ref", browserDescriptor);
-    browserRow.put("name", "browser.open_session");
-    browserRow.put("owner_ura", CALLEE);
+    transport.leakDescriptorResolverStateCode = true;
+    RuntimeClient runtime = new RuntimeClient(transport);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "descriptor resolver response contains noncanonical field state_code",
+        () -> runtime.resolveDescriptorRef(descriptorRequest()));
+  }
+
+	  private static void runtimeAbilityDescriptorProviderUsesCatalogueProvider() {
+	    MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
+	    String catalogueDescriptor =
+	        "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+	    String browserDescriptor =
+	        "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke";
+	    Map<String, Object> browserRow = new LinkedHashMap<>();
+	    browserRow.put("ability_ura", "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session");
+	    browserRow.put("descriptor_ref", browserDescriptor);
+	    browserRow.put("name", "browser.open_session");
+	    browserRow.put("owner_ura", PLUGIN_MANAGEMENT_CALLEE);
     browserRow.put("descriptor_version", "1.0.0");
     browserRow.put("call_mode", "rpc");
     browserRow.put("receipt_semantics", Map.of("kind", "operational"));
@@ -1397,8 +1675,13 @@ public final class RuntimeCoreSeamTest {
     AbilityDescriptorClient descriptors =
         new AbilityDescriptorClient(new RuntimeAbilityDescriptorProvider(ability));
 
-    AbilityDescriptorPage page =
-        descriptors.list(new AbilityDescriptorListRequest(runtimeCallContext(), "owner", CALLEE, ""));
+	    AbilityDescriptorPage page =
+	        descriptors.list(
+	            new AbilityDescriptorListRequest(
+	                runtimeCallContext(RUNTIME_INTROSPECTION_CALLEE, RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")),
+	                "owner",
+	                PLUGIN_MANAGEMENT_CALLEE,
+	                ""));
 
     check(page.descriptors().size() == 1, "descriptor page size");
     check(
@@ -1408,18 +1691,18 @@ public final class RuntimeCoreSeamTest {
         transport.seenDescriptorRequest.get("provider").equals("ability_descriptor"),
         "catalogue descriptor provider");
     check(
-        transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/authority"),
-        "catalogue descriptor resolution subject");
+	        transport.seenDescriptorRequest.get("subject_ura").equals(RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")),
+        "catalogue descriptor resolution subject is the caller's runtime-state resource");
     check(
         transport.seenInvokeTuple.descriptor().equals(catalogueDescriptor),
         "catalogue invocation descriptor");
     check(
-        transport.seenInvokeTuple.subject().equals(CALLEE),
-        "catalogue invocation subject is runtime owner");
+	        transport.seenInvokeTuple.subject().equals(RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")),
+        "catalogue invocation subject is the caller's runtime-state resource");
     Map<String, Object> args =
         JsonValueReader.object(transport.seenInvokeTuple.argsJson().getBytes(StandardCharsets.UTF_8), "catalogue args");
     check(args.get("scope").equals("owner"), "catalogue scope argument");
-    check(args.get("owner_ura").equals(CALLEE), "catalogue owner argument");
+	    check(args.get("owner_ura").equals(PLUGIN_MANAGEMENT_CALLEE), "catalogue owner argument");
     Map<String, Object> typedScalarRow = new LinkedHashMap<>(browserRow);
     typedScalarRow.put("version", "1.0.0");
     typedScalarRow.put("schema_hash", 42);
@@ -1434,7 +1717,13 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         "ability descriptor row 0 descriptor_version is required",
-        () -> descriptors.list(new AbilityDescriptorListRequest(runtimeCallContext(), "owner", CALLEE, "")));
+	        () ->
+	            descriptors.list(
+	                new AbilityDescriptorListRequest(
+	                    runtimeCallContext(RUNTIME_INTROSPECTION_CALLEE, RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")),
+	                    "owner",
+	                    PLUGIN_MANAGEMENT_CALLEE,
+	                    "")));
   }
 
   private static void runtimeAbilityClientRejectsCatalogueReadPublicBuild() {
@@ -1497,29 +1786,43 @@ public final class RuntimeCoreSeamTest {
         .caller(CALLER)
         .callee(CALLEE)
         .descriptor(DESCRIPTOR)
-        .subject(CALLEE)
+        .subject(DEVICE_SUBJECT)
         .nonce(NONCE)
         .causalContext("{\"form\":\"none\"}")
         .argsJson("{\"probe\":true}")
         .metadata(Map.of("trace_id", "trace-1"));
   }
 
-  private static RuntimeCallContext runtimeCallContext() {
-    return new RuntimeCallContext(
-        CALLER,
-        CALLEE,
-        CALLEE,
-        NONCE,
-        Map.of("form", "none"),
-        Map.of("trace_id", "trace-1"));
+	  private static RuntimeCallContext runtimeCallContext() {
+	    return runtimeCallContext(CALLEE, DEVICE_SUBJECT);
+	  }
+
+	  private static RuntimeCallContext runtimeCallContext(String callee, String subject) {
+	    return new RuntimeCallContext(
+	        CALLER,
+	        callee,
+	        subject,
+	        NONCE,
+	        Map.of("form", "none"),
+	        Map.of("trace_id", "trace-1"));
   }
+
+	  private static RuntimeDescriptorRefRequest descriptorRequest() {
+	    return new RuntimeDescriptorRefRequest(
+	        RUNTIME_INTROSPECTION_CALLEE,
+	        "meta.list_abilities",
+	        "rpc",
+	        CALLER,
+	        RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice"),
+	        RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
+	  }
 
   private static InvocationDraft complete(InvocationBuilder builder) {
     return builder
         .caller(CALLER)
         .callee(CALLEE)
         .descriptor(DESCRIPTOR)
-        .subject(CALLEE)
+        .subject(DEVICE_SUBJECT)
         .nonce(NONCE)
         .causalContext("{\"form\":\"none\"}")
         .argsJson("{\"probe\":true}")
@@ -1534,7 +1837,7 @@ public final class RuntimeCoreSeamTest {
   private static String delegationMetadataValue(List<String> scopes) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", "easynet:///r/example/user/alice");
-    payload.put("subject_ura", CALLEE);
+    payload.put("subject_ura", DEVICE_SUBJECT);
     payload.put("caller_ura", CALLER);
     payload.put("audience", CALLEE);
     payload.put("scopes", scopes);
@@ -1548,6 +1851,10 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static String sessionMetadataValue(List<String> scopes) {
+    return sessionMetadataValue(scopes, List.of("invoke"));
+  }
+
+  private static String sessionMetadataValue(List<String> scopes, List<String> allowedActions) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", CALLER);
     payload.put("session_id", "session-1");
@@ -1557,7 +1864,7 @@ public final class RuntimeCoreSeamTest {
     payload.put("subject_ura", "easynet:///r/example/user/alice");
     payload.put("audience", CALLEE);
     payload.put("scopes", scopes);
-    payload.put("allowed_actions", List.of("invoke"));
+    payload.put("allowed_actions", allowedActions);
     payload.put("allowed_followup_abilities", List.of("observe.health"));
     payload.put("issued_at_ms", 10);
     payload.put("expires_at_ms", 20);
@@ -1565,8 +1872,17 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static String authorityMetadataValue(Map<String, Object> payload) {
+    return authorityMetadataWireValue(payload, Map.of());
+  }
+
+  private static String authorityMetadataWireValue(
+      Map<String, Object> payload, Map<String, Object> wireExtra) {
     String signature = Base64.getEncoder().encodeToString("signature".getBytes(StandardCharsets.UTF_8));
-    byte[] wire = JsonValueWriter.object(Map.of("payload", payload, "signature", signature));
+    Map<String, Object> wireObject = new LinkedHashMap<>();
+    wireObject.put("payload", payload);
+    wireObject.put("signature", signature);
+    wireObject.putAll(wireExtra);
+    byte[] wire = JsonValueWriter.object(wireObject);
     return Base64.getEncoder().encodeToString(wire);
   }
 
@@ -1679,6 +1995,7 @@ public final class RuntimeCoreSeamTest {
     private Map<String, Object> seenDescriptorRequest = Map.of();
     private InvocationTuple seenInvokeTuple = null;
     private Map<String, Object> nextOutput = Map.of("ok", true);
+    private boolean leakDescriptorResolverStateCode = false;
     private long eventHandleId = 7;
     private int openedBidi = 0;
 
@@ -1697,6 +2014,10 @@ public final class RuntimeCoreSeamTest {
     @Override
     public byte[] resolveDescriptorRef(byte[] requestJson) {
       seenDescriptorRequest = JsonValueReader.object(requestJson, "descriptor request");
+      if (leakDescriptorResolverStateCode) {
+        return JsonValueWriter.object(
+            Map.of("descriptor_ref", resolvedDescriptorRef, "state_code", "J200"));
+      }
       return JsonValueWriter.object(Map.of("descriptor_ref", resolvedDescriptorRef));
     }
 

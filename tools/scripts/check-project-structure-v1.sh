@@ -182,7 +182,7 @@ require_file PROJECT_STRUCTURE.md
 require_file VERSION
 require_file build.rs
 require_file include/easynet_cli.h
-require_file include/easynet_cli.exports.v6
+require_file include/easynet_cli.exports.v7
 check_root_contract
 
 require_only_files src/bin \
@@ -230,7 +230,7 @@ require_only_dirs src/support \
   async_bridge shellguard platform
 
 require_only_dirs sdk \
-  go python node java swift schemas conformance
+  go python node java swift rust schemas conformance
 
 require_only_dirs sdk/conformance \
   cases fixtures runner
@@ -283,7 +283,6 @@ for forbidden in \
   crates \
   runtime \
   services \
-  sdk/rust \
   src/runtime \
   src/services \
   src/facade \

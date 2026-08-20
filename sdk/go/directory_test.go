@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,107 @@ func TestDirectoryClientDelegatesResolveToInjectedProvider(t *testing.T) {
 		provider.resolveRequest.IncludeAbilities == nil ||
 		*provider.resolveRequest.IncludeAbilities {
 		t.Fatalf("request was not delegated intact: %#v", provider.resolveRequest)
+	}
+}
+
+func TestDirectoryClientScanCollectsEveryPage(t *testing.T) {
+	firstPage := make([]DirectoryRecord, 50)
+	for i := range firstPage {
+		firstPage[i] = DirectoryRecord{Kind: "ABILITY", AbilityURA: fmt.Sprintf("easynet:///r/example/ability/system-agent.dev-a.runtime-health.test.%02d", i)}
+	}
+	provider := &fakeDirectoryProvider{}
+	provider.resolveFunc = func(request DirectoryResolveRequest) (DirectoryResolution, error) {
+		switch request.Cursor {
+		case "":
+			return DirectoryResolution{
+				AnswerKind: "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+				Records:    firstPage,
+				NextCursor: "page-2",
+			}, nil
+		case "page-2":
+			return DirectoryResolution{
+				AnswerKind: "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+				Records:    []DirectoryRecord{{Kind: "ABILITY", AbilityURA: "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"}},
+			}, nil
+		default:
+			t.Fatalf("unexpected cursor %q", request.Cursor)
+			return DirectoryResolution{}, nil
+		}
+	}
+	client, err := NewDirectoryClient(provider)
+	if err != nil {
+		t.Fatalf("NewDirectoryClient: %v", err)
+	}
+	snapshot, err := client.Scan(context.Background(), DirectoryResolveRequest{
+		Call:     runtimeAbilityTestContext(),
+		QueryURA: "easynet:///r/example/device/",
+		Kind:     DirectoryResolveListing,
+		Limit:    50,
+	}, DirectoryScanOptions{
+		MaxPages:   4,
+		MaxRecords: 60,
+	})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !snapshot.Complete || snapshot.Pages != 2 || snapshot.RecordCount != 51 || len(snapshot.Resolution.Records) != 51 {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+	if got := snapshot.Resolution.Records[50].AbilityURA; got != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health" {
+		t.Fatalf("last page ability = %q", got)
+	}
+	if len(provider.resolveRequests) != 2 || provider.resolveRequests[1].Cursor != "page-2" || provider.resolveRequests[1].Limit != 50 {
+		t.Fatalf("scan requests = %#v", provider.resolveRequests)
+	}
+	if provider.resolveRequests[0].Call.NonceBase64 == provider.resolveRequests[1].Call.NonceBase64 {
+		t.Fatalf("scan continuation reused Invocation nonce: %#v", provider.resolveRequests)
+	}
+}
+
+func TestDirectoryClientScanRejectsRepeatedCursorAndBounds(t *testing.T) {
+	provider := &fakeDirectoryProvider{
+		resolveFunc: func(request DirectoryResolveRequest) (DirectoryResolution, error) {
+			return DirectoryResolution{
+				AnswerKind: "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+				Records:    []DirectoryRecord{{Kind: "ID", URA: "easynet:///r/example/device/dev-a"}},
+				NextCursor: "same-cursor",
+			}, nil
+		},
+	}
+	client, _ := NewDirectoryClient(provider)
+	_, err := client.Scan(context.Background(), DirectoryResolveRequest{
+		Call: runtimeAbilityTestContext(), QueryURA: "easynet:///r/example/device/", Kind: DirectoryResolveListing,
+	}, DirectoryScanOptions{MaxPages: 4, MaxRecords: 4})
+	if err == nil || !strings.Contains(err.Error(), "repeated continuation cursor") {
+		t.Fatalf("repeated cursor error = %v", err)
+	}
+
+	provider.resolveRequests = nil
+	_, err = client.Scan(context.Background(), DirectoryResolveRequest{
+		Call: runtimeAbilityTestContext(), QueryURA: "easynet:///r/example/device/", Kind: DirectoryResolveListing,
+	}, DirectoryScanOptions{MaxPages: 4, MaxRecords: 1})
+	if err == nil || !strings.Contains(err.Error(), "maximum record bound") {
+		t.Fatalf("record bound error = %v", err)
+	}
+}
+
+func TestDirectoryClientListNormalizesPageBoundsBeforeProvider(t *testing.T) {
+	provider := &fakeDirectoryProvider{listResponse: DirectoryPage{Records: []DirectoryRecord{}}}
+	client, _ := NewDirectoryClient(provider)
+	page, err := client.List(context.Background(), DirectoryListRequest{
+		Call: runtimeAbilityTestContext(), URAPrefix: "easynet:///r/example/device/",
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if provider.listRequest.Limit != DefaultDirectoryPageLimit || page.Records == nil {
+		t.Fatalf("normalized list request = %#v, page = %#v", provider.listRequest, page)
+	}
+	_, err = client.List(context.Background(), DirectoryListRequest{
+		Call: runtimeAbilityTestContext(), URAPrefix: "easynet:///r/example/device/", Limit: MaxDirectoryPageLimit + 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum page bound") {
+		t.Fatalf("oversized list limit error = %v", err)
 	}
 }
 
@@ -196,8 +298,10 @@ func TestDirectorySubscriptionFailsOnDeltaBeforeSnapshot(t *testing.T) {
 
 type fakeDirectoryProvider struct {
 	resolveRequest   DirectoryResolveRequest
+	resolveRequests  []DirectoryResolveRequest
 	resolveResponse  DirectoryResolution
 	resolveErr       error
+	resolveFunc      func(DirectoryResolveRequest) (DirectoryResolution, error)
 	listRequest      DirectoryListRequest
 	listResponse     DirectoryPage
 	listErr          error
@@ -208,6 +312,10 @@ type fakeDirectoryProvider struct {
 
 func (p *fakeDirectoryProvider) Resolve(_ context.Context, request DirectoryResolveRequest) (DirectoryResolution, error) {
 	p.resolveRequest = request
+	p.resolveRequests = append(p.resolveRequests, request)
+	if p.resolveFunc != nil {
+		return p.resolveFunc(request)
+	}
 	return p.resolveResponse, p.resolveErr
 }
 

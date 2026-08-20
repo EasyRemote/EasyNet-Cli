@@ -163,7 +163,7 @@ fn device_request(
             "cannot resolve EAL device target {node_id:?}: no tenant in scope"
         )));
     };
-    MissionInvocationRequest::remote_node(target, ability, arguments)
+    MissionInvocationRequest::remote_target(target, ability, arguments)
         .map_err(|error| EalError::Validation(format!("parse device target: {error}")))
 }
 
@@ -244,8 +244,9 @@ fn validate_agent_target(
 mod tests {
     use super::*;
     use crate::core::agent::id::{AbilityName, AgentId};
+    use crate::core::agent::spec::RuntimeKind;
     use crate::daemon::execution::mission::invocation_gateway::MissionInvocationTarget;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
     use crate::daemon::persistence::config;
     use serde_json::json;
 
@@ -274,7 +275,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "claude".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
 
         let error = validate_agent_target(&registry, &agent_id, &ability).unwrap_err();
@@ -294,7 +295,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/claude".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
 
         let error = validate_agent_target(&registry, &agent_id, &ability).unwrap_err();
@@ -362,7 +363,7 @@ mod tests {
         let request = device_request("acme", "node-a", "observe.health", json!({}))
             .expect("known local node resolves to local system target");
 
-        assert_eq!(request.target(), &MissionInvocationTarget::LocalDevice);
+        assert_eq!(request.target(), &MissionInvocationTarget::LocalDeviceHost);
     }
 
     #[test]

@@ -47,6 +47,7 @@ use crate::daemon::ability::builtins::resources::media::{
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::resources::context::device_scope::ContextDeviceScope;
 
 /// 2 MiB inline cap — same shape as camera.snapshot. This keeps
 /// base64-expanded receipts below Axon's 4 MiB IPC frame limit while
@@ -241,6 +242,18 @@ pub fn capture_rgb_with_xcap(
     }
 }
 
+#[cfg(not(feature = "native-media"))]
+pub fn capture_rgb_with_xcap(
+    entry: &ResourceEntry,
+    _options: &ScreenCaptureOptions,
+) -> anyhow::Result<RawRgbFrame> {
+    anyhow::bail!(
+        "{ABILITY_SCREEN_SNAPSHOT}: native xcap screen capture is not compiled for subject type {}; \
+         reason={REASON_RESOURCE_UNAVAILABLE}",
+        entry.kind.as_str()
+    )
+}
+
 #[cfg(feature = "native-media")]
 fn capture_display_rgb_with_xcap(
     entry: &ResourceEntry,
@@ -313,6 +326,68 @@ pub fn rgba_bytes_to_rgb_frame(
         rgb_bytes: rgb,
         width,
         height,
+    })
+}
+
+pub fn bgra_bytes_to_rgb_frame(
+    bgra: &[u8],
+    source_width: u32,
+    source_height: u32,
+    source_stride: usize,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<RawRgbFrame> {
+    let minimum_stride = source_width as usize * 4;
+    if source_width == 0
+        || source_height == 0
+        || source_stride < minimum_stride
+        || bgra.len() < source_stride.saturating_mul(source_height as usize)
+    {
+        anyhow::bail!(
+            "{ABILITY_SCREEN_SNAPSHOT}: invalid BGRA frame dimensions {source_width}x{source_height} stride={source_stride}; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+
+    let region = options.region.unwrap_or(CaptureRegion {
+        x: 0,
+        y: 0,
+        w: source_width,
+        h: source_height,
+    });
+    validate_region(region, source_width, source_height)?;
+
+    let mut rgb = Vec::with_capacity((region.w * region.h * 3) as usize);
+    for y in region.y..region.y + region.h {
+        let row_start = y as usize * source_stride + region.x as usize * 4;
+        let row_end = row_start + region.w as usize * 4;
+        let row = &bgra[row_start..row_end];
+        for px in row.chunks_exact(4) {
+            rgb.push(px[2]);
+            rgb.push(px[1]);
+            rgb.push(px[0]);
+        }
+    }
+
+    let mut width = region.w;
+    let mut height = region.h;
+    if let Some(target) = options.resolution {
+        rgb = resize_rgb_nearest(&rgb, width, height, target.width, target.height);
+        width = target.width;
+        height = target.height;
+    }
+    Ok(RawRgbFrame {
+        rgb_bytes: rgb,
+        width,
+        height,
+    })
+}
+
+pub fn rgb_frame_to_jpeg(frame: RawRgbFrame) -> anyhow::Result<EncodedFrame> {
+    let jpeg = encode_jpeg_checked(&frame.rgb_bytes, frame.width, frame.height)?;
+    Ok(EncodedFrame {
+        jpeg_bytes: jpeg,
+        width: frame.width,
+        height: frame.height,
     })
 }
 
@@ -432,6 +507,22 @@ fn select_window(entry: &ResourceEntry) -> anyhow::Result<xcap::Window> {
     }
 }
 
+/// Resolve the resource-entry's remembered window against the live window
+/// list.
+///
+/// `window_id` is preferred but not load-bearing on its own: macOS recycles
+/// window IDs across close/reopen and Space changes, so an exact ID match is
+/// a fast-path hit, not a correctness requirement. The fallback identifies a
+/// window by the stable pair `(pid, app_name)` — the process and app name
+/// cannot change without the window itself closing. `title` is excluded
+/// from the fallback's match requirement: it is the most volatile field a
+/// window exposes (a browser tab, a terminal prompt, or an editor's
+/// unsaved-changes marker can all change it between `meta.list_resources`
+/// discovery and this snapshot), and requiring it verbatim made every
+/// window with a dynamic title falsely report "no longer available" even
+/// though the window was still open. When more than one window shares a
+/// `(pid, app_name)`, `title` still breaks the tie among live candidates —
+/// it just no longer disqualifies a window outright when it has moved on.
 #[cfg(feature = "native-media")]
 fn select_window_by_id_or_name(
     windows: Vec<xcap::Window>,
@@ -441,19 +532,19 @@ fn select_window_by_id_or_name(
     let expected_pid = entry.metadata.get("pid").and_then(Value::as_u64);
     let expected_title = entry.metadata.get("title").and_then(Value::as_str);
     let expected_app = entry.metadata.get("app_name").and_then(Value::as_str);
-    windows
+
+    if let Some(id) = expected_id {
+        if let Some(window) = windows
+            .iter()
+            .find(|window| window.id().ok().is_some_and(|actual| actual as u64 == id))
+        {
+            return Ok(window.clone());
+        }
+    }
+
+    let mut candidates: Vec<xcap::Window> = windows
         .into_iter()
-        .find(|window| {
-            let id_matches = expected_id.is_some_and(|id| {
-                window
-                    .id()
-                    .ok()
-                    .map(|actual| actual as u64 == id)
-                    .unwrap_or(false)
-            });
-            if id_matches {
-                return true;
-            }
+        .filter(|window| {
             let pid_matches = expected_pid.is_some_and(|pid| {
                 window
                     .pid()
@@ -468,21 +559,27 @@ fn select_window_by_id_or_name(
                     .map(|actual| actual == app)
                     .unwrap_or(false)
             });
-            let title_matches = expected_title.is_some_and(|title| {
-                window
-                    .title()
-                    .ok()
-                    .map(|actual| actual == title)
-                    .unwrap_or(false)
-            });
-            pid_matches && app_matches && title_matches
+            pid_matches && app_matches
         })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{ABILITY_SCREEN_SNAPSHOT}: requested window is no longer available; \
-                 reason={REASON_RESOURCE_UNAVAILABLE}"
-            )
-        })
+        .collect();
+
+    if candidates.is_empty() {
+        anyhow::bail!(
+            "{ABILITY_SCREEN_SNAPSHOT}: requested window is no longer available; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+    if candidates.len() > 1 {
+        if let Some(title) = expected_title {
+            if let Some(index) = candidates
+                .iter()
+                .position(|window| window.title().ok().as_deref() == Some(title))
+            {
+                return Ok(candidates.swap_remove(index));
+            }
+        }
+    }
+    Ok(candidates.remove(0))
 }
 
 #[cfg(feature = "native-media")]
@@ -829,7 +926,7 @@ pub fn register_with_backend(
     let snapshot_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_SCREEN_SNAPSHOT,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_SCREEN_SNAPSHOT),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             snapshot_handler(&snapshot_backend, env, args)
@@ -837,7 +934,7 @@ pub fn register_with_backend(
     );
     reg.register_stream_with_envelope_and_spec(
         ABILITY_SCREEN_SUBSCRIBE,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_SCREEN_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| subscribe_handler(&backend, env, args)),
     );
@@ -864,6 +961,7 @@ fn snapshot_handler(
     args: Value,
 ) -> anyhow::Result<Value> {
     let entry = resolve_screen_subject(&env, &args, ABILITY_SCREEN_SNAPSHOT)?;
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
 
     let options = parse_capture_options(&args, false)?;
     ensure_region_allowed(&entry, &options)?;
@@ -882,14 +980,12 @@ fn snapshot_handler(
         );
     }
 
-    // Context-surface persistence: the device daemon keeps every
-    // snapshot under `context/captures/screen.snapshot/` so the
-    // Context page can browse it as <device>/<ability>/<artifact>.
-    // Best-effort by design — a full disk must not fail the snapshot
-    // the caller is waiting on.
-    if let Err(err) = crate::daemon::persistence::context_store::record_capture(
+    // Snapshot success includes durable Context persistence. Returning an
+    // inline image while silently losing its catalog entry would expose two
+    // conflicting terminal states for the same capture.
+    let capture = crate::daemon::persistence::context_store::record_capture(
         crate::daemon::persistence::context_store::CaptureRecord {
-            device: env.callee(),
+            device: device_scope.as_str(),
             ability: ABILITY_SCREEN_SNAPSHOT,
             ext: "jpg",
             bytes: &jpeg_bytes,
@@ -899,26 +995,23 @@ fn snapshot_handler(
             duration_ms: None,
             preview: format!("Screenshot {width}x{height}"),
         },
-    ) {
-        crate::op_event!(
-            component = context,
-            kind = capture_persist_failed,
-            level = "warn",
-            ability = ABILITY_SCREEN_SNAPSHOT,
-            error = err,
-        );
-    }
+    )?;
+    let local_path = crate::daemon::persistence::context_store::captures_dir()
+        .join(ABILITY_SCREEN_SNAPSHOT)
+        .join(&capture.file);
 
     let image_bytes_b64 = BASE64_STANDARD.encode(&jpeg_bytes);
-    let captured_at = chrono::Utc::now().to_rfc3339();
     Ok(json!({
         "image_bytes_b64": image_bytes_b64,
         "content_type":    "image/jpeg",
         "width":           width,
         "height":          height,
         "byte_size":       jpeg_bytes.len(),
-        "captured_at":     captured_at,
+        "captured_at":     capture.timestamp,
         "hardware_id":     entry.hardware_id,
+        "capture_id":      capture.id,
+        "capture_file":    capture.file,
+        "local_path":      local_path.display().to_string(),
     }))
 }
 
@@ -976,7 +1069,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Display,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -1048,6 +1141,7 @@ mod tests {
         ); // EOI
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_prefers_platform_monitor_id() {
         let mut file = ResourcesFile::default();
@@ -1064,6 +1158,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_uses_index_only_without_monitor_id() {
         let mut file = ResourcesFile::default();
@@ -1079,6 +1174,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_allows_primary_only_for_unpinned_resource() {
         let mut file = ResourcesFile::default();
@@ -1090,6 +1186,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_rejects_malformed_metadata_instead_of_primary_fallback() {
         let mut file = ResourcesFile::default();
@@ -1130,6 +1227,9 @@ mod tests {
             "byte_size",
             "captured_at",
             "hardware_id",
+            "capture_id",
+            "capture_file",
+            "local_path",
         ] {
             assert!(
                 resp.get(field).is_some(),
@@ -1138,6 +1238,14 @@ mod tests {
         }
         assert_eq!(resp["content_type"], "image/jpeg");
         assert_eq!(resp["hardware_id"], "h-display-e2e");
+        let captures = crate::daemon::persistence::context_store::list_captures(
+            TEST_DEVICE_URA,
+            Some(ABILITY_SCREEN_SNAPSHOT),
+            10,
+        )
+        .unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].id, resp["capture_id"].as_str().unwrap());
     }
 
     #[test]
@@ -1206,7 +1314,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Camera, // wrong type for screen.snapshot
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-screen",

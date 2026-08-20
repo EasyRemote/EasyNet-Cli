@@ -51,12 +51,26 @@ use crate::daemon::persistence::agent_registry::AgentEntry;
 /// the durable registry shape. The runtime seam converts it into
 /// this enum exactly once so drivers never infer behavior from an
 /// empty-string sentinel.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DriverCommand {
     /// Use the driver-owned canonical executable.
+    #[default]
     Default,
     /// Spawn the operator-provided executable.
     Explicit(String),
+}
+
+/// Per-invocation ambient-context policy selected by the chat boundary.
+///
+/// `Agent` preserves the registered agent's normal workspace projection,
+/// skills, MCP servers, and runtime defaults. `Strict` is the benchmark-safe
+/// profile: drivers must suppress ambient instructions and tools so the model
+/// can observe only the structured request supplied for this invocation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DriverIsolation {
+    #[default]
+    Agent,
+    Strict,
 }
 
 impl DriverCommand {
@@ -84,12 +98,6 @@ impl DriverCommand {
     }
 }
 
-impl Default for DriverCommand {
-    fn default() -> Self {
-        Self::Default
-    }
-}
-
 /// Per-invocation knobs the dispatch layer has already resolved
 /// from the `AgentEntry` + request. An adapter receives these
 /// verbatim; it does not re-read registry state.
@@ -98,6 +106,13 @@ pub struct InvokeOpts {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
+    /// Optional system/developer content carried separately from the user
+    /// prompt. Drivers must project this through their native role surface;
+    /// they must not concatenate it into `prompt`.
+    pub system_prompt: Option<String>,
+    /// Whether the driver may load registered-agent ambient state for this
+    /// invocation.
+    pub isolation: DriverIsolation,
     /// PR-7 Commit 2: Timeline writer for this invocation. When
     /// `Some`, the driver's stdout-line callback emits a
     /// `progress` event per stream chunk, fsynced to disk and
@@ -245,6 +260,7 @@ pub(super) fn finalize_response(
         usage,
         run_dir: run_dir_path,
         tool_calls: Vec::new(),
+        timeline: Vec::new(),
         thread_id: None,
     }
 }

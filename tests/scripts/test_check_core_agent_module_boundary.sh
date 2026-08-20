@@ -22,6 +22,13 @@ pub mod identity;
 pub mod ura;
 RS
 
+cat >"$SB/src/core/agent/id.rs" <<'RS'
+/// Product-neutral Agent identity.
+///
+/// URI-shaped/URA-shaped inputs belong to `crate::core::ura`, the L3 canonical runtime identity layer.
+pub struct AgentId(String);
+RS
+
 cat >"$SB/src/daemon/current.rs" <<'RS'
 use crate::core::agent::spec::AgentSpec;
 

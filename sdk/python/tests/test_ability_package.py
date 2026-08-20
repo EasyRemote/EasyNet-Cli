@@ -11,6 +11,7 @@ def test_runtime_ability_package_manifest_emits_canonical_deploy_shape() -> None
         namespace="er",
         description="Add two numbers.",
         admission_action="stream",
+        exposure="task",
         input_schema={
             "type": "object",
             "required": ["a", "b"],
@@ -34,6 +35,7 @@ def test_runtime_ability_package_manifest_emits_canonical_deploy_shape() -> None
         "namespace": "er",
         "description": "Add two numbers.",
         "admission_action": "stream",
+        "exposure": "task",
         "input_schema": {
             "type": "object",
             "required": ["a", "b"],
@@ -66,4 +68,21 @@ def test_runtime_ability_package_manifest_rejects_unusable_identity_fields() -> 
     )
 
     with pytest.raises(SDKError, match="name must be a non-empty trimmed string"):
+        manifest.to_mapping()
+
+
+def test_runtime_ability_package_manifest_rejects_unknown_exposure() -> None:
+    manifest = RuntimeAbilityPackageManifest(
+        name="add",
+        namespace="er",
+        description="Add two numbers.",
+        admission_action="stream",
+        exposure="public",
+        input_schema={"type": "object"},
+        exec=HostStreamExec(host_socket="/tmp/runtime-host.sock", function="er.add"),
+    )
+
+    with pytest.raises(
+        SDKError, match="exposure must be one of task, operator, or internal"
+    ):
         manifest.to_mapping()

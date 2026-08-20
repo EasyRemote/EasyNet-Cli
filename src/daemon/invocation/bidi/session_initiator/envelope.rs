@@ -31,7 +31,7 @@ pub async fn build_session_envelope_open(
     // `descriptor_bound_from_wire_parts`; signing the old axiom bytes would
     // satisfy metadata presence but fail signature verification.
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             &hub_ura,
             ABILITY_SESSION_OPEN,
             crate::daemon::ability::CallMode::Bidi,
@@ -80,7 +80,7 @@ pub async fn build_session_envelope_open(
                 ..StreamDescriptor::default()
             }],
             // Canonical carrier negotiation + claimant fingerprint
-            // (DEC-F004 / T2.1 step 3, T1.2). Contract v1 is mandatory;
+            // (DEC-F004 / T2.1 step 3, T1.2). Contract v2 is mandatory;
             // the Hub provider rejects absent or retired v0 negotiation.
             session_ext: Some(axon_sdk::pb::axon::v1::SessionOpenExt {
                 contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,

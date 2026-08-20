@@ -29,7 +29,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::daemon::ability::CallMode;
+use crate::daemon::ability::{
+    dispatch::{CatalogRuntimeBindingState, OwnerKind},
+    CallMode,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaselineSurface {
@@ -48,19 +51,20 @@ pub enum BaselineDomain {
     HubMedia,
     DeviceHealth,
     DeviceLifecycle,
-    DeviceLocomotion,
-    DeviceTransfer,
-    DeviceTerminal,
-    DeviceSession,
+    NodeManagementSystemAgent,
+    SessionSystemAgent,
     DeviceConsent,
-    DeviceAgent,
-    DeviceSkill,
-    DeviceBridge,
-    DeviceOrchestration,
-    DeviceContext,
-    DeviceMedia,
-    DeviceRemoteDesktop,
-    DeviceOpenAiCompat,
+    RuntimeGovernanceSystemAgent,
+    RuntimeHealthSystemAgent,
+    RuntimeIntrospectionSystemAgent,
+    DescriptorTransferSystemAgent,
+    SystemAgent,
+    AutomationSystemAgent,
+    AbilityManagementSystemAgent,
+    OpenAiCompatSystemAgent,
+    A2aIntegrationSystemAgent,
+    McpIntegrationSystemAgent,
+    RemoteDesktopSystemAgent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,117 +383,129 @@ const HUB_BASELINE: &[BaselineAbility] = &[
 ];
 
 const DEVICE_BASELINE: &[BaselineAbility] = &[
-    local_rpc!("observe.health", DeviceHealth),
-    local_rpc!("observe.network_health", DeviceHealth),
-    local_rpc!("admin.status", DeviceHealth),
-    local_rpc!("meta.describe", DeviceHealth),
-    local_rpc!("meta.list_abilities", DeviceHealth),
-    local_rpc!("meta.list_resources", DeviceHealth),
-    local_rpc!("node.list", DeviceLifecycle),
-    local_rpc!("node.describe", DeviceLifecycle),
-    local_rpc!("node.remove", DeviceLifecycle),
-    local_rpc!("ability.deploy", DeviceLifecycle),
-    local_rpc!("ability.uninstall", DeviceLifecycle),
-    local_rpc!("ability.publish", DeviceLifecycle),
-    local_rpc!("ability.unpublish", DeviceLifecycle),
-    local_rpc!("fs.read", DeviceLocomotion),
-    local_rpc!("fs.write", DeviceLocomotion),
-    local_rpc!("fs.stat", DeviceLocomotion),
-    local_rpc!("fs.list", DeviceLocomotion),
-    local_rpc!("fs.edit", DeviceLocomotion),
-    local_rpc!("process.exec", DeviceLocomotion),
-    local_rpc!("shell.run", DeviceLocomotion),
-    local_rpc!("http.request", DeviceLocomotion),
-    local_bidi!("fs.transfer", DeviceTransfer),
-    local_rpc!("terminal.create", DeviceTerminal),
-    local_rpc!("terminal.list", DeviceTerminal),
-    local_bidi!("terminal.attach", DeviceTerminal),
-    local_rpc!("terminal.input", DeviceTerminal),
-    local_rpc!("terminal.read", DeviceTerminal),
-    local_rpc!("terminal.resize", DeviceTerminal),
-    local_rpc!("terminal.close", DeviceTerminal),
-    local_rpc!(ABILITY_SESSION_LIST, DeviceSession),
-    local_stream!("session.attach", DeviceSession),
+    local_rpc!("observe.health", RuntimeHealthSystemAgent),
+    local_rpc!("observe.network_health", RuntimeHealthSystemAgent),
+    local_rpc!("admin.status", RuntimeHealthSystemAgent),
+    local_rpc!("meta.describe", RuntimeIntrospectionSystemAgent),
+    local_rpc!("meta.list_abilities", RuntimeIntrospectionSystemAgent),
+    local_rpc!("meta.list_resources", RuntimeIntrospectionSystemAgent),
+    local_rpc!("meta.teach", DescriptorTransferSystemAgent),
+    local_rpc!("meta.acquire", DescriptorTransferSystemAgent),
+    local_rpc!("meta.forget", DescriptorTransferSystemAgent),
+    local_rpc!("invocation.cancel", RuntimeGovernanceSystemAgent),
+    local_rpc!("invocation.history.list", RuntimeGovernanceSystemAgent),
+    local_rpc!("invocation.history.get", RuntimeGovernanceSystemAgent),
+    local_rpc!("invocation.history.path", RuntimeGovernanceSystemAgent),
+    local_rpc!("invocation.record.get", RuntimeGovernanceSystemAgent),
+    local_rpc!("invocation.trace.get", RuntimeGovernanceSystemAgent),
+    local_rpc!("node.describe", NodeManagementSystemAgent),
+    local_rpc!("node.remove", NodeManagementSystemAgent),
+    local_rpc!("ability.deploy", AbilityManagementSystemAgent),
+    local_rpc!("ability.uninstall", AbilityManagementSystemAgent),
+    local_rpc!("ability.publish", AbilityManagementSystemAgent),
+    local_rpc!("ability.unpublish", AbilityManagementSystemAgent),
+    local_rpc!("fs.read", SystemAgent),
+    local_rpc!("fs.write", SystemAgent),
+    local_rpc!("fs.stat", SystemAgent),
+    local_rpc!("fs.list", SystemAgent),
+    local_rpc!("fs.edit", SystemAgent),
+    local_rpc!("process.exec", SystemAgent),
+    local_rpc!("shell.run", SystemAgent),
+    local_rpc!("http.request", SystemAgent),
+    local_bidi!("fs.transfer", SystemAgent),
+    local_rpc!("terminal.create", SystemAgent),
+    local_rpc!("terminal.list", SystemAgent),
+    local_bidi!("terminal.attach", SystemAgent),
+    local_rpc!("terminal.input", SystemAgent),
+    local_rpc!("terminal.read", SystemAgent),
+    local_rpc!("terminal.resize", SystemAgent),
+    local_rpc!("terminal.close", SystemAgent),
+    local_rpc!(ABILITY_SESSION_LIST, SessionSystemAgent),
+    local_stream!("session.attach", SessionSystemAgent),
     local_stream!("consent.subscribe", DeviceConsent),
     local_rpc!("consent.decide", DeviceConsent),
     local_rpc!("consent.list_pending", DeviceConsent),
-    local_rpc!("agent.list", DeviceAgent),
-    local_rpc!("agent.start", DeviceAgent),
-    local_rpc!("agent.stop", DeviceAgent),
-    local_rpc!("agent.purge", DeviceAgent),
-    local_rpc!("agent.refresh", DeviceAgent),
-    local_rpc!("agent.ability.put", DeviceAgent),
-    local_rpc!("chat.history.list", DeviceAgent),
-    local_rpc!("chat.history.get", DeviceAgent),
-    local_rpc!("skill.publish", DeviceSkill),
-    local_rpc!("skill.unpublish", DeviceSkill),
-    local_rpc!("skill.list", DeviceSkill),
-    local_rpc!("skill.tree", DeviceSkill),
-    local_rpc!("skill.read_file", DeviceSkill),
-    local_rpc!("skill.write_file", DeviceSkill),
-    local_rpc!("skill.install", DeviceSkill),
-    local_rpc!("skill.remove", DeviceSkill),
-    local_rpc!("skill.upgrade", DeviceSkill),
-    local_rpc!("mcp.bridge.list_tools", DeviceBridge),
-    local_rpc!("mcp.bridge.call_tool", DeviceBridge),
-    local_rpc!("mcp.client.list", DeviceBridge),
-    local_rpc!("mcp.client.call", DeviceBridge),
-    local_rpc!("a2a.bridge.list_skills", DeviceBridge),
-    local_rpc!("a2a.bridge.send_task", DeviceBridge),
-    local_rpc!("a2a.client.send_task", DeviceBridge),
-    local_rpc!("mission.run", DeviceOrchestration),
-    local_rpc!("mission.track", DeviceOrchestration),
-    local_rpc!("mission.cancel", DeviceOrchestration),
-    local_rpc!("mission.think", DeviceOrchestration),
-    local_rpc!("mission.discuss_round", DeviceOrchestration),
-    local_rpc!("discuss.create", DeviceOrchestration),
-    local_rpc!("discuss.post", DeviceOrchestration),
-    local_stream!("discuss.subscribe", DeviceOrchestration),
-    local_rpc!("discuss.list_turns", DeviceOrchestration),
-    local_rpc!("loop.create", DeviceOrchestration),
-    local_rpc!("loop.status", DeviceOrchestration),
-    local_stream!("loop.subscribe", DeviceOrchestration),
-    local_rpc!("loop.cancel", DeviceOrchestration),
-    local_rpc!("schedule.add", DeviceOrchestration),
-    local_rpc!("schedule.list", DeviceOrchestration),
-    local_rpc!("schedule.remove", DeviceOrchestration),
-    local_rpc!("schedule.enable", DeviceOrchestration),
-    local_rpc!("context.clipboard.list", DeviceContext),
-    local_rpc!("context.clipboard.get", DeviceContext),
-    local_rpc!("context.clipboard.track", DeviceContext),
-    local_rpc!("context.clipboard.remove", DeviceContext),
-    local_rpc!("context.catalog", DeviceContext),
-    local_rpc!("context.folders.list", DeviceContext),
-    local_rpc!("context.fs.list", DeviceContext),
-    local_rpc!("context.favorites.list", DeviceContext),
-    local_rpc!("context.favorites.add", DeviceContext),
-    local_rpc!("context.favorites.remove", DeviceContext),
-    local_rpc!("context.captures.list", DeviceContext),
-    local_rpc!("context.captures.get", DeviceContext),
-    local_stream!("mic.subscribe", DeviceMedia),
-    local_stream!("camera.subscribe", DeviceMedia),
-    local_rpc!("camera.snapshot", DeviceMedia),
-    local_stream!("screen.subscribe", DeviceMedia),
-    local_rpc!("screen.snapshot", DeviceMedia),
-    local_rpc!("openai.chat_completions", DeviceOpenAiCompat),
-    local_rpc!("openai.list_models", DeviceOpenAiCompat),
-    local_rpc!("openai.files.upload", DeviceOpenAiCompat),
-    local_rpc!("openai.files.retrieve", DeviceOpenAiCompat),
-    local_rpc!("openai.files.delete", DeviceOpenAiCompat),
+    local_rpc!("agent.list", SystemAgent),
+    local_rpc!("agent.start", SystemAgent),
+    local_rpc!("agent.stop", SystemAgent),
+    local_rpc!("agent.purge", SystemAgent),
+    local_rpc!("agent.refresh", SystemAgent),
+    local_rpc!("agent.ability.put", SystemAgent),
+    local_rpc!("chat.history.list", SystemAgent),
+    local_rpc!("chat.history.get", SystemAgent),
+    local_rpc!("skill.publish", SystemAgent),
+    local_rpc!("skill.unpublish", SystemAgent),
+    local_rpc!("skill.list", SystemAgent),
+    local_rpc!("skill.tree", SystemAgent),
+    local_rpc!("skill.read_file", SystemAgent),
+    local_rpc!("skill.write_file", SystemAgent),
+    local_rpc!("skill.install", SystemAgent),
+    local_rpc!("skill.remove", SystemAgent),
+    local_rpc!("skill.upgrade", SystemAgent),
+    local_rpc!("mcp.bridge.list_tools", McpIntegrationSystemAgent),
+    local_rpc!("mcp.bridge.call_tool", McpIntegrationSystemAgent),
+    local_rpc!("mcp.client.list", McpIntegrationSystemAgent),
+    local_rpc!("mcp.client.call", McpIntegrationSystemAgent),
+    local_rpc!("a2a.bridge.list_skills", A2aIntegrationSystemAgent),
+    local_rpc!("a2a.bridge.send_task", A2aIntegrationSystemAgent),
+    local_rpc!("a2a.client.send_task", A2aIntegrationSystemAgent),
+    local_rpc!("mission.run", AutomationSystemAgent),
+    local_rpc!("mission.track", AutomationSystemAgent),
+    local_rpc!("mission.cancel", AutomationSystemAgent),
+    local_rpc!("mission.think", AutomationSystemAgent),
+    local_rpc!("mission.discuss_round", AutomationSystemAgent),
+    local_rpc!("discuss.create", AutomationSystemAgent),
+    local_rpc!("discuss.post", AutomationSystemAgent),
+    local_stream!("discuss.subscribe", AutomationSystemAgent),
+    local_rpc!("discuss.list_turns", AutomationSystemAgent),
+    local_rpc!("loop.create", AutomationSystemAgent),
+    local_rpc!("loop.status", AutomationSystemAgent),
+    local_stream!("loop.subscribe", AutomationSystemAgent),
+    local_rpc!("loop.cancel", AutomationSystemAgent),
+    local_rpc!("schedule.add", AutomationSystemAgent),
+    local_rpc!("schedule.list", AutomationSystemAgent),
+    local_rpc!("schedule.remove", AutomationSystemAgent),
+    local_rpc!("schedule.enable", AutomationSystemAgent),
+    local_rpc!("context.clipboard.list", SystemAgent),
+    local_rpc!("context.clipboard.get", SystemAgent),
+    local_rpc!("context.clipboard.track", SystemAgent),
+    local_rpc!("context.clipboard.remove", SystemAgent),
+    local_rpc!("context.catalog", SystemAgent),
+    local_rpc!("context.folders.list", SystemAgent),
+    local_rpc!("context.fs.list", SystemAgent),
+    local_rpc!("context.favorites.list", SystemAgent),
+    local_rpc!("context.favorites.add", SystemAgent),
+    local_rpc!("context.favorites.remove", SystemAgent),
+    local_rpc!("context.captures.list", SystemAgent),
+    local_rpc!("context.captures.get", SystemAgent),
+    local_stream!("context.captures.read", SystemAgent),
+    local_stream!("mic.subscribe", SystemAgent),
+    local_stream!("camera.subscribe", SystemAgent),
+    local_rpc!("camera.snapshot", SystemAgent),
+    local_stream!("screen.subscribe", SystemAgent),
+    local_rpc!("screen.snapshot", SystemAgent),
+    local_rpc!("openai.chat_completions", OpenAiCompatSystemAgent),
+    local_rpc!("openai.list_models", OpenAiCompatSystemAgent),
+    local_rpc!("openai.files.upload", OpenAiCompatSystemAgent),
+    local_rpc!("openai.files.retrieve", OpenAiCompatSystemAgent),
+    local_rpc!("openai.files.delete", OpenAiCompatSystemAgent),
 ];
 
 #[cfg(feature = "remote-desktop")]
-const DEVICE_REMOTE_DESKTOP_BASELINE: &[BaselineAbility] = &[
-    local_rpc!("remote_desktop.create_session", DeviceRemoteDesktop),
-    local_rpc!("remote_desktop.show_session", DeviceRemoteDesktop),
-    local_rpc!("remote_desktop.set_description", DeviceRemoteDesktop),
-    local_rpc!("remote_desktop.add_ice_candidate", DeviceRemoteDesktop),
-    local_stream!("remote_desktop.watch_events", DeviceRemoteDesktop),
-    local_rpc!("remote_desktop.refresh_lease", DeviceRemoteDesktop),
-    local_rpc!("remote_desktop.end_session", DeviceRemoteDesktop),
-    local_bidi!("remote_desktop.attach", DeviceRemoteDesktop),
-    local_rpc!("remote_desktop.permission_status", DeviceRemoteDesktop),
-    local_rpc!("remote_desktop.request_permission", DeviceRemoteDesktop),
+const REMOTE_DESKTOP_SYSTEM_AGENT_BASELINE: &[BaselineAbility] = &[
+    local_rpc!("remote_desktop.create_session", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.show_session", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.set_description", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.add_ice_candidate", RemoteDesktopSystemAgent),
+    local_stream!("remote_desktop.watch_events", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.refresh_lease", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.end_session", RemoteDesktopSystemAgent),
+    local_bidi!("remote_desktop.attach", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.permission_status", RemoteDesktopSystemAgent),
+    local_rpc!(
+        "remote_desktop.request_permission",
+        RemoteDesktopSystemAgent
+    ),
 ];
 
 pub struct HubBaseline;
@@ -509,7 +525,7 @@ impl DeviceBaseline {
         #[cfg(feature = "remote-desktop")]
         {
             let mut abilities = DEVICE_BASELINE.to_vec();
-            abilities.extend_from_slice(DEVICE_REMOTE_DESKTOP_BASELINE);
+            abilities.extend_from_slice(REMOTE_DESKTOP_SYSTEM_AGENT_BASELINE);
             abilities
         }
         #[cfg(not(feature = "remote-desktop"))]
@@ -555,14 +571,64 @@ impl BaselineConformanceReport {
     }
 }
 
-pub struct RegistryConformance<'a> {
-    registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoundRegistryAbility {
+    name: String,
+    call_mode: CallMode,
+    owner: OwnerKind,
 }
 
-impl<'a> RegistryConformance<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoundRegistrySurface {
+    abilities: Vec<BoundRegistryAbility>,
+}
+
+impl BoundRegistrySurface {
+    fn capture(registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog) -> Self {
+        let abilities = registry
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .filter(|row| row.runtime_binding.state == CatalogRuntimeBindingState::Bound)
+            .map(|row| BoundRegistryAbility {
+                name: row.name,
+                call_mode: row.descriptor.call_mode(),
+                owner: row.owner,
+            })
+            .collect();
+        Self { abilities }
+    }
+
+    fn supports(&self, ability: BaselineAbility) -> bool {
+        let expected_owner = match ability.domain {
+            BaselineDomain::HubIntrospection => OwnerKind::RealmAuthority,
+            _ => {
+                let Some(owner) = crate::daemon::ability::catalog::ownership::device_sponsored_system_agent_owner_for_public_ability(
+                    ability.name,
+                ) else {
+                    return false;
+                };
+                OwnerKind::SystemAgent(owner.system_agent_id().to_string())
+            }
+        };
+
+        self.abilities.iter().any(|candidate| {
+            candidate.name == ability.name
+                && candidate.owner == expected_owner
+                && candidate.call_mode == ability.call_mode
+        })
+    }
+}
+
+pub struct RegistryConformance {
+    surface: BoundRegistrySurface,
+}
+
+impl RegistryConformance {
     #[must_use]
-    pub fn new(registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog) -> Self {
-        Self { registry }
+    pub fn new(registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog) -> Self {
+        Self {
+            surface: BoundRegistrySurface::capture(registry),
+        }
     }
 
     #[must_use]
@@ -575,7 +641,7 @@ impl<'a> RegistryConformance<'a> {
             .iter()
             .copied()
             .filter(|ability| ability.surface == BaselineSurface::LocalRegistry)
-            .filter(|ability| !registry_supports(self.registry, *ability))
+            .filter(|ability| !self.surface.supports(*ability))
             .collect();
         BaselineConformanceReport::new(profile, BaselineSurface::LocalRegistry, missing)
     }
@@ -705,17 +771,6 @@ pub fn duplicate_ability_names(abilities: &[BaselineAbility]) -> Vec<&'static st
 #[must_use]
 pub fn baseline_names(abilities: &[BaselineAbility]) -> BTreeSet<&'static str> {
     abilities.iter().map(|ability| ability.name).collect()
-}
-
-fn registry_supports(
-    registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
-    ability: BaselineAbility,
-) -> bool {
-    match ability.call_mode {
-        CallMode::Rpc => registry.has_rpc(ability.name),
-        CallMode::Stream => registry.has_stream(ability.name),
-        CallMode::Bidi => registry.has_bidi(ability.name),
-    }
 }
 
 #[cfg(test)]
@@ -852,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_compat_stays_device_owned() {
+    fn openai_compat_stays_device_hosted_system_agent_surface() {
         let device = DeviceBaseline::required_abilities();
         let names = baseline_names(&device);
         assert!(names.contains("openai.chat_completions"));
@@ -889,6 +944,38 @@ mod tests {
         let report =
             RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
         assert!(report.is_conformant(), "{}", report.panic_message());
+    }
+
+    #[test]
+    fn combined_registry_satisfies_each_authority_baseline_without_name_only_fallback() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let device_ura = crate::core::ura::device_ura("conformance-test", "device-a");
+        let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura,
+        )
+        .expect("combined authority context");
+        let registry =
+            crate::daemon::ability::catalog::build_registry_snapshot_with_authority_context(
+                authority_context,
+            )
+            .expect("build combined registry snapshot");
+
+        assert!(
+            !registry.has_rpc(ABILITY_META_LIST_ABILITIES),
+            "name-only production lookup must remain fail-closed across authority roots"
+        );
+
+        let device = DeviceBaseline::required_abilities();
+        let device_report = RegistryConformance::new(&registry).check("device", &device);
+        assert!(
+            device_report.is_conformant(),
+            "{}",
+            device_report.panic_message()
+        );
+
+        let hub_report =
+            RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
+        assert!(hub_report.is_conformant(), "{}", hub_report.panic_message());
     }
 
     #[cfg(feature = "axon-pb")]

@@ -74,19 +74,20 @@ pub const ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::MISS
 /// know which to pick, the receipts diverged, and the duplicate
 /// names doubled the meta-discovery surface for no win.
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    let owner = OwnerKind::automation_system();
     reg.register_rpc_with_envelope_and_owner(
         "mission.run",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |env, args: Value| run_handler(env, args)),
     );
     reg.register_rpc_with_owner(
         "mission.track",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| track_handler(args)),
     );
     reg.register_rpc_with_owner(
         "mission.cancel",
-        OwnerKind::Device,
+        owner,
         Arc::new(move |args: Value| cancel_handler(args)),
     );
 }
@@ -107,8 +108,8 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///   `run_dir` — absolute path on disk
 ///   `outputs` — map<binding-name, value>; one entry per `let` in the
 ///                EAL source. Bindings the source did not assign are
-///                absent. Non-JSON values are kept as their raw
-///                string form (mirrors `MissionRunResult.outputs`).
+///                absent. Non-JSON child output is represented as a JSON
+///                string at the interpreter byte boundary.
 ///   `meta`    — the `MissionRunMeta` blob (status, started_at_unix_ms,
 ///                ended_at_unix_ms, source_file, etc.).
 ///

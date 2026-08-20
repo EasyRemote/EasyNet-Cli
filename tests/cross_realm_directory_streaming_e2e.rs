@@ -76,7 +76,7 @@ use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::Daemon
 use easynet_cli::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
 use easynet_cli::daemon::persistence::access_control::AccessControlStoreRegistry;
 use easynet_cli::daemon::trust::anchor::{
-    RealmTrustAnchor, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
+    RealmTrustAnchor, TrustAnchorRole, TrustedAgent, TrustedPrincipalOwner,
 };
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 use easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
@@ -181,6 +181,17 @@ async fn upstream_daemon(
         ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     )
     .expect("directory subscription ability URA");
+    let peer_ca_path = PathBuf::from(std::env::var_os("HOME").expect("isolated test HOME"))
+        .join(".easynet")
+        .join("peer-ca")
+        .join(format!("{trusted_peer_realm}.pem"));
+    std::fs::create_dir_all(peer_ca_path.parent().expect("peer CA parent"))
+        .expect("create peer CA fixture directory");
+    std::fs::write(
+        &peer_ca_path,
+        "-----BEGIN CERTIFICATE-----\nVEVTVA==\n-----END CERTIFICATE-----\n",
+    )
+    .expect("write schema-B peer CA fixture");
     let mut trust_anchor = RealmTrustAnchor::default();
     trust_anchor
         .append_agent(TrustedAgent {
@@ -190,11 +201,11 @@ async fn upstream_daemon(
                     .verifying_key()
                     .to_bytes(),
             ),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: Some(trusted_peer_realm.to_string()),
             hub_endpoint: Some(format!("https://{trusted_peer_realm}.example:50443")),
-            tls_ca_pem_path: None,
+            tls_ca_pem_path: Some(peer_ca_path),
         })
         .expect("append trusted peer Hub");
     trust_anchor
@@ -207,22 +218,24 @@ async fn upstream_daemon(
         .expect("bind upstream Hub to an accountable owner");
     let access_control_stores = Arc::new(AccessControlStoreRegistry::default());
     access_control_stores
-        .with_store(UPSTREAM_OWNER_USER_ID, |store| {
+        .with_store(&owner_user_ura, |store| {
             store.create_grant(
                 PermissionGrant {
                     grant_id: "cross-realm-directory-stream".to_string(),
-                    owner_user_id: UPSTREAM_OWNER_USER_ID.to_string(),
+                    owner_user_ura: owner_user_ura.clone(),
                     principal_kind: PrincipalKind::Token,
                     principal_id: trusted_peer_ura.clone(),
                     token_id: Some(trusted_peer_ura),
                     token_class: Some(TokenClass::HubLink),
+                    session_id: None,
+                    session_expires_at: None,
                     callee_ura: Some(owner_ura.clone()),
                     subject_ura_pattern: Some(subject_ura),
                     ability_ura_pattern: Some(ability_ura),
                     actions: vec![AccessAction::Stream],
                     constraints: None,
                     effect: PermissionEffect::Allow,
-                    lifetime: PermissionGrantLifetime::Session,
+                    lifetime: PermissionGrantLifetime::Permanent,
                     state: PermissionGrantState::Active,
                     expires_at: None,
                     review_required_after: None,
@@ -308,7 +321,8 @@ impl FederationClient for InProcessStreamingForwarder {
             .await
             .map_err(|status| FederationClientError::InnerInvokeFailed {
                 endpoint: "in-process".to_string(),
-                status: format!("code={:?} message={}", status.code(), status.message()),
+                status_code: status.code(),
+                status_message: status.message().to_string(),
             })?;
         let inner = response.into_inner();
         // Wrap the daemon's `Stream<Item = Result<InvokeStreamChunk, Status>>`

@@ -1051,9 +1051,6 @@ func directStreamChunkJSONWithAdmission(
 		"payload_json":         directOutputJSON(chunk.GetPayload(), chunk.GetContentType()),
 		"error":                errorValue,
 	}
-	if chunk.GetInvocationId() != "" {
-		value["invocation_id"] = chunk.GetInvocationId()
-	}
 	if chunk.GetElapsedMs() != 0 {
 		value["elapsed_ms"] = chunk.GetElapsedMs()
 	}
@@ -1106,7 +1103,7 @@ func directBidiFrameToUp(frame BidiFrame) (*axonpb.InvokeBidiUp, error) {
 
 func directBidiPayloadBytes(frame BidiFrame) ([]byte, error) {
 	if frame.PayloadBase64() != "" {
-		decoded, err := base64.StdEncoding.DecodeString(frame.PayloadBase64())
+		decoded, err := base64.StdEncoding.Strict().DecodeString(frame.PayloadBase64())
 		if err != nil {
 			return nil, invalidRuntimePayload(fmt.Sprintf("decode payload_base64: %v", err), err)
 		}
@@ -1402,11 +1399,16 @@ func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]
 	if err != nil {
 		return nil, err
 	}
+	receiptID, err := directReceiptID(receipt)
+	if err != nil {
+		return nil, err
+	}
 	receiptURA, err := directReceiptURA(receipt)
 	if err != nil {
 		return nil, err
 	}
 	value := map[string]any{
+		"receipt_id":              receiptID,
 		"receipt_ura":             receiptURA,
 		"index":                   receipt.GetIndex(),
 		"invocation_id":           receipt.GetInvocationId(),
@@ -1457,6 +1459,17 @@ func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]
 		}
 	}
 	return value, nil
+}
+
+func directReceiptID(receipt *axonpb.InvocationReceipt) (string, error) {
+	if receipt == nil {
+		return "", invalidRuntimePayload("direct runtime receipt is missing", nil)
+	}
+	invocationID := strings.TrimSpace(receipt.GetInvocationId())
+	if invocationID == "" || strings.Contains(invocationID, "/") {
+		return "", invalidRuntimePayload("direct runtime receipt invocation_id must be owner-local for receipt id", nil)
+	}
+	return fmt.Sprintf("%s:%d", invocationID, receipt.GetIndex()), nil
 }
 
 func directReceiptURA(receipt *axonpb.InvocationReceipt) (string, error) {
@@ -1666,8 +1679,8 @@ func directAuthorityBinding(binding *axonpb.AuthorityBinding) map[string]any {
 		value := authority.SessionAuthority
 		return map[string]any{
 			"kind":             "session",
-			"issuer_ura":       value.GetBackendUra(),
-			"subject_ura":      value.GetUserUra(),
+			"issuer_ura":       value.GetIssuerUra(),
+			"subject_ura":      value.GetSubjectUra(),
 			"session_id":       value.GetSessionId(),
 			"scopes":           append([]string(nil), value.GetScopes()...),
 			"audiences":        append([]string(nil), value.GetAudiences()...),
@@ -1773,7 +1786,7 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 	code, retry := ErrRouteUnavailable, RetryUnknown
 	retryable := false
 	message := statusValue.Message()
-	if isDescriptorOwnerOfflineMessage(message) {
+	if canonicalCode, ok := canonicalErrorCodeFromMessagePrefix(message); ok && canonicalCode == ErrDescriptorOwnerOffline {
 		code, retry, retryable = ErrDescriptorOwnerOffline, RetrySafe, true
 		return &SDKError{
 			Code:      code,
@@ -1812,6 +1825,18 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 		Details:   map[string]any{"endpoint": endpoint, "grpc_status": statusValue.Code().String()},
 		Cause:     err,
 	}
+}
+
+func canonicalErrorCodeFromMessagePrefix(message string) (ErrorCode, bool) {
+	prefix, _, ok := strings.Cut(strings.TrimSpace(message), ":")
+	if !ok {
+		return "", false
+	}
+	code, err := ParseErrorCode(strings.TrimSpace(prefix))
+	if err != nil {
+		return "", false
+	}
+	return code, true
 }
 
 func directRuntimeError(message string, code ErrorCode, retry RetryHint, details map[string]any, cause error) error {

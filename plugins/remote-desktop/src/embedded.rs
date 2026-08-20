@@ -12,6 +12,7 @@ use crate::daemon::plugins::{
 };
 
 pub(crate) mod config;
+pub(crate) mod consent_registry;
 pub(crate) mod constants;
 pub(crate) mod contract;
 pub(crate) mod errors;
@@ -19,6 +20,8 @@ pub(crate) mod event_log;
 pub(crate) mod handlers;
 pub(crate) mod input;
 pub(crate) mod invoke_bidi;
+pub(crate) mod lease_monitor;
+pub(crate) mod lifecycle_worker;
 pub(crate) mod media;
 pub(crate) mod network;
 pub(crate) mod permissions;
@@ -33,6 +36,8 @@ pub(crate) mod sdp;
 pub(crate) mod session;
 pub(crate) mod session_access;
 pub(crate) mod session_consent;
+pub(crate) mod session_consent_state;
+pub(crate) mod session_creation;
 pub(crate) mod session_events;
 pub(crate) mod session_identity;
 pub(crate) mod session_lease;
@@ -41,9 +46,14 @@ pub(crate) mod session_signaling;
 pub(crate) mod session_state;
 pub(crate) mod session_store;
 pub(crate) mod session_transport_state;
+pub(crate) mod target;
+pub(crate) mod target_monitor;
+pub(crate) mod target_observer;
+pub(crate) mod target_tracking;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod transport;
+pub(crate) mod transport_blocker;
 #[cfg(target_os = "macos")]
 pub(crate) mod videotoolbox_encoder;
 pub(crate) mod view;

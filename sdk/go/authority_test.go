@@ -61,6 +61,50 @@ func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
 	}
 }
 
+func TestAuthorityMetadataRejectsUnknownWireAndPayloadFields(t *testing.T) {
+	sessionPayload := sessionAuthorityPayloadFixture()
+	sessionPayload["backend_ura"] = "easynet:///r/example/agent/backend"
+	sessionPayload["user_ura"] = "easynet:///r/example/user/alice"
+	sessionValue := authorityMetadataFixture(t, sessionPayload, []byte("session-signature"))
+
+	_, err := NewSessionAuthorityFromMetadata(sessionValue)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), "backend_ura") {
+		t.Fatalf("retired session authority payload fields must fail closed, got %v", err)
+	}
+
+	delegationPayload := map[string]any{
+		"issuer_ura":     "easynet:///r/example/user/alice",
+		"subject_ura":    "easynet:///r/example/user/alice",
+		"caller_ura":     "easynet:///r/example/agent/backend",
+		"audience":       "easynet:///r/example/device/dev-a",
+		"scopes":         []string{"device.observe.*"},
+		"issued_at_ms":   float64(1000),
+		"expires_at_ms":  float64(2000),
+		"legacy_subject": "compat",
+	}
+	delegationValue := authorityMetadataFixture(t, delegationPayload, []byte("delegation-signature"))
+
+	_, err = NewDelegationProofFromMetadata(delegationValue)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), "legacy_subject") {
+		t.Fatalf("unknown delegation payload fields must fail closed, got %v", err)
+	}
+
+	wire := map[string]any{
+		"payload":          sessionAuthorityPayloadFixture(),
+		"signature":        base64.StdEncoding.EncodeToString([]byte("session-signature")),
+		"legacy_signature": "compat",
+	}
+	raw, marshalErr := json.Marshal(wire)
+	if marshalErr != nil {
+		t.Fatalf("marshal wire: %v", marshalErr)
+	}
+
+	_, err = NewSessionAuthorityFromMetadata(base64.StdEncoding.EncodeToString(raw))
+	if err == nil || !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), "legacy_signature") {
+		t.Fatalf("unknown session authority wire fields must fail closed, got %v", err)
+	}
+}
+
 func TestSessionAuthorityRejectsAllZeroOwner(t *testing.T) {
 	payload := sessionAuthorityPayloadFixture()
 	payload["session_owner_user_id"] = "00000000-0000-0000-0000-000000000000"
@@ -108,8 +152,38 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
 
 	_, err = NewSessionAuthorityFromMetadata(value)
-	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical user or session subject") {
+	if err == nil || !strings.Contains(err.Error(), "session authority resource has an invalid User owner") {
 		t.Fatalf("dotted owner subject error = %v", err)
+	}
+
+	payload = sessionAuthorityPayloadFixture()
+	payload["subject_ura"] = "easynet:///r/example/resource/user.alice/invoke/principal.lifecycle.get"
+	payload["allowed_followup_abilities"] = []string{"principal.lifecycle.get"}
+	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+	if _, err = NewSessionAuthorityFromMetadata(value); err != nil {
+		t.Fatalf("descriptor-bound subject rejected: %v", err)
+	}
+
+	payload["allowed_followup_abilities"] = []string{"principal.lifecycle.create"}
+	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+	_, err = NewSessionAuthorityFromMetadata(value)
+	if err == nil || !strings.Contains(err.Error(), "descriptor-bound subject ability must be an exact allowed follow-up ability") {
+		t.Fatalf("descriptor-bound ability mismatch error = %v", err)
+	}
+
+	for label, subjectURA := range map[string]string{
+		"pages resource":     "easynet:///r/example/resource/alice.portfolio/index.html",
+		"agent resource":     "easynet:///r/example/resource/agent.alice.pages/skill/render",
+		"device resource":    "easynet:///r/example/resource/device.dev-a/streams/display-1",
+		"user-owned Agent":   "easynet:///r/example/agent/alice.helper",
+		"device SystemAgent": "easynet:///r/example/agent/device.dev-a.runtime",
+	} {
+		payload = sessionAuthorityPayloadFixture()
+		payload["subject_ura"] = subjectURA
+		value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+		if _, err = NewSessionAuthorityFromMetadata(value); err != nil {
+			t.Fatalf("%s exact subject rejected: %v", label, err)
+		}
 	}
 
 	client, err := NewAuthorityClient(&memoryAuthorityTransport{sessionJSON: []byte(`{"metadata":{}}`)})
@@ -130,7 +204,7 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 		IssuedAtMS:               1000,
 		ExpiresAtMS:              2000,
 	})
-	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical user or session subject") {
+	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical User, Agent, or Resource") {
 		t.Fatalf("non-session subject error = %v", err)
 	}
 }
@@ -261,8 +335,8 @@ func TestInvocationBuilderAttachesOneAuthorityMetadata(t *testing.T) {
 
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/backend").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
+		WithDescriptorRef("easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/user/alice").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -282,8 +356,8 @@ func TestInvocationBuilderAttachesOneAuthorityMetadata(t *testing.T) {
 func TestInvocationBuilderRejectsAmbiguousAuthorityMetadata(t *testing.T) {
 	_, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/backend").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
+		WithDescriptorRef("easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/user/alice").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).

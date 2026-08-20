@@ -175,7 +175,7 @@ echo "==> building EasyNet CLI artifact bundle for $TARGET"
   "$CARGO_BIN" zigbuild --release --target "$TARGET" --lib \
     --bin easynet --bin easynet-daemon --bin easynet-keyring \
     --no-default-features \
-    --features axon-pb,headless-media
+    --features axon-pb,headless-media,remote-desktop
 )
 
 echo "==> building dendrite bridge artifact for $TARGET"

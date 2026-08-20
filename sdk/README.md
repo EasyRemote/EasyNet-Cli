@@ -11,7 +11,7 @@ complete generic Invocation.
 | --- | --- |
 | Axon | URA and descriptor-reference grammar, canonical bytes, admission, call modes and receipt cryptography |
 | Rust runtime | native provider implementation and generic handle semantics |
-| C ABI v6 | exact generic lifecycle, Invocation, stream/bidi, health, Addressing and memory boundary |
+| C ABI v7 | exact generic lifecycle, Invocation, stream/bidi, health, Addressing and memory boundary |
 | Go/Python | provider-backed projections of the same runtime object graph |
 | Node/Java/Swift | supported subsets of that graph; absent capabilities are explicitly unsupported |
 | downstream products | ability names, request/result DTOs and workflows outside the SDK |
@@ -44,11 +44,11 @@ consume the generic capabilities above.
 
 ## ABI
 
-ABI v6 is a hard major cut. The authoritative header and export list are:
+ABI v7 is a hard major cut. The authoritative header and export list are:
 
 - [`../include/easynet_cli.h`](../include/easynet_cli.h)
-- [`../include/easynet_cli.exports.v6`](../include/easynet_cli.exports.v6)
-- [`../docs/spec/ffi-abi-v6.md`](../docs/spec/ffi-abi-v6.md)
+- [`../include/easynet_cli.exports.v7`](../include/easynet_cli.exports.v7)
+- [`../docs/spec/ffi-abi-v7.md`](../docs/spec/ffi-abi-v7.md)
 
 There is no v4 domain-symbol compatibility path.
 

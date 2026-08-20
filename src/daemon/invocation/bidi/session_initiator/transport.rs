@@ -63,11 +63,5 @@ pub(super) async fn connect_session_channel(
 }
 
 pub(super) fn session_invocation_client(channel: Channel) -> InvocationClient<Channel> {
-    InvocationClient::new(channel)
-        .max_decoding_message_size(
-            crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-        )
-        .max_encoding_message_size(
-            crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-        )
+    crate::daemon::invocation::transport::invocation_client(channel)
 }

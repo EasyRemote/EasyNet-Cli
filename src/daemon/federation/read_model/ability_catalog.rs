@@ -38,6 +38,7 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use dashmap::mapref::entry::Entry;
@@ -105,12 +106,10 @@ impl OwnerAbilityProjectionRow {
         self.lease_expires_unix_ms <= 0 || self.lease_expires_unix_ms > now_unix_ms
     }
 
-    #[cfg(test)]
     pub(crate) fn owner_ura(&self) -> &str {
         &self.owner_ura
     }
 
-    #[cfg(test)]
     pub(crate) fn host_device_ura(&self) -> &str {
         &self.host_device_ura
     }
@@ -274,6 +273,29 @@ impl AbilityCatalogStore {
             .map(|entry| entry.summaries_as_json())
     }
 
+    /// Return live projection rows whose execution host Device is present.
+    ///
+    /// This is the resolver read-model join for device-sponsored SystemAgents:
+    /// the SystemAgent is the ability owner/callee, while the Device remains
+    /// the session-bearing host. Presence belongs to the host Device; the
+    /// SystemAgent must not be inserted into `PresenceRegistry`; it is not a
+    /// second online principal just to make its published abilities discoverable.
+    pub(crate) fn projection_rows_for_live_hosts_at(
+        &self,
+        live_host_device_uras: &BTreeSet<String>,
+        now_unix_ms: i64,
+    ) -> Vec<OwnerAbilityProjectionRow> {
+        let mut rows: Vec<_> = self
+            .inner
+            .iter()
+            .filter(|entry| entry.is_live_at(now_unix_ms))
+            .filter(|entry| live_host_device_uras.contains(entry.host_device_ura()))
+            .map(|entry| entry.clone())
+            .collect();
+        rows.sort_by(|left, right| left.owner_ura().cmp(right.owner_ura()));
+        rows
+    }
+
     /// Extend an owner projection's lease to `new_expires_unix_ms` in
     /// response to a `federation.heartbeat` refresh.
     ///
@@ -287,6 +309,9 @@ impl AbilityCatalogStore {
     pub(crate) fn refresh_lease(&self, owner_ura: &str, new_expires_unix_ms: i64) -> bool {
         match self.inner.get_mut(owner_ura) {
             Some(mut row) => {
+                if row.lease_expires_unix_ms <= 0 {
+                    return true;
+                }
                 if new_expires_unix_ms > row.lease_expires_unix_ms {
                     row.lease_expires_unix_ms = new_expires_unix_ms;
                 }
@@ -294,6 +319,60 @@ impl AbilityCatalogStore {
             }
             None => false,
         }
+    }
+
+    /// Select the unique live device-sponsored SystemAgent owner that this
+    /// hub's advertised projections prove for one Device placement and
+    /// public ability. Federation counterpart of
+    /// `LocalAbilityPublicationSnapshot::unique_system_agent_owner_for_device_ability`:
+    /// a remote Device's plugin abilities (e.g. `browser.open_session`) are
+    /// neither registry-owned on this hub nor locally published here, so the
+    /// advertised owner projection is the only canonical owner evidence a
+    /// Device-placement route query can normalize against.
+    pub(crate) fn unique_system_agent_owner_for_device_ability_at(
+        &self,
+        device_ura: &str,
+        public_name: &str,
+        now_unix_ms: i64,
+    ) -> Option<String> {
+        let public_name = public_name.trim();
+        if public_name.is_empty() {
+            return None;
+        }
+        let mut owners: Vec<String> = self
+            .inner
+            .iter()
+            .filter_map(|entry| {
+                let row = entry.value();
+                if !row.is_live_at(now_unix_ms) || row.host_device_ura() != device_ura {
+                    return None;
+                }
+                let owner = crate::core::ura::parse_ura(row.owner_ura()).ok()?;
+                owner.device_agent_ids()?;
+                row.ability_summaries
+                    .iter()
+                    .any(|summary| summary.callable_summary.public_name == public_name)
+                    .then(|| row.owner_ura().to_string())
+            })
+            .collect();
+        owners.sort();
+        owners.dedup();
+        match owners.as_slice() {
+            [owner] => Some(owner.clone()),
+            _ => None,
+        }
+    }
+
+    /// Return the full live stored row for a specific owner.
+    pub(crate) fn projection_for_owner_at(
+        &self,
+        owner_ura: &str,
+        now_unix_ms: i64,
+    ) -> Option<OwnerAbilityProjectionRow> {
+        self.inner
+            .get(owner_ura)
+            .filter(|entry| entry.is_live_at(now_unix_ms))
+            .map(|entry| entry.clone())
     }
 
     /// Return the full stored row for tests.
@@ -487,6 +566,46 @@ mod tests {
         assert!(store.get_at("ura", 999).is_some());
         assert!(store.get_at("ura", 1_000).is_none());
         assert!(store.get_at("ura", 1_001).is_none());
+    }
+
+    #[test]
+    fn heartbeat_refresh_extends_only_a_finite_projection_lease() {
+        let store = AbilityCatalogStore::new();
+        assert_eq!(
+            store.upsert_projection(projection_row_with_revision_and_lease(
+                "ura",
+                1,
+                "sha256:digest",
+                1_000,
+                vec![summary("read")],
+            )),
+            ProjectionUpsertOutcome::Inserted
+        );
+
+        assert!(store.refresh_lease("ura", 2_000));
+        let row = store.projection_for_owner("ura").expect("projection");
+        assert_eq!(row.lease_expires_unix_ms(), 2_000);
+        assert_eq!(row.projection_revision(), 1);
+        assert_eq!(row.projection_digest(), "sha256:digest");
+    }
+
+    #[test]
+    fn heartbeat_refresh_preserves_non_expiring_owner_projection() {
+        let store = AbilityCatalogStore::new();
+        assert_eq!(
+            store.upsert_projection(projection_row_with_revision_and_lease(
+                "ura",
+                1,
+                "sha256:digest",
+                0,
+                vec![summary("read")],
+            )),
+            ProjectionUpsertOutcome::Inserted
+        );
+
+        assert!(store.refresh_lease("ura", 2_000));
+        let row = store.projection_for_owner("ura").expect("projection");
+        assert_eq!(row.lease_expires_unix_ms(), 0);
     }
 
     fn projection_row(

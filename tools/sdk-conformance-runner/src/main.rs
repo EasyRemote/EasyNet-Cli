@@ -1417,11 +1417,17 @@ fn run_conformance_command(
         command.env("CARGO_TARGET_DIR", target_dir);
     }
     if language == "python" {
-        let mut python_path = format!(
-            "{}:{}",
-            root.join("sdk/python").display(),
-            root.join("../EasyNet-Axon/sdk/python").display()
-        );
+        let sdk_python = root
+            .join("sdk/python")
+            .canonicalize()
+            .unwrap_or_else(|_| root.join("sdk/python"));
+        let axon_python = std::env::var_os("EASYNET_AXON_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("../EasyNet-Axon"))
+            .join("sdk/python")
+            .canonicalize()
+            .unwrap_or_else(|_| root.join("../EasyNet-Axon/sdk/python"));
+        let mut python_path = format!("{}:{}", sdk_python.display(), axon_python.display());
         if let Some(existing) = std::env::var_os("PYTHONPATH") {
             python_path.push(':');
             python_path.push_str(&existing.to_string_lossy());

@@ -74,11 +74,13 @@ pub mod admission;
 pub mod bidi;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod caller_signature;
+pub(crate) mod causal_context_projection;
 pub mod dispatch;
 pub mod receipts;
 pub mod routing;
 #[cfg(feature = "axon-pb")]
 pub mod streams;
+pub(crate) mod transport;
 
 #[cfg(feature = "axon-pb")]
 pub use crate::daemon::boot::invocation::{

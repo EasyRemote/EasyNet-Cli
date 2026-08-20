@@ -8,7 +8,7 @@ from typing import Mapping, Protocol, Sequence
 
 from .axon_addressing import parse_ura
 from .errors import ErrorCode, RetryHint, SDKError
-from .runtime_ability import RuntimeCallContext
+from .runtime_ability import RuntimeCallContext, _validate_call
 from ._access_control_routes import (
     _ABILITY_ADMISSION_EXPLAIN,
     _ABILITY_CHECK,
@@ -536,6 +536,7 @@ class RuntimeAccessControlProvider:
 def _grant_args(
     request: AccessControlGrantRequest,
 ) -> tuple[AccessControlGrantRequest, dict[str, object]]:
+    _validate_call(request.call)
     grant = _normalize_grant(request.grant, request.owner_ura, request.principal_ura)
     args: dict[str, object] = {
         "grant": _grant_wire(grant),
@@ -560,6 +561,7 @@ def _grant_args(
 def _revoke_args(
     request: AccessControlRevokeRequest,
 ) -> tuple[AccessControlRevokeRequest, dict[str, object]]:
+    _validate_call(request.call)
     owner_ura = _required_text(request.owner_ura, "owner_ura")
     _user_id_from_user_ura(owner_ura, "owner_ura")
     grant_id = _required_text(request.grant_id, "grant_id")
@@ -577,6 +579,7 @@ def _revoke_args(
 def _list_args(
     request: AccessControlListRequest,
 ) -> tuple[AccessControlListRequest, dict[str, object]]:
+    _validate_call(request.call)
     owner_ura = _required_text(request.owner_ura, "owner_ura")
     _user_id_from_user_ura(owner_ura, "owner_ura")
     _principal_id(request.principal_kind, request.principal_ura, request.principal_id)
@@ -604,6 +607,7 @@ def _list_args(
 def _check_args(
     request: AccessControlCheckRequest,
 ) -> tuple[AccessControlCheckRequest, dict[str, object]]:
+    _validate_call(request.call)
     owner_ura = _required_text(request.owner_ura, "owner_ura")
     _user_id_from_user_ura(owner_ura, "owner_ura")
     principal_id = _principal_id(request.principal_kind, request.principal_ura, "")
@@ -642,6 +646,7 @@ def _check_args(
 def _permission_request_create_args(
     request: AccessControlPermissionRequestCreateRequest,
 ) -> tuple[AccessControlPermissionRequestCreateRequest, dict[str, object]]:
+    _validate_call(request.call)
     projected = _normalize_permission_request(
         request.request, request.owner_ura, request.principal_ura
     )
@@ -666,6 +671,7 @@ def _permission_request_create_args(
 def _permission_request_resolve_args(
     request: AccessControlPermissionRequestResolveRequest,
 ) -> tuple[AccessControlPermissionRequestResolveRequest, dict[str, object]]:
+    _validate_call(request.call)
     projected = _normalize_permission_request(
         request.request, request.owner_ura, request.principal_ura
     )
@@ -709,6 +715,7 @@ def _permission_request_resolve_args(
 def _permission_request_list_args(
     request: AccessControlPermissionRequestListRequest,
 ) -> tuple[AccessControlPermissionRequestListRequest, dict[str, object]]:
+    _validate_call(request.call)
     owner_ura = _required_text(request.owner_ura, "owner_ura")
     _user_id_from_user_ura(owner_ura, "owner_ura")
     _principal_id(request.principal_kind, request.principal_ura, request.principal_id)
@@ -727,6 +734,7 @@ def _permission_request_list_args(
 def _admission_explain_args(
     request: AccessControlAdmissionExplainRequest,
 ) -> tuple[AccessControlAdmissionExplainRequest, dict[str, object]]:
+    _validate_call(request.call)
     observer_ura = _required_text(request.observer_ura, "observer_ura")
     args: dict[str, object] = {"observer_ura": observer_ura}
     _optional(args, "invocation_id", request.invocation_id)

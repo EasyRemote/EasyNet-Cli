@@ -117,7 +117,7 @@ fn invoke_agent_command_fixture(
     let meta_catalog_handle = Arc::clone(&dispatch_handle);
     catalog.register_rpc_with_owner(
         "meta.list_abilities",
-        crate::daemon::ability::dispatch::OwnerKind::Device,
+        crate::daemon::ability::dispatch::OwnerKind::runtime_introspection_system(),
         Arc::new(move |args: serde_json::Value| {
             let owner_ura = args
                 .get("agent_ura")
@@ -157,10 +157,21 @@ fn invoke_agent_command_fixture(
     }
     if let Some(handler) = catalog.resolve_rpc_with_env(ability) {
         let device_ura = crate::core::ura::device_ura("localhost", "dev-1");
+        let callee_ura = if ability
+            == crate::daemon::ability::builtins::agents::authoring::ABILITY_PUT_AGENT_ABILITY
+        {
+            crate::core::ura::device_agent_ura(
+                "localhost",
+                "dev-1",
+                crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID,
+            )
+        } else {
+            device_ura.clone()
+        };
         return handler(
             crate::daemon::ability::dispatch::EnvelopeContext::for_test_targeted_ability(
                 crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
-                &device_ura,
+                &callee_ura,
                 ability,
                 &device_ura,
             ),

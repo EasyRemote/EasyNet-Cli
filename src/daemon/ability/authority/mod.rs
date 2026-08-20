@@ -13,16 +13,151 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::daemon::identity::self_identity::CanonicalSigner;
+
 use super::descriptors::{
     canonical_json_bytes, is_valid_ability_name, is_valid_descriptor_version,
     AbilityControlPlaneKey, CallMode,
 };
+use super::owner_projection::OwnerProjection;
 use super::AbilityControlPlaneError;
 
 const DEFAULT_INVOKE_POLICY_REF: &str = "ability_access_policy";
 pub const HOSTED_AGENT_DELEGATION_METADATA_KEY: &str = "x-easynet-hosted-agent-delegation";
 pub const HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY: &str =
     "x-easynet-hosted-agent-delegation-request";
+pub const RUNTIME_DELEGATION_METADATA_KEY: &str = "x-runtime-delegation";
+
+/// Canonical delegated-authority claims shared by the Rust issuer and runtime
+/// admission decoder.
+///
+/// This is the Rust counterpart of the public Go/Python SDK delegation DTO.
+/// It owns wire shape only; admission remains responsible for deciding
+/// whether the issuer is allowed to delegate for the requested subject.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationAuthorityClaims {
+    pub(crate) issuer_ura: String,
+    pub(crate) subject_ura: String,
+    pub(crate) caller_ura: String,
+    pub(crate) audience: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) issued_at_ms: i64,
+    pub(crate) expires_at_ms: i64,
+}
+
+impl DelegationAuthorityClaims {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        issuer_ura: impl Into<String>,
+        subject_ura: impl Into<String>,
+        caller_ura: impl Into<String>,
+        audience: impl Into<String>,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+        issued_at_ms: i64,
+        expires_at_ms: i64,
+    ) -> anyhow::Result<Self> {
+        let claims = Self {
+            issuer_ura: issuer_ura.into(),
+            subject_ura: subject_ura.into(),
+            caller_ura: caller_ura.into(),
+            audience: audience.into(),
+            scopes: scopes.into_iter().map(Into::into).collect(),
+            issued_at_ms,
+            expires_at_ms,
+        };
+        claims.validate_shape()?;
+        Ok(claims)
+    }
+
+    pub fn issuer_ura(&self) -> &str {
+        &self.issuer_ura
+    }
+
+    pub fn subject_ura(&self) -> &str {
+        &self.subject_ura
+    }
+
+    pub fn caller_ura(&self) -> &str {
+        &self.caller_ura
+    }
+
+    pub fn audience(&self) -> &str {
+        &self.audience
+    }
+
+    pub fn scopes(&self) -> &[String] {
+        &self.scopes
+    }
+
+    pub fn issued_at_ms(&self) -> i64 {
+        self.issued_at_ms
+    }
+
+    pub fn expires_at_ms(&self) -> i64 {
+        self.expires_at_ms
+    }
+
+    pub fn canonical_payload_bytes(&self) -> Vec<u8> {
+        canonical_json_bytes(
+            &serde_json::to_value(self).expect("delegation claims serialization is infallible"),
+        )
+    }
+
+    /// Sign and encode the exact metadata value accepted by runtime
+    /// admission. The signer is owner-bound, so an issuer cannot accidentally
+    /// be signed with another principal's key.
+    pub async fn signed_metadata_value(
+        &self,
+        signer: &dyn CanonicalSigner,
+    ) -> anyhow::Result<String> {
+        self.validate_shape()?;
+        if signer.owner_ura() != self.issuer_ura {
+            anyhow::bail!(
+                "delegation signer `{}` does not match issuer `{}`",
+                signer.owner_ura(),
+                self.issuer_ura
+            );
+        }
+        let signature = signer
+            .sign_canonical(&self.canonical_payload_bytes())
+            .await?;
+        let wire = json!({
+            "payload": self,
+            "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+        });
+        Ok(BASE64_STANDARD.encode(serde_json::to_vec(&wire)?))
+    }
+
+    pub(crate) fn validate_shape(&self) -> anyhow::Result<()> {
+        let scalar_fields = [
+            ("issuer_ura", self.issuer_ura.as_str()),
+            ("subject_ura", self.subject_ura.as_str()),
+            ("caller_ura", self.caller_ura.as_str()),
+            ("audience", self.audience.as_str()),
+        ];
+        for (name, value) in scalar_fields {
+            if value.is_empty() || value != value.trim() {
+                anyhow::bail!("delegation {name} must be non-empty and trimmed");
+            }
+            crate::core::ura::parse_ura(value).map_err(|error| {
+                anyhow::anyhow!("delegation {name} must be a canonical URA: {error}")
+            })?;
+        }
+        if self.scopes.is_empty()
+            || self
+                .scopes
+                .iter()
+                .any(|scope| scope.is_empty() || scope != scope.trim())
+        {
+            anyhow::bail!("delegation scopes must contain at least one non-empty trimmed selector");
+        }
+        if self.issued_at_ms < 0 || self.expires_at_ms <= self.issued_at_ms {
+            anyhow::bail!("delegation expiry must be later than its non-negative issue time");
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityPredicate {
@@ -47,78 +182,10 @@ impl AuthorityPredicate {
     }
 }
 
-/// Canonical owner-plane marker grammar for an [`AuthorityScope`].
-///
-/// The owner projection is a runtime-plane label, never a product deployment
-/// mode. It has exactly five shapes: two bare planes (`device`, `authority`) and three
-/// `<plane>:<id>` planes (`agent`, `user`, `plugin`). Parsing the marker is
-/// kept in its own type so the grammar lives in one place and every
-/// construction site is forced through the same validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum OwnerProjection {
-    Device,
-    RealmAuthority,
-    Agent(String),
-    User(String),
-    Plugin(String),
-}
-
-impl OwnerProjection {
-    /// Parse a trimmed owner-plane marker. The caller is responsible for
-    /// trimming; this method rejects anything that is not one of the five
-    /// canonical shapes, including a present-but-empty `<plane>:` id.
-    fn parse(marker: &str) -> Result<Self, AbilityControlPlaneError> {
-        let invalid = || AbilityControlPlaneError::InvalidAuthorityOwnerProjection {
-            projection: marker.to_string(),
-        };
-        match marker {
-            "device" => Ok(Self::Device),
-            "authority" => Ok(Self::RealmAuthority),
-            _ => {
-                let (plane, id) = marker.split_once(':').ok_or_else(invalid)?;
-                if !is_valid_owner_projection_id(id) {
-                    return Err(invalid());
-                }
-                let id = id.to_string();
-                match plane {
-                    "agent" => Ok(Self::Agent(id)),
-                    "user" => Ok(Self::User(id)),
-                    "plugin" => Ok(Self::Plugin(id)),
-                    _ => Err(invalid()),
-                }
-            }
-        }
-    }
-
-    /// Re-render the canonical marker. This always round-trips `parse`.
-    fn canonical(&self) -> String {
-        match self {
-            Self::Device => "device".to_string(),
-            Self::RealmAuthority => "authority".to_string(),
-            Self::Agent(id) => format!("agent:{id}"),
-            Self::User(id) => format!("user:{id}"),
-            Self::Plugin(id) => format!("plugin:{id}"),
-        }
-    }
-}
-
-/// A `<plane>:<id>` identifier segment must be present and must stay a
-/// stable, unambiguous map key. The id charset stays deliberately permissive
-/// — agent ids, realm-scoped user slugs (which may be email-shaped), and
-/// plugin slugs all flow through here — so only shapes that break the marker
-/// as a key are rejected: an empty id, surrounding/interior whitespace,
-/// control characters, or a further `:` that would make the plane ambiguous.
-fn is_valid_owner_projection_id(id: &str) -> bool {
-    !id.is_empty()
-        && id == id.trim()
-        && !id.contains(':')
-        && !id.chars().any(char::is_whitespace)
-        && !id.chars().any(char::is_control)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityScope {
-    /// Human-readable owner plane: device, authority, agent:<id>, user:<id>, plugin:<id>.
+    /// Human-readable owner plane: device, authority, system-agent:<id>,
+    /// agent:<id>, plugin:<id>.
     ///
     /// This is intentionally not a protocol owner. The protocol owner is the
     /// callee/owner URA resolved during advertisement/invocation.
@@ -206,10 +273,13 @@ impl AuthorityBindingKind {
 /// value directly; the transport layer must convert it into signed
 /// [`HostedAgentDelegationClaims`] metadata first.
 ///
-/// Invariant 1: `agent_ura` is always a canonical, trimmed Agent URA.
+/// Invariant 1: `agent_ura` is always a canonical, trimmed user-owned Agent
+/// URA. Device-sponsored SystemAgent URAs and daemon-local `_system.local`
+/// identities are not hosted-agent principals.
 /// Invariant 2: serialization is JSON, not a bare string, so the metadata
 /// grammar can evolve without overloading arbitrary URA text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostedAgentDelegationRequest {
     agent_ura: String,
 }
@@ -256,15 +326,7 @@ impl HostedAgentDelegationRequest {
         if agent_ura != self.agent_ura {
             anyhow::bail!("hosted-agent delegation request Agent URA must be trimmed");
         }
-        let parsed = crate::core::ura::parse_ura(agent_ura).map_err(|err| {
-            anyhow::anyhow!("hosted-agent delegation Agent URA is invalid: {err}")
-        })?;
-        if parsed.kind != crate::core::ura::URAKind::Agent {
-            anyhow::bail!(
-                "hosted-agent delegation request requires an Agent URA, got {:?}",
-                parsed.kind
-            );
-        }
+        validate_hosted_agent_ura(agent_ura, "hosted-agent delegation request")?;
         Ok(())
     }
 }
@@ -283,6 +345,7 @@ impl HostedAgentDelegationRequest {
 pub struct HostedAgentDelegationEnvelopeBinding {
     wire_caller_ura: String,
     wire_callee_ura: String,
+    host_device_ura: String,
     wire_subject_ura: String,
     wire_invocation_nonce_hex: String,
     route_ability: String,
@@ -292,6 +355,7 @@ impl HostedAgentDelegationEnvelopeBinding {
     pub fn new(
         wire_caller_ura: impl Into<String>,
         wire_callee_ura: impl Into<String>,
+        host_device_ura: impl Into<String>,
         wire_subject_ura: impl Into<String>,
         wire_invocation_nonce_hex: impl Into<String>,
         route_ability: impl Into<String>,
@@ -299,6 +363,7 @@ impl HostedAgentDelegationEnvelopeBinding {
         let binding = Self {
             wire_caller_ura: wire_caller_ura.into(),
             wire_callee_ura: wire_callee_ura.into(),
+            host_device_ura: host_device_ura.into(),
             wire_subject_ura: wire_subject_ura.into(),
             wire_invocation_nonce_hex: wire_invocation_nonce_hex.into(),
             route_ability: route_ability.into(),
@@ -310,12 +375,21 @@ impl HostedAgentDelegationEnvelopeBinding {
     fn validate(&self) -> anyhow::Result<()> {
         if self.wire_caller_ura.trim().is_empty()
             || self.wire_callee_ura.trim().is_empty()
+            || self.host_device_ura.trim().is_empty()
             || self.wire_subject_ura.trim().is_empty()
             || self.wire_invocation_nonce_hex.trim().is_empty()
             || self.route_ability.trim().is_empty()
         {
             anyhow::bail!("hosted-agent delegation envelope binding fields must be non-empty");
         }
+        validate_host_device_ura(
+            self.host_device_ura.trim(),
+            "hosted-agent delegation envelope binding",
+        )?;
+        validate_delegation_callee_ura(
+            self.wire_callee_ura.trim(),
+            "hosted-agent delegation envelope binding",
+        )?;
         if self.route_ability.trim().contains('@') {
             anyhow::bail!(
                 "hosted-agent delegation route_ability must be a public route name, not a descriptor ref"
@@ -339,6 +413,10 @@ impl HostedAgentDelegationEnvelopeBinding {
 
     fn callee_ura(&self) -> &str {
         self.wire_callee_ura.trim()
+    }
+
+    fn host_device_ura(&self) -> &str {
+        self.host_device_ura.trim()
     }
 
     fn subject_ura(&self) -> &str {
@@ -369,6 +447,7 @@ pub struct HostedAgentDelegationClaims {
     signing_authority: String,
     wire_caller_ura: String,
     wire_callee_ura: String,
+    host_device_ura: String,
     wire_subject_ura: String,
     wire_invocation_nonce_hex: String,
     route_ability: String,
@@ -386,6 +465,7 @@ impl HostedAgentDelegationClaims {
             signing_authority: signing_authority.into(),
             wire_caller_ura: envelope.wire_caller_ura,
             wire_callee_ura: envelope.wire_callee_ura,
+            host_device_ura: envelope.host_device_ura,
             wire_subject_ura: envelope.wire_subject_ura,
             wire_invocation_nonce_hex: envelope.wire_invocation_nonce_hex,
             route_ability: envelope.route_ability,
@@ -421,17 +501,23 @@ impl HostedAgentDelegationClaims {
             || self.signing_authority.trim().is_empty()
             || self.wire_caller_ura.trim().is_empty()
             || self.wire_callee_ura.trim().is_empty()
+            || self.host_device_ura.trim().is_empty()
             || self.wire_subject_ura.trim().is_empty()
             || self.wire_invocation_nonce_hex.trim().is_empty()
             || self.route_ability.trim().is_empty()
         {
             anyhow::bail!("hosted-agent delegation claims fields must be non-empty");
         }
+        validate_host_device_ura(
+            self.host_device_ura.trim(),
+            "hosted-agent delegation claims",
+        )?;
         if self.route_ability.trim().contains('@') {
             anyhow::bail!(
                 "hosted-agent delegation route_ability must be a public route name, not a descriptor ref"
             );
         }
+        validate_hosted_agent_ura(self.agent_ura.trim(), "hosted-agent delegation claims")?;
         let nonce = hex::decode(self.wire_invocation_nonce_hex.trim()).map_err(|err| {
             anyhow::anyhow!("hosted-agent delegation invocation nonce must be hex: {err}")
         })?;
@@ -463,6 +549,7 @@ pub struct HostedAgentDelegationContext {
     signing_authority: String,
     wire_caller_ura: String,
     wire_callee_ura: String,
+    host_device_ura: String,
     wire_subject_ura: String,
     wire_invocation_nonce_hex: String,
     route_ability: String,
@@ -519,6 +606,7 @@ impl HostedAgentDelegationContext {
         let signing_authority = claims.signing_authority.trim();
         let wire_caller_ura = claims.wire_caller_ura.trim();
         let wire_callee_ura = claims.wire_callee_ura.trim();
+        let host_device_ura = claims.host_device_ura.trim();
         let wire_subject_ura = claims.wire_subject_ura.trim();
         let wire_invocation_nonce_hex = claims.wire_invocation_nonce_hex.trim();
         let route_ability = claims.route_ability.trim();
@@ -526,19 +614,18 @@ impl HostedAgentDelegationContext {
             || signing_authority.is_empty()
             || wire_caller_ura.is_empty()
             || wire_callee_ura.is_empty()
+            || host_device_ura.is_empty()
             || wire_subject_ura.is_empty()
             || wire_invocation_nonce_hex.is_empty()
             || route_ability.is_empty()
         {
             anyhow::bail!("hosted-agent delegation metadata fields must be non-empty");
         }
-        let parsed_agent = crate::core::ura::parse_ura(agent_ura)
-            .map_err(|err| anyhow::anyhow!("invalid hosted-agent delegation agent_ura: {err}"))?;
-        if parsed_agent.kind != crate::core::ura::URAKind::Agent {
-            anyhow::bail!("hosted-agent delegation agent_ura must be an Agent URA");
-        }
+        validate_hosted_agent_ura(agent_ura, "hosted-agent delegation metadata")?;
+        validate_host_device_ura(host_device_ura, "hosted-agent delegation metadata")?;
         if wire_caller_ura != envelope.caller_ura()
             || wire_callee_ura != envelope.callee_ura()
+            || host_device_ura != envelope.host_device_ura()
             || wire_subject_ura != envelope.subject_ura()
             || wire_invocation_nonce_hex != envelope.invocation_nonce_hex()
             || route_ability != envelope.route_ability()
@@ -552,6 +639,7 @@ impl HostedAgentDelegationContext {
             signing_authority: signing_authority.to_string(),
             wire_caller_ura: wire_caller_ura.to_string(),
             wire_callee_ura: wire_callee_ura.to_string(),
+            host_device_ura: host_device_ura.to_string(),
             wire_subject_ura: wire_subject_ura.to_string(),
             wire_invocation_nonce_hex: wire_invocation_nonce_hex.to_string(),
             route_ability: route_ability.to_string(),
@@ -588,29 +676,68 @@ impl HostedAgentDelegationContext {
                 self.signing_authority
             );
         }
-        let parsed_host = crate::core::ura::parse_ura(&self.wire_callee_ura).map_err(|err| {
-            anyhow::anyhow!("{expected_ability} hosted-agent host URA is invalid: {err}")
-        })?;
-        if parsed_host.kind != crate::core::ura::URAKind::Device {
-            anyhow::bail!(
-                "{expected_ability} hosted-agent authority host must be a Device URA, got {:?}",
-                parsed_host.kind
-            );
-        }
-        let expected_host_authority = format!("hosted_by:{}", self.wire_callee_ura);
+        validate_host_device_ura(&self.host_device_ura, expected_ability)?;
+        let expected_host_authority = format!("hosted_by:{}", self.host_device_ura);
         if persisted_signing_authority != expected_host_authority {
             anyhow::bail!(
                 "{expected_ability} hosted-agent authority host {} does not match persisted authority {}",
-                self.wire_callee_ura,
+                self.host_device_ura,
                 persisted_signing_authority
             );
         }
         Ok(HostedAgentAuthority {
             agent_ura: self.agent_ura.clone(),
-            host_device_ura: self.wire_callee_ura.clone(),
+            host_device_ura: self.host_device_ura.clone(),
             ability: self.route_ability.clone(),
             binding_kind: AuthorityBindingKind::HostedAgentDelegation,
         })
+    }
+}
+
+fn validate_hosted_agent_ura(agent_ura: &str, context: &str) -> anyhow::Result<()> {
+    let parsed = crate::core::ura::parse_ura(agent_ura)
+        .map_err(|err| anyhow::anyhow!("{context} Agent URA is invalid: {err}"))?;
+    if parsed.kind != crate::core::ura::URAKind::Agent {
+        anyhow::bail!("{context} requires an Agent URA, got {:?}", parsed.kind);
+    }
+    if agent_ura == crate::core::ura::LOCAL_SYSTEM_AGENT_URA || parsed.realm == "_system" {
+        anyhow::bail!("{context} cannot target daemon-local system identity {agent_ura:?}");
+    }
+    if parsed.agent_ids().is_none() {
+        anyhow::bail!(
+            "{context} requires a user-owned Agent URA; device-sponsored SystemAgent URAs are not hosted agents"
+        );
+    }
+    Ok(())
+}
+
+fn validate_host_device_ura(host_device_ura: &str, context: &str) -> anyhow::Result<()> {
+    let parsed = crate::core::ura::parse_ura(host_device_ura).map_err(|err| {
+        anyhow::anyhow!("{context} hosted-agent host Device URA is invalid: {err}")
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        anyhow::bail!(
+            "{context} hosted-agent host must be a Device URA, got {:?}",
+            parsed.kind
+        );
+    }
+    Ok(())
+}
+
+fn validate_delegation_callee_ura(wire_callee_ura: &str, context: &str) -> anyhow::Result<()> {
+    let parsed = crate::core::ura::parse_ura(wire_callee_ura)
+        .map_err(|err| anyhow::anyhow!("{context} wire callee URA is invalid: {err}"))?;
+    if parsed.kind == crate::core::ura::URAKind::Device {
+        anyhow::bail!(
+            "{context} wire callee must be an Agent/SystemAgent or Authority; \
+             host Device belongs in host_device_ura, got Device callee {wire_callee_ura:?}"
+        );
+    }
+    match parsed.kind {
+        crate::core::ura::URAKind::Agent | crate::core::ura::URAKind::Authority => Ok(()),
+        other => anyhow::bail!(
+            "{context} wire callee must be an Agent/SystemAgent or Authority, got {other:?}"
+        ),
     }
 }
 
@@ -775,11 +902,13 @@ mod tests {
     use super::*;
 
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
+    const LOCAL_SYSTEM_AGENT_URA: &str =
+        "easynet:///r/default/agent/device.local.runtime-introspection";
 
     fn descriptor(name: &str) -> crate::daemon::ability::descriptors::AbilityDescriptor {
         crate::daemon::ability::descriptors::AbilityDescriptor::new(
             name,
-            LOCAL_DEVICE_URA,
+            LOCAL_SYSTEM_AGENT_URA,
             crate::daemon::ability::descriptors::Visibility::Scoped,
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
         )
@@ -840,8 +969,8 @@ mod tests {
         for marker in [
             "device",
             "authority",
+            "system-agent:agent-management",
             "agent:codex",
-            "user:u-1",
             "plugin:fs.read",
         ] {
             let scope = AuthorityScope::new(marker, LOCAL_DEVICE_URA)
@@ -885,6 +1014,7 @@ mod tests {
             "agent",
             "agent:",
             "device:1",
+            "user:u-1",
             "user: ",
             "agent:bad id",
         ] {
@@ -969,14 +1099,16 @@ mod tests {
 
         let signer = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
         let caller = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
-        let callee = "easynet:///r/default/device/local";
+        let callee = crate::core::ura::device_agent_ura("default", "local", "ability-management");
+        let host_device_ura = crate::core::ura::device_ura("default", "local");
         let subject = "easynet:///r/default/device/local";
         let nonce_hex = hex::encode([0x42u8; 16]);
         let ability = "meta.acquire";
         let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
-            callee,
+            callee.as_str(),
+            host_device_ura.as_str(),
             subject,
             nonce_hex.as_str(),
             ability,
@@ -1006,6 +1138,60 @@ mod tests {
     }
 
     #[test]
+    fn hosted_agent_delegation_binds_system_agent_callee_to_separate_host_device() {
+        use ed25519_dalek::Signer as _;
+
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[0x17; 32]);
+        let caller = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
+        let wire_callee =
+            crate::core::ura::device_agent_ura("default", "local", "ability-management");
+        let host_device_ura = crate::core::ura::device_ura("default", "local");
+        let subject = host_device_ura.as_str();
+        let nonce_hex = hex::encode([0x27u8; 16]);
+        let ability = "meta.acquire";
+        let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
+        let envelope = HostedAgentDelegationEnvelopeBinding::new(
+            caller,
+            wire_callee.as_str(),
+            host_device_ura.as_str(),
+            subject,
+            nonce_hex.as_str(),
+            ability,
+        )
+        .unwrap();
+        let claims =
+            HostedAgentDelegationClaims::new(agent_ura.as_str(), "host_device", envelope.clone())
+                .unwrap();
+        let signature = signer.sign(&claims.signing_payload_bytes(caller));
+        let raw = claims.signed_metadata_value(caller, &signature).unwrap();
+        let context = HostedAgentDelegationContext::from_signed_metadata(
+            &raw,
+            &envelope,
+            signer.verifying_key(),
+        )
+        .unwrap();
+
+        let authority = context
+            .authorize(
+                agent_ura.as_str(),
+                "hosted_by:easynet:///r/default/device/local",
+                ability,
+            )
+            .unwrap();
+
+        assert_eq!(authority.host_device_ura(), host_device_ura);
+        assert_ne!(authority.host_device_ura(), wire_callee);
+        let err = context
+            .authorize(
+                agent_ura.as_str(),
+                &format!("hosted_by:{wire_callee}"),
+                ability,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("does not match"), "{err}");
+    }
+
+    #[test]
     fn hosted_agent_delegation_request_round_trips_as_json() {
         let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
         let request = HostedAgentDelegationRequest::new(agent_ura.as_str()).unwrap();
@@ -1029,6 +1215,63 @@ mod tests {
     }
 
     #[test]
+    fn hosted_agent_delegation_request_rejects_device_sponsored_system_agent() {
+        let err = HostedAgentDelegationRequest::new(crate::core::ura::device_agent_ura(
+            "default",
+            "device-a",
+            "system-worker",
+        ))
+        .unwrap_err();
+
+        assert!(err.to_string().contains("SystemAgent"), "{err}");
+    }
+
+    #[test]
+    fn hosted_agent_delegation_request_rejects_local_system_agent() {
+        let err = HostedAgentDelegationRequest::new(crate::core::ura::LOCAL_SYSTEM_AGENT_URA)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("system identity"), "{err}");
+    }
+
+    #[test]
+    fn hosted_agent_delegation_claims_reject_system_agent_direct_construction() {
+        let envelope = HostedAgentDelegationEnvelopeBinding::new(
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            crate::core::ura::device_agent_ura("default", "local", "ability-management"),
+            "easynet:///r/default/device/local",
+            "easynet:///r/default/device/local",
+            hex::encode([0x45u8; 16]),
+            "meta.acquire",
+        )
+        .unwrap();
+
+        let err = HostedAgentDelegationClaims::new(
+            crate::core::ura::device_agent_ura("default", "device-a", "system-worker"),
+            "host_device",
+            envelope,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("SystemAgent"), "{err}");
+    }
+
+    #[test]
+    fn hosted_agent_delegation_request_rejects_unknown_fields() {
+        let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
+        let raw = serde_json::json!({
+            "agent_ura": agent_ura,
+            "legacy_scope": "hosted_by:easynet:///r/default/device/local"
+        })
+        .to_string();
+
+        let err = HostedAgentDelegationRequest::from_metadata_value(&raw)
+            .expect_err("hosted-agent delegation requests must reject shadow authority fields");
+
+        assert!(err.to_string().contains("legacy_scope"), "{err}");
+    }
+
+    #[test]
     fn hosted_agent_delegation_token_rejects_envelope_drift() {
         use ed25519_dalek::Signer as _;
 
@@ -1037,9 +1280,15 @@ mod tests {
         let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
         let nonce_hex = hex::encode([0x24u8; 16]);
         let ability = "meta.acquire";
+        let wire_callee =
+            crate::core::ura::device_agent_ura("default", "local", "ability-management");
+        let drifted_wire_callee =
+            crate::core::ura::device_agent_ura("default", "local", "runtime-control");
+        let host_device_ura = crate::core::ura::device_ura("default", "local");
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
-            "easynet:///r/default/device/local",
+            wire_callee.as_str(),
+            host_device_ura.as_str(),
             "easynet:///r/default/device/local",
             nonce_hex.as_str(),
             ability,
@@ -1050,7 +1299,8 @@ mod tests {
         let raw = claims.signed_metadata_value(caller, &signature).unwrap();
         let drifted_envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
-            "easynet:///r/default/device/other",
+            drifted_wire_callee.as_str(),
+            host_device_ura.as_str(),
             "easynet:///r/default/device/local",
             nonce_hex.as_str(),
             ability,
@@ -1076,13 +1326,15 @@ mod tests {
 
         let signer = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
         let caller = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
-        let callee = "easynet:///r/default/device/local";
+        let callee = crate::core::ura::device_agent_ura("default", "local", "ability-management");
+        let host_device_ura = crate::core::ura::device_ura("default", "local");
         let subject = "easynet:///r/default/device/local";
         let nonce_hex = hex::encode([0x33u8; 16]);
         let ability = "meta.acquire";
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
-            callee,
+            callee.as_str(),
+            host_device_ura.as_str(),
             subject,
             nonce_hex.as_str(),
             ability,
@@ -1099,7 +1351,8 @@ mod tests {
         let replayed_nonce_hex = hex::encode([0x34u8; 16]);
         let replayed_envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
-            callee,
+            callee.as_str(),
+            host_device_ura.as_str(),
             subject,
             replayed_nonce_hex.as_str(),
             ability,
@@ -1121,17 +1374,16 @@ mod tests {
 
     #[test]
     fn hosted_agent_delegation_rejects_descriptor_ref_in_route_ability() {
+        let wire_callee =
+            crate::core::ura::device_agent_ura("default", "local", "ability-management");
         let descriptor_ref = format!(
             "{}@1.0.0",
-            crate::core::ura::owner_ability_ura(
-                "easynet:///r/default/device/local",
-                "meta.acquire"
-            )
-            .unwrap()
+            crate::core::ura::owner_ability_ura(&wire_callee, "meta.acquire").unwrap()
         );
 
         let err = HostedAgentDelegationEnvelopeBinding::new(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            wire_callee,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
             hex::encode([0x33u8; 16]),
@@ -1140,5 +1392,20 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("public route name"), "{err}");
+    }
+
+    #[test]
+    fn hosted_agent_delegation_rejects_device_callee() {
+        let err = HostedAgentDelegationEnvelopeBinding::new(
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            "easynet:///r/default/device/local",
+            "easynet:///r/default/device/local",
+            "easynet:///r/default/device/local",
+            hex::encode([0x33u8; 16]),
+            "meta.acquire",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("host_device_ura"), "{err}");
     }
 }

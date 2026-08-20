@@ -92,14 +92,11 @@ public struct RuntimeDescriptorRefRequest: Sendable, Equatable {
                 "descriptor_ref provider requests require caller_ura and subject_ura"
             )
         }
-        if provider == abilityDescriptorProvider {
-            let authority = try RuntimeAbilityProjection.authorityURAForRealmOf(calleeURA)
-            guard subjectURA == authority else {
-                throw SDKError.validation(
-                    "runtime",
-                    "ability_descriptor provider descriptor resolution subject must be the callee realm Authority"
-                )
-            }
+        if !RuntimeSubjects.isRuntimeGovernanceReadSubject(subjectURA, calleeURA: calleeURA) {
+            throw SDKError.validation(
+                "runtime",
+                "descriptor_ref provider \(provider) subject_ura must be a runtime governance read subject"
+            )
         }
     }
 
@@ -154,7 +151,7 @@ public struct RuntimeCallContext: Sendable, Equatable {
         self.callerURA = try Self.requiredPrincipal(callerURA, "caller_ura")
         self.calleeURA = try Self.requiredPrincipal(calleeURA, "callee_ura")
         self.subjectURA = try Self.requiredPrincipal(subjectURA, "subject_ura")
-        self.nonceBase64 = try Self.required(nonceBase64, "nonce_base64")
+        self.nonceBase64 = try requiredInvocationNonceBase64(nonceBase64, stage: "runtime")
         self.causalContext = try Self.copyObject(causalContext, "causal_context")
         self.metadata = try Self.copyObject(metadata, "metadata")
     }
@@ -251,7 +248,7 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
                 "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider"
             )
         }
-        let subjectURA = try policy.subjectURA(call)
+        let subjectURA = try policy.subjectURA(call, abilityName: ability)
         let descriptorRef = try await runtime.resolveDescriptorRef(
             try RuntimeDescriptorRefRequest(
                 calleeURA: call.calleeURA,
@@ -315,16 +312,16 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
         )
         static let catalogueRead = RuntimeAbilityDispatchPolicy(
             allowGovernanceRead: true,
-            subjectPolicy: .runtimeOwner,
+            subjectPolicy: .runtimeStateRead,
             descriptorProvider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
         )
 
-        func subjectURA(_ call: RuntimeCallContext) throws -> String {
+        func subjectURA(_ call: RuntimeCallContext, abilityName: String) throws -> String {
             switch subjectPolicy {
             case .descriptorBound:
-                return call.subjectURA
-            case .runtimeOwner:
-                return call.calleeURA
+                return try RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA, abilityName: abilityName)
+            case .runtimeStateRead:
+                return try RuntimeSubjects.runtimeGovernanceReadSubjectURA(call.subjectURA)
             }
         }
 
@@ -333,9 +330,9 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
             selectedSubjectURA: String
         ) throws -> String {
             if descriptorProvider == RuntimeDescriptorRefRequest.abilityDescriptorProvider {
-                return try RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA)
+                return selectedSubjectURA
             }
-            if subjectPolicy == .runtimeOwner {
+            if subjectPolicy == .runtimeStateRead {
                 return selectedSubjectURA
             }
             return call.subjectURA
@@ -343,7 +340,7 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
 
         enum SubjectPolicy {
             case descriptorBound
-            case runtimeOwner
+            case runtimeStateRead
         }
     }
 }

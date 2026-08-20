@@ -7,7 +7,7 @@ use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::persistence::daemon_config::DaemonConfig;
 use crate::daemon::trust::anchor::{
-    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustedAgent, TrustedAgentRole,
+    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustAnchorRole, TrustedAgent,
 };
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
@@ -94,7 +94,7 @@ pub(super) fn upsert_hub_identity(
     let entry = TrustedAgent {
         agent_ura: expected_ura.clone(),
         public_key_b64: BASE64_STANDARD.encode(public_key.to_bytes()),
-        role: TrustedAgentRole::Hub,
+        role: TrustAnchorRole::Hub,
         added_at_unix_ms: now_unix_ms(),
         origin_realm: None,
         hub_endpoint: None,
@@ -207,7 +207,7 @@ mod tests {
         let current = RealmTrustAnchor::from_entries(vec![TrustedAgent {
             agent_ura: "easynet:///r/local/device/current".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1,
             origin_realm: None,
             hub_endpoint: None,

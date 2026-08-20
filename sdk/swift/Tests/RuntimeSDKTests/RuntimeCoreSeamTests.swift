@@ -5,8 +5,12 @@ import XCTest
 
 final class RuntimeCoreSeamTests: XCTestCase {
     private let caller = "easynet:///r/example/agent/alice.sdk"
-    private let callee = "easynet:///r/example/device/dev-a"
-    private let descriptor = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+    private let deviceSubject = "easynet:///r/example/device/dev-a"
+    private let callee = "easynet:///r/example/agent/device.dev-a.runtime-health"
+    private let runtimeIntrospectionCallee = "easynet:///r/example/agent/device.dev-a.runtime-introspection"
+    private let runtimeGovernanceCallee = "easynet:///r/example/agent/device.dev-a.runtime-governance"
+    private let pluginManagementCallee = "easynet:///r/example/agent/device.dev-a.plugin-management"
+    private let descriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0"
     private let nonce = "AQIDBAUGBwgJCgsMDQ4PEA=="
 
     func testProductNeutralModuleExportsOnlyGenericRuntimeConcepts() throws {
@@ -31,6 +35,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 "JSONValue.swift",
                 "Runtime.swift",
                 "RuntimeAbilityProjection.swift",
+                "RuntimeGovernanceRoutesGen.swift",
                 "RuntimePrincipals.swift",
                 "RuntimeSubjects.swift",
                 "SDKError.swift",
@@ -61,6 +66,21 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 XCTAssertFalse(source.contains(symbol), "\(sourceName) exports \(symbol)")
             }
         }
+    }
+
+    func testGeneratedRuntimeGovernanceRoutesAreExact() {
+        XCTAssertEqual(
+            RuntimeGovernanceRoutesGen.descriptorProvider("invocation.record.get"),
+            RuntimeDescriptorRefRequest.receiptHistoryProvider
+        )
+        XCTAssertEqual(
+            RuntimeGovernanceRoutesGen.canonicalAbility("system-agent.dev-a.runtime-governance.invocation.record.get"),
+            "invocation.record.get"
+        )
+        XCTAssertEqual(
+            RuntimeGovernanceRoutesGen.descriptorProvider("invocation.history.delete"),
+            ""
+        )
     }
 
     func testDiscoveryAndLifecycleAreExplicit() async throws {
@@ -132,6 +152,13 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let cancelled = try await runtime.cancel(handle, reason: "done")
         XCTAssertTrue(cancelled.requestAccepted)
         XCTAssertTrue(cancelled.terminal)
+        expectSyncSDKError(.invalidArgument, "invocation cancel contains noncanonical field state_code") {
+            _ = try InvocationCancel.fromJSON(
+                Data(
+                    #"{"handle_id":7,"request_accepted":true,"deduplicated":false,"cancelled":true,"state":"Cancelled","terminal":true,"state_code":"C440"}"#.utf8
+                )
+            )
+        }
         let events = try await runtime.events(handle)
         XCTAssertTrue(events.terminal)
         try await runtime.closeHandle(handle)
@@ -246,6 +273,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
                     "ok": true,
                     "terminal_state": "Completed",
                     "terminal_receipt": missingProofPayload,
+                ])
+            )
+        }
+
+        var noncanonicalProofPayload = terminal
+        var noncanonicalProof = noncanonicalProofPayload["authority_proof"] as! [String: Any]
+        noncanonicalProof["proof_payload_base64"] = "AQIDBAUGBwgJCgsMDQ4PEB=="
+        noncanonicalProofPayload["authority_proof"] = noncanonicalProof
+        expectSyncSDKError(.invalidArgument, "authority_proof.proof_payload_base64 must be canonical base64") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": noncanonicalProofPayload,
                 ])
             )
         }
@@ -528,7 +569,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 sessionID: "session-1",
                 sessionOwnerUserID: "alice",
                 creatorPrincipalID: caller,
-                calleeURA: callee,
+                calleeURA: runtimeIntrospectionCallee,
                 subjectURA: "easynet:///r/example/user/alice",
                 audience: callee,
                 scopes: ["invoke"],
@@ -573,6 +614,26 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withSubjectURA("easynet:///r/example/resource/agent.alice.sdk/runtime-state/read")
             .withAuthorityMetadata(scopedSession.metadata())
             .inspect()
+
+        let readDescriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        let invokeOnlySession = try SessionAuthority.fromMetadata(
+            sessionMetadataValue(scopes: ["observe.health"], allowedActions: ["invoke"])
+        )
+        expectSyncSDKError(.authorityDenied, "session authority allowed_actions do not admit read") {
+            _ = try completeBuilder()
+                .withDescriptorRef(readDescriptor)
+                .withSubjectURA("easynet:///r/example/resource/user.alice/runtime-state/read")
+                .withAuthorityMetadata(invokeOnlySession.metadata())
+                .inspect()
+        }
+        let readSession = try SessionAuthority.fromMetadata(
+            sessionMetadataValue(scopes: ["observe.health"], allowedActions: ["read"])
+        )
+        _ = try completeBuilder()
+            .withDescriptorRef(readDescriptor)
+            .withSubjectURA("easynet:///r/example/resource/user.alice/runtime-state/read")
+            .withAuthorityMetadata(readSession.metadata())
+            .inspect()
         expectSyncSDKError(.authoritySubjectMismatch, "session authority subject does not admit invocation subject_ura") {
             _ = try completeBuilder()
                 .withSubjectURA("not-a-ura/resource/user.alice/runtime-state/read")
@@ -614,8 +675,8 @@ final class RuntimeCoreSeamTests: XCTestCase {
     func testRuntimeAbilityProjectionIsCanonical() throws {
         let admittedScopes = [
             "observe.health",
-            "easynet:///r/example/ability/device.dev-a.observe.health",
-            "easynet:///r/example/ability/device.dev-a.*",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.*",
         ]
         for scope in admittedScopes {
             let proof = try DelegationProof.fromMetadata(delegationMetadataValue(scopes: [scope]))
@@ -672,7 +733,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
 
         let mismatchedOwnerProof = try DelegationProof.fromMetadata(authorityMetadataValue([
             "issuer_ura": "easynet:///r/example/user/alice",
-            "subject_ura": callee,
+            "subject_ura": deviceSubject,
             "caller_ura": caller,
             "audience": callee,
             "scopes": ["namespace.resolve"],
@@ -707,6 +768,50 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 realm: "example",
                 userID: "00000000-0000-0000-0000-000000000000"
             )
+        }
+    }
+
+    func testAuthorityMetadataRejectsNoncanonicalFields() throws {
+        let delegationPayload: [String: Any] = [
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": callee,
+            "caller_ura": caller,
+            "audience": callee,
+            "scopes": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]
+
+        expectSyncSDKError(.invalidArgument, "delegation contains noncanonical field legacy_signature") {
+            _ = try DelegationProof.fromMetadata(
+                authorityMetadataValue(delegationPayload, wireExtra: ["legacy_signature": "opaque"])
+            )
+        }
+
+        var legacyDelegationPayload = delegationPayload
+        legacyDelegationPayload["legacy_subject"] = callee
+        expectSyncSDKError(.invalidArgument, "delegation metadata payload contains noncanonical field legacy_subject") {
+            _ = try DelegationProof.fromMetadata(authorityMetadataValue(legacyDelegationPayload))
+        }
+
+        var sessionPayload: [String: Any] = [
+            "issuer_ura": caller,
+            "session_id": "session-1",
+            "session_owner_user_id": "alice",
+            "creator_principal_id": caller,
+            "callee_ura": callee,
+            "subject_ura": "easynet:///r/example/user/alice",
+            "audience": callee,
+            "scopes": ["invoke"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]
+        sessionPayload["backend_ura"] = caller
+        sessionPayload["user_ura"] = "easynet:///r/example/user/alice"
+        expectSyncSDKError(.invalidArgument, "session authority metadata payload contains noncanonical field") {
+            _ = try SessionAuthority.fromMetadata(authorityMetadataValue(sessionPayload))
         }
     }
 
@@ -795,7 +900,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 sessionID: "session-1",
                 sessionOwnerUserID: "alice",
                 creatorPrincipalID: caller,
-                calleeURA: callee,
+                calleeURA: runtimeIntrospectionCallee,
                 subjectURA: callee,
                 audience: callee,
                 scopes: ["invoke"],
@@ -939,7 +1044,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             _ = try InvocationBuilder()
                 .withCalleeURA(callee)
                 .withDescriptorRef(descriptor)
-                .withSubjectURA(callee)
+                .withSubjectURA(deviceSubject)
                 .withNonce(nonce)
                 .withCausalContext("{\"form\":\"none\"}")
                 .withArgsJSON("{}")
@@ -957,6 +1062,42 @@ final class RuntimeCoreSeamTests: XCTestCase {
             expectSyncSDKError(.invalidArgument) {
                 _ = try mutate().inspect()
             }
+        }
+    }
+
+    func testInvocationTupleRejectsNonCanonicalNonceLength() {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try completeBuilder()
+                .withNonce("bm9uY2U=")
+                .inspect()
+        }
+    }
+
+    func testInvocationTupleRejectsMalformedNonceBase64() {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try completeBuilder()
+                .withNonce("not-base64!")
+                .inspect()
+        }
+    }
+
+    func testInvocationTupleRejectsNonCanonicalNonceBase64() {
+        expectSyncSDKError(.invalidArgument, "nonce_base64 must be canonical base64") {
+            _ = try completeBuilder()
+                .withNonce("AQIDBAUGBwgJCgsMDQ4PEB==")
+                .inspect()
+        }
+    }
+
+    func testRuntimeCallContextRejectsNonCanonicalNonceLength() {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try RuntimeCallContext(
+                callerURA: caller,
+                calleeURA: callee,
+                subjectURA: callee,
+                nonceBase64: "bm9uY2U=",
+                causalContext: ["form": .string("none")]
+            )
         }
     }
 
@@ -985,7 +1126,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testCompleteTupleRejectsReceiptHistoryPublicInvocation() {
-        let historyDescriptor = "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        let historyDescriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
         expectSyncSDKError(.invalidArgument, "RuntimeReceiptProvider") {
             _ = try completeBuilder()
                 .withDescriptorRef(historyDescriptor)
@@ -994,13 +1135,17 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testCompleteTupleRejectsCatalogueReadPublicInvocation() {
-        let catalogueDescriptor = "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
-        expectSyncSDKError(.invalidArgument, "RuntimeAbilityDescriptorProvider") {
-            _ = try completeBuilder()
-                .withCalleeURA("easynet:///r/example/authority")
-                .withSubjectURA("easynet:///r/example/authority")
-                .withDescriptorRef(catalogueDescriptor)
-                .inspect()
+        for catalogueDescriptor in [
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+        ] {
+            expectSyncSDKError(.invalidArgument, "RuntimeAbilityDescriptorProvider") {
+                _ = try completeBuilder()
+                    .withCalleeURA(runtimeIntrospectionCallee)
+                    .withSubjectURA(runtimeIntrospectionCallee)
+                    .withDescriptorRef(catalogueDescriptor)
+                    .inspect()
+            }
         }
     }
 
@@ -1008,28 +1153,80 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let ability = RuntimeAbilityClient(runtime: runtime)
         let call = try runtimeCallContext()
-        do {
-            _ = try await ability.build(call: call, abilityName: "meta.list_abilities")
-            XCTFail("expected RuntimeAbilityClient to reject public catalogue read")
-        } catch let error as SDKError {
-            XCTAssertEqual(error.code, .invalidArgument)
-            XCTAssertTrue(error.message.contains("RuntimeAbilityDescriptorProvider"))
+        for abilityName in ["meta.list_abilities", "meta.list_resources"] {
+            do {
+                _ = try await ability.build(call: call, abilityName: abilityName)
+                XCTFail("expected RuntimeAbilityClient to reject public catalogue read")
+            } catch let error as SDKError {
+                XCTAssertEqual(error.code, .invalidArgument)
+                XCTAssertTrue(error.message.contains("RuntimeAbilityDescriptorProvider"))
+            }
+        }
+    }
+
+    func testRuntimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects() throws {
+        let runtimeStateSubject = try RuntimeSubjects.runtimeStateReadSubjectURA(realm: "example", userID: "alice")
+        _ = try RuntimeDescriptorRefRequest(
+            calleeURA: runtimeIntrospectionCallee,
+            ability: "meta.list_abilities",
+            callMode: "rpc",
+            callerURA: caller,
+            subjectURA: runtimeStateSubject,
+            provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+        )
+        _ = try RuntimeDescriptorRefRequest(
+            calleeURA: runtimeIntrospectionCallee,
+            ability: "meta.list_resources",
+            callMode: "rpc",
+            callerURA: caller,
+            subjectURA: runtimeStateSubject,
+            provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+        )
+        _ = try RuntimeDescriptorRefRequest(
+            calleeURA: runtimeGovernanceCallee,
+            ability: "invocation.history.list",
+            callMode: "rpc",
+            callerURA: caller,
+            subjectURA: runtimeStateSubject,
+            provider: RuntimeDescriptorRefRequest.receiptHistoryProvider
+        )
+
+        expectSyncSDKError(.invalidArgument, "runtime governance read subject") {
+            _ = try RuntimeDescriptorRefRequest(
+                calleeURA: callee,
+                ability: "meta.list_abilities",
+                callMode: "rpc",
+                callerURA: caller,
+                subjectURA: "easynet:///r/example/authority",
+                provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+            )
+        }
+        expectSyncSDKError(.invalidArgument, "runtime governance read subject") {
+            _ = try RuntimeDescriptorRefRequest(
+                calleeURA: callee,
+                ability: "meta.list_resources",
+                callMode: "rpc",
+                callerURA: caller,
+                subjectURA: "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+                provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+            )
         }
     }
 
     func testRuntimeAbilityDescriptorProviderUsesCatalogueProvider() async throws {
-        let transport = MemoryRuntimeTransport(callee: callee, descriptor: descriptor)
+        let transport = MemoryRuntimeTransport(callee: runtimeIntrospectionCallee, descriptor: descriptor)
         let runtime = RuntimeClient(transport: transport)
         let ability = RuntimeAbilityClient(runtime: runtime)
         let provider = RuntimeAbilityDescriptorProvider(ability: ability)
-        let call = try runtimeCallContext()
+        let runtimeStateSubject = try RuntimeSubjects.runtimeStateReadSubjectURA(realm: "example", userID: "alice")
+        let call = try runtimeCallContext(calleeURA: runtimeIntrospectionCallee, subjectURA: runtimeStateSubject)
 
         let page = try await provider.list(
-            AbilityDescriptorListRequest(call: call, scope: "all", ownerURA: callee)
+            AbilityDescriptorListRequest(call: call, scope: "all", ownerURA: pluginManagementCallee)
         )
         XCTAssertEqual(page.descriptors.count, 1)
         XCTAssertEqual(page.descriptors[0].name, "browser.open_session")
-        XCTAssertEqual(page.descriptors[0].ownerURA, callee)
+        XCTAssertEqual(page.descriptors[0].ownerURA, pluginManagementCallee)
         XCTAssertEqual(page.descriptors[0].version, "1.0.0")
         XCTAssertEqual(page.descriptors[0].callMode, "rpc")
 
@@ -1042,32 +1239,32 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(abilityField, "meta.list_abilities")
         XCTAssertEqual(callModeField, "rpc")
         XCTAssertEqual(callerField, caller)
-        XCTAssertEqual(resolverSubjectField, "easynet:///r/example/authority")
+        XCTAssertEqual(resolverSubjectField, runtimeStateSubject)
 
         let invokedCalleeField = await transport.lastInvokedTupleField("callee_ura")
         let invokedSubjectField = await transport.lastInvokedTupleField("subject_ura")
         let scopeField = await transport.lastInvokedArgumentField("scope")
         let ownerField = await transport.lastInvokedArgumentField("owner_ura")
         let metadataAbilityField = await transport.lastInvokedMetadataField("ability_ura")
-        XCTAssertEqual(invokedCalleeField, callee)
-        XCTAssertEqual(invokedSubjectField, callee)
+        XCTAssertEqual(invokedCalleeField, runtimeIntrospectionCallee)
+        XCTAssertEqual(invokedSubjectField, runtimeStateSubject)
         XCTAssertEqual(scopeField, "all")
-        XCTAssertEqual(ownerField, callee)
-        XCTAssertEqual(metadataAbilityField, "easynet:///r/example/ability/device.dev-a.meta.list_abilities")
+        XCTAssertEqual(ownerField, pluginManagementCallee)
+        XCTAssertEqual(metadataAbilityField, "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities")
 
         let descriptor = try await provider.get(
             AbilityDescriptorGetRequest(
                 call: call,
-                abilityURA: "easynet:///r/example/ability/device.dev-a.browser.open_session",
+                abilityURA: "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session",
                 callMode: "rpc"
             )
         )
-        XCTAssertEqual(descriptor.descriptorRef, "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc")
+        XCTAssertEqual(descriptor.descriptorRef, "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc")
         var typedScalarRow: [String: JSONValue] = [
-            "ability_ura": .string("easynet:///r/example/ability/device.dev-a.browser.open_session"),
-            "descriptor_ref": .string("easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc"),
+            "ability_ura": .string("easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session"),
+            "descriptor_ref": .string("easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc"),
             "name": .string("browser.open_session"),
-            "owner_ura": .string(callee),
+            "owner_ura": .string(pluginManagementCallee),
             "descriptor_version": .string("1.0.0"),
             "call_mode": .string("rpc"),
         ]
@@ -1075,6 +1272,55 @@ final class RuntimeCoreSeamTests: XCTestCase {
         expectSyncSDKError(.invalidArgument, "schema_hash must be a string") {
             _ = try AbilityDescriptorProjection.fromObject(typedScalarRow)
         }
+    }
+
+    func testRuntimeAbilityPublicPathDescriptorBindsUserSubjects() async throws {
+        let transport = MemoryRuntimeTransport(callee: callee, descriptor: descriptor)
+        let runtime = RuntimeClient(transport: transport)
+        let ability = RuntimeAbilityClient(runtime: runtime)
+        let subject = "easynet:///r/example/user/alice"
+        let call = try RuntimeCallContext(
+            callerURA: caller,
+            calleeURA: callee,
+            subjectURA: subject,
+            nonceBase64: nonce,
+            causalContext: ["form": .string("none")],
+            metadata: ["trace_id": .string("trace-1")]
+        )
+
+        let draft = try await ability.build(
+            call: call,
+            abilityName: "observe.health",
+            arguments: ["probe": .bool(true)]
+        )
+
+        XCTAssertEqual(
+            draft.inspectTuple().subject,
+            "easynet:///r/example/resource/user.alice/invoke/observe.health"
+        )
+        let resolverSubjectField = await transport.lastDescriptorRequestField("subject_ura")
+        XCTAssertEqual(resolverSubjectField, subject)
+
+        let authorityCall = try RuntimeCallContext(
+            callerURA: caller,
+            calleeURA: "easynet:///r/example/authority",
+            subjectURA: "easynet:///r/example/authority",
+            nonceBase64: nonce,
+            causalContext: ["form": .string("none")],
+            metadata: ["trace_id": .string("trace-1")]
+        )
+        let authorityDraft = try await ability.build(
+            call: authorityCall,
+            abilityName: "namespace.resolve",
+            arguments: ["name": .string("alice")]
+        )
+
+        XCTAssertEqual(
+            authorityDraft.inspectTuple().subject,
+            "easynet:///r/example/resource/authority/invoke/namespace.resolve"
+        )
+        let authorityResolverSubject = await transport.lastDescriptorRequestField("subject_ura")
+        XCTAssertEqual(authorityResolverSubject, "easynet:///r/example/authority")
     }
 
     func testPreparedInvocationCannotBeSubmitted() async throws {
@@ -1140,7 +1386,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withCallerURA(caller)
             .withCalleeURA(callee)
             .withDescriptorRef(descriptor)
-            .withSubjectURA(callee)
+            .withSubjectURA(deviceSubject)
             .withNonce(nonce)
             .withCausalContext("{\"form\":\"none\"}")
             .withArgsJSON("{\"probe\":true}")
@@ -1152,7 +1398,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withCallerURA(caller)
             .withCalleeURA(callee)
             .withDescriptorRef(descriptor)
-            .withSubjectURA(callee)
+            .withSubjectURA(deviceSubject)
             .withNonce(nonce)
             .withCausalContext("{\"form\":\"none\"}")
             .withArgsJSON("{\"probe\":true}")
@@ -1161,10 +1407,14 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     private func runtimeCallContext() throws -> RuntimeCallContext {
+        try runtimeCallContext(calleeURA: callee, subjectURA: deviceSubject)
+    }
+
+    private func runtimeCallContext(calleeURA: String, subjectURA: String) throws -> RuntimeCallContext {
         try RuntimeCallContext(
             callerURA: caller,
-            calleeURA: callee,
-            subjectURA: callee,
+            calleeURA: calleeURA,
+            subjectURA: subjectURA,
             nonceBase64: nonce,
             causalContext: ["form": .string("none")],
             metadata: ["trace_id": .string("trace-1")]
@@ -1178,7 +1428,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
     private func delegationMetadataValue(scopes: [String]) throws -> String {
         try authorityMetadataValue([
             "issuer_ura": "easynet:///r/example/user/alice",
-            "subject_ura": callee,
+            "subject_ura": deviceSubject,
             "caller_ura": caller,
             "audience": callee,
             "scopes": scopes,
@@ -1192,6 +1442,10 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     private func sessionMetadataValue(scopes: [String]) throws -> String {
+        try sessionMetadataValue(scopes: scopes, allowedActions: ["invoke"])
+    }
+
+    private func sessionMetadataValue(scopes: [String], allowedActions: [String]) throws -> String {
         try authorityMetadataValue([
             "issuer_ura": caller,
             "session_id": "session-1",
@@ -1201,17 +1455,21 @@ final class RuntimeCoreSeamTests: XCTestCase {
             "subject_ura": "easynet:///r/example/user/alice",
             "audience": callee,
             "scopes": scopes,
-            "allowed_actions": ["invoke"],
+            "allowed_actions": allowedActions,
             "allowed_followup_abilities": ["observe.health"],
             "issued_at_ms": 10,
             "expires_at_ms": 20,
         ])
     }
 
-    private func authorityMetadataValue(_ payload: [String: Any]) throws -> String {
+    private func authorityMetadataValue(_ payload: [String: Any], wireExtra: [String: Any] = [:]) throws -> String {
         let signature = Data("signature".utf8).base64EncodedString()
+        var wire: [String: Any] = ["payload": payload, "signature": signature]
+        for (key, value) in wireExtra {
+            wire[key] = value
+        }
         let data = try JSONSerialization.data(
-            withJSONObject: ["payload": payload, "signature": signature],
+            withJSONObject: wire,
             options: [.sortedKeys]
         )
         return data.base64EncodedString()
@@ -1303,7 +1561,7 @@ actor MemoryHealthTransport: HealthTransport, DiagnosticsTransport {
 
 actor MemoryRuntimeTransport: RuntimeTransport {
     private let descriptor: String
-    private let catalogueDescriptor = "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+    private let catalogueDescriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
     private var signer = ""
     private var policyRef = ""
     private var eventHandleId: Int64 = 7
@@ -1327,10 +1585,10 @@ actor MemoryRuntimeTransport: RuntimeTransport {
             {
               "abilities": [
                 {
-                  "ability_ura": "easynet:///r/example/ability/device.dev-a.browser.open_session",
-                  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc",
+                  "ability_ura": "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session",
+                  "descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc",
                   "name": "browser.open_session",
-                  "owner_ura": "easynet:///r/example/device/dev-a",
+                  "owner_ura": "easynet:///r/example/agent/device.dev-a.plugin-management",
                   "descriptor_version": "1.0.0",
                   "call_mode": "rpc",
                   "receipt_semantics": {},
@@ -1368,7 +1626,15 @@ actor MemoryRuntimeTransport: RuntimeTransport {
         let request = try object(requestJSON)
         descriptorRequests.append(request)
         let ability = request["ability"] as? String
-        let resolved = ability == "meta.list_abilities" ? catalogueDescriptor : descriptor
+        let calleeURA = request["callee_ura"] as? String
+        let resolved: String
+        if ability == "meta.list_abilities" {
+            resolved = catalogueDescriptor
+        } else if calleeURA == "easynet:///r/example/authority" {
+            resolved = "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        } else {
+            resolved = descriptor
+        }
         return try JSONSerialization.data(
             withJSONObject: ["descriptor_ref": resolved],
             options: [.sortedKeys]

@@ -3,13 +3,12 @@
 //
 // File: src/daemon/execution/mission/executors/host_stream.rs
 //
-// Server-stream executor for the `host_stream` AbilityExec. It lets an
-// EXTERNAL resident process (e.g. an easyremote Python host running a
-// generator) stream many frames into the daemon's Axon stream plane
-// without re-spawning per frame — the gap that shell-exec (one bounded
-// result, RPC-only) structurally cannot fill.
+// Framed external-host executor for the `host_stream` AbilityExec. It lets
+// an external resident process serve either a bounded unary result or a
+// generator stream without re-spawning per frame. The manifest admission
+// action selects which canonical runtime geometry consumes this transport.
 //
-// The handler is synchronous (the `LocalStreamHandler` contract): it
+// The stream handler is synchronous (the `LocalStreamHandler` contract): it
 // builds a `broadcast` channel, spawns a reader task, and returns
 // `StreamSource::Live(rx)` immediately. A failure to *open* (no runtime
 // to spawn on) is the only `Err` path — once the source is returned the
@@ -66,24 +65,13 @@ pub fn run_host_stream(
     let (tx, rx) = broadcast::channel::<Value>(FRAME_CHANNEL_DEPTH);
 
     let socket_path = spec.host_socket.clone();
-    // `caller` + `call_id` let a Context-taking host function read who
-    // invoked it (read-only identity injection); the warm host builds a
-    // Context from them. They are envelope projections, not new tuple
-    // fields. Child-call composition (ctx.call) needs the parent receipt
-    // URA too — a separate enabler — so it is not carried here yet.
-    let request = json!({
-        "request": {
-            "fn": spec.function,
-            "args": args,
-            "call_id": call_id,
-            "caller": caller,
-        }
-    });
+    let request = host_stream_request(spec, args, call_id, caller);
 
     let handle = tokio::runtime::Handle::try_current()
         .map_err(|err| anyhow::anyhow!("host_stream open requires a Tokio runtime: {err}"))?;
     handle.spawn(async move {
-        if let Err(err) = pump_host_stream(&socket_path, &request, &tx).await {
+        let mut sink = HostStreamSink::Broadcast(&tx);
+        if let Err(err) = pump_host_stream(&socket_path, &request, &mut sink).await {
             // Any failure after the source went live travels in-band as
             // a single terminal error frame, so the consumer always
             // observes an explicit terminal (invariant 4 routes here for
@@ -99,12 +87,63 @@ pub fn run_host_stream(
     Ok(StreamSource::Live(rx))
 }
 
+/// Invoke the same external host transport as a unary RPC. The host wire is
+/// still framed because that is the transport contract, but RPC geometry
+/// requires exactly one successful item and a verified terminal. Stream
+/// items are collected only for this bounded unary adapter; generators never
+/// select this path.
+pub fn run_host_stream_unary(
+    spec: &HostStreamExec,
+    args: &Value,
+    call_id: &str,
+    caller: &str,
+) -> anyhow::Result<Value> {
+    let socket_path = spec.host_socket.clone();
+    let request = host_stream_request(spec, args, call_id, caller);
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|err| anyhow::anyhow!("host_stream unary requires a Tokio runtime: {err}"))?;
+    handle.block_on(async move {
+        let mut frames = Vec::with_capacity(1);
+        let mut sink = HostStreamSink::Unary(&mut frames);
+        pump_host_stream(&socket_path, &request, &mut sink)
+            .await
+            .map_err(|err| anyhow::anyhow!("host_stream unary failed: {}", err.message))?;
+        match frames.len() {
+            1 => Ok(frames
+                .pop()
+                .expect("one frame was reported by the length check")),
+            0 => Err(anyhow::anyhow!(
+                "host_stream unary completed without a result frame"
+            )),
+            count => Err(anyhow::anyhow!(
+                "host_stream unary returned {count} result frames"
+            )),
+        }
+    })
+}
+
+fn host_stream_request(spec: &HostStreamExec, args: &Value, call_id: &str, caller: &str) -> Value {
+    json!({
+        "request": {
+            "fn": spec.function,
+            "args": args,
+            "call_id": call_id,
+            "caller": caller,
+        }
+    })
+}
+
+enum HostStreamSink<'a> {
+    Broadcast(&'a broadcast::Sender<Value>),
+    Unary(&'a mut Vec<Value>),
+}
+
 /// Drive one host-stream session to a clean terminal, or return the
 /// structured failure that becomes the terminal error frame.
 async fn pump_host_stream(
     socket_path: &str,
     request: &Value,
-    tx: &broadcast::Sender<Value>,
+    sink: &mut HostStreamSink<'_>,
 ) -> Result<(), HostStreamFailure> {
     let stream = UnixStream::connect(socket_path).await.map_err(|e| {
         HostStreamFailure::new(
@@ -167,10 +206,21 @@ async fn pump_host_stream(
                 }
                 rolling.fold_item(seq, item)?;
                 next_seq += 1;
-                // A lagging/absent consumer (`send` error) ends the session;
-                // there is no point reading frames nobody will receive.
-                if tx.send(item.clone()).is_err() {
-                    return Ok(());
+                match sink {
+                    // A lagging/absent consumer (`send` error) ends the
+                    // session; there is no point reading frames nobody will
+                    // receive.
+                    HostStreamSink::Broadcast(tx) if tx.send(item.clone()).is_err() => {
+                        return Ok(())
+                    }
+                    HostStreamSink::Broadcast(_) => {}
+                    HostStreamSink::Unary(frames) if !frames.is_empty() => {
+                        return Err(HostStreamFailure::new(
+                            HostStreamFailureKind::Protocol,
+                            "unary host_stream returned more than one result frame".to_string(),
+                        ))
+                    }
+                    HostStreamSink::Unary(frames) => frames.push(item.clone()),
                 }
             }
             HostFrame::Terminal(terminal) => {

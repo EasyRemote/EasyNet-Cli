@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -106,9 +107,9 @@ func (m *memoryAccessControlAbility) Invoke(_ context.Context, call RuntimeCallC
 			"principal_kind": "user",
 			"principal_id":   "bob",
 			"principal_ura":  "easynet:///r/example/user/bob",
-			"callee_ura":     "easynet:///r/example/device/dev-a",
+			"callee_ura":     "easynet:///r/example/agent/device.dev-a.runtime-health",
 			"subject_ura":    "easynet:///r/example/resource/user.alice/session/session-1",
-			"ability_ura":    "easynet:///r/example/device/dev-a/ability/device.observe.health",
+			"ability_ura":    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 			"action":         "invoke",
 			"status":         "pending",
 		}}}, nil
@@ -142,7 +143,7 @@ func TestRuntimeAccessControlProviderGrantsWithCanonicalPrincipalURAs(t *testing
 			PrincipalKind:     AccessControlPrincipalUser,
 			PrincipalURA:      "easynet:///r/example/user/bob",
 			TokenClass:        "service",
-			AbilityURAPattern: "easynet:///r/example/device/dev-a/ability/device.observe.health",
+			AbilityURAPattern: "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 			Actions:           []string{"invoke"},
 			Lifetime:          "session",
 			CreatedBy:         "easynet:///r/example/user/alice",
@@ -181,6 +182,29 @@ func TestRuntimeAccessControlProviderGrantsWithCanonicalPrincipalURAs(t *testing
 	}
 }
 
+func TestRuntimeAccessControlProviderRejectsShortNonceBeforeInvoke(t *testing.T) {
+	transport := &memoryAccessControlAbility{}
+	provider, err := NewRuntimeAccessControlProvider(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeAccessControlProvider: %v", err)
+	}
+	request := AccessControlGrantRequest{
+		Call:         accessControlCallFixture(),
+		Grant:        AccessControlGrant{GrantID: "grant-1", PrincipalKind: AccessControlPrincipalUser, PrincipalURA: "easynet:///r/example/user/bob", Actions: []string{"invoke"}, CreatedBy: "easynet:///r/example/user/alice"},
+		OwnerURA:     "easynet:///r/example/user/alice",
+		PrincipalURA: "easynet:///r/example/user/bob",
+		ActorURA:     "easynet:///r/example/user/alice",
+	}
+	request.Call.NonceBase64 = "bm9uY2U="
+	_, err = provider.Grant(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "nonce_base64 must decode to 16 bytes") {
+		t.Fatalf("expected canonical nonce rejection, got %v", err)
+	}
+	if transport.ability != "" {
+		t.Fatalf("invalid call reached ability invoker: %s", transport.ability)
+	}
+}
+
 func TestRuntimeAccessControlProviderListsAndChecksCanonicalPolicies(t *testing.T) {
 	transport := &memoryAccessControlAbility{}
 	provider, err := NewRuntimeAccessControlProvider(transport)
@@ -193,7 +217,7 @@ func TestRuntimeAccessControlProviderListsAndChecksCanonicalPolicies(t *testing.
 		OwnerURA:      "easynet:///r/example/user/alice",
 		PrincipalKind: AccessControlPrincipalUser,
 		PrincipalURA:  "easynet:///r/example/user/bob",
-		AbilityURA:    "easynet:///r/example/device/dev-a/ability/device.observe.health",
+		AbilityURA:    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 		SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-1",
 		Action:        "invoke",
 		Limit:         10,
@@ -224,9 +248,9 @@ func TestRuntimeAccessControlProviderListsAndChecksCanonicalPolicies(t *testing.
 		OwnerSource:   "subject",
 		PrincipalKind: AccessControlPrincipalUser,
 		PrincipalURA:  "easynet:///r/example/user/bob",
-		CalleeURA:     "easynet:///r/example/device/dev-a",
+		CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-health",
 		SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-1",
-		AbilityURA:    "easynet:///r/example/device/dev-a/ability/device.observe.health",
+		AbilityURA:    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 		Action:        "invoke",
 		SafeRead:      true,
 	})
@@ -253,9 +277,9 @@ func TestRuntimeAccessControlProviderCheckRequiresExplicitOwnerSource(t *testing
 		OwnerURA:      "easynet:///r/example/user/alice",
 		PrincipalKind: AccessControlPrincipalUser,
 		PrincipalURA:  "easynet:///r/example/user/bob",
-		CalleeURA:     "easynet:///r/example/device/dev-a",
+		CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-health",
 		SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-1",
-		AbilityURA:    "easynet:///r/example/device/dev-a/ability/device.observe.health",
+		AbilityURA:    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 		Action:        "invoke",
 	})
 	if !IsCode(err, ErrInvalidArgument) {
@@ -515,7 +539,7 @@ func accessControlPermissionRequestFixture() AccessControlPermissionRequest {
 		PrincipalURA:       "easynet:///r/example/user/bob",
 		CalleeURA:          "easynet:///r/example/device/dev-a",
 		SubjectURA:         "easynet:///r/example/resource/user.alice/session/session-1",
-		AbilityURA:         "easynet:///r/example/device/dev-a/ability/device.observe.health",
+		AbilityURA:         "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 		Action:             "invoke",
 		RequestedLifetimes: []string{"session"},
 		Status:             "pending",
@@ -525,9 +549,9 @@ func accessControlPermissionRequestFixture() AccessControlPermissionRequest {
 func accessControlCallFixture() RuntimeCallContext {
 	return RuntimeCallContext{
 		CallerURA:     "easynet:///r/example/user/alice",
-		CalleeURA:     "easynet:///r/example/device/dev-a",
+		CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:    "easynet:///r/example/resource/user.alice/access-control",
-		NonceBase64:   "bm9uY2U=",
-		CausalContext: map[string]any{"kind": "none"},
+		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+		CausalContext: map[string]any{"form": "none"},
 	}
 }

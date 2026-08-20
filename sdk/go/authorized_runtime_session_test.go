@@ -377,6 +377,32 @@ func TestRuntimeStateReadSubjectURABuildsUserOwnedResourceSubject(t *testing.T) 
 	}
 }
 
+func TestRuntimeGovernanceReadSubjectURAProjectsUserBusinessSubject(t *testing.T) {
+	subject, err := RuntimeGovernanceReadSubjectURA(
+		"easynet:///r/example/user/alice",
+		"easynet:///r/example/device/dev-a",
+	)
+	if err != nil {
+		t.Fatalf("RuntimeGovernanceReadSubjectURA error = %v", err)
+	}
+	if subject != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("subject = %q", subject)
+	}
+}
+
+func TestRuntimeGovernanceReadSubjectURAAdmitsMatchingRuntimeOwner(t *testing.T) {
+	subject, err := RuntimeGovernanceReadSubjectURA(
+		"easynet:///r/example/device/dev-a",
+		"easynet:///r/example/device/dev-a",
+	)
+	if err != nil {
+		t.Fatalf("RuntimeGovernanceReadSubjectURA error = %v", err)
+	}
+	if subject != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("subject = %q", subject)
+	}
+}
+
 func TestRuntimeStateReadSubjectURARejectsAllZeroUserBeforeDeviceFallback(t *testing.T) {
 	_, err := RuntimeStateReadSubjectURA("example", "00000000-0000-0000-0000-000000000000")
 	if err == nil || !strings.Contains(err.Error(), "user_id must not be all-zero") {
@@ -487,7 +513,7 @@ func TestRuntimeClientSessionRuntimeProviderOpensSignedStreamAndBidi(t *testing.
 	if stream.StreamID() != "provider-stream-1" {
 		t.Fatalf("stream id = %q", stream.StreamID())
 	}
-	if streamSigned["signer_id"] != "caller-key" {
+	if callerSignatureKeyID(streamSigned) != "caller-key" {
 		t.Fatalf("stream signed envelope not forwarded: %#v", streamSigned)
 	}
 
@@ -498,9 +524,15 @@ func TestRuntimeClientSessionRuntimeProviderOpensSignedStreamAndBidi(t *testing.
 	if session.SessionID() != "provider-bidi-1" {
 		t.Fatalf("bidi session id = %q", session.SessionID())
 	}
-	if bidiSigned["signer_id"] != "caller-key" {
+	if callerSignatureKeyID(bidiSigned) != "caller-key" {
 		t.Fatalf("bidi signed envelope not forwarded: %#v", bidiSigned)
 	}
+}
+
+func callerSignatureKeyID(invocation map[string]any) string {
+	signature, _ := invocation["caller_signature"].(map[string]any)
+	keyID, _ := signature["key_id_hint"].(string)
+	return keyID
 }
 
 func TestRuntimeClientSessionRuntimeProviderRejectsNilClientBeforeDereference(t *testing.T) {
@@ -544,6 +576,80 @@ func TestRuntimeClientDescriptorProviderRejectsNilClientBeforeDereference(t *tes
 	}
 	if !strings.Contains(resolution.Reason, string(ErrProviderUnavailable)) {
 		t.Fatalf("nil-client descriptor reason = %q, want provider unavailable", resolution.Reason)
+	}
+}
+
+func TestRuntimeClientDescriptorProviderUsesAbilityDescriptorProviderForCatalogueAbilityURA(t *testing.T) {
+	var seen RuntimeDescriptorRefRequest
+	transport := RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				return nil, err
+			}
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
+		},
+	}
+	runtime, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	provider := NewRuntimeClientDescriptorProvider(runtime)
+
+	resolution, err := provider.ResolveDescriptor(context.Background(), DescriptorResolutionRequest{
+		CallerIdentity: CallerIdentityRef{Principal: PrincipalRef{URA: "easynet:///r/example/user/alice"}},
+		Target:         RuntimeTargetRef{URA: "easynet:///r/example/agent/device.dev-a.runtime-introspection"},
+		Ability:        AbilityRef{Name: "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources"},
+		Subject:        IntentSubjectRef{URA: "easynet:///r/example/user/alice"},
+		CallMode:       "rpc",
+	})
+	if err != nil {
+		t.Fatalf("ResolveDescriptor: %v", err)
+	}
+	if resolution.State != DescriptorResolved {
+		t.Fatalf("descriptor state = %s, want %s (%s)", resolution.State, DescriptorResolved, resolution.Reason)
+	}
+	if seen.Provider != runtimeAbilityDescriptorProvider {
+		t.Fatalf("descriptor provider = %q, want %q", seen.Provider, runtimeAbilityDescriptorProvider)
+	}
+	if seen.SubjectURA != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("descriptor subject_ura = %q, want runtime governance read subject", seen.SubjectURA)
+	}
+}
+
+func TestRuntimeClientDescriptorProviderUsesGovernanceSubjectForReceiptHistoryProvider(t *testing.T) {
+	var seen RuntimeDescriptorRefRequest
+	transport := RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				return nil, err
+			}
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!read"}`), nil
+		},
+	}
+	runtime, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	provider := NewRuntimeClientDescriptorProvider(runtime)
+
+	resolution, err := provider.ResolveDescriptor(context.Background(), DescriptorResolutionRequest{
+		CallerIdentity: CallerIdentityRef{Principal: PrincipalRef{URA: "easynet:///r/example/user/alice"}},
+		Target:         RuntimeTargetRef{URA: "easynet:///r/example/agent/device.dev-a.runtime-governance"},
+		Ability:        AbilityRef{Name: "invocation.history.list"},
+		Subject:        IntentSubjectRef{URA: "easynet:///r/example/user/alice"},
+		CallMode:       "rpc",
+	})
+	if err != nil {
+		t.Fatalf("ResolveDescriptor: %v", err)
+	}
+	if resolution.State != DescriptorResolved {
+		t.Fatalf("descriptor state = %s, want %s (%s)", resolution.State, DescriptorResolved, resolution.Reason)
+	}
+	if seen.Provider != runtimeReceiptHistoryProvider {
+		t.Fatalf("descriptor provider = %q, want %q", seen.Provider, runtimeReceiptHistoryProvider)
+	}
+	if seen.SubjectURA != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("descriptor subject_ura = %q, want runtime governance read subject", seen.SubjectURA)
 	}
 }
 
@@ -711,7 +817,7 @@ func (p *sessionDescriptorProviderFixture) ResolveDescriptor(context.Context, De
 	p.calls++
 	return DescriptorResolution{
 		State:                 DescriptorResolved,
-		DescriptorRef:         "easynet:///r/example/ability/invocation.history.list@1.0.0",
+		DescriptorRef:         "easynet:///r/example/ability/invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		DescriptorFingerprint: "descriptor-fingerprint",
 		OwnerPrincipal:        PrincipalRef{URA: "easynet:///r/example/user/alice"},
 	}, nil

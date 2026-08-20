@@ -9,6 +9,17 @@ import (
 	"testing"
 )
 
+func assertResponseType(t *testing.T, raw []byte, want string) {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	if decoded["type"] != want || decoded["call_id"] != "call-1" {
+		t.Fatalf("unexpected response: %#v", decoded)
+	}
+}
+
 func TestServeIOWritesResultFrame(t *testing.T) {
 	var output bytes.Buffer
 	err := ServeIO(
@@ -48,7 +59,7 @@ func TestServeIOWritesResultFrame(t *testing.T) {
 func TestSidecarInvocationOwnsHandlerProjection(t *testing.T) {
 	frame := sidecarInvocationFrame{
 		CallerURA:       "easynet:///r/hub/user/alice",
-		CalleeURA:       "easynet:///r/hub/device/provider",
+		CalleeURA:       "easynet:///r/hub/service/alice.provider",
 		AbilityURA:      "demo.echo",
 		SubjectURA:      "easynet:///r/hub/resource/demo",
 		InvocationNonce: testNonce(),
@@ -126,7 +137,7 @@ func TestServeIOWritesErrorFrameForProtocolFailure(t *testing.T) {
 
 func TestServeIORejectsNonCanonicalTupleAliases(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","caller":"easynet:///r/hub/user/bob","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","caller":"easynet:///r/hub/user/bob","callee_ura":"easynet:///r/hub/service/alice.provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),
@@ -153,7 +164,7 @@ func TestServeIORejectsNonCanonicalTupleAliases(t *testing.T) {
 
 func TestServeIORejectsUnknownInvocationFields(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"descriptor_ref":"retired-provider-leak","args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/service/alice.provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"descriptor_ref":"retired-provider-leak","args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),
@@ -178,9 +189,133 @@ func TestServeIORejectsUnknownInvocationFields(t *testing.T) {
 	}
 }
 
+func TestServeIORejectsDeviceCallee(t *testing.T) {
+	var output bytes.Buffer
+	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{}}}`
+	err := ServeIO(
+		context.Background(),
+		bytes.NewBufferString(frame+"\n"),
+		&output,
+		func(context.Context, SidecarInvocation) (any, error) {
+			t.Fatal("handler must not run for Device callee")
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("ServeIO: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	if decoded["type"] != "error" || decoded["call_id"] != "call-1" {
+		t.Fatalf("unexpected response: %#v", decoded)
+	}
+	if message, _ := decoded["message"].(string); !strings.Contains(message, "Device is an execution host") {
+		t.Fatalf("unexpected error message: %#v", decoded)
+	}
+}
+
+func TestServeIOAcceptsCallableCalleeRoles(t *testing.T) {
+	for _, calleeURA := range []string{
+		"easynet:///r/hub/agent/alice.provider",
+		"easynet:///r/hub/service/alice.provider",
+		"easynet:///r/hub/authority",
+	} {
+		t.Run(calleeURA, func(t *testing.T) {
+			var frame map[string]any
+			if err := json.Unmarshal([]byte(testFrame()), &frame); err != nil {
+				t.Fatalf("decode frame: %v", err)
+			}
+			frame["invocation"].(map[string]any)["callee_ura"] = calleeURA
+			encoded, err := json.Marshal(frame)
+			if err != nil {
+				t.Fatalf("encode frame: %v", err)
+			}
+
+			var output bytes.Buffer
+			err = ServeIO(
+				context.Background(),
+				bytes.NewBuffer(append(encoded, '\n')),
+				&output,
+				func(_ context.Context, invocation SidecarInvocation) (any, error) {
+					if invocation.CalleeURA != calleeURA {
+						t.Fatalf("callee_ura = %q, want %q", invocation.CalleeURA, calleeURA)
+					}
+					return map[string]any{"ok": true}, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("ServeIO: %v", err)
+			}
+			assertResponseType(t, output.Bytes(), "result")
+		})
+	}
+}
+
+func TestServeIORejectsNonCallableCalleeRoles(t *testing.T) {
+	for _, testCase := range []struct {
+		calleeURA string
+		want      string
+	}{
+		{
+			calleeURA: "easynet:///r/hub/user/alice",
+			want:      "User is a principal, not a callee",
+		},
+		{
+			calleeURA: "easynet:///r/hub/ability/alice.provider.echo",
+			want:      "not an Ability URA",
+		},
+		{
+			calleeURA: "easynet:///r/hub/resource/alice.provider/data",
+			want:      "not a Resource URA",
+		},
+		{
+			calleeURA: "https://example.invalid/device/provider",
+			want:      "canonical URA",
+		},
+	} {
+		t.Run(testCase.calleeURA, func(t *testing.T) {
+			var frame map[string]any
+			if err := json.Unmarshal([]byte(testFrame()), &frame); err != nil {
+				t.Fatalf("decode frame: %v", err)
+			}
+			frame["invocation"].(map[string]any)["callee_ura"] = testCase.calleeURA
+			encoded, err := json.Marshal(frame)
+			if err != nil {
+				t.Fatalf("encode frame: %v", err)
+			}
+
+			var output bytes.Buffer
+			err = ServeIO(
+				context.Background(),
+				bytes.NewBuffer(append(encoded, '\n')),
+				&output,
+				func(context.Context, SidecarInvocation) (any, error) {
+					t.Fatal("handler must not run for non-callable callee")
+					return nil, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("ServeIO: %v", err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+				t.Fatalf("decode output: %v", err)
+			}
+			if decoded["type"] != "error" || decoded["call_id"] != "call-1" {
+				t.Fatalf("unexpected response: %#v", decoded)
+			}
+			if message, _ := decoded["message"].(string); !strings.Contains(message, testCase.want) {
+				t.Fatalf("unexpected error message: %#v", decoded)
+			}
+		})
+	}
+}
+
 func TestServeIORejectsUnknownRequestFields(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","retired_mode":"json","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","retired_mode":"json","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/service/alice.provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),
@@ -260,7 +395,7 @@ func TestSidecarInvocationProjectionCopiesNonceAndRejectsMutation(t *testing.T) 
 		callID:    "call-1",
 		frame: sidecarInvocationFrame{
 			CallerURA:       "easynet:///r/hub/user/alice",
-			CalleeURA:       "easynet:///r/hub/device/provider",
+			CalleeURA:       "easynet:///r/hub/service/alice.provider",
 			AbilityURA:      "demo.echo",
 			SubjectURA:      "easynet:///r/hub/resource/demo",
 			InvocationNonce: nonce,
@@ -286,7 +421,7 @@ func TestSidecarInvocationProjectionRejectsNonCanonicalNonceLength(t *testing.T)
 		callID:    "call-1",
 		frame: sidecarInvocationFrame{
 			CallerURA:       "easynet:///r/hub/user/alice",
-			CalleeURA:       "easynet:///r/hub/device/provider",
+			CalleeURA:       "easynet:///r/hub/service/alice.provider",
 			AbilityURA:      "demo.echo",
 			SubjectURA:      "easynet:///r/hub/resource/demo",
 			InvocationNonce: []int{1, 2, 3, 4},
@@ -306,7 +441,7 @@ func TestSidecarInvocationProjectionRejectsNonInvokeFrame(t *testing.T) {
 		callID:    "call-1",
 		frame: sidecarInvocationFrame{
 			CallerURA:       "easynet:///r/hub/user/alice",
-			CalleeURA:       "easynet:///r/hub/device/provider",
+			CalleeURA:       "easynet:///r/hub/service/alice.provider",
 			AbilityURA:      "demo.echo",
 			SubjectURA:      "easynet:///r/hub/resource/demo",
 			InvocationNonce: testNonce(),
@@ -321,7 +456,7 @@ func TestSidecarInvocationProjectionRejectsNonInvokeFrame(t *testing.T) {
 }
 
 func testFrame() string {
-	return `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}`
+	return `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/service/alice.provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}`
 }
 
 func testNonce() []int {

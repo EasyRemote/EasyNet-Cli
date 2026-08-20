@@ -35,6 +35,8 @@ from .runtime import (
     RuntimeReceipt,
     StreamHandle,
 )
+from ._runtime_governance import governance_descriptor_provider_for_ability
+from ._runtime_subjects import runtime_governance_read_subject_ura
 from ._session_authority_subjects import session_authority_admits_subject
 from ._receipt_history_admission import validate_receipt_history_request
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
@@ -609,12 +611,20 @@ class RuntimeClientDescriptorProvider:
         self, request: DescriptorResolutionRequest
     ) -> DescriptorResolution:
         try:
+            provider = governance_descriptor_provider_for_ability(request.ability.name)
+            subject_ura = request.subject.ura
+            if provider:
+                subject_ura = runtime_governance_read_subject_ura(
+                    subject_ura,
+                    request.target.ura,
+                )
             ref = self._client.resolve_descriptor_ref(
                 callee_ura=request.target.ura,
                 ability=request.ability.name,
                 call_mode=request.call_mode,
                 caller_ura=request.caller_identity.principal.ura,
-                subject_ura=request.subject.ura,
+                subject_ura=subject_ura,
+                provider=provider,
             )
         except Exception as error:
             return _descriptor_resolution_from_error(error)

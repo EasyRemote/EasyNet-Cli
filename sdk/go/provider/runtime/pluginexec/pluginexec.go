@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 const canonicalInvocationNonceBytes = 16
@@ -278,7 +279,65 @@ func (p sidecarInvocationProjection) validateTupleStrings() error {
 			return protocolError("sidecar frame field %q must be a string", field)
 		}
 	}
+	if err := validateCallableCalleeURA(p.frame.CalleeURA); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateCallableCalleeURA(calleeURA string) error {
+	role, err := calleeURARole(calleeURA)
+	if err != nil {
+		return protocolError("sidecar frame field \"callee_ura\" must be a canonical URA: %v", err)
+	}
+	switch role {
+	case "agent", "service", "authority":
+		return nil
+	case "device":
+		return protocolError("sidecar frame field \"callee_ura\" must be a callable Agent, Service, or Authority URA; Device is an execution host, not a callee")
+	case "user":
+		return protocolError("sidecar frame field \"callee_ura\" must advertise AbilityDescriptors; User is a principal, not a callee")
+	case "ability":
+		return protocolError("sidecar frame field \"callee_ura\" must be an owner identity, not an Ability URA")
+	case "resource":
+		return protocolError("sidecar frame field \"callee_ura\" must be an owner identity, not a Resource URA")
+	default:
+		return protocolError("sidecar frame field \"callee_ura\" has unknown URA role")
+	}
+}
+
+// calleeURARole intentionally inspects only the canonical role slot:
+//
+//	easynet:///r/<realm>/<role>/...
+//
+// The public Go SDK root owns full URA grammar delegation to Axon. This
+// provider-scoped package only needs a sidecar admission guard that cannot
+// mistake `/resource/.../device/...` for a Device callee or `/device/...` for a
+// callable owner.
+func calleeURARole(calleeURA string) (string, error) {
+	const prefix = "easynet:///r/"
+	remainder, ok := strings.CutPrefix(calleeURA, prefix)
+	if !ok {
+		return "", fmt.Errorf("missing %s prefix", prefix)
+	}
+	realm, remainder, ok := strings.Cut(remainder, "/")
+	if !ok || realm == "" {
+		return "", errors.New("missing realm or role")
+	}
+	role, tail, hasTail := strings.Cut(remainder, "/")
+	if role == "" {
+		return "", errors.New("missing role")
+	}
+	if role == "authority" {
+		if hasTail {
+			return "", errors.New("authority URA must not have a path tail")
+		}
+		return role, nil
+	}
+	if !hasTail || tail == "" {
+		return "", fmt.Errorf("%s URA is missing identity tail", role)
+	}
+	return role, nil
 }
 
 func (p sidecarInvocationProjection) validateNonce() error {

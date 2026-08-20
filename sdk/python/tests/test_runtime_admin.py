@@ -141,7 +141,7 @@ class RuntimeAdminTransportFake:
         return json.dumps(
             {
                 "descriptor_ref": (
-                    f"easynet:///r/example/ability/authority.{request['ability']}@1.0.0"
+                    f"easynet:///r/example/ability/authority.{request['ability']}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
             }
         ).encode()
@@ -320,7 +320,7 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
     assert page.sessions[0].runtime_host_ura == "easynet:///r/example/device/laptop"
     assert page.sessions[0].control_authority_ura == "easynet:///r/example/authority"
     assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/authority.session.list@1.0.0"
+        "easynet:///r/example/ability/authority.session.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
     )
     assert transport.seen["args"]["include_terminated"] is False
     assert transport.seen["metadata"]["sdk_profile"] == _RUNTIME_ADMIN_PROFILE

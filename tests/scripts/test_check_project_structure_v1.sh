@@ -16,7 +16,7 @@ mkfinal() {
   touch "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/README.md" "$dir/PROJECT_STRUCTURE.md" "$dir/build.rs"
   touch "$dir/README.pdf" "$dir/VERSION"
   mkdir -p "$dir/include"
-  touch "$dir/include/easynet_cli.h" "$dir/include/easynet_cli.exports.v6"
+  touch "$dir/include/easynet_cli.h" "$dir/include/easynet_cli.exports.v7"
 
   mkdir -p "$dir/src/bin"
   touch \
@@ -93,7 +93,7 @@ mkfinal() {
   touch "$dir/src/lib.rs" "$dir/src/ffi/mod.rs" "$dir/src/eal/mod.rs" "$dir/src/support/mod.rs"
 
   mkdir -p \
-    "$dir/sdk/go" "$dir/sdk/python" "$dir/sdk/node" "$dir/sdk/java" "$dir/sdk/swift" \
+    "$dir/sdk/go" "$dir/sdk/python" "$dir/sdk/node" "$dir/sdk/java" "$dir/sdk/swift" "$dir/sdk/rust" \
     "$dir/sdk/schemas" "$dir/sdk/conformance/cases" "$dir/sdk/conformance/fixtures" "$dir/sdk/conformance/runner" \
     "$dir/ability-descriptors/system/agents" \
     "$dir/ability-descriptors/system/federation" \
@@ -164,7 +164,7 @@ expect_fail "$SB/flat-descriptor"
 cp -R "$SB/pass" "$SB/provider-pycache"
 mkdir -p "$SB/provider-pycache/provider_routes/__pycache__"
 touch "$SB/provider-pycache/provider_routes/__pycache__/route_generator.cpython-312.pyc"
-expect_fail "$SB/provider-pycache"
+"$CHECK" "$SB/provider-pycache" >/dev/null
 
 cp -R "$SB/pass" "$SB/missing-invocation"
 rm -rf "$SB/missing-invocation/src/daemon/invocation/admission"

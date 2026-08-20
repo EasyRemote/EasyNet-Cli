@@ -12,6 +12,14 @@ import (
 // descriptor-bound requests and receipts.
 const uraProfileStrictV2 = "axon-strict-v2"
 
+func canonicalInvocationURAProfile() (string, error) {
+	profile, err := axoninv.ParseUraProfile(uraProfileStrictV2)
+	if err != nil {
+		return "", err
+	}
+	return string(profile), nil
+}
+
 // canonicalDescriptorBoundInvocationBytes projects the facade DTO into Axon's
 // descriptor-bound proof model. It is internal signing infrastructure, not an
 // alternate public proof API.

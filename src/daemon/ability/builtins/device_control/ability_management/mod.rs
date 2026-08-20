@@ -1,4 +1,4 @@
-//! Device ability management state machine.
+//! Ability deployment management state machine.
 //!
 //! `ops` owns the public ability.deploy/uninstall handlers, `registrar` owns
 //! runtime binding and replay, `store` owns the durable installed-ability

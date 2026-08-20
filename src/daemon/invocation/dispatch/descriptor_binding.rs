@@ -6,7 +6,7 @@
 //              descriptor-bound ability reference that Axon admission must
 //              verify for a specific call mode.
 //
-// This module exists so unary, stream, bidi, and carrier-v1 session ingress
+// This module exists so unary, stream, bidi, and canonical session ingress
 // cannot drift on descriptor-version binding. Product routing selects the
 // owner/callee/ability. Axon runtime registration selects the descriptor proof
 // version. This boundary joins the two and returns the only string that may be
@@ -476,7 +476,7 @@ mod tests {
         make_ability, AbilityCallModes, AbilityOptions, CallMode as AxonCallMode, LocalRuntime,
     };
 
-    const CALLEE: &str = "easynet:///r/acme/device/dev-a";
+    const CALLEE: &str = "easynet:///r/acme/agent/device.dev-a.locomotion";
 
     fn bound(ability: &str) -> RuntimeBoundAbility {
         RuntimeBoundAbility {
@@ -501,8 +501,11 @@ mod tests {
     }
 
     fn local_callee() -> String {
-        crate::daemon::identity::local_invocation::local_device_ura()
-            .expect("test local device identity")
+        CALLEE.to_string()
+    }
+
+    fn local_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority("easynet:///r/acme/device/dev-a")
     }
 
     fn route_manifest(ability: &str) -> crate::daemon::ability::manifest::AbilityManifest {
@@ -523,7 +526,7 @@ mod tests {
         catalog
             .register_control_plane_descriptor_with_owner(
                 ability,
-                &crate::daemon::ability::dispatch::OwnerKind::Device,
+                &crate::daemon::ability::dispatch::OwnerKind::locomotion_system(),
                 &route_manifest(ability),
                 mode,
                 crate::daemon::ability::descriptors::ReceiptSemantics::Operational,
@@ -641,7 +644,7 @@ mod tests {
             ),
             (crate::daemon::ability::CallMode::Bidi, "test.selected_bidi"),
         ] {
-            let catalog = AxonAbilityCatalog::new_test_metadata_for_device_authority(&callee_ura);
+            let catalog = local_catalog();
             let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
@@ -706,9 +709,7 @@ mod tests {
         let err = RuntimeBoundAbility::from_selected_route(
             "test selected route",
             &runtime,
-            Some(&AxonAbilityCatalog::new_test_metadata_for_device_authority(
-                &callee_ura,
-            )),
+            Some(&local_catalog()),
             &route_for(&callee_ura, ability),
             AxonCallMode::Rpc,
         )
@@ -727,7 +728,7 @@ mod tests {
     async fn selected_route_rejects_runtime_proof_that_drifted_from_catalog() {
         let callee_ura = local_callee();
         let ability = "test.drifted_runtime_proof";
-        let catalog = AxonAbilityCatalog::new_test_metadata_for_device_authority(&callee_ura);
+        let catalog = local_catalog();
         let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -826,7 +827,7 @@ mod tests {
 
         let got = bound("terminal.list")
             .signed_descriptor_ref_from_target(
-                "test carrier-v1",
+                "test canonical carrier",
                 CALLEE,
                 CallMode::Rpc,
                 Some(&target),
@@ -850,7 +851,7 @@ mod tests {
 
         let err = bound("terminal.list")
             .signed_descriptor_ref_from_target(
-                "test carrier-v1",
+                "test canonical carrier",
                 CALLEE,
                 CallMode::Rpc,
                 Some(&target),

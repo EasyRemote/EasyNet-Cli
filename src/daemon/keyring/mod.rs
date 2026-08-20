@@ -1698,6 +1698,9 @@ pub const DEFAULT_KEYRING_SOCKET_REL: &str = ".easynet/keyring.sock";
 /// Default vault file path.
 pub const DEFAULT_VAULT_REL: &str = ".easynet/keyring.enc";
 
+/// Internal lifecycle ownership fact for the key-service process.
+const DEFAULT_OWNER_REL: &str = ".easynet/keyring.owner.json";
+
 /// Single canonical passphrase file owned and read only by the key-service
 /// process. It is deliberately not an environment-configurable public API.
 const DEFAULT_PASSPHRASE_REL: &str = ".easynet/keyring.pass";
@@ -1751,6 +1754,10 @@ pub fn try_default_vault_path() -> anyhow::Result<PathBuf> {
 
 fn try_default_passphrase_path() -> anyhow::Result<PathBuf> {
     home_relative(DEFAULT_PASSPHRASE_REL)
+}
+
+pub(super) fn try_default_owner_path() -> anyhow::Result<PathBuf> {
+    home_relative(DEFAULT_OWNER_REL)
 }
 
 /// Mint a fresh 256-bit random passphrase, hex-encoded.

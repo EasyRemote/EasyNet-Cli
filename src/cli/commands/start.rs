@@ -282,10 +282,16 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     preflight_runtime_start(&start_request)?;
     crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
+    let bootstrap_key_service =
+        crate::daemon::keyring::lifecycle::KeyServiceBootstrapLease::acquire()
+            .context("acquire bootstrap key-service custody for runtime preflight")?;
     super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
         .context("wire local realm trust for device mode")?;
     bootstrap_local_agent_projection(&creds, &runtime_user_binding)
         .context("sync local agent owner projection")?;
+    bootstrap_key_service
+        .release()
+        .context("release bootstrap key-service custody before daemon start")?;
 
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::RuntimeStarting,
@@ -490,24 +496,20 @@ fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
     let user_id = creds.user_id()?;
-    let username = creds.username_slug()?;
-    build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id, username)
+    build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id)
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
-/// publish path can construct the plan from a `(realm, node_id,
-/// user_id, username)` tuple already in scope without re-loading
-/// credentials. `user_id` (UUID) is the immutable subject anchor for
-/// `user/` trust URAs; `username` (slug) is the owner-prefix for
-/// `agent/<username>.<id>` URAs (§15.1-3 dual grammar).
+/// publish path can construct the plan from a `(realm, node_id, user_id)`
+/// tuple already in scope without re-loading credentials. `user_id` is the
+/// immutable authority owner for both user trust URAs and hosted Agent URAs.
 pub(crate) fn build_bootstrap_plan_from(
     realm: &str,
     node_id: &str,
     user_id: &str,
-    username: &str,
 ) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
     crate::daemon::ability::catalog::profiles::bootstrap::build_plan_from_registry(
-        realm, node_id, user_id, username,
+        realm, node_id, user_id,
     )
 }
 
@@ -577,11 +579,11 @@ where
         output::info(
             "Hub URA join lineage detected; skipping backend HTTP credential verification.",
         );
-        return Ok((creds, true));
+        return Ok((*creds, true));
     }
 
     match verify(&creds) {
-        CredentialCheck::Valid => Ok((creds, true)),
+        CredentialCheck::Valid => Ok((*creds, true)),
         CredentialCheck::NetworkUnavailable => {
             record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
                 JoinFailureCode::StartFailedCredentialVerify,
@@ -635,7 +637,7 @@ where
 
 #[derive(Debug)]
 enum StartCredentialReadiness {
-    Ready(config::Credentials),
+    Ready(Box<config::Credentials>),
     Missing,
     Invalid { reason: String },
 }
@@ -647,7 +649,7 @@ impl StartCredentialReadiness {
 
     fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
         match result {
-            Ok(Some(credentials)) => Self::Ready(credentials),
+            Ok(Some(credentials)) => Self::Ready(Box::new(credentials)),
             Ok(None) => Self::Missing,
             Err(error) => Self::Invalid {
                 reason: format!("{error:#}"),
@@ -1506,8 +1508,7 @@ mod tests {
     fn build_bootstrap_plan_threads_credentials_into_plan() {
         let _g = HomeGuard::new();
         // Empty registry: load_agents returns Default. The plan
-        // should still build with consent=true (default-on per
-        // plan §1) and an empty llm list.
+        // should still build with an empty hosted-Agent list.
         let creds = test_creds();
         let plan = build_bootstrap_plan(&creds).expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
@@ -1515,7 +1516,6 @@ mod tests {
             plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"
         );
-        assert!(plan.consent, "consent default-on per plan §1");
         assert!(!plan.mcp);
         assert!(plan.llm_sub_agents.is_empty());
     }
@@ -1542,11 +1542,10 @@ mod tests {
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.
-        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test", "alice")
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test")
             .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(plan.user_id, "user-test");
-        assert_eq!(plan.username, "alice");
         assert_eq!(
             plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"

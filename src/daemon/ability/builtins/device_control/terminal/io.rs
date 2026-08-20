@@ -335,6 +335,7 @@ impl PtyIoService {
 /// every handler observes the same session and state tables.
 ///
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoService) {
+    let owner = OwnerKind::terminal_system();
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
@@ -344,11 +345,10 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
                 &env,
                 input_args.session_id(),
                 "terminal.input",
-                "stream",
             )?;
             input_session(&pty, &io, input_args)
         });
-        reg.register_rpc_with_envelope_and_owner("terminal.input", OwnerKind::Device, handler);
+        reg.register_rpc_with_envelope_and_owner("terminal.input", owner.clone(), handler);
     }
     {
         let pty = Arc::clone(&pty);
@@ -359,11 +359,10 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
                 &env,
                 read_args.session_id(),
                 "terminal.read",
-                "stream",
             )?;
             read_session(&pty, &io, read_args)
         });
-        reg.register_rpc_with_envelope_and_owner("terminal.read", OwnerKind::Device, handler);
+        reg.register_rpc_with_envelope_and_owner("terminal.read", owner.clone(), handler);
     }
     {
         let pty = Arc::clone(&pty);
@@ -373,11 +372,10 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
                 &env,
                 resize_args.session_id(),
                 "terminal.resize",
-                "stream",
             )?;
             resize_session(&pty, resize_args)
         });
-        reg.register_rpc_with_envelope_and_owner("terminal.resize", OwnerKind::Device, handler);
+        reg.register_rpc_with_envelope_and_owner("terminal.resize", owner, handler);
     }
 }
 
@@ -682,7 +680,7 @@ fn terminal_io_args_object<'a>(
         .ok_or_else(|| anyhow::anyhow!("{ability}: args must be an object"))?;
     let mut unknown = object
         .keys()
-        .filter(|key| !allowed_keys.iter().any(|allowed| *allowed == key.as_str()))
+        .filter(|key| !allowed_keys.contains(&key.as_str()))
         .map(String::as_str)
         .collect::<Vec<_>>();
     if !unknown.is_empty() {

@@ -13,6 +13,8 @@ pub mod client;
 #[cfg(feature = "axon-pb")]
 pub mod directory;
 pub mod directory_reader;
+pub(crate) mod hosted_agent_inventory_hydration;
+pub(crate) mod hosted_agent_publication;
 pub mod peers;
 pub mod read_model;
 pub(crate) mod receipt_contract;

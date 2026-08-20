@@ -2,23 +2,16 @@ import Foundation
 
 struct RuntimeAbilityProjection: Sendable, Equatable {
     private static let realmPrefix = "easynet:///r/"
-    private static let runtimeGovernanceReadAbilities = [
-        "meta.list_abilities",
-        "invocation.history.list",
-        "invocation.history.get",
-        "invocation.history.path",
-        "invocation.record.get",
-        "invocation.trace.get",
-    ]
-
     let abilityURA: String
     let publicName: String
     let intrinsicName: String
+    let action: String
 
-    private init(abilityURA: String, publicName: String, intrinsicName: String) {
+    private init(abilityURA: String, publicName: String, intrinsicName: String, action: String) {
         self.abilityURA = abilityURA
         self.publicName = publicName
         self.intrinsicName = intrinsicName
+        self.action = action
     }
 
     init(tuple: InvocationTuple) throws {
@@ -31,30 +24,7 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     }
 
     static func runtimeGovernanceDescriptorProvider(forAbility ability: String) -> String {
-        let clean = ability.trimmingCharacters(in: .whitespacesAndNewlines)
-        if clean == "meta.list_abilities" || clean.hasSuffix(".meta.list_abilities") {
-            return RuntimeDescriptorRefRequest.abilityDescriptorProvider
-        }
-        if runtimeGovernanceReadAbility(clean) != nil {
-            return RuntimeDescriptorRefRequest.receiptHistoryProvider
-        }
-        return ""
-    }
-
-    static func authorityURAForRealmOf(_ ura: String) throws -> String {
-        let clean = ura.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard clean.hasPrefix(realmPrefix) else {
-            throw SDKError.validation("runtime", "callee_ura must be canonical for ability descriptor provider")
-        }
-        let rest = String(clean.dropFirst(realmPrefix.count))
-        guard let slash = rest.firstIndex(of: "/"), slash != rest.startIndex else {
-            throw SDKError.validation("runtime", "callee_ura must be canonical for ability descriptor provider")
-        }
-        let realm = String(rest[..<slash]).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !realm.isEmpty, !realm.contains("/") else {
-            throw SDKError.validation("runtime", "callee_ura must be canonical for ability descriptor provider")
-        }
-        return "\(realmPrefix)\(realm)/authority"
+        RuntimeGovernanceRoutesGen.descriptorProvider(ability)
     }
 
     static func abilityURAForDescriptorRef(_ descriptorRef: String) throws -> String {
@@ -67,7 +37,8 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         return RuntimeAbilityProjection(
             abilityURA: projection.abilityURA,
             publicName: publicAbilityName(calleeURA: calleeURA, intrinsicName: projection.intrinsicName),
-            intrinsicName: projection.intrinsicName
+            intrinsicName: projection.intrinsicName,
+            action: projection.action
         )
     }
 
@@ -97,14 +68,20 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         guard !intrinsicName.isEmpty, !intrinsicName.contains("/") else {
             throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA")
         }
-        return AbilityDescriptorProjection(abilityURA: ability, intrinsicName: intrinsicName)
+        let action = if let bang {
+            String(clean[clean.index(after: bang)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            "invoke"
+        }
+        return AbilityDescriptorProjection(
+            abilityURA: ability,
+            intrinsicName: intrinsicName,
+            action: action.isEmpty ? "invoke" : action
+        )
     }
 
     private static func runtimeGovernanceReadAbility(_ value: String) -> String? {
-        let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return runtimeGovernanceReadAbilities.first { ability in
-            clean == ability || clean.hasSuffix(".\(ability)")
-        }
+        RuntimeGovernanceRoutesGen.canonicalAbility(value)
     }
 
     private static func publicAbilityName(calleeURA: String, intrinsicName: String) -> String {
@@ -122,6 +99,17 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
             let deviceID = String(path.dropFirst("device/".count)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !deviceID.isEmpty, !deviceID.contains("/") {
                 return "device.\(deviceID)"
+            }
+        }
+        if path.hasPrefix("agent/device.") {
+            let scopedAgentID = String(path.dropFirst("agent/device.".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let separator = scopedAgentID.firstIndex(of: "."),
+               separator != scopedAgentID.startIndex,
+               separator != scopedAgentID.index(before: scopedAgentID.endIndex)
+            {
+                let deviceID = String(scopedAgentID[..<separator])
+                let agentID = String(scopedAgentID[scopedAgentID.index(after: separator)...])
+                return "system-agent.\(deviceID).\(agentID)"
             }
         }
         if path == "authority" {
@@ -145,5 +133,6 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     private struct AbilityDescriptorProjection: Sendable, Equatable {
         let abilityURA: String
         let intrinsicName: String
+        let action: String
     }
 }

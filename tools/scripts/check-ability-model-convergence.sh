@@ -70,6 +70,12 @@ if rg -n 'pub const NODE_(LIST|DESCRIBE|REMOVE):' src/daemon/ability/names/feder
     violations=$((violations + 1))
 fi
 
+if rg -n 'pub const NODE_LIST|local_rpc!\("node\.list"|register_rpc_with_spec\([^)]*NODE_LIST|ABILITY_LIST_NODES' \
+    src/daemon -g '*.rs'; then
+    echo "ERROR: retired node.list fleet route must not re-enter the daemon ability model"
+    violations=$((violations + 1))
+fi
+
 if rg -n 'names::federation::NODE_(LIST|DESCRIBE|REMOVE)|federation_names::NODE_(LIST|DESCRIBE|REMOVE)|federation::NODE_(LIST|DESCRIBE|REMOVE)' src -g '*.rs'; then
     echo "ERROR: device lifecycle callers must import node.* constants from names::device_control"
     violations=$((violations + 1))

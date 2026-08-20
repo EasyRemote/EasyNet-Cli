@@ -122,6 +122,38 @@ pub enum AbilityKind {
     System,
 }
 
+/// Descriptor-level subject policy contributed by a manifest.
+///
+/// This manifest-layer type deliberately stores ontology labels as strings
+/// instead of importing daemon descriptor types. The descriptor/control-plane
+/// layer is responsible for interpreting labels against canonical URA parsing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "values", rename_all = "snake_case")]
+pub enum ManifestSubjectScope {
+    /// Dynamic subject set bounded by canonical URA kind labels such as
+    /// `resource`, `user`, or `agent`.
+    OnlyUraKinds(Vec<String>),
+}
+
+impl ManifestSubjectScope {
+    pub fn only_ura_kinds(kinds: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::OnlyUraKinds(kinds.into_iter().map(Into::into).collect())
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            Self::OnlyUraKinds(kinds) => {
+                if crate::core::ura::canonical_ura_kind_scope_labels(kinds).is_none() {
+                    anyhow::bail!(
+                        "ability.toml `subject_scope.only_ura_kinds` values must be sorted, deduplicated, non-empty, and drawn from authority/device/user/agent/ability/resource"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl AbilityKind {
     /// Infer kind from a fully-qualified ability name. Useful at
     /// dispatch-router boundaries that receive a string and need
@@ -212,6 +244,22 @@ pub struct AbilityManifest {
     admission_action: Option<String>,
     name: String,
     description: String,
+    /// Product display lane. This is descriptive catalog metadata only and
+    /// never grants invocation authority.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    exposure: Option<AbilityExposure>,
+    /// Product-owned lifecycle surface for abilities that must not be driven
+    /// by the generic invocation workbench. Descriptive only: call geometry
+    /// remains governed by the descriptor's canonical `call_mode`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    dedicated_surface: Option<AbilityDedicatedSurface>,
+    /// Product materialization rule for the Invocation subject. This is an
+    /// explicit producer fact; consumers must not infer it from ability names.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    subject_contract_kind: Option<AbilitySubjectContractKind>,
+    /// Optional fixed subject URA used only by an explicit subject contract.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    subject_contract_ura: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_seconds: Option<u64>,
     input_schema: Value,
@@ -224,12 +272,17 @@ pub struct AbilityManifest {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     exec: Option<AbilityExec>,
     /// Optional access policy. Drives `<agent>.discover` filtering and
-    /// the `<agent>.invoke` permission check. Absence is treated as the
+    /// canonical child-Invocation admission. Absence is treated as the
     /// default policy (`AccessPolicy::default()`), which sets
     /// `visibility = "device"` — the same trust boundary as "agents
     /// running on the same physical device under one user".
     #[serde(skip_serializing_if = "Option::is_none", default)]
     access: Option<AccessPolicy>,
+    /// Optional descriptor-level subject axis. AccessPolicy scopes caller
+    /// discovery/invocation; this field scopes the Invocation `subject` by
+    /// canonical URA kind when the exact subject set is dynamic.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    subject_scope: Option<ManifestSubjectScope>,
     /// Optional cost declaration. Discovery / MCP surface annotates
     /// every advertised ability with a `cost_kind` + `cost_label`
     /// pair so an operator (or an LLM choosing between two tools)
@@ -264,6 +317,82 @@ pub struct AbilityManifest {
     /// than silently presented as invocable.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     health: Option<HealthSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityExposure {
+    Task,
+    Operator,
+    Internal,
+}
+
+/// Named product lifecycle surface required to operate an ability safely.
+///
+/// `None` is explicit: the generic workbench may use the descriptor when its
+/// canonical call mode and subject constraint are supported. Other variants
+/// direct product clients to a stateful surface that owns setup, frames, and
+/// terminal closure; they never alter admission or routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityDedicatedSurface {
+    None,
+    Terminal,
+    FileTransfer,
+    Media,
+    RemoteDesktop,
+    Voice,
+    Browser,
+    Pages,
+}
+
+impl AbilityDedicatedSurface {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Terminal => "terminal",
+            Self::FileTransfer => "file_transfer",
+            Self::Media => "media",
+            Self::RemoteDesktop => "remote_desktop",
+            Self::Voice => "voice",
+            Self::Browser => "browser",
+            Self::Pages => "pages",
+        }
+    }
+}
+
+/// Product rule for materializing the canonical Invocation subject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AbilitySubjectContractKind {
+    #[serde(rename = "authenticated-user")]
+    AuthenticatedUser,
+    #[serde(rename = "route-target")]
+    RouteTarget,
+    #[serde(rename = "explicit-ura")]
+    ExplicitUra,
+    #[serde(rename = "dedicated-surface")]
+    DedicatedSurface,
+}
+
+impl AbilitySubjectContractKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthenticatedUser => "authenticated-user",
+            Self::RouteTarget => "route-target",
+            Self::ExplicitUra => "explicit-ura",
+            Self::DedicatedSurface => "dedicated-surface",
+        }
+    }
+}
+
+impl AbilityExposure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Operator => "operator",
+            Self::Internal => "internal",
+        }
+    }
 }
 
 /// Per-ability cost declaration, written to disk under the `[cost]`
@@ -508,15 +637,13 @@ pub enum AbilityExec {
     /// CLI. It preserves the MCP `tools/call` response shape and
     /// avoids routing through shell or chat translation.
     Mcp(McpExec),
-    /// Stream frames from an external warm host over a Unix socket.
-    /// The daemon opens `host_socket`, sends one request line, then
-    /// reads many JSON frame lines until an explicit terminal — letting
-    /// an external resident process (e.g. an easyremote Python host
-    /// running a generator) stream frames without re-spawning per
-    /// frame. Unlike `Shell` (one bounded result, RPC-only), this is
-    /// the sole external-process *server-stream* path: an ability with
-    /// this exec registers as stream-mode. The wire protocol is the
-    /// single source of truth in `HostStreamExec`'s doc comment.
+    /// Invoke an external warm host over a framed Unix-socket transport.
+    /// The daemon opens `host_socket`, sends one request line, then reads
+    /// JSON frames until an explicit terminal. `admission_action` selects
+    /// the canonical call geometry: `invoke` requires exactly one result
+    /// frame and `stream` preserves the complete server-stream. The wire
+    /// protocol is the single source of truth in `HostStreamExec`'s doc
+    /// comment.
     HostStream(HostStreamExec),
 }
 
@@ -771,11 +898,16 @@ impl AbilityManifest {
             admission_action: None,
             name: name.into(),
             description: description.into(),
+            exposure: None,
+            dedicated_surface: None,
+            subject_contract_kind: None,
+            subject_contract_ura: None,
             timeout_seconds: None,
             input_schema,
             output_schema: None,
             exec: None,
             access: None,
+            subject_scope: None,
             cost: None,
             boot: None,
             health: None,
@@ -845,6 +977,22 @@ impl AbilityManifest {
         Ok(self)
     }
 
+    /// Attach descriptor-level subject scoping. This is separate from
+    /// [`AccessPolicy`]: the access policy limits callers, while this limits the
+    /// Invocation `subject` axis.
+    pub fn with_subject_scope(
+        mut self,
+        subject_scope: ManifestSubjectScope,
+    ) -> anyhow::Result<Self> {
+        self.subject_scope = Some(subject_scope);
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn subject_scope(&self) -> Option<&ManifestSubjectScope> {
+        self.subject_scope.as_ref()
+    }
+
     /// Set the governed interface version for this ability. This value is
     /// distinct from `schema_version`: changing it changes the descriptor
     /// hash and the authority / implementation binding key.
@@ -856,6 +1004,57 @@ impl AbilityManifest {
 
     pub fn with_admission_action(mut self, action: impl Into<String>) -> anyhow::Result<Self> {
         self.admission_action = Some(action.into());
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Set the product catalog lane. Exposure is descriptive metadata and
+    /// does not alter the manifest's access policy or admission action.
+    pub fn with_exposure(mut self, exposure: AbilityExposure) -> anyhow::Result<Self> {
+        self.exposure = Some(exposure);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Select the product lifecycle surface. This is catalog metadata, not a
+    /// transport fallback: callers must still obey the descriptor call mode.
+    pub fn with_dedicated_surface(
+        mut self,
+        surface: AbilityDedicatedSurface,
+    ) -> anyhow::Result<Self> {
+        self.dedicated_surface = Some(surface);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Declare how product callers materialize `Invocation.subject`.
+    pub fn with_subject_contract(
+        mut self,
+        kind: AbilitySubjectContractKind,
+        subject_ura: Option<String>,
+    ) -> anyhow::Result<Self> {
+        self.subject_contract_kind = Some(kind);
+        self.subject_contract_ura = subject_ura;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Set the complete frontend invocation contract atomically.
+    ///
+    /// Dedicated surfaces and their subject contract are one invariant, so
+    /// validating those fields one builder call at a time would necessarily
+    /// create an invalid intermediate manifest.
+    pub fn with_frontend_contract(
+        mut self,
+        exposure: AbilityExposure,
+        dedicated_surface: AbilityDedicatedSurface,
+        subject_contract_kind: AbilitySubjectContractKind,
+        subject_contract_ura: Option<String>,
+    ) -> anyhow::Result<Self> {
+        self.exposure = Some(exposure);
+        self.dedicated_surface = Some(dedicated_surface);
+        self.subject_contract_kind = Some(subject_contract_kind);
+        self.subject_contract_ura = subject_contract_ura;
         self.validate()?;
         Ok(self)
     }
@@ -922,6 +1121,22 @@ impl AbilityManifest {
     /// Human-readable blurb. Not a protocol field.
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    pub fn exposure(&self) -> Option<AbilityExposure> {
+        self.exposure
+    }
+
+    pub fn dedicated_surface(&self) -> Option<AbilityDedicatedSurface> {
+        self.dedicated_surface
+    }
+
+    pub fn subject_contract_kind(&self) -> Option<AbilitySubjectContractKind> {
+        self.subject_contract_kind
+    }
+
+    pub fn subject_contract_ura(&self) -> Option<&str> {
+        self.subject_contract_ura.as_deref()
     }
 
     /// Effective governed interface version. Absent manifest field means the
@@ -1078,6 +1293,44 @@ impl AbilityManifest {
         }
         if let Some(cost) = &self.cost {
             cost.validate()?;
+        }
+        if let Some(subject_scope) = &self.subject_scope {
+            subject_scope.validate()?;
+        }
+        if self.dedicated_surface.is_some_and(|surface| {
+            surface != AbilityDedicatedSurface::None
+                && self.subject_contract_kind != Some(AbilitySubjectContractKind::DedicatedSurface)
+        }) {
+            anyhow::bail!(
+                "ability.toml `dedicated_surface` requires subject_contract_kind = \"dedicated-surface\""
+            );
+        }
+        if self.subject_contract_kind == Some(AbilitySubjectContractKind::DedicatedSurface)
+            && !self
+                .dedicated_surface
+                .is_some_and(|surface| surface != AbilityDedicatedSurface::None)
+        {
+            anyhow::bail!(
+                "ability.toml subject_contract_kind = \"dedicated-surface\" requires a named dedicated_surface"
+            );
+        }
+        if let Some(subject_contract_ura) = self.subject_contract_ura.as_deref() {
+            if !matches!(
+                self.subject_contract_kind,
+                Some(
+                    AbilitySubjectContractKind::ExplicitUra
+                        | AbilitySubjectContractKind::DedicatedSurface
+                )
+            ) {
+                anyhow::bail!(
+                    "ability.toml `subject_contract_ura` is valid only with subject_contract_kind = \"explicit-ura\" or \"dedicated-surface\""
+                );
+            }
+            if subject_contract_ura.trim().is_empty()
+                || subject_contract_ura.trim() != subject_contract_ura
+            {
+                anyhow::bail!("ability.toml `subject_contract_ura` must be non-empty and trimmed");
+            }
         }
         if let Some(boot) = &self.boot {
             boot.validate()?;
@@ -1331,8 +1584,11 @@ impl McpExec {
 /// fail loud.
 pub fn default_chat_manifest() -> AbilityManifest {
     // The schema below is the wire contract for the chat ability. It
-    // keeps `prompt` as the only required request field while the
-    // optional fields model the current canonical chat runtime:
+    // exposes two first-class entry shapes: the canonical minimal
+    // prompt payload and the strict structured single-turn payload.
+    // The canonical minimal `{"prompt": "..."}` payload remains a
+    // first-class product contract, not a compatibility alias.
+    // Optional fields model the current canonical chat runtime:
     // (1) resume a multi-turn session via
     // `session_id`, (2) decide which other abilities of the same agent
     // to expose to the LLM as tools (`skills`), (3) decide which
@@ -1351,7 +1607,28 @@ pub fn default_chat_manifest() -> AbilityManifest {
         "properties": {
             "prompt": {
                 "type": "string",
-                "description": "The user prompt sent to the agent."
+                "description": "The canonical minimal `{\"prompt\": \"...\"}` payload. Exactly one of `prompt` or `messages` is required."
+            },
+            "messages": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "description": "Structured fresh single-turn input: one user message with one optional preceding system message. Unsupported roles or multi-turn history fail closed.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "role": {
+                            "type": "string",
+                            "enum": ["system", "user"]
+                        },
+                        "content": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    },
+                    "required": ["role", "content"],
+                    "additionalProperties": false
+                }
             },
             "context": {
                 "type": "string",
@@ -1490,9 +1767,38 @@ pub fn default_chat_manifest() -> AbilityManifest {
                     },
                     "additionalProperties": false
                 }
+            },
+            "execution": {
+                "type": "object",
+                "description": "Per-invocation daemon execution policy. cwd is relative to the registered agent root, never a host-absolute path.",
+                "properties": {
+                    "cwd": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 900000
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["agent", "strict"]
+                    }
+                },
+                "additionalProperties": false
             }
         },
-        "required": ["prompt"],
+        "oneOf": [
+            {
+                "required": ["prompt"],
+                "not": {"required": ["messages"]}
+            },
+            {
+                "required": ["messages"],
+                "not": {"required": ["prompt"]}
+            }
+        ],
         "additionalProperties": false,
     });
 
@@ -1545,6 +1851,21 @@ pub fn default_chat_manifest() -> AbilityManifest {
                         "subject_ura": {"type": "string"}
                     },
                     "required": ["ability"]
+                }
+            },
+            "timeline": {
+                "type": "array",
+                "description": "Ordered driver progress events captured during this turn. \
+                                Each event carries local elapsed time and the driver's raw \
+                                progress payload.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elapsed_ms": {"type": "integer", "minimum": 0},
+                        "type": {"type": "string"},
+                        "payload": {}
+                    },
+                    "required": ["elapsed_ms", "type", "payload"]
                 }
             },
             "context_used": {
@@ -1600,6 +1921,16 @@ pub fn default_chat_manifest() -> AbilityManifest {
         "default_chat_manifest is a constant, well-formed input; validation failing \
          here would be a compile-time contract violation in this file",
     )
+    .with_exposure(AbilityExposure::Task)
+    .expect(
+        "the embedded chat exposure is a constant canonical catalog lane; validation \
+         failure here would be a compile-time contract violation in this file",
+    )
+    .with_subject_contract(AbilitySubjectContractKind::AuthenticatedUser, None)
+    .expect(
+        "the embedded chat subject contract is a canonical authenticated-user contract; \
+         validation failure here would be a compile-time contract violation in this file",
+    )
     .with_admission_action("invoke")
     .expect(
         "the embedded chat admission action is a constant canonical enum value; validation \
@@ -1637,7 +1968,119 @@ mod tests {
         assert_eq!(m.descriptor_version(), DEFAULT_DESCRIPTOR_VERSION);
         assert!(m.input_schema().is_object());
         assert!(m.output_schema().is_none());
+        assert_eq!(m.exposure(), None);
+        assert_eq!(m.dedicated_surface(), None);
+        assert_eq!(m.subject_contract_kind(), None);
+        assert_eq!(m.subject_contract_ura(), None);
         assert_eq!(m.timeout_seconds(), None);
+    }
+
+    #[test]
+    fn exposure_round_trips_as_descriptive_catalog_metadata() {
+        let manifest = AbilityManifest::new("infer", "run inference", object_schema())
+            .unwrap()
+            .with_exposure(AbilityExposure::Task)
+            .unwrap()
+            .with_access(AccessPolicy {
+                visibility: ManifestAccessScope::Device,
+                allow_callers: None,
+                deny_callers: None,
+            })
+            .unwrap();
+
+        let wire = manifest.to_toml_string().unwrap();
+        assert!(wire.contains("exposure = \"task\""));
+        assert_eq!(
+            AbilityManifest::from_toml_str(&wire).unwrap().exposure(),
+            Some(AbilityExposure::Task)
+        );
+        assert_eq!(manifest.access().visibility, ManifestAccessScope::Device);
+    }
+
+    #[test]
+    fn dedicated_surface_round_trips_as_descriptive_catalog_metadata() {
+        let error = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_subject_contract(AbilitySubjectContractKind::DedicatedSurface, None)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires a named dedicated_surface"));
+
+        let error = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_dedicated_surface(AbilityDedicatedSurface::Terminal)
+            .unwrap_err();
+        assert!(error.to_string().contains("requires subject_contract_kind"));
+
+        let manifest = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_frontend_contract(
+                AbilityExposure::Operator,
+                AbilityDedicatedSurface::Terminal,
+                AbilitySubjectContractKind::RouteTarget,
+                None,
+            )
+            .unwrap_err();
+        assert!(manifest
+            .to_string()
+            .contains("requires subject_contract_kind = \"dedicated-surface\""));
+
+        let manifest = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_frontend_contract(
+                AbilityExposure::Operator,
+                AbilityDedicatedSurface::Terminal,
+                AbilitySubjectContractKind::DedicatedSurface,
+                None,
+            )
+            .unwrap();
+
+        let wire = manifest.to_toml_string().unwrap();
+        assert!(wire.contains("dedicated_surface = \"terminal\""));
+        assert_eq!(
+            AbilityManifest::from_toml_str(&wire)
+                .unwrap()
+                .dedicated_surface(),
+            Some(AbilityDedicatedSurface::Terminal)
+        );
+
+        let manifest = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_frontend_contract(
+                AbilityExposure::Operator,
+                AbilityDedicatedSurface::Terminal,
+                AbilitySubjectContractKind::DedicatedSurface,
+                Some("easynet:///r/_system/resource/ability-contract.terminal/session-subject-policy".to_string()),
+            )
+            .unwrap();
+        assert_eq!(
+            manifest.subject_contract_ura(),
+            Some("easynet:///r/_system/resource/ability-contract.terminal/session-subject-policy")
+        );
+    }
+
+    #[test]
+    fn subject_contract_round_trips_without_name_inference() {
+        let manifest = AbilityManifest::new("inspect", "inspect resource", object_schema())
+            .unwrap()
+            .with_subject_contract(
+                AbilitySubjectContractKind::ExplicitUra,
+                Some("easynet:///r/acme/resource/device.dev-a/session/pty-1".to_string()),
+            )
+            .unwrap();
+
+        let wire = manifest.to_toml_string().unwrap();
+        assert!(wire.contains("subject_contract_kind = \"explicit-ura\""));
+        let parsed = AbilityManifest::from_toml_str(&wire).unwrap();
+        assert_eq!(
+            parsed.subject_contract_kind(),
+            Some(AbilitySubjectContractKind::ExplicitUra)
+        );
+        assert_eq!(
+            parsed.subject_contract_ura(),
+            Some("easynet:///r/acme/resource/device.dev-a/session/pty-1")
+        );
     }
 
     #[test]
@@ -1724,6 +2167,7 @@ tool_name = "legacy-provider-field"
         // before the two paths converge in a later PR. If this breaks, update
         // both sides in the same PR, not one at a time.
         let m = default_chat_manifest();
+        assert_eq!(m.exposure(), Some(AbilityExposure::Task));
         assert_eq!(m.name(), "chat");
         let props = m
             .input_schema()
@@ -1731,13 +2175,14 @@ tool_name = "legacy-provider-field"
             .and_then(Value::as_object)
             .expect("properties must be an object");
         assert!(props.contains_key("prompt"));
+        assert!(props.contains_key("messages"));
         assert!(props.contains_key("context"));
-        let required = m
+        let one_of = m
             .input_schema()
-            .get("required")
+            .get("oneOf")
             .and_then(Value::as_array)
-            .expect("required is an array");
-        assert!(required.iter().any(|v| v.as_str() == Some("prompt")));
+            .expect("oneOf entry-shape guard is an array");
+        assert_eq!(one_of.len(), 2);
         assert_eq!(
             m.input_schema().get("additionalProperties"),
             Some(&Value::Bool(false)),
@@ -1759,6 +2204,7 @@ tool_name = "legacy-provider-field"
             .expect("properties must be an object");
         for required_key in [
             "prompt",
+            "messages",
             "context",
             "session_id",
             "skills",
@@ -1766,6 +2212,7 @@ tool_name = "legacy-provider-field"
             "driver",
             "stream",
             "attachments",
+            "execution",
         ] {
             assert!(
                 props.contains_key(required_key),
@@ -1773,15 +2220,15 @@ tool_name = "legacy-provider-field"
                 props.keys().collect::<Vec<_>>()
             );
         }
-        // Only `prompt` is required. Every extended field is optional so the
-        // canonical minimal `{"prompt": "..."}` payload remains valid.
-        let required = m
+        // JSON Schema discovery exposes both entry shapes and pins their
+        // mutual exclusion so product clients can reject malformed requests
+        // before dispatching them to the daemon.
+        let one_of = m
             .input_schema()
-            .get("required")
+            .get("oneOf")
             .and_then(Value::as_array)
-            .expect("required is an array");
-        assert_eq!(required.len(), 1);
-        assert_eq!(required[0].as_str(), Some("prompt"));
+            .expect("oneOf entry-shape guard is an array");
+        assert_eq!(one_of.len(), 2);
     }
 
     #[test]
@@ -2020,6 +2467,35 @@ tool_name = "legacy-provider-field"
     fn from_toml_str_rejects_malformed_toml() {
         let err = AbilityManifest::from_toml_str("not = a = valid = toml").unwrap_err();
         assert!(format!("{err}").contains("parse"));
+    }
+
+    #[test]
+    fn subject_scope_only_ura_kinds_round_trips_and_validates() {
+        let manifest = AbilityManifest::new("share_screen", "share screen", object_schema())
+            .unwrap()
+            .with_subject_scope(ManifestSubjectScope::only_ura_kinds(["resource"]))
+            .unwrap();
+        assert_eq!(
+            manifest.subject_scope(),
+            Some(&ManifestSubjectScope::OnlyUraKinds(vec![
+                "resource".to_string()
+            ]))
+        );
+        let toml = manifest.to_toml_string().unwrap();
+        assert!(toml.contains("[subject_scope]"), "{toml}");
+        assert!(toml.contains("kind = \"only_ura_kinds\""), "{toml}");
+        assert!(toml.contains("values = [\"resource\"]"), "{toml}");
+
+        let parsed = AbilityManifest::from_toml_str(&toml).unwrap();
+        assert_eq!(parsed.subject_scope(), manifest.subject_scope());
+
+        let error = AbilityManifest::new("bad", "bad", object_schema())
+            .unwrap()
+            .with_subject_scope(ManifestSubjectScope::only_ura_kinds([
+                "resource", "resource",
+            ]))
+            .unwrap_err();
+        assert!(format!("{error}").contains("only_ura_kinds"));
     }
 
     #[test]

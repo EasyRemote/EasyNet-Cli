@@ -61,7 +61,7 @@ where
     let provider: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(ability_count_provider);
     reg.register_rpc_with_owner(
         ABILITY_ADMIN_STATUS,
-        OwnerKind::Device,
+        OwnerKind::runtime_health_system(),
         Arc::new(move |_args: Value| handler(&provider)),
     );
 }

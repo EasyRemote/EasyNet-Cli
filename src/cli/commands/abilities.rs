@@ -29,12 +29,11 @@
 //     Invoke against the appropriate Agent ability
 //
 // regardless of `--node`. The replacement: invoke the daemon-hosted
-// metadata ability through Axon's local Invocation gRPC path, the
-// same route `easynet ability invoke` uses for local calls. One
-// Axon runtime; one source of truth for the catalogue. The `--node`
-// flag is reserved for a future federation-Invoke entry; passing a
-// remote node id today returns a precise error rather than silently
-// auto-routing local.
+// metadata ability through the canonical Invocation path, the same
+// route `easynet ability invoke` uses. Local targets enter the local
+// runtime; canonical remote Device URAs are resolved and dispatched
+// to the target runtime. One runtime model; one source of truth for
+// the catalogue.
 //
 // Filtering model
 // ---------------
@@ -75,7 +74,7 @@ pub struct AbilitiesArgs {
     /// Catalogue scope URA. Owner URAs filter by owner; Ability URAs filter to one canonical ability.
     #[arg(long = "subject-ura", value_name = "URA")]
     pub subject_ura: Option<String>,
-    /// Reserved for federation routing — only the local node is accepted today; remote listing ships post-AXON-RFC-001 P1.5.
+    /// Target runtime: `local` or a canonical remote Device URA.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
     /// Glob pattern to filter by ability name (e.g. fs.*, claude.*, *.health). Empty pattern is equivalent to omitting the flag.
@@ -196,9 +195,14 @@ impl AbilityCatalogueScope {
         let parsed = parse_ura(&scope_ura)?;
         match parsed.kind {
             URAKind::Ability => Ok(Self::Ability(scope_ura)),
-            URAKind::Agent | URAKind::Device | URAKind::Authority | URAKind::User => {
+            URAKind::Agent | URAKind::Service | URAKind::Device | URAKind::Authority => {
                 Ok(Self::Owner(scope_ura))
             }
+            URAKind::User => bail!(
+                "--subject-ura cannot scope ability ownership to a User Principal; \
+                 use an explicit Agent, Service, SystemAgent, Authority, DeviceProfileProjection \
+                 migration row, or Ability URA"
+            ),
             other => bail!("--subject-ura must be an owner URA or Ability URA, got {other:?}"),
         }
     }
@@ -239,7 +243,7 @@ fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
         })
 }
 
-/// Build owned (Device, Agent, User, Kind) cells for one ability
+/// Build owned (Device, Agent, Principal, Kind) cells for one ability
 /// entry. The three identity columns are projections of the
 /// owner URA — only the slots that the owner kind actually
 /// names get populated; the rest stay `-`.
@@ -273,14 +277,15 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
     // KIND is read straight from the owner URA kind — that's the
     // authoritative classifier. Handler implementation hints such as
     // `fulfilled_by` describe how an ability runs, not who owns the catalogue
-    // row, so they cannot override owner classification. The pre-migration
-    // default was `agent_chat`, which mis-labelled every device-owned and
-    // user-owned verb.
+    // row, so they cannot override owner classification. User rows are rendered
+    // only as legacy principal projections; target architecture uses Agent,
+    // Service, SystemAgent, Authority, or DeviceProfileProjection owners.
     let kind = match parsed.as_ref().map(|p| p.kind) {
         Some(URAKind::Device) => "system".to_string(),
         Some(URAKind::Authority) => "hub".to_string(),
         Some(URAKind::Agent) => "agent".to_string(),
-        Some(URAKind::User) => "user".to_string(),
+        Some(URAKind::Service) => "service".to_string(),
+        Some(URAKind::User) => "legacy_principal".to_string(),
         _ => "-".to_string(),
     };
 
@@ -301,6 +306,10 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
                 dash(),
                 p.user_id().map(str::to_string).unwrap_or_else(dash),
             ),
+            URAKind::Service => {
+                let (principal_id, service_id) = p.service_ids().unwrap_or(("-", "-"));
+                (dash(), service_id.to_string(), principal_id.to_string())
+            }
             URAKind::Authority => (dash(), "hub".to_string(), dash()),
             _ => (dash(), dash(), dash()),
         },
@@ -332,7 +341,12 @@ enum GroupKey {
         agent: String,
         ura: String,
     },
-    User {
+    Service {
+        user: String,
+        service: String,
+        ura: String,
+    },
+    LegacyPrincipal {
         user: String,
         ura: String,
     },
@@ -347,7 +361,12 @@ impl GroupKey {
             GroupKey::Agent { user, agent, ura } => {
                 format!("AGENT {user}.{agent} ({ura})")
             }
-            GroupKey::User { user, ura } => format!("USER {user} ({ura})"),
+            GroupKey::Service { user, service, ura } => {
+                format!("SERVICE {user}.{service} ({ura})")
+            }
+            GroupKey::LegacyPrincipal { user, ura } => {
+                format!("LEGACY PRINCIPAL {user} ({ura})")
+            }
             GroupKey::Device(ura) => format!("DEVICE / SYSTEM ({ura})"),
             GroupKey::Other => "OTHER".to_string(),
         }
@@ -358,9 +377,10 @@ impl GroupKey {
         match self {
             GroupKey::Hub(_) => 0,
             GroupKey::Agent { .. } => 1,
-            GroupKey::User { .. } => 2,
-            GroupKey::Device(_) => 3,
-            GroupKey::Other => 4,
+            GroupKey::Service { .. } => 2,
+            GroupKey::LegacyPrincipal { .. } => 3,
+            GroupKey::Device(_) => 4,
+            GroupKey::Other => 5,
         }
     }
 }
@@ -380,7 +400,17 @@ fn group_for(entry: &Value) -> GroupKey {
                     ura: owner_ura.to_string(),
                 }
             }
-            URAKind::User => GroupKey::User {
+            URAKind::Service => {
+                let Some((principal_id, service_id)) = p.service_ids() else {
+                    return GroupKey::Other;
+                };
+                GroupKey::Service {
+                    user: principal_id.to_string(),
+                    service: service_id.to_string(),
+                    ura: owner_ura.to_string(),
+                }
+            }
+            URAKind::User => GroupKey::LegacyPrincipal {
                 user: p.user_id().unwrap_or("-").to_string(),
                 ura: owner_ura.to_string(),
             },
@@ -408,7 +438,7 @@ fn render_grouped(filtered: &[Value]) {
     }
 
     let term_width = console::Term::stderr().size().1 as usize;
-    let headers = ["ABILITY", "KIND", "DESCRIPTION"];
+    let headers = ["ABILITY", "MODE", "HASH", "KIND", "DESCRIPTION"];
 
     eprintln!();
     for ((_, key), entries) in &groups {
@@ -419,7 +449,8 @@ fn render_grouped(filtered: &[Value]) {
         let header_style = match key {
             GroupKey::Hub(_) => style(&title).magenta().bold(),
             GroupKey::Agent { .. } => style(&title).green().bold(),
-            GroupKey::User { .. } => style(&title).yellow().bold(),
+            GroupKey::Service { .. } => style(&title).cyan().bold(),
+            GroupKey::LegacyPrincipal { .. } => style(&title).yellow().bold(),
             GroupKey::Device(_) => style(&title).blue().bold(),
             GroupKey::Other => style(&title).red().bold(),
         };
@@ -428,7 +459,7 @@ fn render_grouped(filtered: &[Value]) {
         // Per-section column widths: ability + kind only;
         // description reflows against the terminal so long
         // single-line descriptions don't wrap mid-row.
-        let mut rows: Vec<[String; 3]> = Vec::with_capacity(entries.len());
+        let mut rows: Vec<[String; 5]> = Vec::with_capacity(entries.len());
         for entry in entries {
             let name = entry
                 .get("name")
@@ -436,15 +467,37 @@ fn render_grouped(filtered: &[Value]) {
                 .unwrap_or("-")
                 .to_string();
             let (_d, _a, _u, kind) = extract_columns(entry);
+            // MODE + HASH disambiguate sibling invocation contracts that
+            // share one public name (e.g. `chat` publishes both an rpc and
+            // a stream descriptor with distinct hashes). The short hash
+            // prefix lets an operator match a resolved descriptor_ref to
+            // its catalogue row at a glance while debugging admission
+            // mismatches.
+            let mode = entry
+                .get("call_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+                .to_string();
+            let hash = entry
+                .get("descriptor_hash")
+                .and_then(Value::as_str)
+                .map(|h| {
+                    h.strip_prefix("sha256:")
+                        .unwrap_or(h)
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                })
+                .unwrap_or_else(|| "-".to_string());
             let description = entry
                 .get("description")
                 .and_then(Value::as_str)
                 .map(|s| s.lines().next().unwrap_or(s).to_string())
                 .unwrap_or_default();
-            rows.push([name, kind, description]);
+            rows.push([name, mode, hash, kind, description]);
         }
         let widths = column_widths(&headers, &rows);
-        let total_fixed: usize = widths[..2].iter().sum::<usize>() + 2 * 2; // 2-space gutters
+        let total_fixed: usize = widths[..4].iter().sum::<usize>() + 4 * 2; // 2-space gutters
         let desc_budget = term_width
             .saturating_sub(4 + total_fixed) // leading 4-space indent for grouped rows
             .max(20);
@@ -453,21 +506,25 @@ fn render_grouped(filtered: &[Value]) {
         // beyond the section title so the visual hierarchy reads
         // clearly even on a narrow terminal.
         eprintln!(
-            "    {}  {}  {}",
+            "    {}  {}  {}  {}  {}",
             style(pad(headers[0], widths[0])).dim(),
             style(pad(headers[1], widths[1])).dim(),
-            style(headers[2]).dim(),
+            style(pad(headers[2], widths[2])).dim(),
+            style(pad(headers[3], widths[3])).dim(),
+            style(headers[4]).dim(),
         );
-        let rule_width: usize = (widths[..2].iter().sum::<usize>() + 2 * 2 + desc_budget)
+        let rule_width: usize = (widths[..4].iter().sum::<usize>() + 4 * 2 + desc_budget)
             .min(term_width.saturating_sub(4).max(40));
         eprintln!("    {}", style("─".repeat(rule_width)).dim());
 
         for row in &rows {
-            let desc = truncate_display(&row[2], desc_budget);
+            let desc = truncate_display(&row[4], desc_budget);
             eprintln!(
-                "    {}  {}  {}",
+                "    {}  {}  {}  {}  {}",
                 style(pad(&row[0], widths[0])).cyan(),
-                style(pad(&row[1], widths[1])).dim(),
+                style(pad(&row[1], widths[1])).yellow(),
+                style(pad(&row[2], widths[2])).dim(),
+                style(pad(&row[3], widths[3])).dim(),
                 desc,
             );
         }
@@ -475,8 +532,8 @@ fn render_grouped(filtered: &[Value]) {
     }
 }
 
-fn column_widths(headers: &[&str; 3], rows: &[[String; 3]]) -> [usize; 3] {
-    let mut w = [0usize; 3];
+fn column_widths(headers: &[&str; 5], rows: &[[String; 5]]) -> [usize; 5] {
+    let mut w = [0usize; 5];
     for (i, h) in headers.iter().enumerate() {
         w[i] = measure_text_width(h);
     }
@@ -761,6 +818,52 @@ mod tests {
     }
 
     #[test]
+    fn catalogue_query_accepts_service_owner_scope() {
+        let query = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: None,
+            subject_ura: Some("easynet:///r/test/service/alice.pages".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let body = query.to_request();
+
+        assert_eq!(body["owner_ura"], "easynet:///r/test/service/alice.pages");
+        assert!(body.get("ability_ura").is_none());
+        assert!(body.get("subject_ura").is_none());
+        assert!(body.get("agent_ura").is_none());
+    }
+
+    #[test]
+    fn extract_columns_projects_service_owner_identity() {
+        let entry = serde_json::json!({
+            "owner_ura": "easynet:///r/test/service/alice.pages",
+        });
+
+        let (device, agent, user, kind) = extract_columns(&entry);
+
+        assert_eq!(device, "-");
+        assert_eq!(agent, "pages");
+        assert_eq!(user, "alice");
+        assert_eq!(kind, "service");
+    }
+
+    #[test]
+    fn catalogue_scope_rejects_user_principal_as_owner_filter() {
+        let err =
+            AbilityCatalogueScope::from_cli_scope(Some("easynet:///r/test/user/alice".into()))
+                .unwrap_err()
+                .to_string();
+
+        assert!(
+            err.contains("User Principal"),
+            "user principals are accountability roots, not ability owners: {err}"
+        );
+    }
+
+    #[test]
     fn catalogue_query_rejects_conflicting_cli_owner_scope() {
         let err = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
             agent: None,
@@ -794,7 +897,7 @@ mod tests {
     fn catalogue_query_rejects_conflicting_local_agent_selector() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/test/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/test/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
         };
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
@@ -842,7 +945,7 @@ mod tests {
             agent: None,
             agent_ura: None,
             subject_ura: None,
-            node: Some("some-remote-node".into()),
+            node: Some("easynet:///r/test/device/remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
         })
@@ -868,7 +971,7 @@ mod tests {
             agent: None,
             agent_ura: None,
             subject_ura: None,
-            node: Some("some-remote-node".into()),
+            node: Some("easynet:///r/test/device/remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
         })
@@ -897,8 +1000,8 @@ mod tests {
     #[test]
     fn group_for_buckets_each_owner_kind_into_its_section() {
         // Pin the partition: hub URA → Hub, agent URA → Agent,
-        // user URA → User, device URA → Device. A future render
-        // change that loses or merges a bucket trips this test.
+        // historical user-owner URA → LegacyPrincipal, device URA → Device. A
+        // future render change that loses or merges a bucket trips this test.
         let hub = json!({
             "name": "hub.openai.chat_completions",
             "owner_ura": crate::core::ura::hub_ura("easynet.run"),
@@ -918,7 +1021,7 @@ mod tests {
         });
         assert!(matches!(group_for(&hub), GroupKey::Hub(_)));
         assert!(matches!(group_for(&agent), GroupKey::Agent { .. }));
-        assert!(matches!(group_for(&user), GroupKey::User { .. }));
+        assert!(matches!(group_for(&user), GroupKey::LegacyPrincipal { .. }));
         assert!(matches!(group_for(&device), GroupKey::Device(_)));
     }
 
@@ -949,7 +1052,7 @@ mod tests {
         assert_eq!(extract_columns(&device).3, "system");
         assert_eq!(extract_columns(&hub).3, "hub");
         assert_eq!(extract_columns(&agent).3, "agent");
-        assert_eq!(extract_columns(&user).3, "user");
+        assert_eq!(extract_columns(&user).3, "legacy_principal");
     }
 
     #[test]
@@ -963,7 +1066,7 @@ mod tests {
 
     #[test]
     fn group_section_order_matches_render_priority() {
-        // Hub → Agent → User → Device → Other. Lower number prints
+        // Hub → Agent → legacy principal → Device → Other. Lower number prints
         // first.
         assert!(
             GroupKey::Hub("x".into()).section_order()
@@ -981,14 +1084,14 @@ mod tests {
                 ura: "x".into()
             }
             .section_order()
-                < GroupKey::User {
+                < GroupKey::LegacyPrincipal {
                     user: "u".into(),
                     ura: "x".into()
                 }
                 .section_order()
         );
         assert!(
-            GroupKey::User {
+            GroupKey::LegacyPrincipal {
                 user: "u".into(),
                 ura: "x".into()
             }

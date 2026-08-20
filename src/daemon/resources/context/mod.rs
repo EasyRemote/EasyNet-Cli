@@ -12,3 +12,4 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod clipboard_tracker;
+pub(crate) mod device_scope;

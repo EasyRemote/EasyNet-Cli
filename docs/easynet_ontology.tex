@@ -231,14 +231,25 @@ The object-oriented shorthand ``agent owns ability'' is not precise enough for
 the device/daemon/plugin control plane. The cleaner split is:
 
 \begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item \textbf{User Principal} --- accountability and authentication
+    subject for a human or service account. A User account is not an Agent; it
+    may own or authorize hosted Agents, but it does not advertise abilities as a
+    synthetic account Agent.
+    \item \textbf{Agent} --- routable behavior subject that may advertise
+    governed \texttt{AbilityDescriptor}s and appear as Invocation callee. An
+    Agent has logical identity independent of the Device or process that hosts
+    its implementation.
     \item \textbf{Device} --- execution substrate identified by
     \texttt{device\_ura}, with \texttt{node\_id} and local resources.
     \item \textbf{Daemon} --- projection and dispatch runtime. It registers
     descriptors, binds implementations, dispatches Invocations, and emits
     receipts.
-    \item \textbf{DeviceAgent} --- control-plane identity projection for a
-    device. It advertises descriptors; it is not the ultimate authority
-    source.
+    \item \textbf{System Agent} --- restricted Agent sponsored by one Device
+    for device-native abilities. It advertises the descriptor and remains the
+    logical callee; the Device is its host and possible receipt attestor.
+    \item \textbf{Authority} --- routable realm governance actor. It may own
+    authority-scoped descriptors and issue or verify governance predicates, but
+    it is not an execution substrate.
     \item \textbf{AbilityDescriptor} --- versioned governed interface with
     \texttt{ability\_ura}, \texttt{name}, \texttt{version}, \texttt{schema},
     \texttt{schema\_hash}, \texttt{call\_mode}, visibility, and policy
@@ -254,9 +265,20 @@ the device/daemon/plugin control plane. The cleaner split is:
 \end{itemize}
 
 \derived{} Ownership, authority, and execution binding are separate layers.
-\texttt{DeviceAgent advertises AbilityDescriptor}; it does not formally own
-Ability. The owner/accountability root is the \texttt{device\_ura} or an
-explicit \texttt{AuthorityBinding}.
+For device-native behavior, the System Agent advertises and owns the
+AbilityDescriptor. The Device is sponsor, host, key custodian, and possible
+receipt attestor; it is not a Principal. Accountability resolves through the
+Device's paired Principal and the explicit \texttt{AuthorityBinding}.
+
+\begin{quote}
+\textbf{Canonical actor contract.}
+User/Account = Principal/accountability;
+Agent = routable AbilityDescriptor owner/callee;
+System Agent = Device-sponsored restricted Agent;
+Authority = realm governance actor;
+Device = execution host/custody/sponsor, not an ordinary public actor;
+AbilityImpl/Plugin/Skill = implementation/resource plane, not public ownership identity.
+\end{quote}
 
 \derived{} \texttt{Invocation.subject} is an \texttt{EntityRef}, not only a
 resource pointer. It may refer to a resource, agent, ability, session,
@@ -535,27 +557,31 @@ session:
 
 \subsection{What this means concretely}
 
-\derived{} The set of network-first-class objects collapses to two:
+\derived{} The network-first-class actor set is deliberately small:
 
 \begin{center}
 \renewcommand{\arraystretch}{1.25}
 \begin{tabularx}{\linewidth}{X X}
 \toprule
-\textbf{Network first-class} & \textbf{Host-local, not first-class} \\
+\textbf{Network first-class actor/interface} & \textbf{Host-local, not first-class actor} \\
 \midrule
-Agent (the only addressable actor) & Device (physical substrate, hardware,
-credentials) \\
-Ability (public method endpoint) & Axon runtime (the OS-level hosting
+Agent, System Agent, and Service (routable callees) & Device (physical
+substrate, hardware, credentials) \\
+Authority (realm governance actor) & Axon runtime (the protocol/runtime
 process) \\
-                                 & MCP server (local stdio process for AI
+AbilityDescriptor (governed callable interface) & MCP server (local stdio process for AI
 clients) \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\derived{} The network only sees \textbf{agents talking to agents via
-abilities}. Devices exist, but only as deployment metadata. They never appear
-as the ``to'' of an ability call from outside.
+\derived{} Ordinary public Invocation callees are \textbf{Agent, System Agent,
+Service, or Authority} identities advertising governed AbilityDescriptors.
+Devices exist as execution host, sponsor, key custodian, and possible receipt
+attestor. A Device may appear in bounded bootstrap, pairing,
+publication-custody, or session-control caller paths enumerated by the shared
+\texttt{DeviceCallerPurpose} classifier, but it is not an ordinary public
+callee.
 
 \subsection{Logical identity versus physical placement}
 
@@ -595,19 +621,20 @@ in \S\ref{sec:gaps}.
 not. It \emph{leaves room for distributed agents}, even though the current
 implementation does not yet exercise it.
 
-\subsection{Known transitional misalignment}
+\subsection{Known transitional surface}
 
 \begin{warningbox}
-The current Axon SDK exposes \texttt{deploy\_package(node\_id, ...)} ---
-ability deployment is currently routed by \emph{device node id}, not by agent
-logical id. Under the new ontology this is a leak: the public API should be
-\texttt{deploy\_package(agent\_id, ...)}, with the runtime resolving which
-device hosts that agent.
+The CLI surface \texttt{easynet ability deploy <path> --to <node>} still uses a
+Device selector to choose the execution host. This is a host-selection UX, not
+descriptor ownership. The current daemon implementation derives deployed
+AbilityDescriptor ownership from the device-sponsored ability-management
+System Agent while keeping the target Device as execution host.
 
 \smallskip
-\deferred{} This is \textbf{not fixed in the current PR.} The CLI command
-\texttt{easynet ability deploy <path> --to <node>} retains its current shape.
-Its long-help text explicitly notes this is a transitional form.
+\deferred{} A future UX may replace \texttt{--to <node>} with an Agent or
+SystemAgent placement selector. Until then, code and documentation must keep the
+three facts separate: selected host Device, descriptor owner SystemAgent, and
+accountability User Principal.
 \end{warningbox}
 
 % ──────────────────────────────────────────────────────────────────────────
@@ -660,10 +687,11 @@ let r = claude("hello")
     \item \textbf{Agents are callable objects.} The default \texttt{chat}
     ability gives every agent a built-in call operator. Custom agents can
     override or supplement it.
-    \item \textbf{Mission is the universal execution model.} Once
-    \texttt{agent send} is sugar for a one-line mission, every cross-agent
-    interaction in the system goes through the mission runtime. There is no
-    ``second path.''
+    \item \textbf{Mission is the default orchestration implementation model.}
+    Once \texttt{agent send} is sugar for a one-line mission, the CLI, EAL, and
+    MCP-facing paths share the mission runtime for composition. Mission still
+    emits ordinary child Invocations; it does not replace the Invocation
+    primitive or redefine caller/callee/subject/nonce/causal-context semantics.
 \end{enumerate}
 
 % ──────────────────────────────────────────────────────────────────────────

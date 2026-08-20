@@ -31,7 +31,7 @@ class RuntimeTransportFake:
             {
                 "descriptor_ref": (
                     "easynet:///r/example/ability/authority."
-                    f"{request['ability']}@1.0.0"
+                    f"{request['ability']}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
             }
         ).encode()
@@ -81,7 +81,7 @@ def test_project_ability_descriptor_ignores_nested_descriptor_compatibility_shap
             "descriptor": {
                 "name": "skill.list",
                 "owner_ura": "easynet:///r/localhost/device/node-a",
-                "ability_ura": "easynet:///r/localhost/ability/device.node-a.skill.list",
+                "ability_ura": "easynet:///r/localhost/ability/system-agent.node-a.skill-management.skill.list",
                 "metadata": {"tool_name": "skill.list"},
             },
             "name": "agent.list",
@@ -101,7 +101,7 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
             {
                 "name": "namespace.resolve",
                 "ability_ura": "easynet:///r/example/ability/authority.namespace.resolve",
-                "descriptor_ref": "easynet:///r/example/ability/authority.namespace.resolve@1.0.0",
+                "descriptor_ref": "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "owner_ura": "easynet:///r/example/authority",
                 "descriptor_version": "1.0.0",
                 "schema_hash": "sha256:abc",
@@ -129,10 +129,13 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
     )
 
     assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0"
+        "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
     )
     assert transport.descriptor_requests[-1]["provider"] == "ability_descriptor"
-    assert transport.seen["subject_ura"] == "easynet:///r/example/authority"
+    assert (
+        transport.seen["subject_ura"]
+        == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    )
     assert transport.seen["args"] == {
         "scope": "realm",
         "owner_ura": "easynet:///r/example/authority",
@@ -142,7 +145,7 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
     assert descriptor.ability_ura == "easynet:///r/example/ability/authority.namespace.resolve"
     assert (
         descriptor.descriptor_ref
-        == "easynet:///r/example/ability/authority.namespace.resolve@1.0.0"
+        == "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
     )
     assert descriptor.version == "1.0.0"
     assert descriptor.class_ == "runtime"
@@ -212,7 +215,7 @@ def test_runtime_ability_descriptor_provider_rejects_retired_name_and_input_sche
                 "local_name": "health",
                 "ability_ura": "easynet:///r/example/ability/authority.observe.health",
                 "descriptor_ref": (
-                    "easynet:///r/example/ability/authority.observe.health@1.0.0"
+                    "easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 ),
                 "owner_ura": "easynet:///r/example/authority",
                 "descriptor_version": "1.0.0",
@@ -236,7 +239,7 @@ def test_runtime_ability_descriptor_provider_rejects_typed_descriptor_projection
                 "name": "observe.health",
                 "ability_ura": "easynet:///r/example/ability/authority.observe.health",
                 "descriptor_ref": (
-                    "easynet:///r/example/ability/authority.observe.health@1.0.0"
+                    "easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 ),
                 "owner_ura": "easynet:///r/example/authority",
                 "descriptor_version": "1.0.0",

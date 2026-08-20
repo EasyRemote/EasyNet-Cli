@@ -150,41 +150,6 @@ impl ResolveRequest {
     }
 }
 
-/// Versioned public ingress adapter for `federation.resolve`.
-///
-/// Canonical daemon code consumes [`ResolveRequest`], whose selector lives in
-/// one nested `filter` object. This ingress adapter accepts the prior flat
-/// selector fields at the public ability boundary and immediately normalizes
-/// them so runtime/read-model code never carries two selector authorities.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ResolveRequestIngressV1 {
-    #[serde(default)]
-    pub ura_prefix: Option<String>,
-    #[serde(default)]
-    pub include_abilities: bool,
-    #[serde(default)]
-    pub filter: Option<ResolveFilterRequest>,
-}
-
-impl ResolveRequestIngressV1 {
-    #[must_use]
-    pub fn into_canonical(self) -> ResolveRequest {
-        let Self {
-            ura_prefix,
-            include_abilities,
-            filter,
-        } = self;
-        let (filter_prefix, filter_include_abilities) = filter
-            .map(|filter| (filter.agent_ura_prefix, filter.include_abilities))
-            .unwrap_or((None, false));
-        ResolveRequest::with_filter(
-            ura_prefix.or(filter_prefix),
-            include_abilities || filter_include_abilities,
-        )
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResolveAgentSummary {
@@ -241,6 +206,8 @@ pub struct ResolveKeyResponse {
     pub public_keys_b64: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub principal_owner_ura: Option<String>,
+    /// Public wire scalar user-id segment paired with `principal_owner_ura`.
+    /// This is not a runtime User URA.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub principal_owner_user_id: Option<String>,
 }
@@ -419,42 +386,6 @@ mod tests {
 
             assert_unknown_field_rejected::<ResolveRequest>(serde_json::Value::Object(body), field);
         }
-    }
-
-    #[test]
-    fn resolve_request_ingress_v1_normalizes_flat_selector_to_filter() {
-        let ingress: ResolveRequestIngressV1 = serde_json::from_value(serde_json::json!({
-            "ura_prefix": "easynet:///r/acme/device",
-            "include_abilities": true
-        }))
-        .expect("ingress adapter accepts v1 flat selector");
-
-        let canonical = ingress.into_canonical();
-
-        assert_eq!(
-            canonical.effective_ura_prefix(),
-            Some("easynet:///r/acme/device")
-        );
-        assert!(canonical.wants_abilities());
-    }
-
-    #[test]
-    fn resolve_request_ingress_v1_normalizes_nested_filter() {
-        let ingress: ResolveRequestIngressV1 = serde_json::from_value(serde_json::json!({
-            "filter": {
-                "agent_ura_prefix": "easynet:///r/acme/agent",
-                "include_abilities": true
-            }
-        }))
-        .expect("ingress adapter accepts canonical nested filter");
-
-        let canonical = ingress.into_canonical();
-
-        assert_eq!(
-            canonical.effective_ura_prefix(),
-            Some("easynet:///r/acme/agent")
-        );
-        assert!(canonical.wants_abilities());
     }
 
     #[test]

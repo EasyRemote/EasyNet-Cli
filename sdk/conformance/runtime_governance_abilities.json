@@ -1,0 +1,13 @@
+{
+  "ability_descriptor": [
+    "meta.list_abilities",
+    "meta.list_resources"
+  ],
+  "receipt_history": [
+    "invocation.history.list",
+    "invocation.history.get",
+    "invocation.history.path",
+    "invocation.record.get",
+    "invocation.trace.get"
+  ]
+}

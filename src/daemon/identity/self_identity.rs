@@ -270,6 +270,19 @@ pub fn load_runtime_caller_signer(
     RuntimeCallerSignerResolver::default_path().load(owner_ura)
 }
 
+/// Resolve a runtime caller signer through an explicit key-service socket.
+///
+/// Attached SDK/native-runtime hosts must use this entrypoint when they are
+/// bound to a non-default daemon endpoint. Otherwise descriptor/provider paths
+/// can sign as the same caller URA with a different local keyring, which strict
+/// remote admission must reject as a trust-anchor mismatch.
+pub(crate) fn load_runtime_caller_signer_at_keyring_socket(
+    owner_ura: impl Into<String>,
+    socket_path: impl Into<PathBuf>,
+) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
+    RuntimeCallerSignerResolver::new(Arc::new(KeyringClient::new(socket_path))).load(owner_ura)
+}
+
 const RUNTIME_CALLER_SIGNER_CUSTODY_CHALLENGE: &[u8] = b"easynet.runtime.caller-signer-custody.v1";
 
 /// Prove that the canonical runtime caller signer for `owner_ura` is present
@@ -348,7 +361,6 @@ impl RuntimeCallerSignerResolver {
         }
     }
 
-    #[cfg(test)]
     fn new(provider: Arc<KeyringClient>) -> Self {
         Self { provider }
     }

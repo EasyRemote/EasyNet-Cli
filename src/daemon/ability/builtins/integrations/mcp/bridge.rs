@@ -54,7 +54,6 @@ use serde_json::{json, Value};
 use crate::daemon::ability::catalog::profiles::mcp::{
     tool_specs_from_descriptors, McpToolRouteTable,
 };
-use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -91,12 +90,12 @@ pub fn register<F>(
     let provider_for_list = Arc::clone(&provider);
     reg.register_rpc_with_owner(
         "mcp.bridge.list_tools",
-        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
+        OwnerKind::mcp_integration_system(),
         Arc::new(move |_args: Value| list_tools_handler(&provider_for_list)),
     );
     reg.register_rpc_with_owner(
         "mcp.bridge.call_tool",
-        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
+        OwnerKind::mcp_integration_system(),
         Arc::new(move |args: Value| call_tool_handler(&provider, &registry_handle, args)),
     );
 }
@@ -286,7 +285,11 @@ mod tests {
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name.to_string(),
-            crate::core::ura::device_ura("test", "local"),
+            crate::core::ura::device_agent_ura(
+                "test",
+                "local",
+                crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
+            ),
             Visibility::Public,
             AdmissionAction::Invoke,
         )
@@ -311,12 +314,17 @@ mod tests {
     }
 
     fn executable_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_test_runtime_for_device_authority(
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                TEST_DEVICE_URA,
+            )
+            .expect("MCP bridge fixture authority context");
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
-            TEST_DEVICE_URA,
+            authority_context,
         )
     }
 
@@ -334,7 +342,7 @@ mod tests {
         let _ = handle.set(arc.clone());
         arc.hot_register_rpc_with_spec(
             "test.echo",
-            OwnerKind::Device,
+            OwnerKind::plugin_management_system(),
             manifest_for("test.echo"),
             Arc::new(|args: Value| Ok(json!({"echoed": args}))),
         )
@@ -537,7 +545,7 @@ mod tests {
         let _ = handle.set(arc.clone());
         arc.hot_register_rpc_with_spec(
             "always.fails",
-            OwnerKind::Device,
+            OwnerKind::plugin_management_system(),
             manifest_for("always.fails"),
             Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
         )

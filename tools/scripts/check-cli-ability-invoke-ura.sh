@@ -41,6 +41,12 @@ grep -q 'local_registry_ability()' "$INVOKE_RS" \
 grep -q 'ABILITY_URA=' "$CHAT_SMOKE" \
     || fail "chat smoke must name the public selector ABILITY_URA"
 
+bad_device_smoke="$(grep -nE 'ability/device[./]' "$CONTROL_SMOKE" 2>/dev/null || true)"
+if [[ -n "$bad_device_smoke" ]]; then
+    fail "control smoke must use a device-sponsored SystemAgent Ability URA, not a direct Device owner:
+$bad_device_smoke"
+fi
+
 bad="$(
     grep -nE 'pub ability: String|invoke_args\.ability\b|ability invoke <ability>|ability invoke <name>|invoke <ability>|Ability \(tool\) name|ability invoke observe\.health([[:space:]]|$)|ability invoke "\$ABILITY"|\bABILITY=' \
         "$INVOKE_RS" "$GROUP_RS" "$CONTROL_SMOKE" "$CHAT_SMOKE" 2>/dev/null || true

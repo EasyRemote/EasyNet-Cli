@@ -56,6 +56,7 @@
 
 #![cfg(feature = "axon-pb")]
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[path = "support/runtime_fixture.rs"]
@@ -89,10 +90,19 @@ use easynet_cli::daemon::invocation::admission::federated_key_resolver::Federate
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_STATUS;
-use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
+
+fn test_attempt_ledger_path(realm: &str) -> std::path::PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    std::env::temp_dir().join(format!(
+        "easynet-cross-realm-signed-admission-{realm}-{}-{}.jsonl",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
 
 /// In-process federation client that forwards every `invoke`
 /// to a target `DaemonInvocationService`. Used so daemon B's
@@ -124,7 +134,8 @@ impl FederationClient for InProcessForwarder {
             .await
             .map_err(|status| FederationClientError::InnerInvokeFailed {
                 endpoint: "in-process-A".to_string(),
-                status: format!("code={:?} message={}", status.code(), status.message()),
+                status_code: status.code(),
+                status_message: status.message().to_string(),
             })?;
         Ok(response.into_inner())
     }
@@ -189,7 +200,9 @@ async fn hub_service(
     let service = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_session_realm(realm)
         .with_daemon_runtime(daemon_runtime)
-        .with_local_ability_catalog(Arc::clone(&catalog));
+        .with_local_ability_catalog(Arc::clone(&catalog))
+        .with_invocation_attempt_ledger_path(test_attempt_ledger_path(realm))
+        .expect("open cross-realm signed-admission attempt audit ledger");
     service
         .register_daemon_unary_routes(&daemon_ura)
         .await
@@ -288,7 +301,6 @@ fn signed_request(
                 ability_name: ability_ref.to_string(),
                 function_name: ability.to_string(),
             })),
-            ..InvocationTarget::default()
         }),
         arguments: args.to_vec(),
         ..InvokeRequest::default()
@@ -338,7 +350,7 @@ async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
         .append_agent(TrustedAgent {
             agent_ura: DEVICE_A_URA.to_string(),
             public_key_b64: device_a_pubkey_b64.clone(),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -353,7 +365,7 @@ async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
                     .verifying_key()
                     .to_bytes(),
             ),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some(REALM_B.to_string()),
             hub_endpoint: Some("in-process-B".to_string()),
@@ -520,7 +532,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
         .append_agent(TrustedAgent {
             agent_ura: DEVICE_A_URA.to_string(),
             public_key_b64: device_a_pubkey_b64.clone(),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -535,7 +547,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
                     .verifying_key()
                     .to_bytes(),
             ),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some(REALM_B.to_string()),
             hub_endpoint: Some("in-process-B".to_string()),

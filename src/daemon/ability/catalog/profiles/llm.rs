@@ -19,8 +19,9 @@
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 
 const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
-    // RFC-005 owner-local catalogue names: `meta.*` and the built-in
-    // `session.*` and `skill.<operation>` abilities are device-profile-owned.
+    // RFC-005 owner-local catalogue names: `meta.*` remains direct Device
+    // migration-surface, while built-in `session.*` and `skill.<operation>`
+    // abilities are device-sponsored SystemAgent-owned.
     // LLM profile's dynamic surface is `conversation.*` plus private
     // per-skill `skill.<skill-name>` entries.
     //
@@ -44,7 +45,7 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
 ];
 
 fn is_llm_dynamic_ability(ability_name: &str) -> bool {
-    const DEVICE_SKILL_ABILITIES: &[&str] = &[
+    const SYSTEM_SKILL_ABILITIES: &[&str] = &[
         "skill.install",
         "skill.list",
         "skill.publish",
@@ -55,7 +56,7 @@ fn is_llm_dynamic_ability(ability_name: &str) -> bool {
         "skill.upgrade",
         "skill.write_file",
     ];
-    if DEVICE_SKILL_ABILITIES.contains(&ability_name) {
+    if SYSTEM_SKILL_ABILITIES.contains(&ability_name) {
         return false;
     }
     LLM_DYNAMIC_ABILITY_PREFIXES
@@ -80,7 +81,7 @@ pub fn descriptors_for(
 /// `metadata["agent_type"]` with the given string when supplied.
 ///
 /// Per RFC §A4 the wire-level Agent envelope has no `kind` /
-/// `type` field. The legacy `registry::AgentType` Rust enum
+/// `type` field. The legacy `registry::RuntimeKind` Rust enum
 /// (claude-code | codex | codex-app-server) is intentionally kept
 /// as an internal type — refactoring 28+ files to delete it is
 /// out of scope here — but its display string is surfaced through
@@ -242,7 +243,7 @@ mod tests {
 
     #[test]
     fn catalog_snapshot_projects_to_multiple_llm_owners_without_mutating_source() {
-        let source_owner = "easynet:///r/acme/device/catalog";
+        let source_owner = "easynet:///r/acme/agent/device.catalog.runtime-introspection";
         let descriptor = |name: &str, description: &str| {
             AbilityDescriptor::new(
                 name,
@@ -257,7 +258,7 @@ mod tests {
         let catalog = LlmProfileAbilityCatalog::from_system_abilities(vec![
             descriptor("conversation.send", "Send a prompt"),
             descriptor("skill.design", "Run a private skill"),
-            descriptor("meta.list_abilities", "Device-owned metadata"),
+            descriptor("meta.list_abilities", "Runtime-introspection metadata"),
         ]);
 
         let alice = descriptors_for_with_catalog(

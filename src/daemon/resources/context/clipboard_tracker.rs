@@ -69,7 +69,7 @@ pub fn spawn() {
     let device_ura =
         crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_status()
             .ok()
-            .and_then(|status| status.host_device_agent_ura().map(str::to_string))
+            .and_then(|status| status.host_device_ura().map(str::to_string))
             .unwrap_or_default();
     if let Err(e) = std::thread::Builder::new()
         .name("clipboard-tracker".into())

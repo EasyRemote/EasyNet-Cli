@@ -24,24 +24,37 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
-    ScreenSnapshotBackend, XcapBackend,
-};
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenSnapshotBackend;
+#[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
+#[cfg(feature = "native-media")]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::XcapBackend;
 use crate::daemon::ability::descriptors::AdmissionAction;
-use crate::daemon::ability::dispatch::{BidiSource, EnvelopeContext, StreamSource};
+use crate::daemon::ability::dispatch::{
+    AbilityHandlerFailure, BidiSource, EnvelopeContext, OwnerKind, StreamSource,
+};
 use crate::daemon::ability::{AbilityImplSource, CallMode};
-use crate::daemon::plugins::package::BuiltinPluginAbilitySpec;
+use crate::daemon::plugins::package::{
+    BuiltinPluginAbilityHints, BuiltinPluginAbilitySpec, BuiltinPluginFrontendContract,
+};
+use crate::daemon::plugins::remote_desktop::consent_registry::ConsentTicketError;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
-    ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE, ABILITY_REQUEST_PERMISSION,
-    ABILITY_SET_DESCRIPTION, ABILITY_SHOW_SESSION, ABILITY_WATCH_EVENTS,
+    ABILITY_GRANT_CONSENT, ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE,
+    ABILITY_REPORT_CLIENT_STATE, ABILITY_REQUEST_PERMISSION, ABILITY_SET_DESCRIPTION,
+    ABILITY_SHOW_SESSION, ABILITY_WATCH_EVENTS,
 };
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::handlers;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::schema;
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetError;
 use crate::daemon::plugins::{
     PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder, PluginRuntimeLimits, Result,
 };
+use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 
 type PluginRpcHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<Value>;
@@ -50,6 +63,9 @@ type PluginStreamHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<StreamSource>;
 type PluginBidiHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<BidiSource>;
+
+const RESOURCE_SUBJECT_KINDS: &[&str] = &["resource"];
+const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "resource", "user"];
 
 #[derive(Clone, Copy)]
 enum RemoteDesktopAbilityBinding {
@@ -94,31 +110,96 @@ impl RemoteDesktopAbilityBinding {
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+                Arc::new(move |env, args| {
+                    classify_handler_result(handler(Arc::clone(&plugin), env, args))
+                }),
             ),
             Self::StatelessRpc { handler } => builder.rpc(
                 spec.name,
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(handler),
+                Arc::new(move |env, args| classify_handler_result(handler(env, args))),
             ),
             Self::Stream { handler } => builder.stream(
                 spec.name,
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+                Arc::new(move |env, args| {
+                    classify_handler_result(handler(Arc::clone(&plugin), env, args))
+                }),
             ),
             Self::Bidi { handler } => builder.bidi(
                 spec.name,
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+                Arc::new(move |env, args| {
+                    classify_handler_result(handler(Arc::clone(&plugin), env, args))
+                }),
             ),
         }
     }
+}
+
+fn classify_handler_result<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
+    result.map_err(|error| {
+        let axon_error = if let Some(error) = error.downcast_ref::<RemoteDesktopError>() {
+            error.to_axon()
+        } else if let Some(error) = error.downcast_ref::<ConsentTicketError>() {
+            consent_ticket_error_to_axon(error)
+        } else if let Some(error) = error.downcast_ref::<RemoteAppTargetError>() {
+            error.to_axon()
+        } else {
+            AxonError::new(AxonErrorKind::Internal)
+                .with_code(ErrorCode::ExecutionFailed)
+                .with_stage(ErrorStage::Execution)
+                .with_security_class(SecurityClass::Resource)
+                .with_message(error.to_string())
+        };
+        anyhow::Error::new(AbilityHandlerFailure::new(axon_error))
+    })
+}
+
+fn consent_ticket_error_to_axon(error: &ConsentTicketError) -> AxonError {
+    let (kind, code, stage, security_class) = match error {
+        ConsentTicketError::Full => (
+            AxonErrorKind::ResourceExhausted,
+            ErrorCode::ResourceExhausted,
+            ErrorStage::Quota,
+            SecurityClass::Resource,
+        ),
+        ConsentTicketError::Invalid => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthorityExpired,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+        ConsentTicketError::CallerMismatch => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthorityCallerMismatch,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+        ConsentTicketError::SubjectMismatch => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthoritySubjectMismatch,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+        ConsentTicketError::IntentMismatch => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthorityScopeViolation,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+    };
+    AxonError::new(kind)
+        .with_code(code)
+        .with_stage(stage)
+        .with_security_class(security_class)
+        .with_message(error.to_string())
 }
 
 /// Single runtime-side source for every exported remote desktop ability.
@@ -126,11 +207,31 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
     &[
         RemoteDesktopCompiledAbilityBinding {
             spec: BuiltinPluginAbilitySpec {
+                name: ABILITY_GRANT_CONSENT,
+                layer: PluginAbilityLayer::Control,
+                call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
+                bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
+                description: schema::grant_consent_description,
+                input_schema: schema::grant_consent_input_schema,
+            },
+            handler: RemoteDesktopAbilityBinding::Rpc {
+                handler: handlers::grant_consent::handle,
+            },
+        },
+        RemoteDesktopCompiledAbilityBinding {
+            spec: BuiltinPluginAbilitySpec {
                 name: ABILITY_CREATE_SESSION,
                 layer: PluginAbilityLayer::Control,
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::create_session_description,
                 input_schema: schema::create_session_input_schema,
             },
@@ -145,6 +246,9 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::show_session_description,
                 input_schema: schema::show_session_input_schema,
             },
@@ -159,6 +263,9 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::set_description_description,
                 input_schema: schema::set_description_input_schema,
             },
@@ -173,6 +280,9 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::add_ice_candidate_description,
                 input_schema: schema::add_ice_candidate_input_schema,
             },
@@ -182,11 +292,31 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
         },
         RemoteDesktopCompiledAbilityBinding {
             spec: BuiltinPluginAbilitySpec {
+                name: ABILITY_REPORT_CLIENT_STATE,
+                layer: PluginAbilityLayer::Control,
+                call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
+                bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
+                description: schema::report_client_state_description,
+                input_schema: schema::report_client_state_input_schema,
+            },
+            handler: RemoteDesktopAbilityBinding::Rpc {
+                handler: handlers::report_client_state::handle,
+            },
+        },
+        RemoteDesktopCompiledAbilityBinding {
+            spec: BuiltinPluginAbilitySpec {
                 name: ABILITY_WATCH_EVENTS,
                 layer: PluginAbilityLayer::Observation,
                 call_mode: CallMode::Stream,
                 admission_action: AdmissionAction::Stream,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::watch_events_description,
                 input_schema: schema::watch_events_input_schema,
             },
@@ -201,6 +331,9 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::refresh_lease_description,
                 input_schema: schema::refresh_lease_input_schema,
             },
@@ -215,6 +348,9 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::end_session_description,
                 input_schema: schema::end_session_input_schema,
             },
@@ -229,6 +365,9 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Bidi,
                 admission_action: AdmissionAction::Stream,
                 bidi_wire_kind: Some(PluginBidiWireKind::JsonFrames),
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::attach_description,
                 input_schema: schema::attach_input_schema,
             },
@@ -243,6 +382,10 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
+                subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract:
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION,
                 description: schema::permission_status_description,
                 input_schema: schema::permission_status_input_schema,
             },
@@ -257,6 +400,10 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract:
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION,
                 description: schema::request_permission_description,
                 input_schema: schema::request_permission_input_schema,
             },
@@ -280,7 +427,22 @@ pub fn contribute(
     builder: &mut PluginContributionBuilder,
     limits: PluginRuntimeLimits,
 ) -> Result<()> {
-    contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits)
+    #[cfg(feature = "native-media")]
+    {
+        contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits)
+    }
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    {
+        contribute_with_screen_backend(builder, Arc::new(SyntheticScreenBackend), limits)
+    }
+    #[cfg(not(any(feature = "native-media", feature = "headless-media")))]
+    {
+        let _ = builder;
+        let _ = limits;
+        anyhow::bail!(
+            "remote-desktop requires either native-media or headless-media provider support"
+        )
+    }
 }
 
 /// Contribute the remote desktop plugin with an injected screen backend.
@@ -293,6 +455,29 @@ pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend
     limits: PluginRuntimeLimits,
 ) -> Result<()> {
     let plugin = RemoteDesktopPlugin::new(backend, limits.into());
+    contribute_with_plugin(builder, plugin)
+}
+
+#[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_platform_services(
+    builder: &mut PluginContributionBuilder,
+    backend: Arc<dyn ScreenSnapshotBackend>,
+    target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
+    limits: PluginRuntimeLimits,
+) -> Result<()> {
+    let plugin = RemoteDesktopPlugin::with_target_binding_verifier(
+        backend,
+        target_binding_verifier,
+        limits.into(),
+    );
+    contribute_with_plugin(builder, plugin)
+}
+
+fn contribute_with_plugin(
+    builder: &mut PluginContributionBuilder,
+    plugin: Arc<RemoteDesktopPlugin>,
+) -> Result<()> {
+    builder.set_public_owner(OwnerKind::remote_desktop_system());
     for binding in compiled_ability_bindings() {
         binding
             .handler
@@ -305,8 +490,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend
 mod tests {
     use super::*;
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
+    use crate::daemon::ability::descriptors::ScopeRule;
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
+    use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
@@ -319,6 +506,18 @@ mod tests {
             assert_eq!(
                 spec.name, binding.spec.name,
                 "ability_specs must be a pure projection of the compiled binding table"
+            );
+            assert_eq!(
+                spec.frontend_contract,
+                if matches!(
+                    spec.name,
+                    ABILITY_PERMISSION_STATUS | ABILITY_REQUEST_PERMISSION
+                ) {
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION
+                } else {
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP
+                },
+                "remote desktop product lifecycle must be descriptor-owned, with permission probes publishing their host-local subject policy"
             );
         }
     }
@@ -333,6 +532,99 @@ mod tests {
                 binding.spec.name
             );
         }
+    }
+
+    #[test]
+    fn consent_ticket_failures_are_machine_readable() {
+        let err =
+            classify_handler_result::<()>(Err(ConsentTicketError::Invalid.into())).unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured handler failure");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::PermissionDenied);
+        assert_eq!(axon_error.code, ErrorCode::AuthorityExpired);
+        assert_eq!(axon_error.stage, Some(ErrorStage::AuthorityValidation));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Authority));
+        assert!(
+            !axon_error.message.is_empty(),
+            "public ability errors must not collapse to an empty body"
+        );
+    }
+
+    #[test]
+    fn target_resolution_failures_are_machine_readable() {
+        let err = classify_handler_result::<()>(Err(RemoteAppTargetError::new(
+            ABILITY_CREATE_SESSION,
+            TargetResolutionError::TargetMetadataIncomplete,
+            "window targets require window_id",
+        )
+        .into()))
+        .unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured target failure");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::InvalidArgument);
+        assert_eq!(axon_error.code, ErrorCode::RequestMetadataInvalid);
+        assert_eq!(axon_error.reason, "target_metadata_incomplete");
+        assert_eq!(axon_error.stage, Some(ErrorStage::RequestValidation));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Resource));
+        assert_eq!(
+            axon_error
+                .context
+                .get("frontend_action")
+                .map(String::as_str),
+            Some("show_unsupported")
+        );
+        assert!(
+            axon_error
+                .message
+                .contains("reason=target_metadata_incomplete"),
+            "target failure must keep canonical reason in message: {}",
+            axon_error.message
+        );
+    }
+
+    #[test]
+    fn permission_probe_subject_failures_are_machine_readable_invalid_arguments() {
+        let err = classify_handler_result::<()>(Err(RemoteDesktopError::InvalidArgument {
+            ability: ABILITY_PERMISSION_STATUS,
+            detail: "screen-capture permission probes are host-local".to_string(),
+        }
+        .into()))
+        .unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured permission failure");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::InvalidArgument);
+        assert_eq!(axon_error.code, ErrorCode::RequestPayloadInvalid);
+        assert_eq!(axon_error.stage, Some(ErrorStage::RequestValidation));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Resource));
+        assert!(
+            axon_error.message.contains("reason=invalid_argument"),
+            "permission subject failure must keep canonical reason in message: {}",
+            axon_error.message
+        );
+    }
+
+    #[test]
+    fn unknown_handler_failures_still_have_structured_payloads() {
+        let err = classify_handler_result::<()>(Err(anyhow::anyhow!("boom"))).unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must wrap untyped errors for adapter projection");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::Internal);
+        assert_eq!(axon_error.code, ErrorCode::ExecutionFailed);
+        assert_eq!(axon_error.stage, Some(ErrorStage::Execution));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Resource));
+        assert_eq!(axon_error.message, "boom");
     }
 
     #[test]
@@ -367,12 +659,46 @@ mod tests {
             .iter()
             .find(|row| row.name == ABILITY_CREATE_SESSION)
             .expect("remote_desktop.create_session must be catalogued");
+        assert_eq!(
+            create_session.owner,
+            OwnerKind::remote_desktop_system(),
+            "remote_desktop.* descriptors must be owned by the remote-desktop SystemAgent; plugin-management owns plugin lifecycle only"
+        );
         let descriptor = &create_session.descriptor;
 
         assert_eq!(descriptor.description, schema::create_session_description());
         assert_eq!(
+            descriptor.scope_subjects,
+            ScopeRule::OnlyUraKinds(vec!["resource".to_string()]),
+            "remote_desktop.create_session descriptor must reject non-resource subjects before handler dispatch"
+        );
+        assert_eq!(
             descriptor.input_schema(),
             &schema::create_session_input_schema()
+        );
+        let permission_status = rows
+            .iter()
+            .find(|row| row.name == ABILITY_PERMISSION_STATUS)
+            .expect("remote_desktop.permission_status must be catalogued");
+        assert_eq!(
+            permission_status.descriptor.scope_subjects,
+            ScopeRule::OnlyUraKinds(vec![
+                "agent".to_string(),
+                "resource".to_string(),
+                "user".to_string()
+            ]),
+            "host-local permission probes must advertise local-system Agent, caller User, and descriptor-bound invoke resource subjects; target resources are rejected by the handler"
+        );
+        assert_eq!(
+            permission_status
+                .descriptor
+                .metadata
+                .get("subject_contract_ura")
+                .map(String::as_str),
+            Some(
+                crate::daemon::plugins::package::REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA
+            ),
+            "permission probes must publish the exact host-local subject policy contract instead of leaving Resource scope ambiguous"
         );
         let record = reg
             .control_plane_record_for_mode(ABILITY_CREATE_SESSION, DescriptorCallMode::Rpc)

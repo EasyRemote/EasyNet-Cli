@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -144,13 +145,22 @@ func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	}
 }
 
-func TestStreamEventDoesNotAcceptLegacyContentTypeAlias(t *testing.T) {
-	event, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"data","content_type":"application/json"}`))
-	if err != nil {
-		t.Fatalf("NewStreamEventFromJSON: %v", err)
+func TestStreamEventRejectsLegacyContentTypeAlias(t *testing.T) {
+	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"data","content_type":"application/json"}`))
+	if err == nil || !strings.Contains(err.Error(), "stream event contains noncanonical field content_type") {
+		t.Fatalf("NewStreamEventFromJSON accepted legacy content_type alias: %v", err)
 	}
-	if event.PayloadContentType() != "" {
-		t.Fatalf("legacy content_type alias populated payload content type: %q", event.PayloadContentType())
+}
+
+func TestStreamProjectionsRejectProductStateCode(t *testing.T) {
+	if _, err := NewStreamHandleFromJSON(&memoryStreamTransport{}, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4,"state_code":"S200"}`)); err == nil || !strings.Contains(err.Error(), "stream open contains noncanonical field state_code") {
+		t.Fatalf("NewStreamHandleFromJSON accepted product state_code: %v", err)
+	}
+	if _, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"data","state":"Open","terminal":false,"state_code":"S200"}`)); err == nil || !strings.Contains(err.Error(), "stream event contains noncanonical field state_code") {
+		t.Fatalf("NewStreamEventFromJSON accepted product state_code: %v", err)
+	}
+	if _, err := NewStreamCancelFromJSON([]byte(`{"stream_id":"stream-1","cancelled":false,"state":"CancelRequested","terminal":false,"state_code":"S200"}`)); err == nil || !strings.Contains(err.Error(), "stream cancel contains noncanonical field state_code") {
+		t.Fatalf("NewStreamCancelFromJSON accepted product state_code: %v", err)
 	}
 }
 

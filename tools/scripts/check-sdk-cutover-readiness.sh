@@ -113,7 +113,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "canonical runtime convergence V2 self-test" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" --self-test
   run_gate "SDK product-neutrality syntax" bash -n "$SELF_DIR/check-sdk-product-neutrality.sh"
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
-  run_gate "generic FFI ABI v6 exact-surface self-test" bash "$REPO_ROOT/tests/scripts/test_check_ffi_abi_v6_header.sh"
+  run_gate "generic FFI ABI v7 exact-surface self-test" bash "$REPO_ROOT/tests/scripts/test_check_ffi_abi_v7_header.sh"
   run_gate "SDK package metadata self-test" bash "$SELF_DIR/check-sdk-package-metadata.sh" --self-test
   run_gate "downstream SDK consumer cutover self-test" bash "$SELF_DIR/check-downstream-sdk-consumer-cutover.sh" --self-test
   run_gate "product key-custody boundary self-test" bash "$SELF_DIR/check-product-key-custody-boundary.sh" --self-test
@@ -123,6 +123,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "standalone Hub PrincipalLifecycle E2E self-test" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" --self-test
   run_gate "CLI Hub/Device daemon E2E self-test" bash "$SELF_DIR/cli-hub-device-daemon-e2e.sh" --self-test
   run_gate "Docker two-node EasyRemote CLI E2E self-test" bash "$SELF_DIR/docker-two-node-easyremote-cli-e2e.sh" --self-test
+  run_gate "Docker media/bidi E2E self-test" bash "$SELF_DIR/docker-media-bidi-e2e.sh" --self-test
   run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
   run_gate "Go SDK live smoke self-test" bash "$SELF_DIR/go-sdk-live-smoke.sh" --self-test
   run_gate "Python SDK static contract self-test" bash "$SELF_DIR/check-python-sdk-static-contract.sh" --self-test
@@ -205,7 +206,7 @@ run_gate "SDK canonical public API" bash "$SELF_DIR/check-sdk-canonical-public-a
 run_gate "retired edge-adapter policy absence" check_retired_edge_adapter_policy_absence || status=1
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_sdk_conformance_live_gates "$CUTOVER_LIVE_RESULTS_DIR" || status=1
-run_gate "generic FFI ABI v6 exact surface" bash "$SELF_DIR/check-ffi-abi-v6-header.sh" || status=1
+run_gate "generic FFI ABI v7 exact surface" bash "$SELF_DIR/check-ffi-abi-v7-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1
 run_gate "canonical runtime convergence V2" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" || status=1
@@ -223,6 +224,8 @@ run_gate "product smokes" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "
 run_gate "runtime events cross-repo gate" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "$SELF_DIR/runtime-events-cross-repo-e2e.sh" || status=1
 run_gate "runtime events live daemon E2E" bash "$SELF_DIR/runtime-events-live-daemon-e2e.sh" || status=1
 run_gate "standalone Hub PrincipalLifecycle E2E" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" || status=1
+run_gate "Docker two-node EasyRemote CLI E2E source contract" bash "$SELF_DIR/docker-two-node-easyremote-cli-e2e.sh" --self-test || status=1
+run_gate "Docker media/bidi E2E source contract" bash "$SELF_DIR/docker-media-bidi-e2e.sh" --self-test || status=1
 run_gate "Python SDK live smoke" bash "$SELF_DIR/python-sdk-live-smoke.sh" || status=1
 run_gate "Go SDK live smoke" bash "$SELF_DIR/go-sdk-live-smoke.sh" || status=1
 

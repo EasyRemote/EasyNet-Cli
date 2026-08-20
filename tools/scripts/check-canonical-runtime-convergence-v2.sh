@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/generate-runtime-governance-routes.py" --check
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
+EASYNET_BACKEND_ROOT="${EASYNET_BACKEND_ROOT:-$ROOT/../EasyNet}"
 CANONICAL_LIFECYCLE_AXON_ROOT="$AXON_ROOT"
 source "$ROOT/sdk/conformance/toolchain_path.sh"
 source "$ROOT/sdk/conformance/python_toolchain.sh"
@@ -39,6 +42,18 @@ check_static_registration_manifest_boundary_contract() {
 
 check_remote_public_governance_read_boundary_contract() {
   bash "$ROOT/tools/scripts/check-remote-public-governance-read-boundary.sh" >/dev/null
+}
+
+check_backend_product_dto_drift_contract() {
+  local backend_root="$EASYNET_BACKEND_ROOT"
+  local drift_gate="$backend_root/scripts/check-canonical-runtime-product-drift.sh"
+  if [[ ! -d "$backend_root" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$drift_gate" ]]; then
+    fail "sibling EasyNet backend exists but product drift gate is missing: $drift_gate"
+  fi
+  bash "$drift_gate" >/dev/null
 }
 
 check_mcp_reflection_async_bridge_contract() {
@@ -125,6 +140,8 @@ check_local_runtime_stream_chunk_projection_contract() {
   [[ -f "$stream" ]] || fail "stream dispatcher source is missing: ${stream#$cli_root/}"
 
   "$PYTHON_BIN" - "$stream" <<'PY'
+import re
+import re
 import sys
 from pathlib import Path
 
@@ -429,8 +446,10 @@ remote_required = {
     "facts.canonical_detail()": "remote_projection_not_using_canonical_detail",
     "facts.grpc_status_code()": "remote_projection_not_using_classifier_status",
     "canonical_untyped_remote_failure_detail": "untyped_remote_projection_not_shared",
-    "route_negative_owner_offline_is_route_unavailable_not_ability_absent": "route_negative_test_missing",
-    "caller_signer_readiness_is_not_downgraded_to_ability_absent": "caller_signer_test_missing",
+    "typed_owner_offline_is_route_unavailable_not_ability_absent": "typed_owner_offline_test_missing",
+    "route_text_does_not_gain_owner_offline_state": "route_text_negative_test_missing",
+    "typed_caller_signer_readiness_is_not_downgraded_to_ability_absent": "typed_caller_signer_test_missing",
+    "keyring_text_does_not_gain_caller_signer_state": "keyring_text_negative_test_missing",
 }
 for needle, marker in remote_required.items():
     if needle not in remote:
@@ -442,19 +461,31 @@ classifier_required = {
     "RuntimeFailureKind::RouteUnavailable": "route_unavailable_kind_missing",
     "RuntimeFailureKind::CallerSignerUnavailable": "caller_signer_kind_missing",
     "RuntimeFailureKind::NotFound": "not_found_kind_missing",
-    "detail.contains(\"ROUTE_NEGATIVE\")": "route_negative_detail_missing",
-    "detail.contains(\"NEGATIVE_REASON_NXDOMAIN\")": "nxdomain_detail_missing",
-    "detail.contains(\"OWNER IS NOT ONLINE\")": "owner_offline_detail_missing",
+    "code == \"DESCRIPTOR_OWNER_OFFLINE\"": "descriptor_owner_offline_typed_code_missing",
+    "code == \"CALLER_SIGNER_UNAVAILABLE\"": "caller_signer_typed_code_missing",
+    "code == \"ROUTE_NEGATIVE\"": "route_negative_typed_code_missing",
+    "canonical_code_from_message_prefix": "canonical_prefix_helper_missing",
     "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online": "descriptor_owner_offline_projection_missing",
-    "detail.contains(\"REQUIRES A CALLER SIGNER\")": "caller_signer_detail_missing",
-    "detail.contains(\"KEYRING ENTRY NOT FOUND\")": "keyring_not_found_detail_missing",
-    "detail.contains(\"SELF-IDENTITY:\")": "self_identity_detail_missing",
-    "classifies_owner_offline_before_not_found": "owner_offline_classifier_test_missing",
-    "classifies_keyring_detail_as_caller_signer_unavailable": "caller_signer_classifier_test_missing",
+    "classifies_typed_owner_offline_before_not_found": "typed_owner_offline_classifier_test_missing",
+    "route_text_does_not_gain_descriptor_owner_offline_state": "route_text_classifier_negative_missing",
+    "classifies_typed_caller_signer_unavailable": "typed_caller_signer_classifier_test_missing",
+    "untyped_keyring_detail_does_not_gain_caller_signer_state": "keyring_text_classifier_negative_missing",
 }
 for needle, marker in classifier_required.items():
     if needle not in classifier:
         raise SystemExit(f"remote_failure_route_negative:{marker}")
+classifier_semantics = classifier.split("pub(crate) fn canonical_untyped_remote_failure_detail", 1)[0]
+for legacy in (
+    'detail.contains("ROUTE_NEGATIVE")',
+    'detail.contains("NEGATIVE_REASON_NXDOMAIN")',
+    'detail.contains("NEGATIVE_REASON_NOROUTE")',
+    'detail.contains("OWNER IS NOT ONLINE")',
+    'detail.contains("REQUIRES A CALLER SIGNER")',
+    'detail.contains("KEYRING ENTRY NOT FOUND")',
+    'detail.contains("SELF-IDENTITY:")',
+):
+    if legacy in classifier_semantics:
+        raise SystemExit("remote_failure_route_negative:detail_semantic_classifier_present")
 owner_index = classifier.find("self.is_descriptor_owner_offline(&code)")
 route_index = classifier.find("self.is_route_unavailable(&code)")
 signer_index = classifier.find("self.is_caller_signer_unavailable(&code)")
@@ -568,11 +599,11 @@ if legacy in production:
 required = {
     "struct CallbackFrameProjection": "projection_value_object_missing",
     "enum CallbackFrameLifecycle": "projection_lifecycle_state_missing",
-    "CallbackFrameLifecycle::CanonicalTerminal": "canonical_terminal_state_missing",
-    "fn is_canonical_terminal(&self) -> bool": "terminal_accessor_missing",
+    "CallbackFrameLifecycle::StopAfterFrame": "stop_after_frame_state_missing",
+    "fn should_stop_after_frame(&self) -> bool": "terminal_accessor_missing",
     "fn into_json_bytes(self) -> Vec<u8>": "json_serialization_boundary_missing",
-    "projection.is_canonical_terminal()": "reader_terminal_accessor_missing",
-    "callback_frame_projection_terminality_is_not_inferred_from_json_shape": "json_independence_test_missing",
+    "projection.should_stop_after_frame()": "reader_terminal_accessor_missing",
+    "callback_frame_projection_lifecycle_is_not_inferred_from_json_shape": "json_independence_test_missing",
 }
 for needle, label in required.items():
     if needle not in text:
@@ -585,7 +616,7 @@ for fn_name in ("run_stream_reader", "run_bidi_down_reader"):
     body = match.group(0)
     if 'projection["terminal"]' in body or ".as_bool().unwrap_or(false)" in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_terminal_lookup")
-    if "projection.is_canonical_terminal()" not in body:
+    if "projection.should_stop_after_frame()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_typed_terminal_missing")
     if "projection.into_json_bytes()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_boundary_missing")
@@ -1452,6 +1483,7 @@ check_principal_owner_alias_retirement_contract() {
 check_admission_owner_authority_source_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local policy_gate="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
+  local policy_gate_tests="$cli_root/src/daemon/invocation/admission/policy_gate_tests.rs"
   local owner_resolution="$cli_root/src/daemon/invocation/admission/owner_resolution.rs"
 
   for file in "$policy_gate" "$owner_resolution"; do
@@ -1467,7 +1499,7 @@ check_admission_owner_authority_source_contract() {
     fail "resolve_owner must not accept daemon_ura as an owner fact source"
   fi
 
-  if ! rg -q 'local_authority_ability_without_trust_owner_stays_unresolved' "$policy_gate"; then
+  if ! rg -q 'local_authority_ability_without_trust_owner_stays_unresolved' "$policy_gate" "$policy_gate_tests" 2>/dev/null; then
     fail "admission policy gate must prove local Authority abilities stay unresolved without trust owner facts"
   fi
 }
@@ -1686,6 +1718,7 @@ check_session_open_authority_vocabulary_contract() {
 check_authority_context_model_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local authority="$cli_root/src/daemon/ability/authority/mod.rs"
+  local owner_projection="$cli_root/src/daemon/ability/owner_projection.rs"
   local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
   local catalog_build="$cli_root/src/daemon/ability/catalog/build.rs"
   local conformance="$cli_root/src/daemon/ability/conformance.rs"
@@ -1694,12 +1727,12 @@ check_authority_context_model_vocabulary_contract() {
   local daemon_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
   local errors="$cli_root/src/daemon/ability/control_plane_error.rs"
 
-  for file in "$authority" "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; do
+  for file in "$authority" "$owner_projection" "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; do
     [[ -f "$file" ]] || fail "authority context vocabulary source is missing: ${file#$cli_root/}"
   done
 
   if rg -n 'CanonicalHubAuthority|for_hub_authority_root|hosts_hub_authority|hub_authority_root|OwnerKind::Hub|AbilityAuthoritySet::Hub|AbilityAuthoritySet::Both|Self::Hub \{|Self::Both|fn hub\(&self\)|\.hub\(\)|Hub authority context|Hub authority set|authority_set: "hub"|authority set "hub"|Device\+Hub authority|InvalidHubAuthorityRoot|hub authority root must|product Hub Authority|supported Hub owner|Hub owners|dynamic Hub owner|Hub owner with Device projection|foreign Hub authority root|Hub-owned session\.open|Hub registry leaked|Hub owner filtering|Hub LocalRuntime|Hub daemon builder' \
-    "$authority" "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; then
+    "$authority" "$owner_projection" "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; then
     fail "authority context model preserves retired Hub/Both vocabulary"
   fi
   if rg -n 'for_local_combined_environment|Public catalogue constructors historically|Preserve that API behavior' "$dispatch"; then
@@ -1750,13 +1783,13 @@ for constructor, source in [
         raise SystemExit(f"AxonAbilityCatalog::{constructor} preserves implicit combined authority")
 PY
 
-  if ! rg -q 'RealmAuthority' "$authority"; then
+  if ! rg -q 'RealmAuthority' "$owner_projection"; then
     fail "authority owner projection parser must expose RealmAuthority"
   fi
-  if ! rg -F -q '"authority" => Ok(Self::RealmAuthority)' "$authority"; then
+  if ! rg -F -q '"authority" => Ok(Self::RealmAuthority)' "$owner_projection"; then
     fail "authority owner projection must map authority marker to RealmAuthority"
   fi
-  if rg -F -q '"hub" => Ok(Self::RealmAuthority)' "$authority"; then
+  if rg -F -q '"hub" => Ok(Self::RealmAuthority)' "$owner_projection"; then
     fail "authority owner projection must not preserve retired hub marker compatibility"
   fi
   if ! rg -q 'authority_scope_authority_marker_projects_realm_authority_state' "$authority"; then
@@ -1770,7 +1803,7 @@ PY
     "struct CanonicalRealmAuthority" \
     "RealmAuthority," \
     "OwnerKind::RealmAuthority" \
-    '"authority" => Some(OwnerKind::RealmAuthority)' \
+    "OwnerProjection::RealmAuthority => Some(OwnerKind::RealmAuthority)" \
     "RealmAuthority {" \
     "DeviceAndRealmAuthority {" \
     "fn realm_authority(&self)" \
@@ -1910,17 +1943,20 @@ check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
   local client_contract="$cli_root/src/daemon/federation/client/ability_contract.rs"
+  local descriptor="$cli_root/ability-descriptors/system/federation/federation.advertise_agent.ability.toml"
   [[ -f "$wrappers" ]] || return 0
   [[ -f "$client_contract" ]] || return 0
+  [[ -f "$descriptor" ]] || return 0
 
-  "$PYTHON_BIN" - "$wrappers" "$client_contract" <<'PY'
+  "$PYTHON_BIN" - "$wrappers" "$client_contract" "$descriptor" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-wrappers_path, client_contract_path = map(Path, sys.argv[1:])
+wrappers_path, client_contract_path, descriptor_path = map(Path, sys.argv[1:])
 text = wrappers_path.read_text()
 client_contract = client_contract_path.read_text()
+descriptor = descriptor_path.read_text()
 match = re.search(
     r"#\[derive\([^\]]*Deserialize[^\]]*\)\]\s*"
     r"#\[serde\(deny_unknown_fields\)\]\s*"
@@ -1931,33 +1967,41 @@ match = re.search(
 if match is None:
     raise SystemExit("advertise_agent_request_not_strict")
 body = match.group("body")
-if "pub signing_authority: AdvertiseSigningAuthorityRequest" not in body:
-    raise SystemExit("advertise_agent_signing_authority_not_required")
-if "host_ura: Option" in body or re.search(r"\bpub\s+host_ura\b", body):
-    raise SystemExit("advertise_agent_retired_host_ura_field")
-if "self.host_ura" in text:
-    raise SystemExit("advertise_agent_host_ura_fallback")
+request_fields = re.findall(r"\bpub\s+(\w+)\s*:", body)
+if request_fields != ["agent_ura", "incarnation_id"]:
+    raise SystemExit(f"advertise_agent_request_not_exact:{request_fields}")
+if "HostedAgentIncarnationId" not in body:
+    raise SystemExit("advertise_agent_request_not_using_incarnation_value_object")
 response = re.search(r"pub struct AdvertiseAgentResponse\s*\{(?P<body>.*?)\n\}", text, re.DOTALL)
 if response is None:
     raise SystemExit("advertise_agent_response_missing")
 response_body = response.group("body")
-if "pub ack: bool" not in response_body:
-    raise SystemExit("advertise_agent_response_ack_missing")
-if "replaced_prior" in response_body:
-    raise SystemExit("advertise_agent_response_retired_replaced_prior")
+response_fields = re.findall(r"\bpub\s+(\w+)\s*:", response_body)
+if response_fields != ["ack", "assignment"] or "HostedAgentGenerationAssignment" not in response_body:
+    raise SystemExit(f"advertise_agent_response_not_exact:{response_fields}")
 receipt = re.search(r"pub struct AdvertiseAgentReceipt\s*\{(?P<body>.*?)\n\}", client_contract, re.DOTALL)
 if receipt is None:
     raise SystemExit("advertise_agent_receipt_missing")
 receipt_body = receipt.group("body")
-if "pub ack: bool" not in receipt_body:
-    raise SystemExit("advertise_agent_receipt_ack_missing")
-if "replaced_prior" in receipt_body:
-    raise SystemExit("advertise_agent_receipt_retired_replaced_prior")
-if '"replaced_prior"' not in client_contract:
-    raise SystemExit("advertise_agent_receipt_missing_retired_replaced_prior_negative_test")
+receipt_fields = re.findall(r"\bpub\s+(\w+)\s*:", receipt_body)
+if receipt_fields != ["ack", "assignment"] or "HostedAgentGenerationAssignment" not in receipt_body:
+    raise SystemExit(f"advertise_agent_receipt_not_exact:{receipt_fields}")
+args = re.search(r"pub struct AdvertiseAgentArgs\s*\{(?P<body>.*?)\n\}", client_contract, re.DOTALL)
+if args is None:
+    raise SystemExit("advertise_agent_args_missing")
+args_fields = re.findall(r"\bpub\s+(\w+)\s*:", args.group("body"))
+if args_fields != ["agent_ura", "incarnation_id"]:
+    raise SystemExit(f"advertise_agent_args_not_exact:{args_fields}")
+if 'descriptor_version = "2.0.0"' not in descriptor:
+    raise SystemExit("advertise_agent_descriptor_version_not_bumped")
+if 'required = ["agent_ura", "incarnation_id"]' not in descriptor or "additionalProperties = false" not in descriptor:
+    raise SystemExit("advertise_agent_descriptor_input_not_closed")
+if r'\"required\":[\"ack\",\"assignment\"]' not in descriptor or r'\"additionalProperties\":false' not in descriptor:
+    raise SystemExit("advertise_agent_descriptor_output_not_closed")
 for test in (
-    "advertise_agent_request_rejects_retired_top_level_host_ura",
-    "advertise_agent_request_requires_signing_authority",
+    "advertise_agent_request_is_exactly_agent_and_incarnation",
+    "advertise_agent_request_requires_strict_incarnation_id",
+    "advertise_agent_response_is_closed_and_reuses_the_assignment_value_object",
     "advertise_agent_receipt_rejects_retired_fields",
 ):
     if test not in text and test not in client_contract:
@@ -2045,9 +2089,19 @@ PY
 check_invocation_history_ledger_ura_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
+  local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
+  local cli_history="$cli_root/src/cli/commands/groups/invocation.rs"
+  local node_sdk="$cli_root/sdk/node/index.js"
+  local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local axon_ura="$AXON_ROOT/core/ura-rs/src/lib.rs"
   [[ -f "$history" ]] || return 0
+  [[ -f "$dispatch" ]] || return 0
+  [[ -f "$cli_history" ]] || return 0
+  [[ -f "$node_sdk" ]] || return 0
+  [[ -f "$node_tests" ]] || return 0
+  [[ -f "$axon_ura" ]] || fail "Axon URA source is missing: ${axon_ura#$AXON_ROOT/}"
 
-  "$PYTHON_BIN" - "$history" <<'PY'
+  "$PYTHON_BIN" - "$history" "$dispatch" "$cli_history" "$node_sdk" "$node_tests" "$axon_ura" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2055,44 +2109,250 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text()
 production = text.split("#[cfg(test)]", 1)[0]
+dispatch = Path(sys.argv[2]).read_text()
+cli_path = Path(sys.argv[3])
+cli_text = cli_path.read_text()
+cli_production = cli_text.split("#[cfg(test)]", 1)[0]
+node_path = Path(sys.argv[4])
+node_text = node_path.read_text()
+node_test_path = Path(sys.argv[5])
+node_tests = node_test_path.read_text()
+axon_ura = Path(sys.argv[6]).read_text()
 
-ledger = re.search(
-    r"fn ledger_resource_ura\(\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn ledger_resource_ura_from_host_device_agent_ura",
-    production,
-    re.S,
-)
-if ledger is None:
-    raise SystemExit("invocation_history_ledger_ura_function_not_found")
-if "anyhow::Result<Option<String>>" not in ledger.group("ret"):
-    raise SystemExit("invocation_history_ledger_ura_not_fallible")
-ledger_body = ledger.group("body")
-if "load_hosted_identity_status().ok()" in ledger_body:
-    raise SystemExit("invocation_history_ledger_ura_aggregate_load_collapsed")
-if "invocation.history ledger owner projection unavailable" not in ledger_body:
-    raise SystemExit("invocation_history_ledger_ura_missing_projection_context")
+for required in (
+    "pub fn invocation_ledger_resource_ura(owner_ura: &str) -> Option<String>",
+    'URAKind::Authority => "authority.invocations".to_string()',
+    '"billing/invocations"',
+    "invocation_ledger_resource_owner_is_canonical_for_every_runtime_owner_kind",
+):
+    if required not in axon_ura:
+        raise SystemExit(f"invocation_history_ledger_ura_axon_owner_model_missing:{required}")
+
+for retired in (
+    "AgentAggregateRepository",
+    "load_hosted_identity_status",
+    "host_device_ura",
+    "ledger_resource_ura()",
+):
+    if retired in production:
+        raise SystemExit(f"invocation_history_ledger_ura_ambient_owner_path_present:{retired}")
+
+for required in (
+    "reg.ledger_governance_authority()",
+    "governance.runtime_owner_ura()",
+    "governance.owner().clone()",
+    "ledger_ura: String",
+):
+    if required not in production:
+        raise SystemExit(f"invocation_history_ledger_ura_catalog_binding_missing:{required}")
+
+for required in (
+    "struct LedgerGovernanceAuthority",
+    "owner: OwnerKind",
+    "runtime_owner_ura: String",
+    "fn ledger_governance_authority(&self) -> LedgerGovernanceAuthority",
+    "authority_scope.authority_root().to_string()",
+):
+    if required not in dispatch:
+        raise SystemExit(f"invocation_history_ledger_governance_domain_missing:{required}")
 
 projection = re.search(
-    r"fn ledger_resource_ura_from_host_device_agent_ura\([^)]*\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn fetch_records_from_path",
+    r"fn ledger_resource_ura_from_runtime_owner_ura\([^)]*\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn fetch_records_from_path",
     production,
     re.S,
 )
 if projection is None:
     raise SystemExit("invocation_history_ledger_ura_projection_helper_not_found")
-if "anyhow::Result<Option<String>>" not in projection.group("ret"):
-    raise SystemExit("invocation_history_ledger_ura_projection_helper_not_fallible")
+if "anyhow::Result<String>" not in projection.group("ret"):
+    raise SystemExit("invocation_history_ledger_ura_projection_helper_not_required_and_fallible")
 projection_body = projection.group("body")
 for required in (
-    "invalid host_device_agent_ura",
-    "return Ok(None);",
-    "resource_dot_ura",
+    "must not be empty",
+    "not a canonical runtime owner",
+    "invocation_ledger_resource_ura(runtime_owner_ura)",
+    "does not support runtime owner",
 ):
     if required not in projection_body:
         raise SystemExit(f"invocation_history_ledger_ura_projection_missing:{required}")
-if ".ok()?" in projection_body or "parse_ura(host_device_agent_ura).ok()" in projection_body:
+if ".ok()?" in projection_body or "parse_ura(runtime_owner_ura).ok()" in projection_body:
     raise SystemExit("invocation_history_ledger_ura_parse_collapsed")
+for retired in (
+    "return Ok(None);",
+    "resource_dot_ura(",
+    "URAKind::Device",
+    "URAKind::User",
+    "URAKind::Agent",
+):
+    if retired in projection_body:
+        raise SystemExit(
+            f"invocation_history_ledger_ura_projection_duplicates_protocol_owner_mapping:{retired}"
+        )
 
-if "ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity" not in text:
+if "ledger_resource_ura_projection_requires_canonical_runtime_owner" not in text:
     raise SystemExit("missing_invocation_history_ledger_ura_projection_test")
+for required in (
+    "easynet:///r/test/authority",
+    "easynet:///r/test/resource/authority.invocations/billing/invocations",
+    "authority_runtime_binds_history_reader_to_authority_ledger",
+):
+    if required not in text:
+        raise SystemExit(f"missing_invocation_history_ledger_ura_authority_test:{required}")
+
+for response in (
+    "HistoryListResponse",
+    "HistoryGetResponse",
+    "TraceGetResponse",
+    "HistoryPathResponse",
+):
+    match = re.search(
+        rf"struct {response} \{{(?P<body>.*?)\n\}}",
+        cli_production,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"invocation_history_cli_response_missing:{response}")
+    if "ledger_ura: String" not in match.group("body"):
+        raise SystemExit(f"invocation_history_cli_response_missing_ledger_ura:{response}")
+
+for required in (
+    "trait InvocationHistoryResponse",
+    "fn validate_history_ledger_ura",
+    "parse_ura(trimmed)",
+    "URAKind::Resource",
+    "T: DeserializeOwned + InvocationHistoryResponse",
+    "response.validate_response(operation)?",
+    "invocation_history_responses_require_canonical_ledger_ura",
+):
+    if required not in cli_text:
+        raise SystemExit(f"invocation_history_cli_ledger_ura_contract_missing:{required}")
+
+if "HistoryListResponse {\n            ledger_path: None" in cli_text:
+    raise SystemExit("invocation_history_cli_limit_zero_synthesizes_legacy_response")
+
+node_receipt = re.search(
+    r"function receiptLedgerSource\(output\) \{(?P<body>.*?)\n\}\n\nfunction requiredHistoryLedgerURA",
+    node_text,
+    re.S,
+)
+if node_receipt is None:
+    raise SystemExit("invocation_history_node_receipt_ledger_source_not_found")
+node_receipt_body = node_receipt.group("body")
+for forbidden in (
+    "const source = output.source",
+    "return \"invocation.history.list\";",
+):
+    if forbidden in node_receipt_body:
+        raise SystemExit(f"invocation_history_node_legacy_ledger_source_fallback:{forbidden}")
+for required in (
+    'Object.hasOwn(output, "source")',
+    "noncanonical field source",
+    'output.ledger_ura, "ledger_ura"',
+):
+    if required not in node_receipt_body:
+        raise SystemExit(f"invocation_history_node_ledger_source_contract_missing:{required}")
+
+node_validator = re.search(
+    r"function requiredHistoryLedgerURA\(value, field\) \{(?P<body>.*?)\n\}\n\nfunction authorityMetadataValue",
+    node_text,
+    re.S,
+)
+if node_validator is None:
+    raise SystemExit("invocation_history_node_ledger_ura_validator_not_found")
+node_validator_body = node_validator.group("body")
+for required in (
+    "field} is required",
+    "canonicalResourceSubject(ledgerURA)",
+    "canonical Resource URA",
+):
+    if required not in node_validator_body:
+        raise SystemExit(f"invocation_history_node_ledger_ura_validator_missing:{required}")
+
+node_page = re.search(
+    r"export class ReceiptHistoryPage \{(?P<body>.*?)\n\}\n\nexport class SessionHistoryOperations",
+    node_text,
+    re.S,
+)
+if node_page is None:
+    raise SystemExit("invocation_history_node_page_not_found")
+if 'requiredHistoryLedgerURA(value.source, "source")' not in node_page.group("body"):
+    raise SystemExit("invocation_history_node_page_source_not_canonical_ledger_ura")
+
+for required in (
+    "runtime receipt provider rejects legacy history source field",
+    "runtime receipt provider requires canonical ledger_ura",
+    "receiptLedgerURA",
+):
+    if required not in node_tests:
+        raise SystemExit(f"invocation_history_node_ledger_ura_test_missing:{required}")
+PY
+}
+
+check_sdk_governance_read_single_ingress_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local ffi="$cli_root/src/ffi/invocation/mod.rs"
+  local runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local runtime_ability="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
+  local cabi="$cli_root/sdk/python/easynet_sdk/_cabi.py"
+  local direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
+  [[ -f "$ffi" ]] || return 0
+  [[ -f "$runtime" ]] || return 0
+  [[ -f "$runtime_ability" ]] || return 0
+  [[ -f "$cabi" ]] || return 0
+  [[ -f "$direct" ]] || return 0
+
+  "$PYTHON_BIN" - "$ffi" "$runtime" "$runtime_ability" "$cabi" "$direct" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ffi, runtime, runtime_ability, cabi, direct = (
+    Path(path).read_text() for path in sys.argv[1:]
+)
+
+for retired in (
+    "runtime_local_governance_read",
+    "local_governance_read_with_axon_pb",
+    "LocalRuntimeGovernanceReadIssuer",
+):
+    if retired in ffi or retired in cabi:
+        raise SystemExit(f"sdk_governance_read_second_ingress_present:{retired}")
+
+for required in (
+    'pub unsafe extern "C" fn runtime_governance_read(',
+    "InvocationTuplePolicy::GovernanceRead",
+    "invoke_with_axon_pb_policy(",
+):
+    if required not in ffi:
+        raise SystemExit(f"sdk_governance_read_canonical_ffi_missing:{required}")
+
+for required in (
+    "class _GovernanceReadTransport(Protocol):",
+    "def _governance_read(self, draft: InvocationDraft) -> InvocationResult:",
+    "isinstance(transport, _GovernanceReadTransport)",
+    "return InvocationResult.from_json(raw)",
+):
+    if required not in runtime:
+        raise SystemExit(f"sdk_python_governance_read_optional_seam_missing:{required}")
+
+runtime_transport = re.search(
+    r"class RuntimeTransport\(Protocol\):(?P<body>.*?)\n\n@runtime_checkable",
+    runtime,
+    re.S,
+)
+if runtime_transport is None:
+    raise SystemExit("sdk_python_runtime_transport_protocol_not_found")
+if "governance_read" in runtime_transport.group("body"):
+    raise SystemExit("sdk_python_governance_read_forced_into_base_transport")
+if "def governance_read(" in direct:
+    raise SystemExit("sdk_python_direct_provider_fake_governance_capability_present")
+if "self._runtime._governance_read(" not in runtime_ability:
+    raise SystemExit("sdk_python_runtime_ability_not_using_governance_seam")
+for required in (
+    "self._raw.runtime_governance_read",
+    "return self.lib.governance_read(self._require_open(), draft_json)",
+):
+    if required not in cabi:
+        raise SystemExit(f"sdk_python_cabi_governance_read_missing:{required}")
 PY
 }
 
@@ -2277,7 +2537,7 @@ for name, text in (
 if "resolve_key_request_rejects_retired_presented_pubkey_hex" not in wire:
     raise SystemExit("resolve_key_request_dto:missing_retired_hex_negative_test")
 PY
-  if ! rg -q 'ResolveKeyRequest::new\(agent_ura\)' "$resolver"; then
+  if ! rg -q 'ResolveKeyRequest::new\(caller_ura\)' "$resolver"; then
     fail "federated key resolver must construct outbound requests through ResolveKeyRequest"
   fi
   if ! rg -q 'ResolveKeyRequest::new\(target\.hub_ura\.clone\(\)\)' "$join"; then
@@ -2489,10 +2749,12 @@ production = text.split("#[cfg(test)]", 1)[0]
 
 for helper in (
     "fn canonical_ura(",
-    "fn canonical_principal_ura(",
+    "fn canonical_caller_ura(",
+    "fn canonical_callee_ura(",
     "fn canonical_ability_ura(",
     "fn value_ability_ura_set(",
-    "fn optional_principal_ura_filter_string(",
+    "fn optional_caller_ura_filter_string(",
+    "fn optional_callee_ura_filter_string(",
     "fn optional_ability_ura_filter_string(",
     "fn optional_state_filter_string(",
     "fn is_supported_history_state_filter(",
@@ -2509,7 +2771,7 @@ if apply_filter is None:
     raise SystemExit("invocation_history_filter_scope_apply_filter_missing")
 apply_body = apply_filter.group("body")
 for required in (
-    'optional_principal_ura_filter_string(object, "caller_ura")',
+    'optional_caller_ura_filter_string(object, "caller_ura")',
     'optional_ability_ura_filter_string(object, "ability_ura")',
     'optional_state_filter_string(object, "state")',
     "subject_filter_values(object)?",
@@ -2532,12 +2794,13 @@ scoped_callee = re.search(
 if scoped_callee is None:
     raise SystemExit("invocation_history_filter_scope_callee_missing")
 scoped_body = scoped_callee.group("body")
-if 'optional_principal_ura_filter_string(object, "callee_ura")' not in scoped_body:
+if 'optional_callee_ura_filter_string(object, "callee_ura")' not in scoped_body:
     raise SystemExit(
-        'invocation_history_filter_scope_callee_missing:optional_principal_ura_filter_string(object, "callee_ura")'
+        'invocation_history_filter_scope_callee_missing:optional_callee_ura_filter_string(object, "callee_ura")'
     )
 for retired in (
-    'optional_principal_ura_filter_string(object, "agent_ura")',
+    'optional_callee_ura_filter_string(object, "agent_ura")',
+    'optional_principal_ura_filter_string(object, "callee_ura")',
     '"agent_ura"',
 ):
     if retired in scoped_body:
@@ -3979,17 +4242,25 @@ def struct_with_attrs(name: str) -> tuple[str, str]:
 
 file_attrs, file_body = struct_with_attrs("LocalAgentsFile")
 entry_attrs, entry_body = struct_with_attrs("HostedAgentEntry")
-for name, attrs in (
-    ("LocalAgentsFile", file_attrs),
-    ("HostedAgentEntry", entry_attrs),
+if "Serialize" not in file_attrs:
+    raise SystemExit("local_agents_schema:LocalAgentsFile:missing_serialize")
+if "#[serde(deny_unknown_fields)]" not in entry_attrs:
+    raise SystemExit("local_agents_schema:HostedAgentEntry:missing_deny_unknown_fields")
+for required in (
+    "impl<'de> Deserialize<'de> for LocalAgentsFile",
+    "struct Wire",
+    "#[serde(deny_unknown_fields)]",
+    'rename = "host_device_agent_ura"',
+    "retired_host_device_ura",
+    "validate_host_device_ura_field",
 ):
-    if "#[serde(deny_unknown_fields)]" not in attrs:
-        raise SystemExit(f"local_agents_schema:{name}:missing_deny_unknown_fields")
+    if required not in text:
+        raise SystemExit(f"local_agents_schema:LocalAgentsFile:missing_deserialize_guard:{required}")
 for retired in ("#[serde(default)]",):
     if retired in file_body:
         raise SystemExit(f"local_agents_schema:LocalAgentsFile:retired_default:{retired}")
 for field in (
-    "pub host_device_agent_ura: String",
+    "pub host_device_ura: String",
     "pub hosted_agents: Vec<HostedAgentEntry>",
 ):
     if field not in file_body:
@@ -4024,8 +4295,11 @@ for required in (
     "existing_malformed_file_fails_closed",
     "deserialize_rejects_unknown_fields",
     "unknown local-agents fields must fail closed",
-    "deserialize_rejects_missing_host_device_agent_ura",
-    "missing field `host_device_agent_ura`",
+    "deserialize_rejects_missing_host_device_ura",
+    "missing field `host_device_ura`",
+    "deserialize_migrates_retired_host_device_agent_ura",
+    "deserialize_rejects_conflicting_host_device_fields",
+    "deserialize_rejects_host_device_ura_that_is_not_device",
     "deserialize_rejects_missing_hosted_agents",
     "missing field `hosted_agents`",
 ):
@@ -4241,7 +4515,7 @@ for required in (
     "if proof.session_id.is_some()",
     ".ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?",
     "verifier_rejects_session_proof_without_session_owner_fact",
-    "proof.session_owner_user_id = None",
+    "proof.session_owner_user_ura = None",
     "session proof must bind session owner",
     "pub(crate) fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool",
     "request_scoped_one_time_authority_proof(proof) && !proof_binds_invocation_identity(proof)",
@@ -4260,8 +4534,8 @@ if helper is None:
     raise SystemExit("authority_proof_session_fact:helper_not_inspectable")
 body = helper.group("body")
 for required in (
-    "proof.session_owner_user_id",
-    "context.session_owner_user_id",
+    "proof.session_owner_user_ura",
+    "context.session_owner_user_ura",
     "map(str::trim)",
     "filter(|owner| !owner.is_empty())",
 ):
@@ -4289,8 +4563,8 @@ for forbidden in (
     if forbidden in binding.group("body"):
         raise SystemExit(f"authority_proof_route_binding:verifier_duplicate:{forbidden}")
 legacy_inline = (
-    "if proof.session_owner_user_id.as_deref().is_some()\n"
-    "        && proof.session_owner_user_id.as_deref() != context.session_owner_user_id"
+    "if proof.session_owner_user_ura.as_deref().is_some()\n"
+    "        && proof.session_owner_user_ura.as_deref() != context.session_owner_user_ura"
 )
 if legacy_inline in binding.group("body"):
     raise SystemExit("authority_proof_session_fact:legacy_optional_inline_check")
@@ -4540,13 +4814,23 @@ for name, body in (
     ("PermissionGrant", grant_body),
     ("PermissionRequest", request_body),
 ):
-    for field in ("owner_user_id", "principal_id"):
+    for field in ("owner_user_ura", "principal_id"):
         field_offset = body.find(f"pub {field}: String")
         if field_offset < 0:
             raise SystemExit(f"access_control_policy_schema:{name}:missing_identity_field:{field}")
         prefix = body[max(0, field_offset - 80):field_offset]
         if "#[serde(default)]" in prefix:
             raise SystemExit(f"access_control_policy_schema:{name}:identity_default_retired:{field}")
+    owner_offset = body.find("pub owner_user_ura: String")
+    owner_prefix = body[max(0, owner_offset - 120):owner_offset]
+    if '#[serde(rename = "owner_user_id")]' not in owner_prefix:
+        raise SystemExit(
+            f"access_control_policy_schema:{name}:missing_owner_user_id_wire_adapter"
+        )
+    if "pub owner_user_id:" in body:
+        raise SystemExit(
+            f"access_control_policy_schema:{name}:bare_owner_user_id_runtime_field"
+        )
 
 for required in (
     "permission_grant_deserialization_rejects_unknown_fields",
@@ -5130,11 +5414,12 @@ check_sdk_history_authority_subject_contract() {
   local py_receipt_guard="$cli_root/sdk/python/easynet_sdk/_receipt_history_admission.py"
   local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
   local node="$cli_root/sdk/node/index.js"
+  local node_dts="$cli_root/sdk/node/index.d.ts"
   local node_subjects="$cli_root/sdk/node/runtime-subjects.js"
   local node_principals="$cli_root/sdk/node/runtime-principals.js"
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_runtime" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_subjects" "$node_principals" "$node_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_runtime" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_dts" "$node_subjects" "$node_principals" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -5157,6 +5442,7 @@ from pathlib import Path
     py_receipt_guard_path,
     py_receipt_test_path,
     node_path,
+    node_dts_path,
     node_subjects_path,
     node_principals_path,
     node_test_path,
@@ -5345,6 +5631,23 @@ if py:
         raise SystemExit("sdk_python_session_history_not_using_shared_receipt_guard")
     if "validate_receipt_history_request" not in py_receipt:
         raise SystemExit("sdk_python_receipt_provider_not_using_shared_history_guard")
+    for retired in (
+        'nonce_base64: str = ""',
+        "causal_context: Mapping[str, object] | None = None",
+        "causal_context=dict(causal_context or {})",
+    ):
+        if retired in py_receipt:
+            raise SystemExit(f"sdk_python_receipt_read_call_context_tuple_default_retired:{retired}")
+    for required in (
+        "nonce_base64: str,",
+        "causal_context: Mapping[str, object],",
+        'nonce = _required_text(nonce_base64, "nonce_base64")',
+        'raise _invalid("causal_context is required")',
+    ):
+        if required not in py_receipt:
+            raise SystemExit(f"sdk_python_receipt_read_call_context_complete_tuple_missing:{required}")
+    if "test_receipt_read_call_context_requires_complete_tuple_fields" not in read(py_receipt_test_path):
+        raise SystemExit("sdk_python_receipt_read_call_context_complete_tuple_test_missing")
     require(
         py_helper_path,
         "def session_authority_admits_subject(",
@@ -5567,6 +5870,7 @@ if py:
 
 node = read(node_path)
 if node:
+    node_dts = read(node_dts_path)
     node_subjects = read(node_subjects_path)
     node_principals = read(node_principals_path)
     node_test = read(node_test_path)
@@ -5605,6 +5909,46 @@ if node:
             raise SystemExit(f"sdk_node_history_authority_subject_missing:{token}")
     if "export function containsAllZeroPrincipal(value)" not in node_principals:
         raise SystemExit("sdk_node_history_authority_subject_missing:runtime_principal_guard")
+    runtime_call_context_impl = section(
+        node,
+        "export class RuntimeCallContext",
+        "export function receiptReadCallContext",
+    )
+    for retired in (
+        'optionalRuntimeString(value.nonce_base64, "nonce_base64") ?? ""',
+        "value.causal_context === undefined || value.causal_context === null",
+    ):
+        if retired in runtime_call_context_impl:
+            raise SystemExit(f"sdk_node_receipt_read_call_context_tuple_default_retired:{retired}")
+    for required in (
+        'this.nonceBase64 = requiredRuntimeString(value.nonce_base64, "nonce_base64")',
+        'this.causalContext = objectValue(value.causal_context, "causal_context")',
+    ):
+        if required not in runtime_call_context_impl:
+            raise SystemExit(f"sdk_node_receipt_read_call_context_complete_tuple_missing:{required}")
+    if 'test("receipt read call context requires complete tuple fields"' not in node_test:
+        raise SystemExit("sdk_node_receipt_read_call_context_complete_tuple_test_missing")
+    runtime_call_fields = section(
+        node_dts,
+        "export interface RuntimeCallContextFields",
+        "export class RuntimeCallContext",
+    )
+    receipt_read_fields = section(
+        node_dts,
+        "export interface ReceiptReadCallContextFields",
+        "export declare function receiptReadCallContext",
+    )
+    for section_name, body in (
+        ("runtime_call", runtime_call_fields),
+        ("receipt_read", receipt_read_fields),
+    ):
+        if (
+            "nonce_base64?: string | null" in body
+            or "causal_context?: Record<string, unknown> | null" in body
+        ):
+            raise SystemExit(f"sdk_node_receipt_read_call_context_optional_tuple_type_retired:{section_name}")
+        if "nonce_base64: string;" not in body or "causal_context: Record<string, unknown>;" not in body:
+            raise SystemExit(f"sdk_node_receipt_read_call_context_required_tuple_type_missing:{section_name}")
     for retired in (
         "const RUNTIME_STATE_READ_SUBJECT_PATH",
         "function canonicalResourceSubject(subjectURA)",
@@ -5674,6 +6018,7 @@ check_sdk_go_python_history_public_route_cutover_contract() {
   local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
 
   "$PYTHON_BIN" - "$go_runtime" "$go_governance" "$go_receipt" "$go_descriptor" "$go_test" "$go_descriptor_test" "$go_receipt_test" "$py_runtime" "$py_governance" "$py_ability_invocation" "$py_receipt" "$py_descriptor" "$py_test" "$py_ability_invocation_test" "$py_descriptor_test" "$py_receipt_test" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -5693,13 +6038,13 @@ for required in (
     "func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy",
     "func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy",
     "runtimeAbilitySubjectRuntimeOwner",
+    "runtimeAbilitySubjectRuntimeGovernanceRead",
     "func (c *RuntimeAbilityClient) buildGovernanceRead(",
     "func (c *RuntimeAbilityClient) buildCatalogueRead(",
     "func (c *RuntimeAbilityClient) buildWithCallModePolicy(",
     "descriptorProvider  string",
     "descriptorProvider:  runtimeReceiptHistoryProvider",
     "descriptorProvider:  runtimeAbilityDescriptorProvider",
-    "Provider:   policy.descriptorProvider",
     "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
     "func (c *RuntimeAbilityClient) invokeGovernanceRead(",
     "func (c *RuntimeAbilityClient) invokeCatalogueRead(",
@@ -5713,10 +6058,10 @@ for required in (
     'runtimeReceiptHistoryProvider    = "receipt_history"',
     "func runtimeGovernanceDescriptorProviderForAbility(abilityName string) string",
     "func isRuntimeGovernanceReadAbility(abilityName string) bool",
-    'abilityName == "meta.list_abilities"',
-    'abilityName == "meta.list_resources"',
-    "strings.HasPrefix(abilityName, \"invocation.history.\")",
-    "strings.HasPrefix(abilityName, \"invocation.trace.\")",
+    '{ability: "meta.list_abilities", provider: runtimeAbilityDescriptorProvider}',
+    '{ability: "meta.list_resources", provider: runtimeAbilityDescriptorProvider}',
+    '{ability: "invocation.record.get", provider: runtimeReceiptHistoryProvider}',
+    "abilityName == route.ability",
 ):
     if required not in go_governance:
         raise SystemExit(f"sdk_history_public_route_cutover:go_governance_missing:{required}")
@@ -5724,6 +6069,8 @@ if "receipt.catalog" in go_governance:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_catalog_alias_not_retired")
 if "runtime.catalog" in go_governance:
     raise SystemExit("sdk_history_public_route_cutover:go_runtime_catalog_alias_not_retired")
+if "strings.HasPrefix(abilityName" in go_governance:
+    raise SystemExit("sdk_history_public_route_cutover:go_governance_must_use_exact_generated_routes")
 if "ability.Invoke(ctx, call, r.listAbility, args)" in go_receipt or "ability.Invoke(ctx, call, r.getAbility, args)" in go_receipt:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_uses_public_invoke")
 for required in (
@@ -5755,9 +6102,9 @@ if "TestRuntimeAbilityClientRejectsCatalogueReadPublicRouteBeforeDescriptorResol
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_public_rejection_test_missing")
 if '"meta.list_resources"' not in go_test:
     raise SystemExit("sdk_history_public_route_cutover:go_resource_catalogue_read_test_missing")
-if 'seen["subject_ura"] != "easynet:///r/example/authority"' not in go_descriptor_test:
+if 'seen["subject_ura"] != "easynet:///r/example/resource/user.alice/runtime-state/read"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_subject_test_missing")
-if 'Provider:   policy.descriptorProvider' not in go_runtime:
+if not re.search(r"Provider:\s*policy\.descriptorProvider", go_runtime):
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_not_forwarded")
 if '"ability_descriptor"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_test_missing")
@@ -5789,10 +6136,10 @@ for required in (
     'RECEIPT_HISTORY_PROVIDER = "receipt_history"',
     "def governance_descriptor_provider_for_ability(",
     "def is_runtime_governance_read_ability(",
-    'value == "meta.list_abilities"',
-    'value == "meta.list_resources"',
-    'value.startswith("invocation.history.")',
-    'value.startswith("invocation.trace.")',
+    '("meta.list_abilities", ABILITY_DESCRIPTOR_PROVIDER)',
+    '("meta.list_resources", ABILITY_DESCRIPTOR_PROVIDER)',
+    '("invocation.record.get", RECEIPT_HISTORY_PROVIDER)',
+    "candidate == route",
 ):
     if required not in py_governance:
         raise SystemExit(f"sdk_history_public_route_cutover:py_governance_missing:{required}")
@@ -5800,6 +6147,8 @@ if "receipt.catalog" in py_governance:
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_catalog_alias_not_retired")
 if "runtime.catalog" in py_governance:
     raise SystemExit("sdk_history_public_route_cutover:py_runtime_catalog_alias_not_retired")
+if 'startswith("invocation.history.")' in py_governance or 'startswith("invocation.trace.")' in py_governance:
+    raise SystemExit("sdk_history_public_route_cutover:py_governance_must_use_exact_generated_routes")
 for required in (
     "def _reject_governance_read_action(",
     "is_runtime_governance_read_ability(public_name, ability_ura=ability_ura)",
@@ -5849,7 +6198,7 @@ if "test_generic_invocation_rejects_governance_read_descriptor_ref" not in py_ab
     raise SystemExit("sdk_history_public_route_cutover:py_generic_descriptor_rejection_test_missing")
 if "test_tuple_ability_selector_delegates_to_addressing_projection" not in py_ability_invocation_test:
     raise SystemExit("sdk_history_public_route_cutover:py_tuple_selector_addressing_projection_test_missing")
-if 'transport.seen["subject_ura"] == "easynet:///r/example/authority"' not in py_descriptor_test:
+if '== "easynet:///r/example/resource/user.alice/runtime-state/read"' not in py_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_subject_test_missing")
 if 'transport.descriptor_requests[-1]["provider"] == "ability_descriptor"' not in py_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:py_descriptor_provider_test_missing")
@@ -5864,12 +6213,17 @@ check_sdk_cross_language_history_public_ingress_cutover_contract() {
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
   local java_builder="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationBuilder.java"
   local java_projection="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityProjection.java"
+  local java_request="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeDescriptorRefRequest.java"
+  local java_runtime="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityClient.java"
+  local java_subjects="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java"
   local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   local swift_invocation="$cli_root/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
   local swift_projection="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeAbilityProjection.swift"
+  local swift_ability="$cli_root/sdk/swift/Sources/RuntimeSDK/AbilityDescriptor.swift"
+  local swift_subjects="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeSubjects.swift"
   local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
 
-  "$PYTHON_BIN" - "$node" "$node_test" "$java_builder" "$java_projection" "$java_test" "$swift_invocation" "$swift_projection" "$swift_test" <<'PY'
+  "$PYTHON_BIN" - "$node" "$node_test" "$java_builder" "$java_projection" "$java_request" "$java_runtime" "$java_subjects" "$java_test" "$swift_invocation" "$swift_projection" "$swift_ability" "$swift_subjects" "$swift_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -5878,16 +6232,17 @@ for path in paths:
     if not path.exists():
         raise SystemExit(f"sdk_history_public_ingress_cutover:missing:{path}")
 
-node, node_test, java_builder, java_projection, java_test, swift_invocation, swift_projection, swift_test = [
+node, node_test, java_builder, java_projection, java_request, java_runtime, java_subjects, java_test, swift_invocation, swift_projection, swift_ability, swift_subjects, swift_test = [
     path.read_text(encoding="utf-8", errors="replace") for path in paths
 ]
 
 for required in (
-    "const RUNTIME_GOVERNANCE_READ_ABILITIES",
     "function rejectGovernanceReadPublicInvocationDescriptor",
     "RuntimeAbilityProjection.fromDescriptorRef(calleeURA, descriptorRef)",
     "runtimeGovernanceReadAbility(ability.publicName)",
     "runtimeGovernanceReadAbility(ability.intrinsicName)",
+    "canonicalRuntimeGovernanceAbility(value)",
+    "generatedRuntimeGovernanceDescriptorProvider(value)",
     "use RuntimeReceiptProvider, SessionHistoryOperations, or the canonical runtime catalogue provider path",
 ):
     if required not in node:
@@ -5903,8 +6258,9 @@ for retired in (
 for required in (
     "public invocation builder rejects receipt history descriptor before dispatch",
     "public invocation builder rejects runtime catalogue descriptor before dispatch",
-    "device.dev-a.invocation.history.list@1.0.0#",
-    "authority.meta.list_abilities@1.0.0#",
+    "system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#",
+    "system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#",
+    "system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#",
     "SessionHistoryOperations",
 ):
     if required not in node_test:
@@ -5919,11 +6275,12 @@ for required in (
     if required not in java_builder:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_builder_missing:{required}")
 for required in (
-    "private static final String[] RUNTIME_GOVERNANCE_READ_ABILITIES",
     "static String runtimeGovernanceReadAbility(String calleeURA, String descriptorRef)",
     "fromDescriptorRef(calleeURA, descriptorRef)",
     "runtimeGovernanceReadAbility(ability.publicName())",
     "runtimeGovernanceReadAbility(ability.intrinsicName())",
+    "RuntimeGovernanceRoutesGen.canonicalAbility(value)",
+    "RuntimeGovernanceRoutesGen.descriptorProvider(ability)",
     "descriptorAbilityProjection(String descriptorRef)",
 ):
     if required not in java_projection:
@@ -5933,18 +6290,50 @@ for retired in (
     "descriptorAbilityURA(",
     "descriptorWireAbility(",
     "ABILITY_PATH_MARKER",
+    "authorityURAForRealmOf(",
 ):
     if retired in java_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_projection_retired:{retired}")
 for required in (
+    "RuntimeSubjects.isRuntimeGovernanceReadSubject(subjectURA, calleeURA)",
+    "descriptor_ref provider ",
+    "subject_ura must be a runtime governance read subject",
+):
+    if required not in java_request:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_request_provider_subject_missing:{required}")
+for retired in (
+    "callee realm Authority",
+    "authorityURAForRealmOf(calleeURA)",
+):
+    if retired in java_request:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_request_retired_authority_subject:{retired}")
+if "return selectedSubjectURA;" not in java_runtime:
+    raise SystemExit("sdk_history_public_ingress_cutover:java_catalogue_resolver_subject_not_runtime_owner")
+if "return RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA())" in java_runtime:
+    raise SystemExit("sdk_history_public_ingress_cutover:java_catalogue_resolver_uses_authority_subject")
+for required in (
+    "static boolean isRuntimeGovernanceReadSubject(String subjectURA, String calleeURA)",
+    'RUNTIME_STATE_READ_SUBJECT_PATH.equals(resource.path())',
+    'new RuntimeOwnerSubject("authority", realm)',
+    'new RuntimeOwnerSubject("device", realm)',
+):
+    if required not in java_subjects:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_runtime_subject_missing:{required}")
+for required in (
     '"completeTupleRejectsReceiptHistoryPublicInvocation"',
     '"completeTupleRejectsCatalogueReadPublicInvocation"',
+    '"runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects"',
     "private static void completeTupleRejectsReceiptHistoryPublicInvocation()",
     "private static void completeTupleRejectsCatalogueReadPublicInvocation()",
-    "device.dev-a.invocation.history.list@1.0.0#",
-    "authority.meta.list_abilities@1.0.0#",
+    "private static void runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects()",
+    "system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#",
+    "system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#",
+    "system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#",
     "RuntimeReceiptProvider",
     "RuntimeAbilityDescriptorProvider",
+    "RuntimeSubjects.runtimeStateReadSubjectURA(\"example\", \"alice\")",
+    "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+    "catalogue descriptor resolution subject is the caller's runtime-state resource",
 ):
     if required not in java_test:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_test_missing:{required}")
@@ -5958,11 +6347,12 @@ for required in (
     if required not in swift_invocation:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_invocation_missing:{required}")
 for required in (
-    "private static let runtimeGovernanceReadAbilities",
     "static func runtimeGovernanceReadAbility(calleeURA: String, descriptorRef: String) throws -> String?",
     "fromDescriptorRef(calleeURA: calleeURA, descriptorRef: descriptorRef)",
     "runtimeGovernanceReadAbility(ability.publicName)",
     "runtimeGovernanceReadAbility(ability.intrinsicName)",
+    "RuntimeGovernanceRoutesGen.canonicalAbility(value)",
+    "RuntimeGovernanceRoutesGen.descriptorProvider(ability)",
     "descriptorAbilityProjection(_ descriptorRef: String)",
 ):
     if required not in swift_projection:
@@ -5972,16 +6362,43 @@ for retired in (
     "descriptorAbilityURA(",
     "descriptorWireAbility(",
     "abilityPathMarker",
+    "authorityURAForRealmOf(",
 ):
     if retired in swift_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_projection_retired:{retired}")
 for required in (
+    "RuntimeSubjects.isRuntimeGovernanceReadSubject(subjectURA, calleeURA: calleeURA)",
+    "subject_ura must be a runtime governance read subject",
+    "return selectedSubjectURA",
+):
+    if required not in swift_ability:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_ability_provider_subject_missing:{required}")
+for retired in (
+    "callee realm Authority",
+    "RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA)",
+):
+    if retired in swift_ability:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_ability_retired_authority_subject:{retired}")
+for required in (
+    "static func isRuntimeGovernanceReadSubject(_ subjectURA: String, calleeURA: String) -> Bool",
+    "resource.path == runtimeStateReadSubjectPath",
+    'RuntimeOwnerSubject(kind: "authority", realm: realm)',
+    'RuntimeOwnerSubject(kind: "device", realm: realm)',
+):
+    if required not in swift_subjects:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_runtime_subject_missing:{required}")
+for required in (
     "testCompleteTupleRejectsReceiptHistoryPublicInvocation",
     "testCompleteTupleRejectsCatalogueReadPublicInvocation",
-    "device.dev-a.invocation.history.list@1.0.0#",
-    "authority.meta.list_abilities@1.0.0#",
+    "testRuntimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects",
+    "system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#",
+    "system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#",
+    "system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#",
     "RuntimeReceiptProvider",
     "RuntimeAbilityDescriptorProvider",
+    'RuntimeSubjects.runtimeStateReadSubjectURA(realm: "example", userID: "alice")',
+    "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+    "XCTAssertEqual(resolverSubjectField, runtimeStateSubject)",
 ):
     if required not in swift_test:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_test_missing:{required}")
@@ -5995,16 +6412,146 @@ for corpus, label in (
         raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_receipt_catalog_alias_not_retired")
     if "runtime.catalog" in corpus:
         raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_runtime_catalog_alias_not_retired")
-    for ability in (
-        "meta.list_abilities",
-        "invocation.history.list",
-        "invocation.history.get",
-        "invocation.history.path",
-        "invocation.record.get",
-        "invocation.trace.get",
-    ):
-        if ability not in corpus:
-            raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_ability_missing:{ability}")
+PY
+}
+
+check_sdk_runtime_ability_descriptor_bound_subject_parity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_runtime="$cli_root/sdk/go/runtime_ability.go"
+  local go_subject="$cli_root/sdk/go/runtime_subject.go"
+  local go_runtime_test="$cli_root/sdk/go/runtime_ability_test.go"
+  local go_subject_test="$cli_root/sdk/go/runtime_subject_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local java_runtime="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityClient.java"
+  local java_subjects="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift_ability="$cli_root/sdk/swift/Sources/RuntimeSDK/AbilityDescriptor.swift"
+  local swift_subjects="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeSubjects.swift"
+  local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+
+  "$PYTHON_BIN" - \
+    "$go_runtime" "$go_subject" "$go_runtime_test" "$go_subject_test" \
+    "$py_runtime" "$py_test" \
+    "$node" "$node_test" \
+    "$java_runtime" "$java_subjects" "$java_test" \
+    "$swift_ability" "$swift_subjects" "$swift_test" <<'PY'
+import sys
+from pathlib import Path
+
+paths = [Path(arg) for arg in sys.argv[1:]]
+for path in paths:
+    if not path.exists():
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:missing:{path}")
+
+(
+    go_runtime,
+    go_subject,
+    go_runtime_test,
+    go_subject_test,
+    py_runtime,
+    py_test,
+    node,
+    node_test,
+    java_runtime,
+    java_subjects,
+    java_test,
+    swift_ability,
+    swift_subjects,
+    swift_test,
+) = [path.read_text(encoding="utf-8", errors="replace") for path in paths]
+
+for required in (
+    "func descriptorBoundSubjectURA(",
+    "case URAKindUser, URAKindAuthority:",
+    'addressing.DescriptorBoundResourceSubjectURA(ctx, subjectURA, "invoke/"+strings.TrimSpace(abilityName))',
+):
+    if required not in go_subject:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:go_subject_missing:{required}")
+if "return descriptorBoundSubjectURA(ctx, addressing, call.SubjectURA, abilityName)" not in go_runtime:
+    raise SystemExit("sdk_runtime_ability_descriptor_bound_subject_parity:go_runtime_not_using_helper")
+for required in (
+    "easynet:///r/example/resource/user.alice/invoke/namespace.resolve",
+    "TestDescriptorBoundSubjectURAProjectsAuthoritySubjectBeforeSigning",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in go_runtime_test and required not in go_subject_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:go_test_missing:{required}")
+
+for required in (
+    'if subject.kind in {"user", "authority"}:',
+    "self._addressing.descriptor_bound_resource_subject_ura(",
+    'subject.ura, f"invoke/{ability_name}"',
+):
+    if required not in py_runtime:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:python_runtime_missing:{required}")
+for required in (
+    "test_runtime_ability_descriptor_binds_authority_subject",
+    "easynet:///r/example/resource/user.alice/invoke/namespace.resolve",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in py_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:python_test_missing:{required}")
+
+for required in (
+    "function descriptorBoundRuntimeSubjectURA(subjectURA, abilityName)",
+    'return `easynet:///r/${realm}/resource/authority/invoke/${ability}`;',
+    'return `easynet:///r/${realm}/resource/user.${userID}/invoke/${ability}`;',
+    "runtimeAbilitySubjectURA(selectedContext, ability, policy)",
+):
+    if required not in node:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:node_missing:{required}")
+for required in (
+    "runtime ability public path descriptor-binds user subjects",
+    "easynet:///r/example/resource/user.alice/invoke/observe.health",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in node_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:node_test_missing:{required}")
+
+for required in (
+    "RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA(), abilityName)",
+    "subjectURA(call, ability)",
+):
+    if required not in java_runtime:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:java_runtime_missing:{required}")
+for required in (
+    "static String descriptorBoundSubjectURA(String subjectURA, String abilityName)",
+    'return "easynet:///r/" + parsed.realm() + "/resource/authority/invoke/" + ability;',
+    'return "easynet:///r/" + parsed.realm() + "/resource/user." + userID + "/invoke/" + ability;',
+):
+    if required not in java_subjects:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:java_subjects_missing:{required}")
+for required in (
+    "runtimeAbilityPublicPathDescriptorBindsUserSubjects",
+    "easynet:///r/example/resource/user.alice/invoke/observe.health",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in java_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:java_test_missing:{required}")
+
+for required in (
+    "RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA, abilityName: abilityName)",
+    "subjectURA(call, abilityName: ability)",
+):
+    if required not in swift_ability:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:swift_ability_missing:{required}")
+for required in (
+    "static func descriptorBoundSubjectURA(_ subjectURA: String, abilityName: String) throws -> String",
+    'return "easynet:///r/\\(parsed.realm)/resource/authority/invoke/\\(ability)"',
+    'return "easynet:///r/\\(parsed.realm)/resource/user.\\(userID)/invoke/\\(ability)"',
+):
+    if required not in swift_subjects:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:swift_subjects_missing:{required}")
+for required in (
+    "testRuntimeAbilityPublicPathDescriptorBindsUserSubjects",
+    "easynet:///r/example/resource/user.alice/invoke/observe.health",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in swift_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:swift_test_missing:{required}")
 PY
 }
 
@@ -6049,6 +6596,96 @@ for required in (
 ):
     if required not in node_test:
         raise SystemExit(f"sdk_node_stream_bidi_explicit_terminality:test_missing:{required}")
+PY
+}
+
+check_sdk_stream_bidi_projection_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_projection="$cli_root/sdk/go/runtime_projection.go"
+  local go_stream="$cli_root/sdk/go/stream.go"
+  local go_bidi="$cli_root/sdk/go/bidi.go"
+  local go_stream_test="$cli_root/sdk/go/stream_test.go"
+  local go_bidi_test="$cli_root/sdk/go/bidi_test.go"
+  local py_stream="$cli_root/sdk/python/easynet_sdk/stream.py"
+  local py_bidi="$cli_root/sdk/python/easynet_sdk/bidi.py"
+  local py_stream_test="$cli_root/sdk/python/tests/test_stream.py"
+  local py_bidi_test="$cli_root/sdk/python/tests/test_bidi.py"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  [[ -f "$go_projection" ]] || fail "Go runtime projection helper is missing: ${go_projection#$cli_root/}"
+  [[ -f "$go_stream" ]] || fail "Go stream source is missing: ${go_stream#$cli_root/}"
+  [[ -f "$go_bidi" ]] || fail "Go bidi source is missing: ${go_bidi#$cli_root/}"
+  [[ -f "$go_stream_test" ]] || fail "Go stream tests are missing: ${go_stream_test#$cli_root/}"
+  [[ -f "$go_bidi_test" ]] || fail "Go bidi tests are missing: ${go_bidi_test#$cli_root/}"
+  [[ -f "$py_stream" ]] || fail "Python stream source is missing: ${py_stream#$cli_root/}"
+  [[ -f "$py_bidi" ]] || fail "Python bidi source is missing: ${py_bidi#$cli_root/}"
+  [[ -f "$py_stream_test" ]] || fail "Python stream tests are missing: ${py_stream_test#$cli_root/}"
+  [[ -f "$py_bidi_test" ]] || fail "Python bidi tests are missing: ${py_bidi_test#$cli_root/}"
+  [[ -f "$node" ]] || fail "Node SDK source is missing: ${node#$cli_root/}"
+  [[ -f "$node_test" ]] || fail "Node SDK runtime-core tests are missing: ${node_test#$cli_root/}"
+
+  "$PYTHON_BIN" - "$go_projection" "$go_stream" "$go_bidi" "$go_stream_test" "$go_bidi_test" "$py_stream" "$py_bidi" "$py_stream_test" "$py_bidi_test" "$node" "$node_test" <<'PY'
+import sys
+from pathlib import Path
+
+(
+    go_projection,
+    go_stream,
+    go_bidi,
+    go_stream_test,
+    go_bidi_test,
+    py_stream,
+    py_bidi,
+    py_stream_test,
+    py_bidi_test,
+    node,
+    node_test,
+) = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+for fragment, source, label in (
+    ("func rejectUnknownRuntimeProjectionFields", go_projection, "go_projection_helper_missing"),
+    ("projection+\" contains noncanonical field \"+field", go_projection, "go_projection_error_missing"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"stream open\"", go_stream, "go_stream_open_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(\n\t\traw,\n\t\t\"stream event\"", go_stream, "go_stream_event_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"stream cancel\"", go_stream, "go_stream_cancel_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"bidi open\"", go_bidi, "go_bidi_open_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(\n\t\traw,\n\t\t\"bidi frame\"", go_bidi, "go_bidi_frame_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"bidi outcome\"", go_bidi, "go_bidi_outcome_not_strict"),
+    ("_reject_unknown_stream_fields(", py_stream, "python_stream_helper_missing"),
+    ("stream event contains noncanonical field", py_stream_test, "python_stream_event_test_missing"),
+    ("stream open contains noncanonical field state_code", py_stream_test, "python_stream_open_test_missing"),
+    ("stream cancel contains noncanonical field state_code", py_stream_test, "python_stream_cancel_test_missing"),
+    ("_reject_unknown_bidi_fields(", py_bidi, "python_bidi_helper_missing"),
+    ("bidi open contains noncanonical field state_code", py_bidi_test, "python_bidi_open_test_missing"),
+    ("bidi frame contains noncanonical field state_code", py_bidi_test, "python_bidi_frame_test_missing"),
+    ("bidi outcome contains noncanonical field state_code", py_bidi_test, "python_bidi_outcome_test_missing"),
+    ("function rejectRuntimeProjectionFields", node, "node_projection_helper_missing"),
+    ("stream open contains noncanonical field", node_test, "node_stream_open_test_missing"),
+    ("stream event contains noncanonical field state_code", node_test, "node_stream_event_test_missing"),
+    ("stream event contains noncanonical field frame_type", node_test, "node_stream_alias_test_missing"),
+    ("bidi open contains noncanonical field", node_test, "node_bidi_open_test_missing"),
+    ("bidi frame contains noncanonical field state_code", node_test, "node_bidi_frame_test_missing"),
+    ("bidi frame contains noncanonical field event_type", node_test, "node_bidi_alias_test_missing"),
+):
+    if fragment not in source:
+        raise SystemExit(f"sdk_stream_bidi_projection_strict:{label}")
+
+for source, label in (
+    (go_stream_test, "go_stream_tests"),
+    (go_bidi_test, "go_bidi_tests"),
+):
+    for fragment in ("contains noncanonical field state_code", "accepted product state_code"):
+        if fragment not in source:
+            raise SystemExit(f"sdk_stream_bidi_projection_strict:{label}:missing:{fragment}")
+
+for forbidden, source, label in (
+    ("DoesNotAcceptLegacyContentTypeAlias", go_stream_test, "go_legacy_content_type_acceptance_test"),
+    ("payload_content_type, \"\"", py_stream_test, "python_legacy_content_type_acceptance_test"),
+    ("aliasStreamEvent.frame_type", node_test, "node_stream_frame_type_alias_acceptance"),
+    ("aliasBidiFrame.event_type", node_test, "node_bidi_event_type_alias_acceptance"),
+):
+    if forbidden in source:
+        raise SystemExit(f"sdk_stream_bidi_projection_strict:{label}")
 PY
 }
 
@@ -6703,9 +7340,9 @@ if 'descriptorMap(schema["input"])' in go:
 if "projectRuntimeAbilityDescriptor(row, i)" not in go:
     raise SystemExit("sdk_go_ability_descriptor_provider_not_strict_projector")
 for token in (
-    "field schema_hash must be a string",
-    "field input_schema must be an object",
-    "field hints.read_only must be a boolean",
+    "field %s must be a string",
+    "field %s must be an object",
+    "field %s must be a boolean",
 ):
     if token not in go:
         raise SystemExit(f"sdk_go_ability_descriptor_strict_wire_missing:{token}")
@@ -6714,6 +7351,7 @@ for token in (
     "TestProjectAbilityDescriptorDoesNotDeriveRetiredNameOrInputSchemaAliases",
     "TestRuntimeAbilityDescriptorProviderRejectsRetiredNameAndInputSchemaAliases",
     "TestRuntimeAbilityDescriptorProviderRejectsTypedDescriptorProjectionFields",
+    "ability descriptor row 0 field schema_hash must be a string",
 ):
     if token not in go_tests:
         raise SystemExit(f"sdk_go_ability_descriptor_strict_test_missing:{token}")
@@ -7007,9 +7645,19 @@ meta = read(meta_path)
 meta_prod = production(meta)
 if '"owner_ura"' not in meta_prod or '"ability_ura"' not in meta_prod:
     raise SystemExit("runtime_descriptor_catalog_scope:meta_canonical_fields_missing")
-for retired in ('"agent_ura"', '"subject_ura"', "AbilitySubjectScope", "merge_owner_scope("):
+for retired in ('"agent_ura"', "AbilitySubjectScope", "merge_owner_scope("):
     if retired in meta_prod:
         raise SystemExit(f"runtime_descriptor_catalog_scope:meta_retired_scope:{retired}")
+for retired_subject_query in (
+    '| "subject_ura"',
+    '"subject_ura" =>',
+    'string_arg(object, "subject_ura")',
+    'subject_ura: Option<String>',
+):
+    if retired_subject_query in meta_prod:
+        raise SystemExit(
+            f"runtime_descriptor_catalog_scope:meta_retired_scope:{retired_subject_query}"
+        )
 for required_test in (
     "list_abilities_filters_by_owner_ura_and_ability_ura",
     "list_abilities_rejects_retired_agent_and_subject_scope_fields",
@@ -7019,8 +7667,14 @@ for required_test in (
 
 cli = read(cli_path)
 cli_prod = production(cli)
-if '"owner_ura"' not in cli_prod or '"ability_ura"' not in cli_prod:
-    raise SystemExit("runtime_descriptor_catalog_scope:cli_canonical_fields_missing")
+for required in (
+    "AbilityCatalogQuery::new(owner_ura, ability_ura)",
+    "self.inner.owner_ura()",
+    "self.inner.ability_ura()",
+    "self.inner.to_request_json()",
+):
+    if required not in cli_prod:
+        raise SystemExit(f"runtime_descriptor_catalog_scope:cli_shared_query_missing:{required}")
 for retired in ('"agent_ura"', '"subject_ura"', "pub(crate) fn agent_ura", "pub(crate) fn subject_ura"):
     if retired in cli_prod:
         raise SystemExit(f"runtime_descriptor_catalog_scope:cli_retired_scope:{retired}")
@@ -7359,13 +8013,15 @@ check_sdk_direct_runtime_state_projection_contract() {
   local go_direct_test="$cli_root/sdk/go/direct_runtime_codec_test.go"
   local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  local ffi_backpressure="$cli_root/src/ffi/invocation/backpressure.rs"
 
-  "$PYTHON_BIN" - "$go_direct" "$go_direct_test" "$py_direct" "$py_direct_test" <<'PY'
+  "$PYTHON_BIN" - "$go_direct" "$go_direct_test" "$py_direct" "$py_direct_test" "$ffi_invocation" "$ffi_backpressure" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+go_path, go_test_path, py_path, py_test_path, ffi_path, ffi_backpressure_path = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -7403,6 +8059,13 @@ if "stateName, err := directStateName(chunk.GetState(), \"direct_runtime.stream\
     raise SystemExit("sdk_go_direct_runtime_stream_state_not_fallible")
 if "stateName, err := directStateName(receipt.GetState(), stage)" not in go:
     raise SystemExit("sdk_go_direct_runtime_receipt_state_not_fallible")
+go_stream_projection = section(
+    go,
+    r"func directStreamChunkJSONWithAdmission\((?P<body>.*?)\n\}",
+    "go_direct_stream_chunk_projection",
+)
+if '"invocation_id"' in go_stream_projection or "GetInvocationId()" in go_stream_projection:
+    raise SystemExit("sdk_go_direct_runtime_stream_projection_leaks_invocation_id")
 go_tests = read(go_test_path)
 for required in (
     "TestDirectRuntimeUnaryRejectsUnsupportedInvocationState",
@@ -7431,6 +8094,68 @@ for required in (
 ):
     if required not in py:
         raise SystemExit(f"sdk_python_direct_runtime_state_call_missing:{required}")
+py_stream_projection = section(
+    py,
+    r"def _stream_chunk_json\(chunk: Any\) -> bytes:\n(?P<body>.*?)(?=\n\ndef |\Z)",
+    "python_direct_stream_chunk_projection",
+)
+if '"invocation_id"' in py_stream_projection or "chunk.invocation_id" in py_stream_projection:
+    raise SystemExit("sdk_python_direct_runtime_stream_projection_leaks_invocation_id")
+ffi = read(ffi_path)
+ffi_stream_projection = section(
+    ffi,
+    r"fn stream_chunk_json\((?P<body>.*?)\n\}",
+    "ffi_stream_chunk_projection",
+)
+for retired in ('"ok"', '"invocation_id"', '"proof_error"'):
+    if retired in ffi_stream_projection:
+        raise SystemExit(f"ffi_stream_projection_leaks_retired_field:{retired}")
+if '"transport_terminal": error.is_some() && !proven_terminal' not in ffi_stream_projection:
+    raise SystemExit("ffi_stream_projection_missing_transport_terminal_error_boundary")
+if "sdk_callback_event_sequence(chunk.sequence)" not in ffi_stream_projection:
+    raise SystemExit("ffi_stream_projection_missing_proto_to_sdk_sequence_boundary")
+if "fn sdk_callback_event_sequence(protobuf_sequence: u64) -> u64" not in ffi or "protobuf_sequence.saturating_add(1)" not in ffi:
+    raise SystemExit("ffi_stream_projection_sequence_boundary_not_explicit")
+ffi_bidi_projection = section(
+    ffi,
+    r"fn bidi_down_frame_json\((?P<body>.*?)\n\}",
+    "ffi_bidi_down_projection",
+)
+if "sdk_callback_event_sequence(frame.sequence)" not in ffi_bidi_projection:
+    raise SystemExit("ffi_bidi_projection_missing_proto_to_sdk_sequence_boundary")
+if re.search(r'"sequence":\s*frame\.sequence', ffi_bidi_projection):
+    raise SystemExit("ffi_bidi_projection_leaks_proto_sequence")
+ffi_stream_status = section(
+    ffi,
+    r"fn stream_status_error_json\((?P<body>.*?)\n\}",
+    "ffi_stream_status_error_projection",
+)
+for retired in ("ok", "code", "message"):
+    if re.search(rf'\n\s{{8}}"{retired}"\s*:', ffi_stream_status):
+        raise SystemExit(f"ffi_stream_status_error_leaks_retired_top_level:{retired}")
+if '"error": {' not in ffi_stream_status or '"stage": "stream_transport"' not in ffi_stream_status:
+    raise SystemExit("ffi_stream_status_error_missing_canonical_error")
+ffi_receipt_error = section(
+    ffi,
+    r"fn stream_receipt_verification_error_json\((?P<body>.*?)\n\}",
+    "ffi_stream_receipt_verification_error_projection",
+)
+for retired in ("ok", "message"):
+    if re.search(rf'\n\s{{8}}"{retired}"\s*:', ffi_receipt_error):
+        raise SystemExit(f"ffi_stream_receipt_error_leaks_retired_top_level:{retired}")
+if '"kind": "error"' not in ffi_receipt_error or '"stage": "receipt_verification"' not in ffi_receipt_error:
+    raise SystemExit("ffi_stream_receipt_error_missing_canonical_error")
+ffi_backpressure = read(ffi_backpressure_path)
+ffi_stream_backpressure = section(
+    ffi_backpressure,
+    r"fn stream_callback_backpressure_event\((?P<body>.*?)\n\}",
+    "ffi_stream_backpressure_projection",
+)
+for retired in ('"ok"', '"code"', '"message"'):
+    if retired in ffi_stream_backpressure:
+        raise SystemExit(f"ffi_stream_backpressure_leaks_retired_top_level:{retired}")
+if '"error": runtime_backpressure_error("stream", sequence, queue_capacity)' not in ffi_stream_backpressure:
+    raise SystemExit("ffi_stream_backpressure_missing_canonical_error")
 py_tests = read(py_test_path)
 for required in (
     "test_direct_runtime_unary_rejects_unsupported_invocation_state",
@@ -7550,23 +8275,41 @@ def read(path: Path) -> str:
     return path.read_text()
 
 go = read(go_path)
-for retired in ("dag_root_hex", "dag_proof_ura"):
+for retired in (
+    'causalString(value, "kind")',
+    'case "list", "vector"',
+    'case "merkle", "dag"',
+    'value["vector"]',
+    'causalString(item, "ura")',
+    'causalString(item, "hash_hex")',
+    "dag_root_hex",
+    "dag_proof_ura",
+):
     if retired in go:
-        raise SystemExit(f"sdk_go_causal_context_retired_dag_alias:{retired}")
+        raise SystemExit(f"sdk_go_causal_context_retired_alias:{retired}")
 if 'causalString(value, "root_hex")' not in go:
     raise SystemExit("sdk_go_causal_context_root_hex_missing")
 if 'causalString(value, "proof_ura")' not in go:
     raise SystemExit("sdk_go_causal_context_proof_ura_missing")
-if "causal_context DAG requires root_hex and proof_ura" not in go:
-    raise SystemExit("sdk_go_causal_context_canonical_dag_error_missing")
+if "causal_context merkle requires root_hex and proof_ura" not in go:
+    raise SystemExit("sdk_go_causal_context_canonical_merkle_error_missing")
+if "requireCausalExactKeys" not in go:
+    raise SystemExit("sdk_go_causal_context_exact_key_gate_missing")
 go_tests = read(go_test_path)
 for required in (
-    "TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases",
+    "TestRuntimeSigningCausalContextRejectsRetiredAliases",
+    '"merkle"',
+    '"kind"',
+    '"none"',
+    '"vector"',
+    '"dag"',
+    '"ura"',
+    '"hash_hex"',
     "dag_root_hex",
     "dag_proof_ura",
 ):
     if required not in go_tests:
-        raise SystemExit(f"sdk_go_causal_context_dag_alias_test_missing:{required}")
+        raise SystemExit(f"sdk_go_causal_context_alias_test_missing:{required}")
 
 py = read(py_path)
 for retired in ("dag_root_hex", "dag_proof_ura"):
@@ -7590,23 +8333,97 @@ for required in (
 PY
 }
 
+check_daemon_causal_context_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/invocation/causal_context_projection.rs"
+  local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
+  local child="$cli_root/src/daemon/execution/child_invocation.rs"
+  local a2a="$cli_root/src/daemon/ability/builtins/integrations/a2a/client.rs"
+  local remote_desktop="$cli_root/plugins/remote-desktop/src/session_consent.rs"
+
+  "$PYTHON_BIN" - "$projection" "$dispatch" "$child" "$a2a" "$remote_desktop" <<'PY'
+import sys
+from pathlib import Path
+
+projection_path, dispatch_path, child_path, a2a_path, remote_desktop_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"daemon_causal_context_projection_source_missing:{path}")
+    return path.read_text()
+
+projection = read(projection_path)
+for required in (
+    'pub(crate) fn causal_context_projection',
+    '{"form": "none"}',
+    '"form": "scalar"',
+    '"form": "list"',
+    '"form": "merkle"',
+    "projection_uses_canonical_form_field",
+):
+    if required not in projection:
+        raise SystemExit(f"daemon_causal_context_projection_required_missing:{required}")
+for retired in ('{"kind": "none"}', '"kind": "scalar"', '"kind": "list"', '"kind": "merkle"'):
+    if retired in projection:
+        raise SystemExit(f"daemon_causal_context_projection_retired_kind:{retired}")
+
+for path in (dispatch_path, child_path):
+    text = read(path)
+    if "causal_context_projection::causal_context_projection" not in text:
+        raise SystemExit(f"daemon_causal_context_projection_not_reused:{path}")
+    for retired in ('{"kind": "none"}', '"kind": "scalar"', '"kind": "list"', '"kind": "merkle"'):
+        if retired in text:
+            raise SystemExit(f"daemon_causal_context_projection_consumer_retired_kind:{path}:{retired}")
+
+a2a = read(a2a_path)
+for required in (
+    'projection.get("form")',
+    "causal context uses retired kind field; use form",
+    "retired_causal_context_kind_is_rejected_instead_of_becoming_root",
+):
+    if required not in a2a:
+        raise SystemExit(f"a2a_causal_context_form_gate_missing:{required}")
+if 'projection.get("kind").and_then(Value::as_str)' in a2a:
+    raise SystemExit("a2a_causal_context_reads_retired_kind")
+
+remote_desktop = read(remote_desktop_path)
+for required in (
+    'value.get("form")',
+    "causal_context uses retired kind field; use form",
+    "causal_context_receipt_projection_rejects_retired_kind_field",
+):
+    if required not in remote_desktop:
+        raise SystemExit(f"remote_desktop_causal_context_form_gate_missing:{required}")
+if 'value.get("kind").and_then(Value::as_str)' in remote_desktop:
+    raise SystemExit("remote_desktop_causal_context_reads_retired_kind")
+PY
+}
+
 check_sdk_direct_runtime_descriptor_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
   local go_direct_test="$cli_root/sdk/go/direct_runtime_test.go"
+  local go_errors="$cli_root/sdk/go/errors.go"
+  local go_errors_test="$cli_root/sdk/go/errors_test.go"
   local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+  local py_errors="$cli_root/sdk/python/easynet_sdk/errors.py"
+  local py_errors_test="$cli_root/sdk/python/tests/test_errors.py"
 
   "$PYTHON_BIN" - \
     "$go_direct" \
     "$go_direct_test" \
+    "$go_errors" \
+    "$go_errors_test" \
     "$py_direct" \
-    "$py_direct_test" <<'PY'
+    "$py_direct_test" \
+    "$py_errors" \
+    "$py_errors_test" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_direct_path, go_direct_test_path, py_direct_path, py_direct_test_path = map(Path, sys.argv[1:])
+go_direct_path, go_direct_test_path, go_errors_path, go_errors_test_path, py_direct_path, py_direct_test_path, py_errors_path, py_errors_test_path = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -7621,32 +8438,48 @@ def section(text: str, start: str, end: str) -> str:
     return text[offset : stop if stop >= 0 else len(text)]
 
 go_direct = read(go_direct_path)
+go_errors = read(go_errors_path)
 go_body = section(go_direct, "func directRuntimeGRPCError(", "func directRuntimeError(")
 if re.search(r"case\s+codes\.NotFound:\s*code,\s*retry,\s*retryable\s*=\s*ErrAbilityNotFound", go_body):
     raise SystemExit("sdk_go_direct_runtime_not_found_legacy_ability_projection")
 if "case codes.NotFound:" not in go_body or "ErrDescriptorNotFound" not in go_body:
     raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_projection_missing")
-if "isDescriptorOwnerOfflineMessage(message)" not in go_body or "ErrDescriptorOwnerOffline" not in go_body:
-    raise SystemExit("sdk_go_direct_runtime_owner_offline_projection_missing")
+if "isDescriptorOwnerOfflineMessage" in go_direct or "isDescriptorOwnerOfflineMessage" in go_errors:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_message_classifier_retired")
+if "canonicalErrorCodeFromMessagePrefix(message)" not in go_body or "ErrDescriptorOwnerOffline" not in go_body:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_typed_prefix_projection_missing")
 go_tests = read(go_direct_test_path)
+go_error_tests = read(go_errors_test_path)
 if "TestDirectRuntimeGRPCErrorProjectsProviderNotFoundAsDescriptorNotFound" not in go_tests:
     raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_test_missing")
 if "TestDirectRuntimeGRPCErrorProjectsOwnerOfflineAsDescriptorOwnerOffline" not in go_tests:
     raise SystemExit("sdk_go_direct_runtime_owner_offline_descriptor_test_missing")
+if "TestDirectRuntimeGRPCErrorDoesNotInferOwnerOfflineFromRouteText" not in go_tests:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_negative_text_test_missing")
+if "TestDecodeTransportErrorJSONDoesNotInferOwnerOfflineFromRouteText" not in go_error_tests:
+    raise SystemExit("sdk_go_error_json_owner_offline_negative_text_test_missing")
 
 py_direct = read(py_direct_path)
+py_errors = read(py_errors_path)
 py_body = section(py_direct, "def _grpc_error(", "def _direct_error(")
 if re.search(r"grpc\.StatusCode\.NOT_FOUND:\s*\(\s*ErrorCode\.ABILITY_NOT_FOUND", py_body, re.S):
     raise SystemExit("sdk_python_direct_runtime_not_found_legacy_ability_projection")
 if "grpc.StatusCode.NOT_FOUND" not in py_body or "ErrorCode.DESCRIPTOR_NOT_FOUND" not in py_body:
     raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_projection_missing")
-if "is_descriptor_owner_offline_message(message)" not in py_body or "ErrorCode.DESCRIPTOR_OWNER_OFFLINE" not in py_body:
-    raise SystemExit("sdk_python_direct_runtime_owner_offline_projection_missing")
+if "is_descriptor_owner_offline_message" in py_direct or "_is_descriptor_owner_offline_message" in py_errors:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_message_classifier_retired")
+if "_canonical_error_code_from_message_prefix(message)" not in py_body or "ErrorCode.DESCRIPTOR_OWNER_OFFLINE" not in py_body:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_typed_prefix_projection_missing")
 py_tests = read(py_direct_test_path)
+py_error_tests = read(py_errors_test_path)
 if "test_direct_runtime_grpc_not_found_projects_descriptor_not_found" not in py_tests:
     raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_test_missing")
 if "test_direct_runtime_grpc_owner_offline_projects_descriptor_owner_offline" not in py_tests:
     raise SystemExit("sdk_python_direct_runtime_owner_offline_descriptor_test_missing")
+if "test_direct_runtime_grpc_does_not_infer_owner_offline_from_route_text" not in py_tests:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_negative_text_test_missing")
+if "test_from_json_does_not_infer_owner_offline_from_route_text" not in py_error_tests:
+    raise SystemExit("sdk_python_error_json_owner_offline_negative_text_test_missing")
 PY
 }
 
@@ -7942,6 +8775,19 @@ for retired in (
         raise SystemExit(f"auth_agents_retired_row_alias:{retired}")
 if "AgentTableProjection::from_backend_row" not in body:
     raise SystemExit("auth_agents_table_projection_not_used")
+if "items: Vec<serde_json::Value>" in text:
+    raise SystemExit("auth_agents_row_schema_uses_untyped_json_value")
+for required in (
+    "struct AgentItem",
+    "items: Vec<AgentItem>",
+    "resolve_unavailable: Vec<ResolveUnavailable>",
+    "not canonical runtime contracts",
+):
+    if required not in text:
+        raise SystemExit(f"auth_agents_typed_response_missing:{required}")
+for read_model in ("AuthResp", "UserResp", "DeviceListResp", "DeviceItem", "AbilityListResp", "AbilityItem", "AgentListResp", "AgentItem", "SkillInfo"):
+    if re.search(r"#\[serde\(deny_unknown_fields\)\]\s*struct\s+" + re.escape(read_model) + r"\b", text):
+        raise SystemExit(f"auth_backend_read_model_overstrict:{read_model}")
 projection = re.search(
     r"impl AgentTableProjection \{(?P<body>.*?)\n\}",
     text,
@@ -7951,19 +8797,23 @@ if projection is None:
     raise SystemExit("auth_agents_table_projection_missing")
 projection_body = projection.group("body")
 for required in (
-    '"agent_id"',
-    '"display_name"',
-    '"node_id"',
-    '"skills"',
+    "row.agent_id.clone()",
+    "row.display_name.clone()",
+    "row.node_id.clone()",
+    "row.skills.len()",
 ):
     if required not in projection_body:
         raise SystemExit(f"auth_agents_projection_missing:{required}")
-for retired in ('"ura"', '"name"'):
+for retired in ('"ura"', '"name"', "canonical_agent_row_string"):
     if retired in projection_body:
         raise SystemExit(f"auth_agents_projection_uses_retired_alias:{retired}")
 for test in (
     "auth_agents_table_uses_canonical_backend_fields",
-    "auth_agents_table_rejects_legacy_row_aliases",
+    "auth_agents_table_rejects_rows_missing_canonical_identity_fields",
+    "agent_list_response_accepts_backend_public_contract",
+    "agent_list_response_ignores_additive_envelope_fields",
+    "agent_list_response_ignores_additive_row_fields",
+    "agent_list_response_rejects_null_collections",
 ):
     if test not in text:
         raise SystemExit(f"missing_auth_agents_projection_test:{test}")
@@ -8051,7 +8901,7 @@ for test in (
 if build:
     for required in (
         "pages_identity.user_root_identity()?",
-        "api_key_ability::register(&mut reg, &user, &pages_realm)",
+        "api_key_ability::register(&mut reg, &owner_user_id, &pages_realm)",
         "openai_compat_ability::set_identity(pages_identity.clone())?",
     ):
         if required not in build:
@@ -9100,6 +9950,7 @@ check_target_gate_credential_state_contract() {
   [[ -f "$target_gate" ]] || return 0
 
   "$PYTHON_BIN" - "$target_gate" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -9116,7 +9967,6 @@ for required in (
     "enum LocalCredentialIdentityState",
     "Available(LocalCredentialIdentity)",
     "Unpaired",
-    "Unavailable { reason: String }",
     "load_credentials_optional()?",
     "creds.user_id()?",
     "target_gate_credential_identity_load_failed",
@@ -9125,6 +9975,8 @@ for required in (
 ):
     if required not in text:
         raise SystemExit(f"target_gate_credential_state_missing:{required}")
+if re.search(r"Unavailable\s*\{\s*reason:\s*String,?\s*\}", text) is None:
+    raise SystemExit("target_gate_credential_state_missing:Unavailable { reason: String }")
 
 start = text.find("fn local_runtime_authority_ura(")
 end = text.find("// ── Route-outcome wire mapping", start)
@@ -9149,6 +10001,7 @@ check_runtime_trust_revoke_credentials_contract() {
   [[ -f "$invalidator" ]] || return 0
 
   "$PYTHON_BIN" - "$invalidator" "$dispatcher" <<'PY'
+import re
 import re
 import sys
 from pathlib import Path
@@ -9331,7 +10184,7 @@ for required in (
     "register_pubkey_with_owner(",
     "pub(crate) struct RegisterPubkeyRequest",
     "pub(crate) fn to_arguments_bytes(&self) -> serde_json::Result<Vec<u8>>",
-    "fn role_wire(role: TrustedAgentRole) -> &'static str",
+    "fn role_wire(role: TrustAnchorRole) -> &'static str",
     "args.principal_ura",
 ):
     if required not in register_prod:
@@ -9474,10 +10327,72 @@ for expected in (
     "provider-invocation-list-user-plugin-after-cli.json",
     "provider-invocation-list-add-after-cli.json",
     "provider-invocation-list-native-after-easyremote.json",
+    "hub-invocation-list-directory-before-device-list.json",
+    "caller-device-list-single-submit.json",
+    "hub-invocation-list-directory-after-device-list.json",
 ):
     if expected not in script:
         raise SystemExit(f"product_e2e_invocation_history_exact_scope:missing_exact_artifact:{expected}")
+
+for required in (
+    'DIRECTORY_DISCOVER_URA="easynet:///r/${REALM}/ability/authority.federation.discover"',
+    'caller_cli "device list --state all --format json"',
+    "directory_before_request_ids",
+    "directory_after_request_ids",
+    "directory_device_list_delta",
+    "len(directory_device_list_delta) == 1",
+    "verified_completed_receipt_chain(directory_device_list_delta[0])",
+    'directory_device_list_delta[0].get("caller_ura") == user_ura',
+    'directory_device_list_delta[0].get("callee_ura") == hub_ura',
+    'directory_device_list_delta[0].get("subject_ura") == user_directory_subject_ura',
+    "caller_device_list_one_verified_receipt_chain",
+):
+    if required not in script:
+        raise SystemExit(f"product_e2e_invocation_history_exact_scope:device_list_proof_missing:{required}")
 PY
+}
+
+check_product_media_bidi_e2e_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local script="$cli_root/tools/scripts/docker-media-bidi-e2e.sh"
+  [[ -x "$script" ]] || fail "docker media/bidi e2e script is missing or not executable: $script"
+
+  if ! "$PYTHON_BIN" - "$script" <<'PY'
+import sys
+from pathlib import Path
+
+script = Path(sys.argv[1]).read_text(encoding="utf-8")
+for required in (
+    "synthetic media stream and bidirectional multimodal transfer",
+    "kind = \"sidecar\"",
+    "sdk-python/easynet_sdk",
+    "serve_plugin(",
+    "media.synthetic_stream",
+    "media.synthetic_bidi",
+    "ability stream",
+    "ability bidi",
+    "caller_media_bidi_descriptor_ref",
+    "caller_remote_media_stream_succeeded",
+    "caller_remote_media_bidi_succeeded",
+    "canonical_carrier_reverse_bidi_opened",
+    "canonical_carrier_reverse_bidi_input",
+    "media_stream_unique_invocation_records",
+    "media_bidi_unique_invocation_records",
+    "media_product_operations_have_verified_single_terminal_receipt_chains",
+    "provider_media_plugin_removed",
+    "provider_removed_media_routes_reject_invocation",
+):
+    if required not in script:
+        raise SystemExit(f"product_media_bidi_e2e:missing:{required}")
+if ("fallback_" + "transport") in script:
+    raise SystemExit("product_media_bidi_e2e:retired_fallback_transport")
+if "carrier_v1_reverse_" + "bidi_" in script:
+    raise SystemExit("product_media_bidi_e2e:retired_reverse_bidi_marker")
+PY
+  then
+    return 1
+  fi
+  bash "$script" --self-test >/dev/null || return 1
 }
 
 check_device_trust_sync_caller_classification_contract() {
@@ -9603,14 +10518,18 @@ PY
 check_admission_owner_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
+  local policy_tests="$cli_root/src/daemon/invocation/admission/policy_gate_tests.rs"
   [[ -f "$policy" ]] || return 0
 
-  "$PYTHON_BIN" - "$policy" <<'PY'
+  "$PYTHON_BIN" - "$policy" "$policy_tests" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text()
+test_text = text
+if Path(sys.argv[2]).exists():
+    test_text += "\n" + Path(sys.argv[2]).read_text()
 
 resolve = re.search(
     r"pub\(crate\) fn resolve_owner\((?P<sig>.*?)\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n\}",
@@ -9651,7 +10570,7 @@ for test in (
     "authority_ability_does_not_project_paired_device_credentials_owner",
     "authority_subject_does_not_project_paired_device_credentials_owner",
 ):
-    if test not in text:
+    if test not in test_text:
         raise SystemExit(f"missing_admission_owner_credentials_test:{test}")
 PY
 }
@@ -9660,19 +10579,23 @@ check_shared_local_device_owner_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local owner="$cli_root/src/daemon/invocation/admission/owner_resolution.rs"
   local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
+  local policy_tests="$cli_root/src/daemon/invocation/admission/policy_gate_tests.rs"
   local bootstrap="$cli_root/src/daemon/invocation/admission/bootstrap_authority.rs"
   local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
   [[ -f "$owner" ]] || return 0
 
-  "$PYTHON_BIN" - "$owner" "$policy" "$bootstrap" "$facade" <<'PY'
+  "$PYTHON_BIN" - "$owner" "$policy" "$policy_tests" "$bootstrap" "$facade" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 owner = Path(sys.argv[1]).read_text()
 policy = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
-bootstrap = Path(sys.argv[3]).read_text() if Path(sys.argv[3]).exists() else ""
-facade = Path(sys.argv[4]).read_text() if Path(sys.argv[4]).exists() else ""
+policy_test_text = policy
+if Path(sys.argv[3]).exists():
+    policy_test_text += "\n" + Path(sys.argv[3]).read_text()
+bootstrap = Path(sys.argv[4]).read_text() if Path(sys.argv[4]).exists() else ""
+facade = Path(sys.argv[5]).read_text() if Path(sys.argv[5]).exists() else ""
 
 fn = re.search(
     r"pub\(crate\) fn local_device_owner_fact\((?P<sig>.*?)\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n\}",
@@ -9720,12 +10643,13 @@ if policy:
         if retired in policy:
             raise SystemExit(f"ordinary_policy_retains_local_device_owner_projection:{retired}")
     for required in (
-        "principal_for(context.trusted_role, &caller_ura, context.trust_anchor)?",
+        "VerifiedCallerProjection::from_trusted_path(\n            context.trusted_path,",
         "device_principal_projection_ignores_malformed_local_credentials",
         "paired_device_subject_does_not_project_credentials_owner",
         "paired_device_ability_does_not_project_credentials_owner",
     ):
-        if required not in policy:
+        target = policy if required.startswith("VerifiedCallerProjection::from_trusted_path") else policy_test_text
+        if required not in target:
             raise SystemExit(f"device_principal_projection_missing:{required}")
 
 if bootstrap:
@@ -9956,7 +10880,7 @@ for forbidden in (
 for required in (
     "runtime ability projection is canonical for authority scope admission",
     '"device.dev-a.observe.health"',
-    '"easynet:///r/example/ability/device.dev-a.observe.health"',
+    '"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"',
     '"descriptor_ref must contain a canonical Ability URA"',
     "delegationValue([scope])",
     "nestedDeviceCallee",
@@ -10011,24 +10935,37 @@ PY
 check_admission_authority_raw_wire_strict_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  local authority_metadata="$cli_root/src/daemon/invocation/admission/authority_metadata.rs"
+  local authority="$cli_root/src/daemon/ability/authority/mod.rs"
   [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+  [[ -f "$authority_metadata" ]] || fail "authority metadata source is missing: ${authority_metadata#$cli_root/}"
+  [[ -f "$authority" ]] || fail "authority source is missing: ${authority#$cli_root/}"
 
-  "$PYTHON_BIN" - "$facade" <<'PY'
+  "$PYTHON_BIN" - "$facade" "$authority_metadata" "$authority" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+metadata = Path(sys.argv[2]).read_text(encoding="utf-8")
+authority = Path(sys.argv[3]).read_text(encoding="utf-8")
 
-for struct_name in ("DelegationProofRaw", "SessionAuthorityRaw"):
+for retired in ("DelegationProofRaw", "SessionAuthorityRaw"):
+    if re.search(rf"\bstruct {retired}\b", text):
+        raise SystemExit(f"admission_authority_raw_wire_strict:duplicate_raw_wire:{retired}")
+
+for struct_name in ("RawDelegationAuthorityWire", "RawSessionAuthorityWire"):
     match = re.search(
         rf"struct {struct_name} \{{(?P<body>.*?)\n\}}",
-        text,
+        metadata,
         re.S,
     )
     if match is None:
         raise SystemExit(f"admission_authority_raw_wire_strict:missing:{struct_name}")
+    prefix = metadata[max(0, match.start() - 160):match.start()]
     body = match.group("body")
+    if "deny_unknown_fields" not in prefix:
+        raise SystemExit(f"admission_authority_raw_wire_strict:missing_deny_unknown_fields:{struct_name}")
     if "#[serde(default)]" in body:
         raise SystemExit(f"admission_authority_raw_wire_strict:serde_default_retired:{struct_name}")
     for required in ("payload:", "signature:"):
@@ -10036,13 +10973,47 @@ for struct_name in ("DelegationProofRaw", "SessionAuthorityRaw"):
             raise SystemExit(f"admission_authority_raw_wire_strict:field_missing:{struct_name}:{required}")
 
 for required in (
+    "decode_delegation_authority_wire(",
+    "decode_session_authority_wire(",
+    "delegation authority JSON parse failed",
+    "session authority JSON parse failed",
+    "delegation authority payload parse failed",
+    "session authority payload parse failed",
+):
+    if required not in metadata:
+        raise SystemExit(f"admission_authority_raw_wire_strict:decoder_missing:{required}")
+
+for required in (
+    "authority_metadata::decode_delegation_authority_wire(raw_proof)",
+    "authority_metadata::decode_session_authority_wire(raw_authority)",
+):
+    if required not in text:
+        raise SystemExit(f"admission_authority_raw_wire_strict:facade_decoder_missing:{required}")
+
+for required in (
     "admission_authority_raw_wire_requires_payload_and_signature",
+    "assert_raw_authority_wire_unknown_field_error",
     "missing raw fields must not be reinterpreted as payload/signature defaults",
     "parse_and_verify_delegation_proof(",
     "parse_and_verify_session_authority(",
 ):
     if required not in text:
         raise SystemExit(f"admission_authority_raw_wire_strict:test_missing:{required}")
+
+request = re.search(
+    r"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)"
+    r"pub struct HostedAgentDelegationRequest \{(?P<body>.*?)\n\}",
+    authority,
+    re.S,
+)
+if request is None:
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_missing")
+if "#[serde(deny_unknown_fields)]" not in request.group("prefix"):
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_missing_deny_unknown_fields")
+if "hosted_agent_delegation_request_rejects_unknown_fields" not in authority:
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_unknown_field_test_missing")
+if "legacy_scope" not in authority:
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_legacy_scope_fixture_missing")
 PY
 }
 
@@ -10123,13 +11094,15 @@ PY
 check_session_prelude_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  local initiator="$cli_root/src/daemon/invocation/bidi/session_initiator.rs"
   [[ -f "$prelude" ]] || return 0
 
-  "$PYTHON_BIN" - "$prelude" <<'PY'
+  "$PYTHON_BIN" - "$prelude" "$initiator" <<'PY'
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text()
+initiator = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
 start = text.find("async fn sync_paired_user_trust_prelude(")
 if start < 0:
     raise SystemExit("session_prelude_user_trust_sync_missing")
@@ -10142,6 +11115,8 @@ for retired in (
     "load_credentials().ok()",
     "load_credentials().ok()?",
     "user_ura().ok()",
+    "signer: &dyn CanonicalSigner",
+    "publish_paired_user_keys_prelude(client, signer",
 ):
     if retired in body:
         raise SystemExit(f"session_prelude_credentials_retired_fallback:{retired}")
@@ -10151,10 +11126,24 @@ required = (
     "UserTrustBootstrapError::CredentialsUnavailable",
     "load paired credentials",
     "project runtime user binding",
+    "sync.user_signer",
+    "UserTrustBootstrapError::SignerUnavailable",
+    "publish_paired_user_keys_prelude(",
+    "user_signer.as_ref()",
 )
 for token in required:
     if token not in body:
         raise SystemExit(f"session_prelude_credentials_missing_fail_closed_path:{token}")
+
+for token in (
+    "pub struct PairedUserTrustSigner",
+    "enum PairedUserTrustSignerSource",
+    "pub fn runtime_caller()",
+    "load_runtime_caller_signer(user_ura)",
+    "fixed paired user signer owner",
+):
+    if token not in text:
+        raise SystemExit(f"session_prelude_user_signer_source_missing:{token}")
 
 not_required_count = body.count("return Ok(UserTrustBootstrapOutcome::NotRequired);")
 if not_required_count != 3:
@@ -10167,6 +11156,14 @@ for test in (
 ):
     if test not in text:
         raise SystemExit(f"missing_session_prelude_credentials_test:{test}")
+
+for token in (
+    "__caller_ura",
+    "prelude must publish the paired user key as the paired User",
+    "paired user resolve_key must pin the presented public key as the paired User",
+):
+    if token not in initiator:
+        raise SystemExit(f"missing_session_prelude_user_signer_caller_assertion:{token}")
 
 advertise_start = text.find("async fn run_hosted_agent_advertise_prelude(")
 if advertise_start < 0:
@@ -10190,10 +11187,14 @@ helper_end = text.find("\nasync fn advertise_hosted_agent_entry", helper_start)
 helper_body = text[helper_start : helper_end if helper_end >= 0 else len(text)]
 for required in (
     "load_credentials_optional()",
-    "pages_user_from_env_or_credentials(",
-    "no user-root Pages identity is bound",
+    "runtime_user_binding()",
+    "RuntimeUserBinding::Bound",
+    "RuntimeUserBinding::Unbound",
+    "parse_ura(&user_ura)",
+    "URAKind::User",
+    ".user_id()",
     "SessionError::HostedAgentPreludeFailed",
-    "project username for hosted-agent owner projection",
+    "project runtime user binding for hosted-agent owner projection",
 ):
     if required not in helper_body:
         raise SystemExit(f"session_prelude_hosted_agent_owner_projector_missing:{required}")
@@ -10205,9 +11206,8 @@ for retired in (
     if retired in helper_body:
         raise SystemExit(f"session_prelude_hosted_agent_owner_projector_not_shared:{retired}")
 for test in (
-    "hosted_agent_owner_segment_accepts_explicit_dev_override",
     "hosted_agent_owner_segment_reads_valid_paired_credentials",
-    "hosted_agent_owner_segment_rejects_federation_native_credentials_without_username",
+    "hosted_agent_owner_segment_rejects_federation_native_credentials_without_user_binding",
 ):
     if test not in text:
         raise SystemExit(f"missing_session_prelude_hosted_agent_owner_test:{test}")
@@ -10449,15 +11449,20 @@ if "serde_json::from_slice" in heartbeat_projection or "if let Ok" in heartbeat_
     raise SystemExit("session_prelude_receipt:heartbeat_tolerant_decode")
 if "!diff.added.is_empty() || !diff.removed.is_empty()" in heartbeat:
     raise SystemExit("session_prelude_receipt:heartbeat_revision_only_diff_skipped")
-if "fn heartbeat_refresh_owner_uras_for_caller" not in heartbeat:
-    raise SystemExit("session_prelude_receipt:heartbeat_owner_refresh_projection_missing")
-if "heartbeat_refresh_owner_uras()" in heartbeat and ".unwrap_or_default()" in heartbeat:
-    raise SystemExit("session_prelude_receipt:heartbeat_owner_refresh_error_collapsed")
-owner_refresh_projection = heartbeat.split("fn heartbeat_refresh_owner_uras_for_caller", 1)[1].split(
+if "fn heartbeat_args" not in heartbeat:
+    raise SystemExit("session_prelude_receipt:heartbeat_typed_args_missing")
+heartbeat_args_projection = heartbeat.split("fn heartbeat_args", 1)[1].split(
     "\nfn apply_federation_heartbeat_receipt", 1
 )[0]
-if "owner projection cursor unavailable" not in owner_refresh_projection:
-    raise SystemExit("session_prelude_receipt:heartbeat_owner_refresh_error_context_missing")
+if "refresh_owner_uras: Vec::new()" not in heartbeat_args_projection:
+    raise SystemExit("session_prelude_receipt:heartbeat_must_not_refresh_owner_projection_leases")
+for retired in (
+    "fn heartbeat_refresh_owner_uras_for_caller",
+    "heartbeat_refresh_owner_uras()",
+    "owner projection cursor unavailable",
+):
+    if retired in heartbeat:
+        raise SystemExit(f"session_prelude_receipt:retired_heartbeat_owner_lease_projection:{retired}")
 
 for test in (
     "federation_join_receipt_rejects_empty_or_malformed_body",
@@ -10468,7 +11473,7 @@ for test in (
 for test in (
     "federation_heartbeat_receipt_rejects_empty_or_malformed_body",
     "federation_heartbeat_receipt_applies_revision_only_diff",
-    "heartbeat_refresh_owner_uras_rejects_corrupt_cursor_store",
+    "heartbeat_does_not_reintroduce_projection_lease_ownership",
 ):
     if test not in heartbeat:
         raise SystemExit(f"session_prelude_receipt:missing_heartbeat_test:{test}")
@@ -10675,23 +11680,33 @@ from pathlib import Path
 pairing = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 join = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
 
-def struct_prefix(name: str) -> str:
-    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*pub\(crate\) struct {name} \{{)", pairing)
+def struct_prefix(source: str, name: str) -> str:
+    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*(?:pub\(crate\) )?struct {name} \{{)", source)
     if not match:
         raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
     return match.group("prefix")
 
+def struct_body(source: str, name: str) -> str:
+    match = re.search(rf"(?:pub\(crate\) )?struct {name} \{{(?P<body>.*?)\n\}}", source, re.S)
+    if not match:
+        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
+    return match.group("body")
+
 for name in ("FederatedPeerEntry", "PairingCredentialEnvelope"):
-    prefix = struct_prefix(name)
+    prefix = struct_prefix(pairing, name)
     if "#[serde(deny_unknown_fields)]" not in prefix:
         raise SystemExit(f"pairing_response_strict_schema:open_schema:{name}")
     derive_line = next((line for line in prefix.splitlines() if line.startswith("#[derive(")), "")
     if "Default" in derive_line:
         raise SystemExit(f"pairing_response_strict_schema:default_derive:{name}")
+    if "#[serde(default" in struct_body(pairing, name):
+        raise SystemExit(f"pairing_response_strict_schema:default_field:{name}")
 
 for required in (
     "pairing_credential_rejects_retired_tenant_id_alias",
     "pairing_credential_carries_immutable_user_binding",
+    "pairing_credential_rejects_missing_runtime_custody_facts",
+    "federated_peer_entry_rejects_missing_peer_hub_url",
 ):
     if required not in pairing:
         raise SystemExit(f"pairing_response_strict_schema:missing_test:{required}")
@@ -10703,6 +11718,25 @@ for retired in (
 
 if "pairing_envelope_fixture() -> PairingCredentialEnvelope" not in join:
     raise SystemExit("pairing_response_strict_schema:join_fixture_missing")
+preflight_prefix = struct_prefix(join, "PairingPreflight")
+if "#[serde(deny_unknown_fields)]" not in preflight_prefix:
+    raise SystemExit("pairing_response_strict_schema:preflight_open_schema")
+preflight_body = struct_body(join, "PairingPreflight")
+for required in (
+    "hub_public_key_b64: String",
+    "hub_tls_ca_pem_b64: Option<String>",
+    "hub_agent_ura: String",
+):
+    if required not in preflight_body:
+        raise SystemExit(f"pairing_response_strict_schema:preflight_field_missing:{required}")
+for retired in (
+    "_hub_agent_ura",
+    '#[serde(default)]\n    hub_public_key_b64',
+    '#[serde(default, rename = "hub_agent_ura")]',
+    "hub_tls_ca_pem_b64: String",
+):
+    if retired in preflight_body:
+        raise SystemExit(f"pairing_response_strict_schema:preflight_retired:{retired}")
 for initializer in re.finditer(r"PairingCredentialEnvelope \{(?P<body>.*?)\n\s*\}", join, re.S):
     if "..Default::default()" in initializer.group("body"):
         raise SystemExit("pairing_response_strict_schema:join_default_envelope_constructor")
@@ -10710,9 +11744,33 @@ for required in (
     "validate_pairing_response_rejects_missing_username",
     "validate_pairing_response_rejects_missing_user_id",
     "validate_pairing_response_rejects_all_zero_user_before_credentials_projection",
+    "validate_pairing_response_requires_provisioned_credential_fact",
+    "validate_pairing_response_requires_registered_public_key_fact",
+    "validate_pairing_response_rejects_mismatched_device_public_key",
+    "validate_pairing_response_rejects_noncanonical_device_ura_fact",
+    "validate_pairing_response_rejects_empty_deploy_signature",
+    "validate_pairing_response_rejects_empty_federated_peer_endpoint",
 ):
     if required not in join:
         raise SystemExit(f"pairing_response_strict_schema:join_missing_test:{required}")
+for required in (
+    "validate_pairing_response(envelope, device_public_key)?",
+    "pairing response credential_provisioned must be true",
+    "pairing response public_key_registered must be true",
+    "pairing response device_public_key does not match local runtime signer",
+    "canonical joined device URA",
+    "fn require_pairing_field(value: &str, field: &str) -> anyhow::Result<()>",
+    "validate_pairing_preflight(preflight)",
+    "fn validate_pairing_preflight(mut preflight: PairingPreflight)",
+    'require_pairing_preflight_field(&preflight.hub_public_key_b64, "hub_public_key_b64")?',
+    "decode pairing preflight hub_public_key_b64",
+    "pairing preflight hub_agent_ura",
+    "pairing_preflight_rejects_missing_hub_public_key",
+    "pairing_preflight_rejects_short_hub_public_key",
+    "pairing_preflight_rejects_mismatched_hub_agent_ura",
+):
+    if required not in join:
+        raise SystemExit(f"pairing_response_strict_schema:join_validation_missing:{required}")
 PY
 }
 
@@ -10868,6 +11926,9 @@ for struct_name, field_names in {
     match = re.search(rf"pub struct {struct_name} \{{(?P<body>.*?)\n\}}", receipt, re.S)
     if match is None:
         raise SystemExit(f"federation_receipt_facts:struct_missing:{struct_name}")
+    prefix_start = max(0, match.start() - 240)
+    if "#[serde(deny_unknown_fields)]" not in receipt[prefix_start:match.start()]:
+        raise SystemExit(f"federation_receipt_facts:missing_deny_unknown_fields:{struct_name}")
     body = match.group("body")
     for field in field_names:
         field_match = re.search(rf"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)\s*pub {field}:", body)
@@ -10898,6 +11959,15 @@ for required in (
 ):
     if required not in client:
         raise SystemExit(f"federation_receipt_facts:client_required_missing:{required}")
+
+for required in (
+    "join_receipt_rejects_shadow_membership_fields",
+    "authority_ability_entry_rejects_shadow_descriptor_fields",
+    "advertise_contract_rejects_shadow_owner_fields",
+    "authority_abilities_diff_rejects_shadow_revision_fields",
+):
+    if required not in receipt:
+        raise SystemExit(f"federation_receipt_facts:receipt_shadow_field_test_missing:{required}")
 
 for required in (
     "pub authority_published_abilities: Vec<AuthorityAbilityEntry>,",
@@ -11084,18 +12154,21 @@ if next_item == -1:
 impl_body = production[impl_start:next_item]
 
 for required in (
-    "fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError>",
-    "self.resolve_local_all(agent_ura)",
-    "self.resolve_federated(agent_ura).map(|key| vec![key])",
+    "fn resolve_all(&self, caller_ura: &str) -> Result<Vec<VerifyingKey>, AxonError>",
+    "self.resolve_local_all(caller_ura)",
+    "self.resolve_federated(caller_ura).map(|key| vec![key])",
 ):
     if required not in impl_body:
         raise SystemExit(f"federated_key_resolver_user_keyset:resolve_all_missing:{required}")
 
 for required in (
     "fn resolve_local_all(",
-    "self.is_same_realm_user(agent_ura)",
-    "lookup_user_all(agent_ura)",
-    "resolve_principal_lifecycle_local_public_keys(agent_ura)",
+    "Some(pk) if Self::is_user_ura(caller_ura)",
+    "fn local_pubkey_matches_presented(",
+    "local_trust_anchor_presented_pubkey_mismatch",
+    "self.is_same_realm_user(caller_ura)",
+    "lookup_user_all(caller_ura)",
+    "resolve_principal_lifecycle_local_public_keys(caller_ura)",
     "Self::append_unique(",
     "axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA",
 ):
@@ -11103,8 +12176,8 @@ for required in (
         raise SystemExit(f"federated_key_resolver_user_keyset:local_all_missing:{required}")
 
 for retired in (
-    "fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {\n        self.resolve(agent_ura).map(|key| vec![key])",
-    "match self.presented_pubkey_b64.as_deref() {\n            Some(pk) => trust_anchor.lookup_user_by_pubkey(agent_ura, pk),\n            None => trust_anchor.lookup(agent_ura),\n        }\n        .map(|entry| vec![",
+    "fn resolve_all(&self, caller_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {\n        self.resolve(caller_ura).map(|key| vec![key])",
+    "match self.presented_pubkey_b64.as_deref() {\n            Some(pk) => trust_anchor.lookup_user_by_pubkey(caller_ura, pk),\n            None => trust_anchor.lookup(caller_ura),\n        }\n        .map(|entry| vec![",
 ):
     if retired in production:
         raise SystemExit(f"federated_key_resolver_user_keyset:retired_single_key_path:{retired[:80]}")
@@ -11113,9 +12186,70 @@ tests = text.split("\n#[cfg(test)]\nmod tests", 1)[1] if "\n#[cfg(test)]\nmod te
 for required_test in (
     "same_realm_user_resolve_all_returns_all_trust_anchor_keys_without_dial",
     "same_realm_principal_lifecycle_resolve_all_returns_all_active_user_keys_without_dial",
+    "presented_pubkey_local_hub_authority_resolves_exact_row_without_federation_client",
 ):
     if required_test not in tests:
         raise SystemExit(f"federated_key_resolver_user_keyset:test_missing:{required_test}")
+PY
+}
+
+check_forwarded_finalization_federated_receipt_resolver_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  local unary="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local stream="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+  local bidi="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+  [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+  [[ -f "$unary" ]] || fail "unary dispatcher source is missing: ${unary#$cli_root/}"
+  [[ -f "$stream" ]] || fail "stream dispatcher source is missing: ${stream#$cli_root/}"
+  [[ -f "$bidi" ]] || fail "bidi dispatcher source is missing: ${bidi#$cli_root/}"
+
+  "$PYTHON_BIN" - "$facade" "$unary" "$stream" "$bidi" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+facade = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = facade.split("\n#[cfg(test)]\nmod tests", 1)[0]
+match = re.search(
+    r"pub\(crate\) fn receipt_key_resolver\(&self\) -> Arc<dyn axon_sdk::invocation::KeyResolver> \{(?P<body>.*?)\n    \}",
+    production,
+    re.S,
+)
+if not match:
+    raise SystemExit("forwarded_finalization_receipt_resolver:method_missing")
+body = match.group("body")
+
+for required in (
+    "if let Some(resolver) = self.federated_keys.as_ref()",
+    "let resolver: Arc<dyn axon_sdk::invocation::KeyResolver> = resolver.clone();",
+    "return resolver;",
+    "RealmTrustAnchorKeyResolver::new",
+):
+    if required not in body:
+        raise SystemExit(f"forwarded_finalization_receipt_resolver:missing:{required}")
+
+if body.find("federated_keys") > body.find("RealmTrustAnchorKeyResolver::new"):
+    raise SystemExit("forwarded_finalization_receipt_resolver:local_resolver_precedes_federated_provider")
+
+tests = facade.split("\n#[cfg(test)]\nmod tests", 1)[1] if "\n#[cfg(test)]\nmod tests" in facade else ""
+if "receipt_key_resolver_reuses_federated_authority_for_cross_realm_signers" not in tests:
+    raise SystemExit("forwarded_finalization_receipt_resolver:test_missing")
+if "dial_failed" not in tests or "no trust-anchor entry" not in tests:
+    raise SystemExit("forwarded_finalization_receipt_resolver:test_not_load_bearing")
+
+for path in map(Path, sys.argv[2:]):
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if "RealmTrustAnchorKeyResolver::new" in text:
+        raise SystemExit(
+            "forwarded_finalization_receipt_resolver:dispatcher_constructs_local_resolver:"
+            + path.name
+        )
+    if "receipt_key_resolver()" not in text:
+        raise SystemExit(
+            "forwarded_finalization_receipt_resolver:dispatcher_not_using_facade_provider:"
+            + path.name
+        )
 PY
 }
 
@@ -11140,7 +12274,7 @@ for required in (
     if required not in production:
         raise SystemExit(f"admission_facade_user_role_projection:missing:{required}")
 
-role_start = production.find("fn trusted_role_for_caller(")
+role_start = production.find("fn trusted_path_for_caller(")
 role_end = production.find("\n    fn trust_anchor_user_role_for_caller(", role_start)
 if role_start == -1 or role_end == -1:
     raise SystemExit("admission_facade_user_role_projection:trusted_role_body_missing")
@@ -11358,6 +12492,7 @@ check_eal_device_target_identity_contract() {
   [[ -f "$dispatch" ]] || fail "EAL dispatch source is missing: ${dispatch#$cli_root/}"
 
   "$PYTHON_BIN" - "$dispatch" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -11375,13 +12510,14 @@ for required in (
     "enum EalLocalNodeIdentity",
     "Known(String)",
     "Unpaired",
-    "Unavailable { reason: String }",
     "load_credentials_optional()",
     "load local credentials for EAL device target resolution",
     "fn matches_node(&self, node_id: &str) -> Result<bool, EalError>",
 ):
     if required not in production:
         raise SystemExit(f"eal_device_target_identity:missing:{required}")
+if re.search(r"Unavailable\s*\{\s*reason:\s*String,?\s*\}", production) is None:
+    raise SystemExit("eal_device_target_identity:missing:Unavailable { reason: String }")
 
 for test in (
     "device_request_rejects_malformed_credentials_before_remote_guess",
@@ -11419,9 +12555,12 @@ for retired in (
 
 for required in (
     "remote invocation ingress is URA-only",
-    "parse_node_ura(trimmed)",
+    "RuntimeIdentityUra::parse(trimmed)",
+    "identity.kind() != URAKind::Device",
+    "expected a canonical Device URA",
     "not a canonical URA",
     "bare_node_id_is_rejected_before_directory_lookup",
+    "authority_ura_is_not_a_device_target",
     "empty_target_rejects_before_remote_dispatch",
 ):
     if required not in remote:
@@ -11697,6 +12836,77 @@ check_retired_edge_adapter_policy_absence_contract() {
 check_daemon_tuple_route_contract() {
   bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-pending-dispatch-target-boundary.sh" >/dev/null
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local unary="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local stream="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+  local bidi="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+
+  [[ -f "$unary" ]] || fail "unary dispatcher source is missing: ${unary#$cli_root/}"
+  [[ -f "$stream" ]] || fail "stream dispatcher source is missing: ${stream#$cli_root/}"
+  [[ -f "$bidi" ]] || fail "bidi dispatcher source is missing: ${bidi#$cli_root/}"
+
+  "$PYTHON_BIN" - "$unary" "$stream" "$bidi" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+paths = [Path(path) for path in sys.argv[1:]]
+texts = {path.name: path.read_text(encoding="utf-8", errors="replace") for path in paths}
+
+def production(text: str) -> str:
+    return text.split("\nmod tests {", 1)[0]
+
+for name, text in texts.items():
+    body = production(text)
+    for retired in (
+        "escalate_canonical_invoke(",
+        "escalate_canonical_stream(",
+        "dispatch_escalated_bidi(",
+        "invoke_bidi_escalated_after_route_negative",
+        "route negative after session escalation",
+        "remote Invoke session escalation",
+        "remote InvokeStream session escalation",
+    ):
+        if retired in body:
+            raise SystemExit(
+                f"daemon_tuple_route_contract:public_ingress_route_negative_escalation:{name}:{retired}"
+            )
+
+route_resolution_patterns = {
+    "unary_dispatcher.rs": (
+        r"let selection = match self\.resolve_canonical_rpc_route\(request\)\.await \{"
+        r".*?Err\(status\) => return \(Err\(status\), false\),"
+    ),
+    "stream_dispatcher.rs": (
+        r"let selection = match self\.resolve_stream_route\(request\)\.await \{"
+        r".*?Err\(status\) => return Err\(status\),"
+    ),
+    "bidi_dispatcher.rs": (
+        r"let selection = match self\.resolve_bidi_route\(envelope_open\)\.await \{"
+        r".*?Err\(status\) => return Err\(status\),"
+    ),
+}
+
+for name, pattern in route_resolution_patterns.items():
+    if not re.search(pattern, production(texts[name]), flags=re.S):
+        raise SystemExit(
+            f"daemon_tuple_route_contract:route_negative_not_fail_closed:{name}"
+        )
+
+bidi = production(texts["bidi_dispatcher.rs"])
+for required in (
+    "struct SessionControlLifecycle",
+    "session_control_lifecycle_from_wire",
+    "dispatch_session_control_request",
+    "SessionControlRequestKind::AdvertiseAgent",
+    "SessionControlRequestKind::AdvertiseAbilities",
+    "SessionControlRequestKind::ResolveKey",
+):
+    if required not in bidi:
+        raise SystemExit(
+            f"daemon_tuple_route_contract:session_control_state_machine_missing:{required}"
+        )
+PY
 }
 
 check_remote_invocation_subject_provenance_contract() {
@@ -11856,7 +13066,9 @@ for required in (
     "is_runtime_catalogue_read(ability)",
     'surface != "Invoke"',
     "catalogue read envelope is missing runtime-read subject",
-    "subject_ura == route.callee_ura",
+    "RuntimeGovernanceReadSubject::parse_for_callee(",
+    "&route.callee_ura",
+    "must use a runtime governance read subject",
     "canonical unary Invoke catalogue read path",
     "canonical remote",
     "catalogue read path",
@@ -12123,24 +13335,33 @@ PY
 check_filesystem_resource_owner_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local files="$cli_root/src/daemon/resources/files/mod.rs"
+  local catalog_build="$cli_root/src/daemon/ability/catalog/build.rs"
   [[ -f "$files" ]] || fail "filesystem ResourceRef source is missing: $files"
+  [[ -f "$catalog_build" ]] || fail "ability catalog build source is missing: $catalog_build"
 
-  "$PYTHON_BIN" - "$files" <<'PY'
+  "$PYTHON_BIN" - "$files" "$catalog_build" <<'PY'
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+catalog_build = Path(sys.argv[2]).read_text(encoding="utf-8")
 
-if "fn resource_ref_value(" not in text:
-    raise SystemExit("filesystem_resource_owner:resource_ref_value_missing")
-start = text.find("fn resource_ref_value(")
-end = text.find("fn map_local_path_to_virtual_resource", start)
-if end < 0:
-    raise SystemExit("filesystem_resource_owner:resource_ref_value_section_missing")
-body = text[start:end]
+if "pub fn resource_ref_for_local_path(" not in text:
+    raise SystemExit("filesystem_resource_owner:local_factory_missing")
+if "fn resource_ref_value_owned_by(" not in text:
+    raise SystemExit("filesystem_resource_owner:owned_factory_missing")
+local_start = text.find("pub fn resource_ref_for_local_path(")
+local_end = text.find("pub(crate) fn resource_ref_for_target_tmp_relative_path", local_start)
+owned_start = text.find("fn resource_ref_value_owned_by(")
+owned_end = text.find("fn map_local_path_to_virtual_resource", owned_start)
+if local_end < 0 or owned_end < 0:
+    raise SystemExit("filesystem_resource_owner:factory_section_missing")
+local_body = text[local_start:local_end]
+owned_body = text[owned_start:owned_end]
+body = local_body + "\n" + owned_body
 
-if ") -> Result<Value>" not in body:
-    raise SystemExit("filesystem_resource_owner:resource_ref_value_not_fallible")
+if ") -> Result<Value>" not in local_body or ") -> Result<Value>" not in owned_body:
+    raise SystemExit("filesystem_resource_owner:factory_not_fallible")
 
 for retired in (
     ".ok()",
@@ -12153,18 +13374,32 @@ for retired in (
     if retired in body:
         raise SystemExit(f"filesystem_resource_owner:default_local_fallback_retired:{retired}")
 
+for forbidden in (
+    "identity::local_invocation::local_device_ura",
+    "load_credentials()",
+    "load_credentials_optional()",
+):
+    if forbidden in body:
+        raise SystemExit(f"filesystem_resource_owner:resource_domain_ambient_owner:{forbidden}")
+
 for required in (
-    "crate::daemon::identity::local_invocation::local_device_ura()",
-    "resource_ref: local device owner unavailable",
     "parsed_owner.kind != crate::core::ura::URAKind::Device",
 ):
-    if required not in body:
+    if required not in owned_body:
         raise SystemExit(f"filesystem_resource_owner:canonical_owner_projection_missing:{required}")
 
+for required in (
+    "hosted_device_authority_root()",
+    "FilesystemResourceProvider::for_device",
+    "construct Device filesystem resource provider",
+):
+    if required not in catalog_build:
+        raise SystemExit(f"filesystem_resource_owner:catalog_owner_injection_missing:{required}")
+
 for required_test in (
-    "resource_ref_for_local_path_rejects_missing_local_device_identity",
-    "resource_ref_for_local_path_binds_credentials_backed_device_owner",
-    "provision_local_device_credentials",
+    "filesystem_provider_rejects_non_device_authority",
+    "resource_ref_for_local_path_binds_explicit_device_owner",
+    "foreign_device_resource_ref_rejects_before_local_path_resolution",
 ):
     if required_test not in text:
         raise SystemExit(f"filesystem_resource_owner:test_missing:{required_test}")
@@ -12358,7 +13593,7 @@ for required in (
     "LocalRuntimeInvocationIdentity::new(identity.realm, NodeId::new(node_id)).map(Some)",
     "spawn_schedule_tick(kernel_for_tick, schedule_for_tick, identity)",
     "boot_bus.emit_skipped(\"schedule-tick\")",
-    "schedule_tick_invocation_uras(&identity, &entry.target_node, &fire.schedule_id)",
+    "schedule_tick_invocation_uras(&identity, &target_agent_ura, &fire.schedule_id)",
     "schedule_tick_invocation_uras_use_runtime_realm",
     "local_runtime_invocation_identity_uses_paired_credentials_not_env",
 ):
@@ -12508,12 +13743,12 @@ for retired in (
 
 for required in (
     "pub struct LocalRuntimeSessionProjection",
-    "pub fn from_callee_ura(callee_ura: &str) -> anyhow::Result<Self>",
+    "pub fn from_execution_host_ura(execution_host_ura: &str) -> anyhow::Result<Self>",
     "parsed.kind != crate::core::ura::URAKind::Device",
     "TenantId::new(parsed.realm.clone())",
     "NodeId::new(device_id)",
-    "projects_session_read_model_from_device_callee_ura",
-    "rejects_non_device_session_read_model_callee",
+    "projects_session_read_model_from_execution_host_ura",
+    "rejects_non_device_session_execution_host",
 ):
     if required not in identity:
         raise SystemExit(f"kernel_session_projection_identity_missing:{required}")
@@ -12521,10 +13756,10 @@ for required in (
 for required in (
     "runtime_identity::LocalRuntimeSessionProjection",
     "tenant: tenant.clone()",
-    "let session_projection = LocalRuntimeSessionProjection::from_callee_ura(&callee)?;",
+    "let session_projection =\n            LocalRuntimeSessionProjection::from_execution_host_ura(&execution_host_ura)?;",
     "node: session_projection.node().clone()",
     "tenant: session_projection.tenant().clone()",
-    "invoke_rejects_non_device_session_projection_without_admitting_row",
+    "invoke_rejects_callee_without_local_execution_host_before_admitting_row",
 ):
     if required not in kernel:
         raise SystemExit(f"kernel_session_read_model_cutover_missing:{required}")
@@ -12753,9 +13988,9 @@ for required in (
 
 for required in (
     "ScheduleCreateSpec::new(",
-    ".with_catch_up_window_secs(catch_up_window_secs)",
-    ".with_enabled(enabled)",
-    ".with_prompt(prompt)",
+    ".with_catch_up_window_secs(input.catch_up_window_secs)",
+    ".with_enabled(input.enabled)",
+    ".with_prompt(input.prompt)",
     "svc.add_spec(spec)?",
 ):
     if required not in schedule_ability:
@@ -12814,7 +14049,7 @@ for retired in (
         raise SystemExit(f"schedule_store_current_schema_retired_prompt_null:{retired}")
 
 for required_test in (
-    "load_all_skips_records_missing_current_schema_facts",
+    "load_all_rejects_records_missing_current_schema_facts",
     "parse_on_disk_schedule_rejects_unsupported_schema_version",
     "null-prompt",
     "blank-prompt",
@@ -13071,7 +14306,7 @@ if "ChildInvocationReceiptAnchor::new(" not in gateway or "ChildInvocationRecord
     raise SystemExit("mission_terminal_receipt_projection:gateway_not_using_generic_child_invocation_record")
 for required in (
     '"dependency_receipts"',
-    "child_is_receipt_anchored_and_inherits_subject_trace_and_parent_deadline",
+    "child_is_receipt_anchored_and_derives_subject_while_inheriting_trace_and_deadline",
     'invocation_record.get("receipt").is_none()',
     'invocation_record["terminal_receipt"]["receipt_ura"]',
     'invocation_record["terminal_receipt"]["receipt_hash"]',
@@ -13393,6 +14628,74 @@ if '"query_name is not a canonical URA, route-ref, or descriptor ref"' not in co
 PY
 }
 
+check_namespace_resolver_typed_query_ingress_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local route_resolver="$cli_root/src/daemon/invocation/routing/route_resolver.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  [[ -f "$route_resolver" ]] || fail "route resolver source is missing: $route_resolver"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
+
+  "$PYTHON_BIN" - "$route_resolver" "$wrappers" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+route_path, wrappers_path = map(Path, sys.argv[1:])
+route = route_path.read_text(encoding="utf-8")
+wrappers = wrappers_path.read_text(encoding="utf-8")
+route_production = route.split("\n#[cfg(test)]\nmod tests", 1)[0]
+wrappers_production = wrappers.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for retired in (
+    "fn json_string(",
+    "fn json_bool(",
+    "fn json_resolve_type(",
+    'unwrap_or_default()\n        .trim()\n        .to_string()',
+):
+    if retired in route_production:
+        raise SystemExit(f"namespace_resolver_typed_query:retired_loose_helper:{retired}")
+
+for required in (
+    "pub(crate) struct NamespaceResolveQuery",
+    "pub(crate) fn from_json(value: &Value) -> Result<Self, String>",
+    'required_string(object, "query_name")?',
+    "required_qtype_string(object)?",
+    "ResolveType::from_str_name(&qtype_text)",
+    "pub(crate) fn resolve_query(&self, query: &NamespaceResolveQuery) -> Value",
+    "self.resolve_query(&query)",
+    "fn directory_answer(&self, query: &NamespaceResolveQuery) -> Value",
+):
+    if required not in route_production:
+        raise SystemExit(f"namespace_resolver_typed_query:missing:{required}")
+
+resolve_json = re.search(
+    r"pub\(crate\) fn resolve_query_json\(&self, query: &Value\) -> Value \{(?P<body>.*?)\n    \}",
+    route_production,
+    re.S,
+)
+if not resolve_json:
+    raise SystemExit("namespace_resolver_typed_query:resolve_query_json_missing")
+if "NamespaceResolveQuery::from_json(query)" not in resolve_json.group("body"):
+    raise SystemExit("namespace_resolver_typed_query:json_entry_not_parsing_typed_query")
+
+if "use crate::daemon::invocation::routing::route_resolver::NamespaceResolveQuery;" not in wrappers_production:
+    raise SystemExit("namespace_resolver_typed_query:wrapper_not_importing_value_object")
+if "NamespaceResolveQuery::from_json(query).map(|_| ())" not in wrappers_production:
+    raise SystemExit("namespace_resolver_typed_query:wrapper_duplicates_validation")
+if "ResolveType::from_str_name(qtype)" in wrappers_production:
+    raise SystemExit("namespace_resolver_typed_query:wrapper_manual_qtype_validation")
+
+for required_test in (
+    "resolve_query_json_rejects_missing_query_name_before_empty_selector_default",
+    "resolve_query_json_rejects_missing_qtype_instead_of_shape_guessing",
+    "resolve_query_json_rejects_short_qtype_aliases",
+    "resolve_query_json_ignores_retired_camel_case_input_aliases",
+):
+    if required_test not in route:
+        raise SystemExit(f"namespace_resolver_typed_query:missing_test:{required_test}")
+PY
+}
+
 check_namespace_proxy_resolve_exact_tuple_ingress_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
@@ -13526,6 +14829,67 @@ for required_test in (
 ):
     if required_test not in tests and required_test not in contracts:
         raise SystemExit(f"namespace_proxy_resolve_exact_tuple:missing_test:{required_test}")
+PY
+}
+
+check_federation_resolve_canonical_filter_ingress_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local wire="$cli_root/src/daemon/federation/wire_contract.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  [[ -f "$wire" ]] || fail "federation wire contract source is missing: $wire"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
+  [[ -f "$dispatcher" ]] || fail "unary dispatcher source is missing: $dispatcher"
+
+  "$PYTHON_BIN" - "$wire" "$wrappers" "$dispatcher" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+wire_path, wrappers_path, dispatcher_path = map(Path, sys.argv[1:])
+wire = wire_path.read_text(encoding="utf-8")
+wrappers = wrappers_path.read_text(encoding="utf-8")
+dispatcher = dispatcher_path.read_text(encoding="utf-8")
+wire_production = wire.split("\n#[cfg(test)]", 1)[0]
+wrappers_production = wrappers.split("\n#[cfg(test)]", 1)[0]
+dispatcher_production = dispatcher.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for name, text in (
+    ("wire", wire_production),
+    ("wrappers", wrappers_production),
+    ("dispatcher", dispatcher_production),
+):
+    for retired in (
+        "ResolveRequestIngressV1",
+        "into_canonical(",
+        "ingress adapter accepts v1 flat selector",
+        "normalizes flat selector",
+    ):
+        if retired in text:
+            raise SystemExit(f"federation_resolve_canonical_filter:retired_ingress:{name}:{retired}")
+
+resolve_match = re.search(r"pub struct ResolveRequest\s*\{(?P<body>.*?)\n\}", wire_production, re.S)
+if not resolve_match:
+    raise SystemExit("federation_resolve_canonical_filter:resolve_request_missing")
+resolve_body = resolve_match.group("body")
+if "pub filter: Option<ResolveFilterRequest>" not in resolve_body:
+    raise SystemExit("federation_resolve_canonical_filter:canonical_filter_missing")
+for retired in ("pub ura_prefix", "pub include_abilities"):
+    if retired in resolve_body:
+        raise SystemExit(f"federation_resolve_canonical_filter:flat_field_on_request:{retired}")
+
+if not re.search(
+    r"parse_json_args::<\s*federation_wrappers::ResolveRequest\s*>\s*\(\s*arguments\s*\)\?",
+    dispatcher_production,
+):
+    raise SystemExit("federation_resolve_canonical_filter:dispatcher_not_parsing_canonical_request")
+if "ResolveRequestIngressV1" in wrappers:
+    raise SystemExit("federation_resolve_canonical_filter:wrapper_reexports_retired_ingress")
+if "resolve_request_canonical_shape_rejects_flat_selector_fields" not in wire:
+    raise SystemExit("federation_resolve_canonical_filter:flat_selector_negative_test_missing")
+for required in ('"ura_prefix"', '"include_abilities"', "assert_unknown_field_rejected::<ResolveRequest>"):
+    if required not in wire:
+        raise SystemExit(f"federation_resolve_canonical_filter:negative_test_token_missing:{required}")
 PY
 }
 
@@ -13858,7 +15222,7 @@ for retired_ffi_authority in (
     "dedupe_descriptor_catalog_entries(",
     "descriptor_catalog_dedupe_required_string(",
     "RuntimeDescriptorResolutionProvider::catalog_entries(",
-    "RuntimeDescriptorCatalog",
+    "struct RuntimeDescriptorCatalog ",
 ):
     if retired_ffi_authority in production:
         raise SystemExit(
@@ -13877,8 +15241,8 @@ if resolve is None:
 resolve_body = resolve.group("body")
 if "runtime_owner_ura_from_session(session).ok()" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_collapsed")
-if ".map_err(DescriptorResolutionError::runtime_owner_unavailable)" not in provider:
-    raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_typed_error_mapping_missing")
+if ".map_err(DescriptorResolutionError::runtime_attachment_unavailable)" not in provider:
+    raise SystemExit("ffi_descriptor_runtime_owner:runtime_attachment_typed_error_mapping_missing")
 owner = re.search(
     r"fn runtime_owner_ura_from_session\([^)]*\)\s*->\s*std::result::Result<String,\s*String>\s*\{(?P<body>.*?)\n\}\n\n/// Binds unsigned native-runtime calls",
     text,
@@ -13906,7 +15270,6 @@ for retired in (
     "RemoteDescriptorCatalogProbe",
     "DescriptorCatalogProbeSubject",
     "RemoteInvocationCallerSigner",
-    "load_remote_invocation_caller_signer(",
     "invoke_remote_target_with_caller_signer_typed(",
     "runtime_meta_descriptor_catalog_entries",
     "descriptor_catalog_entry_from_value",
@@ -13914,26 +15277,35 @@ for retired in (
 ):
     if retired in combined_production:
         raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_path:{retired}")
-catalog_entry = re.search(
-    r"fn descriptor_catalog_entry_from_descriptor\([^)]*\)\s*->\s*std::result::Result<Value,\s*String>\s*\{(?P<body>.*?)\n\}\n\n#\[derive\(Debug\)\]\nenum CatalogResolution",
-    provider,
-    re.S,
-)
-if catalog_entry is None:
-    raise SystemExit("ffi_descriptor_runtime_owner:provider_catalog_entry_function_missing")
-catalog_entry_body = catalog_entry.group("body")
-if "descriptor.descriptor_ref()" not in catalog_entry_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_not_using_descriptor_owner")
-if "canonical_ability_descriptor_ref(&format!(" in catalog_entry_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_recomputes_descriptor_ref")
-if "descriptor_ref not found in remote runtime catalog" not in resolve_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:remote_catalog_miss_error_missing")
-if '"runtime_remote_descriptor_catalog"' not in resolve_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:remote_catalog_source_missing")
-if "runtime_descriptor_catalog_entries(callee_ura)" not in resolve_body:
-    compact_resolve = re.sub(r"\s+", "", resolve_body)
-    if "runtime_descriptor_catalog_entries(callee_ura)" not in compact_resolve:
-        raise SystemExit("ffi_descriptor_runtime_owner:remote_descriptor_catalog_not_callee_bound")
+for required in (
+    "enum AttachedDescriptorCatalogRoute",
+    "RemoteCatalogueReadIssuer::catalogue_read_plan(",
+    "load_remote_invocation_caller_signer(",
+    "invoke_remote_target_with_signer_at_endpoint(",
+):
+    if required not in combined_production:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:signed_catalog_route_missing:{required}")
+if "descriptor_ref not found in committed runtime catalog" not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:committed_catalog_miss_error_missing")
+if '"runtime_committed_descriptor_catalog"' not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:committed_catalog_source_missing")
+compact_resolve = re.sub(r"\s+", "", resolve_body)
+if "AbilityCatalogQuery::exact(callee_ura,&ability_ura,descriptor_version)" not in compact_resolve:
+    raise SystemExit("ffi_descriptor_runtime_owner:committed_catalog_query_not_callee_bound")
+if "runtime_live_descriptor_catalog_entries(catalog_reader,&runtime_owner_ura,&query,&read_context,)?" not in compact_resolve:
+    raise SystemExit("ffi_descriptor_runtime_owner:committed_catalog_reader_missing")
+for required in (
+    "trait RuntimeDescriptorCatalogReader",
+    "AbilityCatalogRow::parse(entry, index, \"committed runtime descriptor\")",
+    "insert_catalog_descriptor(",
+    "struct AttachedDaemonDescriptorCatalogReader",
+    "invoke_attached_daemon_system_ability_targeted_root_timeout(",
+    "DescriptorResolutionError::CatalogUnavailable(_)",
+):
+    if required not in combined_production:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:committed_catalog_boundary_missing:{required}")
+if "runtime_daemon_native_agent_descriptor_catalog_entries" in provider_production:
+    raise SystemExit("ffi_descriptor_runtime_owner:product_specific_agent_catalog_branch")
 if "target_owned_descriptor_catalog_subject_ura" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_target_owned_subject_helper")
 if "AbilitySelector::parse(ability)" in resolve_body:
@@ -13950,10 +15322,9 @@ for required in (
     "fn validate_ability_descriptor_catalogue_subject(",
     "Self::AbilityDescriptor => validate_ability_descriptor_catalogue_subject(object)",
     "descriptor_ref provider ability_descriptor requires subject_ura",
-    "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
-    "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
-    "crate::core::ura::hub_ura(&callee.realm)",
-    "runtime_descriptor_resolver_rejects_ability_descriptor_non_authority_subjects",
+    "descriptor_ref provider ability_descriptor subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
+    "fn ability_descriptor_catalogue_subject_error(",
+    "runtime_descriptor_resolver_rejects_ability_descriptor_non_governance_subjects",
     "fn validate_receipt_history_descriptor_subject(",
     "provider.validate_request_subject(object)?",
     "Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object)",
@@ -13969,6 +15340,14 @@ for required in (
 ):
     if required not in provider and required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_subject_gate_missing:{required}")
+for retired in (
+    "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
+    "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+    "crate::core::ura::hub_ura(&callee.realm)",
+    "runtime_descriptor_resolver_rejects_ability_descriptor_non_authority_subjects",
+):
+    if retired in provider or retired in text:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:retired_ability_descriptor_authority_subject:{retired}")
 receipt_subject_validator = re.search(
     r"fn validate_receipt_history_descriptor_subject\([^)]*\)\s*->\s*Result<\(\),\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn receipt_history_descriptor_subject_error",
     provider,
@@ -14002,20 +15381,33 @@ for retired in (
     'contains("ROUTE_NEGATIVE")',
     'contains("requires a caller signer")',
     "Self::CallerSignerUnavailable(",
-    "Self::OwnerOffline(",
     "Self::RuntimeOffline(",
+    "error.runtime_failure_kind()",
+    "RuntimeFailureKind::DescriptorOwnerOffline",
 ):
     if retired in production:
         raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_classifier:{retired}")
 for required in (
     "enum DescriptorResolutionError",
-    "RuntimeOwnerUnavailable(String)",
+    "RuntimeAttachmentUnavailable(String)",
     "DescriptorNotFound(String)",
-    "descriptor resolution requires a caller signer",
+    "OwnerOffline(String)",
+    "CatalogUnavailable(String)",
+    "DescriptorVersionAmbiguous(String)",
+    "use crate::daemon::runtime_failure::RuntimeFailureFacts;",
+    "pub(crate) fn canonical_detail(&self) -> String",
+    "RuntimeFailureFacts::new(self.runtime_failure_code(), self.message())",
+    "descriptor resolution requires attached daemon identity",
     "fn descriptor_resolution_abi_projection(",
-    'code: CALLER_SIGNER_UNAVAILABLE_CODE',
+    "DescriptorResolutionError::RuntimeAttachmentUnavailable(_)",
+    "DescriptorResolutionError::OwnerOffline(_)",
+    'code: "RUNTIME_OFFLINE"',
     'code: "DESCRIPTOR_NOT_FOUND"',
+    'code: "DESCRIPTOR_OWNER_OFFLINE"',
+    'code: "PROVIDER_UNAVAILABLE"',
+    "DescriptorNotFound must not be reclassified by message text",
     "descriptor_resolution_abi_projection(&error)",
+    "execution_target_owner_ura_for_public_ability(",
 ):
     if required not in text and required not in provider:
         raise SystemExit(f"ffi_descriptor_runtime_owner:typed_projection_missing:{required}")
@@ -14025,11 +15417,16 @@ if "descriptor_resolution_error_projection(&message)" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_uses_message_classifier")
 if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_formats_error_before_projection")
+if "error.canonical_detail()" not in entry:
+    raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_does_not_sanitize_descriptor_error")
 
 for required_test in (
     "runtime_descriptor_resolver_requires_runtime_owner_for_remote_catalog",
-    "runtime owner failure must not expose custody implementation details",
-    "runtime_descriptor_resolver_rebinds_remote_system_action_descriptor_to_callee",
+    "runtime attachment failure must not expose custody implementation details",
+    "runtime_descriptor_resolver_requires_version_when_catalog_has_multiple_versions",
+    'code: "VERSION_MISMATCH"',
+    "DESCRIPTOR_OWNER_OFFLINE",
+    "runtime_descriptor_resolver_resolves_hosted_agent_rpc_and_stream_from_committed_catalog",
     "runtime_descriptor_resolver_uses_explicit_provider_for_remote_resource_catalogue_read",
     "runtime_descriptor_resolver_does_not_remote_probe_remote_catalog_miss",
     "runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup",
@@ -14039,7 +15436,7 @@ for required_test in (
     "runtime_owner_resolution_rejects_relative_control_endpoint_before_cwd_lookup",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
 ):
-    if required_test not in text:
+    if required_test not in text and required_test not in provider:
         raise SystemExit(f"ffi_descriptor_runtime_owner:missing_test:{required_test}")
 PY
 }
@@ -14071,7 +15468,6 @@ resolver = provider_production[resolver_start:resolver_end]
 for retired in (
     "fn from_remote_probe_rejection(",
     "RemoteInvocationFailure::",
-    "Self::OwnerOffline(",
 ):
     if retired in production or retired in provider_production:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
@@ -14082,19 +15478,24 @@ for retired in (
 ):
     if retired in resolver:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
-if "descriptor_ref not found in remote runtime catalog" not in provider_production:
-    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:remote_catalog_miss_missing")
-if '"runtime_remote_descriptor_catalog"' not in provider_production:
-    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:remote_catalog_source_missing")
-if "runtime_descriptor_catalog_entries(callee_ura)" not in provider_production:
-    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:remote_descriptor_catalog_not_callee_bound")
+if "descriptor_ref not found in committed runtime catalog" not in provider_production:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:committed_catalog_miss_missing")
+if '"runtime_committed_descriptor_catalog"' not in provider_production:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:committed_catalog_source_missing")
+for required in (
+    "trait RuntimeDescriptorCatalogReader",
+    "AbilityCatalogQuery::exact(callee_ura, &ability_ura, descriptor_version)",
+    "runtime_live_descriptor_catalog_entries(\n        catalog_reader,\n        &runtime_owner_ura,\n        &query,\n        &read_context,\n    )?",
+):
+    if required not in provider_production:
+        raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:committed_catalog_reader_missing:{required}")
 for required_test in (
     "descriptor_resolution_errors_project_canonical_runtime_codes",
-    "runtime_descriptor_resolver_rebinds_remote_system_action_descriptor_to_callee",
+    "runtime_descriptor_resolver_resolves_hosted_agent_rpc_and_stream_from_committed_catalog",
     "runtime_descriptor_resolver_uses_explicit_provider_for_remote_resource_catalogue_read",
     "runtime_descriptor_resolver_does_not_remote_probe_remote_catalog_miss",
 ):
-    if required_test not in text:
+    if required_test not in text and required_test not in provider:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:missing_test:{required_test}")
 PY
 }
@@ -14537,8 +15938,8 @@ if "pub struct AuthorityPublishedAbilityStore" not in production_store:
     raise SystemExit("authority_published_store:canonical_type_missing")
 if "HubPublishedAbilityStore" in production_store:
     raise SystemExit("authority_published_store:retired_type_alias_or_name")
-if "entries: BTreeMap<String, AbilityDescriptor>" not in production_store:
-    raise SystemExit("authority_published_store:entries_not_canonical_descriptor")
+if "entries: BTreeMap<CatalogDescriptorKey, AbilityDescriptor>" not in production_store:
+    raise SystemExit("authority_published_store:entries_not_full_canonical_identity")
 if "entries: BTreeMap<String, AuthorityAbilityEntry>" in production_store:
     raise SystemExit("authority_published_store:opaque_entry_cache")
 if "fn validate_authority_ability_entry" not in production_store:
@@ -14556,6 +15957,8 @@ if "pub fn apply_diff" not in production_store or "-> Result<(), String>" not in
 for test_name in (
     "seed_rejects_noncanonical_descriptor_rows",
     "apply_diff_is_atomic_when_added_row_is_noncanonical",
+    "apply_diff_ignores_complete_stale_transition",
+    "snapshot_preserves_same_ability_rpc_and_stream_variants",
 ):
     if test_name not in store:
         raise SystemExit(f"authority_published_store:missing_test:{test_name}")
@@ -14566,10 +15969,14 @@ if len(realm_split) != 2:
 realm_body = realm_split[1].split("scope.apply", 1)[0]
 if "entry.descriptor" in realm_body:
     raise SystemExit("meta_list_abilities:realm_opaque_descriptor_passthrough")
-if "serde_json::to_value(descriptor)" not in realm_body:
-    raise SystemExit("meta_list_abilities:realm_canonical_descriptor_projection_missing")
-if 'Value::String("authority:broadcast".to_string())' not in realm_body:
-    raise SystemExit("meta_list_abilities:realm_source_projection_missing")
+if "insert_catalog_descriptor(" not in realm_body:
+    raise SystemExit("meta_list_abilities:realm_canonical_conflict_gate_missing")
+if "snapshot_with_revision()" not in realm_body:
+    raise SystemExit("meta_list_abilities:realm_atomic_snapshot_missing")
+if "catalog_snapshot_revision(&catalog)" not in meta_production:
+    raise SystemExit("meta_list_abilities:catalog_revision_missing")
+if 'Value::String("authority:broadcast".to_string())' in realm_body:
+    raise SystemExit("meta_list_abilities:descriptor_source_hash_mutation")
 if 'Value::String("hub:broadcast".to_string())' in realm_body:
     raise SystemExit("meta_list_abilities:retired_hub_broadcast_source")
 if "fn describe_hosted_agent_count(" not in meta_production:
@@ -14585,32 +15992,18 @@ if "meta.describe: load hosted-Agent identity status" not in meta_production:
 if "device_describe_rejects_corrupt_hosted_agent_projection_before_zero_fallback" not in meta:
     raise SystemExit("meta_describe:corrupt_hosted_agent_projection_test_missing")
 
-dedupe = re.search(
-    r"fn dedupe_descriptor_catalog_entries\([^)]*\)\s*->\s*std::result::Result<Vec<Value>, String>\s*\{(?P<body>.*?)\n\}\n\nfn descriptor_catalog_dedupe_required_string",
-    descriptor_provider,
-    re.S,
-)
-if dedupe is None:
-    raise SystemExit("runtime_descriptor_provider:dedupe_not_fallible")
-dedupe_body = dedupe.group("body")
-if re.search(r"\bcontinue\s*;", dedupe_body):
-    raise SystemExit("runtime_descriptor_provider:dedupe_silent_drop")
-if "descriptor_catalog_dedupe_required_string" not in dedupe_body:
-    raise SystemExit("runtime_descriptor_provider:dedupe_required_fields_missing")
-if "descriptor_catalog_dedupe_rejects_schema_incomplete_rows" not in ffi:
-    raise SystemExit("runtime_descriptor_provider:missing_schema_incomplete_dedupe_test")
+for required in (
+    'AbilityCatalogRow::parse(entry, index, "committed runtime descriptor")',
+    "insert_catalog_descriptor(",
+    "CatalogDescriptorKey",
+):
+    if required not in descriptor_provider:
+        raise SystemExit(f"runtime_descriptor_provider:live_catalog_validation_missing:{required}")
 
-if "fn schema_bound_catalogue_entry" not in cli_catalog_production:
-    raise SystemExit("cli_ability_catalog:schema_bound_entry_missing")
-for field in ("ability_ura", "owner_ura", "name", "version"):
-    if f'required_catalogue_string(object, index, "{field}")' not in cli_catalog_production:
-        raise SystemExit(f"cli_ability_catalog:required_field_missing:{field}")
 for token, code in (
-    ("AbilitySelector::parse(ability_ura)", "ability_selector_missing"),
-    ("ability_ura_matches_owner_ura(owner_ura, ability_ura)", "owner_binding_missing"),
-    ("name != selector.public_name()", "public_name_binding_missing"),
-    ("ability_ura_from_descriptor_ref(descriptor_ref)", "descriptor_ref_ability_binding_missing"),
-    ('descriptor_ref.starts_with(&format!("{ability_ura}@{version}#"))', "descriptor_ref_version_binding_missing"),
+    ("AbilityCatalogRow::parse(entry, index, \"CLI meta.list_abilities\")", "shared_row_parser_missing"),
+    ("AbilityCatalogQuery::new(owner_ura, ability_ura)", "shared_query_missing"),
+    ("self.inner.to_request_json()", "shared_query_projection_missing"),
 ):
     if token not in cli_catalog_production:
         raise SystemExit(f"cli_ability_catalog:{code}")
@@ -14693,8 +16086,8 @@ if re.search(r"if\s+hosts_device_authority\s*\{\s*if\s+let\s+Some\(hot_registrar
 if "let stateful_device_runtime = owns_device_product_state && daemon_runtime_assembly;" not in catalog:
     raise SystemExit("daemon_runtime_assembly:stateful_device_runtime_guard_missing")
 
-if re.search(r"if\s+hosts_device_authority\s*\{\s*device_registrar_cell\s*\.", catalog, re.S):
-    raise SystemExit("daemon_runtime_assembly:device_registrar_bound_to_authority_rows")
+if re.search(r"if\s+hosts_device_authority\s*\{\s*ability_deployment_registrar_cell\s*\.", catalog, re.S):
+    raise SystemExit("daemon_runtime_assembly:ability_deployment_registrar_bound_to_authority_rows")
 
 if "fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime" not in tests:
     raise SystemExit("daemon_runtime_assembly:deterministic_snapshot_replay_regression_test_missing")
@@ -14932,64 +16325,6 @@ for token, code in (
 PY
 }
 
-check_agent_invoke_strict_args_contract() {
-  local cli_root="${CLI_ROOT:-$ROOT}"
-  local invoke="$cli_root/src/daemon/ability/builtins/agents/invoke.rs"
-  [[ -f "$invoke" ]] || fail "agent invoke source is missing: $invoke"
-
-  "$PYTHON_BIN" - "$invoke" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
-
-for forbidden, code in (
-    ("struct InvokeMetadata", "runtime_metadata_struct_in_business_parser"),
-    ("metadata: InvokeMetadata", "runtime_metadata_field_in_invoke_args"),
-    ("key.starts_with('_')", "underscore_sidecar_prefix_carveout"),
-    ('.get("_request_id")', "request_id_sidecar_extraction"),
-    ('.get("_caller_ura")', "caller_ura_sidecar_extraction"),
-    ("sidecar-metadata slot", "sidecar_slot_documented_in_parser"),
-    ("accepted-and-dropped", "silent_sidecar_drop_documented"),
-):
-    if forbidden in production:
-        raise SystemExit(f"agent_invoke_strict_args:{code}")
-
-for retired_test in (
-    "parse_accepts_underscore_prefixed_sidecar_fields",
-    "parse_drops_unread_underscore_fields_silently",
-    "parse_tolerates_non_string_sidecar_values",
-):
-    if retired_test in text:
-        raise SystemExit(f"agent_invoke_strict_args:retired_test:{retired_test}")
-
-for required in (
-    "parse_rejects_underscore_prefixed_sidecar_fields",
-    "parse_rejects_unread_underscore_fields",
-    "parse_rejects_non_string_sidecar_values",
-    "There is no underscore sidecar exception here",
-    "metadata are canonical invocation-envelope facts owned by",
-):
-    if required not in text:
-        raise SystemExit(f"agent_invoke_strict_args:missing:{required}")
-
-parse = re.search(
-    r"impl InvokeArgs \{\s*fn parse\(raw: &Value\) -> anyhow::Result<Self> \{(?P<body>.*?)\n    \}\n\}",
-    production,
-    re.S,
-)
-if parse is None:
-    raise SystemExit("agent_invoke_strict_args:parse_body_missing")
-body = parse.group("body")
-if 'const KNOWN: &[&str] = &["ability_ura", "args"];' not in body:
-    raise SystemExit("agent_invoke_strict_args:canonical_known_fields_missing")
-if "invalid_args: unknown field" not in body:
-    raise SystemExit("agent_invoke_strict_args:unknown_field_fail_closed_missing")
-PY
-}
-
 check_plugin_sidecar_helper_matrix_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   CHECK_GO_PLUGINEXEC_PROJECTION_ROOT="$cli_root" \
@@ -15070,6 +16405,12 @@ if "fn template_profile(self) -> anyhow::Result<PluginTemplateProfile>" not in t
     raise SystemExit("plugin_template_profile_entry_missing")
 if "PluginTemplateProfile::for_language(self)" not in text:
     raise SystemExit("plugin_template_profile_factory_missing")
+if "generated_exec_templates_parse_as_plugin_packages_for_every_open_language" not in text:
+    raise SystemExit("plugin_template_installable_matrix_test_missing")
+if "PluginPackage::from_installed" not in text:
+    raise SystemExit("plugin_template_installable_package_parser_not_exercised")
+if "for language in languages" not in text:
+    raise SystemExit("plugin_template_installable_matrix_not_language_iterated")
 hello_template = re.search(
     r"struct HelloPluginTemplate\s*\{(?P<body>.*?)\n\}",
     text,
@@ -15370,9 +16711,12 @@ required_helper_tokens = {
     "python": [
         "caller_ura: str",
         "_reject_unknown_invocation_fields(invocation)",
-        "_reject_unknown_request_fields(frame)",
+        "_reject_unknown_open_request_fields(frame)",
         "def _reject_unknown_invocation_fields(",
-        "def _reject_unknown_request_fields(",
+        "def _reject_unknown_open_request_fields(",
+        "def serve_stream_plugin(",
+        "def serve_bidi_plugin(",
+        "def _iter_bidi_input_frames(",
         "def _require_invocation_fields(",
         "MappingProxyType",
         "_CANONICAL_INVOCATION_NONCE_BYTES = 16",
@@ -15470,6 +16814,10 @@ required_helper_tests = {
         "test_plugin_invocation_owns_handler_projection",
         "test_plugin_invocation_rejects_non_canonical_nonce_length",
         "test_plugin_invocation_rejects_boolean_nonce_bytes",
+        "test_stream_plugin_helper_writes_items_and_single_terminal",
+        "test_bidi_plugin_helper_projects_input_frames_until_close",
+        "test_bidi_plugin_helper_rejects_mismatched_input_call_id",
+        "test_generic_plugin_helper_rejects_unconfigured_stream_path",
     ],
     "node": [
         "serveExecPlugin writes terminal error frame for uncorrelated request",
@@ -15636,6 +16984,16 @@ for language in sorted(required_languages - set(expected_helpers)):
 for language in sorted(required_languages):
     for call_mode in ("ExecStream", "ExecBidi"):
         row = rows[(language, call_mode)]
+        if language == "python":
+            if row["state"] != "ProviderBacked":
+                raise SystemExit(
+                    f"plugin_python_streaming_helper_not_provider_backed:{call_mode}:{row['state']}"
+                )
+            if row["template_available"]:
+                raise SystemExit(f"plugin_streaming_template_open_without_helper:{language}:{call_mode}")
+            if row["helper_package"] != "easynet_sdk.providers.runtime.plugin_exec":
+                raise SystemExit(f"plugin_python_streaming_helper_package_missing:{call_mode}")
+            continue
         if row["state"] not in {"Unsupported", "Seam"}:
             raise SystemExit(
                 f"plugin_streaming_helper_state_open_without_contract:{language}:{call_mode}:{row['state']}"
@@ -16166,8 +17524,8 @@ for required, code in (
     ("RemoteUnsupported {", "remote_unsupported_state_missing"),
     ("fn require_local_mutation(", "local_mutation_guard_missing"),
     ("capability_state=unsupported", "unsupported_state_diagnostic_missing"),
-    ("fn require_device_registrar(", "registrar_requirement_missing"),
-    ("canonical device ability registrar is unavailable", "registrar_precondition_diagnostic_missing"),
+    ("fn require_ability_deployment_registrar(", "registrar_requirement_missing"),
+    ("canonical ability deployment registrar is unavailable", "registrar_precondition_diagnostic_missing"),
     ("fn classify_target_ura(", "canonical_target_ura_classifier_missing"),
     ("ability.deploy: `target_ura` is required", "deploy_target_ura_requirement_missing"),
     ("ability.uninstall: `target_ura` is required", "uninstall_target_ura_requirement_missing"),
@@ -16193,7 +17551,7 @@ for retired in (
     if retired in production:
         raise SystemExit(f"device_ability_mutation_target:retired_compat_vocabulary:{retired}")
 
-if len(re.findall(r"device_registrar\.get\(\)\s*\.cloned\(\)", production)) != 1:
+if len(re.findall(r"ability_deployment_registrar\.get\(\)\s*\.cloned\(\)", production)) != 1:
     raise SystemExit("device_ability_mutation_target:registrar_lookup_not_centralized")
 
 for fn_name, code in (
@@ -16757,6 +18115,93 @@ for required in (
 PY
 }
 
+check_cli_network_device_invocation_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local device_group="$cli_root/src/cli/commands/groups/device.rs"
+  local devices="$cli_root/src/cli/commands/devices.rs"
+  local directory_reader="$cli_root/src/daemon/federation/directory_reader.rs"
+  local remote_invoke="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  for path in "$device_group" "$devices" "$directory_reader" "$remote_invoke"; do
+    [[ -f "$path" ]] || fail "CLI Network device invocation source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$device_group" "$devices" "$directory_reader" "$remote_invoke" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+device_group, devices, directory_reader, remote_invoke = [
+    Path(path).read_text(encoding="utf-8", errors="replace")
+    for path in sys.argv[1:]
+]
+group_production = device_group.split("\n#[cfg(test)]", 1)[0]
+devices_production = devices.split("\n#[cfg(test)]", 1)[0]
+reader_production = directory_reader
+remote_production = remote_invoke.split("\n#[cfg(test)]", 1)[0]
+
+if "DeviceAction::List(a) => devices::run(a)" not in group_production:
+    raise SystemExit("cli_network_device_invocation:list_not_owned_by_device_directory_command")
+
+for required in (
+    "read_federated_directory_for_user(",
+    "read_federated_directory_for_operator_audit(",
+):
+    if required not in devices_production:
+        raise SystemExit(f"cli_network_device_invocation:device_list_missing:{required}")
+
+for retired in (
+    "auth_get_json(",
+    "auth_post_json(",
+    "ureq::",
+    "/api/v1/devices",
+    "load_device_inventory_summary(",
+):
+    if retired in devices_production:
+        raise SystemExit(
+            f"cli_network_device_invocation:device_list_backend_bypass:{retired}"
+        )
+
+for required in (
+    "invoke_federation_discover_for_user(",
+    "invoke_federation_discover_for_operator_audit(",
+):
+    if required not in reader_production:
+        raise SystemExit(f"cli_network_device_invocation:directory_reader_missing:{required}")
+
+scope_body = re.search(
+    r"fn invoke_federation_discover_with_scope\((?P<body>.*?)\n\}",
+    remote_production,
+    re.S,
+)
+if scope_body is None:
+    raise SystemExit("cli_network_device_invocation:canonical_discover_issuer_missing")
+body = scope_body.group("body")
+for required in (
+    "RemoteAbilityInvocationTarget::for_target_owned_selector(",
+    '"federation.discover"',
+    "ProtoEnvelope::from_target(",
+    ".signed_descriptor_ref_invoke_request_with_signer(",
+    "crate::daemon::invocation::transport::invocation_client(channel)",
+    "client.invoke(request)",
+    'ensure_completed_invoke_response("federation.discover", &response)',
+):
+    if required not in body:
+        raise SystemExit(
+            f"cli_network_device_invocation:canonical_discover_issuer_incomplete:{required}"
+        )
+for retired in (
+    "ureq::",
+    "/api/v1/devices",
+    "auth_get_json(",
+    "auth_post_json(",
+):
+    if retired in body:
+        raise SystemExit(
+            f"cli_network_device_invocation:canonical_discover_issuer_backend_bypass:{retired}"
+        )
+PY
+}
+
 check_cli_device_show_projection_error_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local device_group="$cli_root/src/cli/commands/groups/device.rs"
@@ -16959,7 +18404,10 @@ for required, code in (
     ("fn require_local_runtime(", "local_runtime_requirement_helper_missing"),
     ("requires canonical destination runtime assembly", "assembly_diagnostic_missing"),
     ("requires canonical runtime admission graph", "admission_graph_requirement_missing"),
-    ("not published for session.open carrier-v1", "bidi_publication_requirement_missing"),
+    (
+        "not published for session.open canonical carrier",
+        "bidi_publication_requirement_missing",
+    ),
 ):
     if required not in text:
         raise SystemExit(f"local_session_runtime_assembly:{code}")
@@ -17005,7 +18453,7 @@ if not helper:
 body = helper.group("body")
 required = {
     "canonical_ability_descriptor_ref(ability)": "explicit_descriptor_ref_parse_missing",
-    "catalog_descriptor_ref_for_wire(": "catalog_descriptor_ref_authority_missing",
+    "system_protocol_descriptor_ref_for_wire(": "system_protocol_descriptor_ref_authority_missing",
     "expect(\"test ability must resolve through canonical catalog descriptor authority\")": "fail_closed_catalog_error_missing",
 }
 for fragment, code in required.items():
@@ -17079,15 +18527,22 @@ PY
 check_canonical_receipt_resolver_trust_source_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local grpc="$cli_root/src/support/platform/local_daemon_grpc.rs"
+  local ffi="$cli_root/src/ffi/invocation/mod.rs"
+  local client="$cli_root/src/daemon/invocation/dispatch/client.rs"
   [[ -f "$grpc" ]] || fail "local daemon gRPC source is missing: ${grpc#$cli_root/}"
+  [[ -f "$ffi" ]] || fail "FFI invocation source is missing: ${ffi#$cli_root/}"
+  [[ -f "$client" ]] || fail "daemon invocation client source is missing: ${client#$cli_root/}"
 
-  "$PYTHON_BIN" - "$grpc" <<'PY'
+  "$PYTHON_BIN" - "$grpc" "$ffi" "$client" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+ffi_text = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+client_text = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
 production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]", 1)[0]
+ffi_production = ffi_text.split("\n#[cfg(test)]", 1)[0]
 
 for required in (
     "enum RealmReceiptTrustSource",
@@ -17096,12 +18551,21 @@ for required in (
     "Missing { path: PathBuf }",
     "LoadFailed { path: PathBuf, error: String }",
     "fn unavailable_detail(&self) -> Option<String>",
+    "fn resolve_all(",
     "realm_trust: RealmReceiptTrustSource",
+    "daemon_federated_trust: Option<Arc<dyn axon_sdk::invocation::KeyResolver>>",
+    "struct DaemonFederatedReceiptResolver",
+    "impl axon_sdk::invocation::KeyResolver for DaemonFederatedReceiptResolver",
+    "ResolveKeyRequest::new(signer_ura)",
+    "ResolveKeyResponse",
+    "invoke_local_daemon_ability_with_tuple_plan_at_verified",
+    "record_verified_causal_anchor(&terminal.causal_anchor)",
+    "pub(crate) fn for_daemon_endpoint(endpoint: PathBuf) -> Self",
     "RealmReceiptTrustSource::load(trust_anchor_path)",
-    "RealmReceiptTrustSource::Loaded(resolver)",
     "realm trust anchor at {} is empty",
     "realm trust anchor at {} is missing",
     "realm trust anchor at {} failed to load: {error}",
+    "daemon_federated_trust=not configured",
 ):
     if required not in production:
         raise SystemExit(f"canonical_receipt_resolver_trust_source:missing:{required}")
@@ -17116,6 +18580,26 @@ for retired in (
     if retired in production:
         raise SystemExit(f"canonical_receipt_resolver_trust_source:retired:{retired}")
 
+for source_name, source_text in (
+    ("ffi", ffi_production),
+    ("daemon_client", client_text),
+):
+    for match in re.finditer(r"CanonicalRuntimeReceiptResolver::new\(\)", source_text):
+        prefix = source_text[max(0, match.start() - 160):match.start()]
+        if "#[cfg(test)]" not in prefix:
+            raise SystemExit(f"canonical_receipt_resolver_trust_source:{source_name}:production_local_only_resolver")
+    if "CanonicalRuntimeReceiptResolver::for_daemon_endpoint" not in source_text:
+        raise SystemExit(f"canonical_receipt_resolver_trust_source:{source_name}:missing_endpoint_bound_resolver")
+
+for required in (
+    "InboundReceiptCheckpointVerifier::for_daemon_endpoint(endpoint)",
+    "stream_endpoint",
+    "bidi_endpoint",
+    "run_bidi_down_reader(",
+):
+    if required not in ffi_production:
+        raise SystemExit(f"canonical_receipt_resolver_trust_source:ffi_stream_bidi_missing:{required}")
+
 if "canonical_receipt_resolver_preserves_malformed_realm_trust_source" not in text:
     raise SystemExit("canonical_receipt_resolver_trust_source:missing_malformed_source_test")
 if "not_a_role" not in text or "!message.contains(\"empty or unavailable\")" not in text:
@@ -17124,6 +18608,10 @@ if "canonical_receipt_resolver_preserves_missing_realm_trust_source" not in text
     raise SystemExit("canonical_receipt_resolver_trust_source:missing_missing_source_test")
 if "message.contains(\"is missing\")" not in text:
     raise SystemExit("canonical_receipt_resolver_trust_source:missing_test_not_load_bearing")
+if "canonical_receipt_resolver_uses_delegated_trust_after_local_and_realm_miss" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:missing_delegated_trust_test")
+if "resolve_all(&resolver, &signer_ura)" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:delegated_trust_test_must_cover_keyset")
 PY
 }
 
@@ -17725,7 +19213,8 @@ if "format!(\"{context}: {raw_detail}\")" in body or "format!(\"{context}: {deta
 
 test = remote.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in remote else ""
 for required_test in (
-    "caller_signer_readiness_is_not_downgraded_to_ability_absent",
+    "typed_caller_signer_readiness_is_not_downgraded_to_ability_absent",
+    "keyring_text_does_not_gain_caller_signer_state",
     "status.message().contains(\"CALLER_SIGNER_UNAVAILABLE\")",
     "!status.message().contains(\"keyring entry not found\")",
     "!status.message().contains(\"keyring rejected request\")",
@@ -17734,8 +19223,10 @@ for required_test in (
     if required_test not in test:
         raise SystemExit(f"remote_failure_caller_signer_projection:missing_test:{required_test}")
 
-if "classifies_keyring_detail_as_caller_signer_unavailable" not in classifier:
+if "classifies_typed_caller_signer_unavailable" not in classifier:
     raise SystemExit("remote_failure_caller_signer_projection:missing_classifier_test")
+if "untyped_keyring_detail_does_not_gain_caller_signer_state" not in classifier:
+    raise SystemExit("remote_failure_caller_signer_projection:missing_classifier_negative_test")
 if "assert!(status.message().contains(\"keyring entry not found\"))" in remote:
     raise SystemExit("remote_failure_caller_signer_projection:retired_keyring_positive_assertion")
 PY
@@ -19226,12 +20717,12 @@ required_tests = {
     "ErrorCode.AUTHORITY_SUBJECT_MISMATCH": "subject_mismatch_test_missing",
     "delegation authority subject does not match invocation subject_ura": "delegation_subject_test_missing",
     "session authority subject does not admit invocation subject_ura": "session_subject_test_missing",
-    'payload.put("subject_ura", CALLEE)': "tuple_bound_delegation_fixture_missing",
+    'payload.put("subject_ura", DEVICE_SUBJECT)': "tuple_bound_delegation_fixture_missing",
     'payload.put("scopes", scopes)': "tuple_bound_scope_fixture_missing",
     '"runtimeAbilityProjectionIsCanonical"': "runtime_ability_projection_test_selector_missing",
     "private static void runtimeAbilityProjectionIsCanonical()": "runtime_ability_projection_test_body_missing",
     '"device.dev-a.observe.health"': "runtime_ability_wire_scope_test_missing",
-    '"easynet:///r/example/ability/device.dev-a.observe.health"': "runtime_ability_ura_scope_test_missing",
+    '"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"': "runtime_ability_ura_scope_test_missing",
     '"easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"': "authority_projection_descriptor_test_missing",
     '"namespace.resolve"': "authority_projection_scope_test_missing",
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
@@ -19466,11 +20957,11 @@ required_tests = {
     ".authoritySubjectMismatch": "subject_mismatch_test_missing",
     "delegation authority subject does not match invocation subject_ura": "delegation_subject_test_missing",
     "session authority subject does not admit invocation subject_ura": "session_subject_test_missing",
-    '"subject_ura": callee': "tuple_bound_delegation_fixture_missing",
+    '"subject_ura": deviceSubject': "tuple_bound_delegation_fixture_missing",
     '"scopes": scopes': "tuple_bound_scope_fixture_missing",
     "testRuntimeAbilityProjectionIsCanonical": "runtime_ability_projection_test_missing",
     '"device.dev-a.observe.health"': "runtime_ability_owner_qualified_scope_rejection_missing",
-    '"easynet:///r/example/ability/device.dev-a.observe.health"': "runtime_ability_ura_scope_test_missing",
+    '"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"': "runtime_ability_ura_scope_test_missing",
     '"easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"': "authority_projection_descriptor_test_missing",
     '"namespace.resolve"': "authority_projection_scope_test_missing",
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
@@ -19570,20 +21061,23 @@ PY
 check_java_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local result="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  local runtime_client="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeClient.java"
   local receipt="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
   local proof="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
   local tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   [[ -f "$result" ]] || fail "Java InvocationResult source is missing: ${result#$cli_root/}"
+  [[ -f "$runtime_client" ]] || fail "Java RuntimeClient source is missing: ${runtime_client#$cli_root/}"
   [[ -f "$receipt" ]] || fail "Java RuntimeReceipt source is missing: ${receipt#$cli_root/}"
   [[ -f "$proof" ]] || fail "Java RuntimeReceiptProofFacts source is missing: ${proof#$cli_root/}"
   [[ -f "$tests" ]] || fail "Java runtime seam tests are missing: ${tests#$cli_root/}"
 
-  "$PYTHON_BIN" - "$result" "$receipt" "$proof" "$tests" <<'PY'
+  "$PYTHON_BIN" - "$result" "$runtime_client" "$receipt" "$proof" "$tests" <<'PY'
 import sys
 from pathlib import Path
 
-result_path, receipt_path, proof_path, tests_path = map(Path, sys.argv[1:])
+result_path, runtime_client_path, receipt_path, proof_path, tests_path = map(Path, sys.argv[1:])
 result = result_path.read_text(encoding="utf-8")
+runtime_client = runtime_client_path.read_text(encoding="utf-8")
 receipt = receipt_path.read_text(encoding="utf-8")
 proof = proof_path.read_text(encoding="utf-8")
 tests = tests_path.read_text(encoding="utf-8")
@@ -19652,6 +21146,16 @@ if "terminal_receipt state does not match invocation terminal_state" not in resu
     raise SystemExit("java_runtime_receipt_projection:terminal_state_topology_missing")
 if 'fields.containsKey("receipt")' not in result or "retired receipt alias is not accepted" not in result:
     raise SystemExit("java_runtime_receipt_projection:retired_receipt_alias_not_rejected")
+if 'requireExactKeys(fields, "ok", "terminal_state", "output_json", "terminal_receipt")' not in result:
+    raise SystemExit("java_runtime_receipt_projection:invocation_result_wire_schema_not_exact")
+if "invocation result contains noncanonical field" not in result:
+    raise SystemExit("java_runtime_receipt_projection:invocation_result_unknown_field_error_missing")
+if "requireExactDescriptorResolverResponse(response)" not in runtime_client:
+    raise SystemExit("java_runtime_receipt_projection:descriptor_resolver_response_not_exact")
+if 'Set.of("descriptor_ref")' not in runtime_client:
+    raise SystemExit("java_runtime_receipt_projection:descriptor_resolver_response_allowed_set_missing")
+if "descriptor resolver response contains noncanonical field" not in runtime_client:
+    raise SystemExit("java_runtime_receipt_projection:descriptor_resolver_response_unknown_field_error_missing")
 legacy_patterns = {
     "terminalReceiptValue instanceof Map<?, ?> map ? copyStringMap(map) : Map.of()": "malformed_terminal_receipt_downgrade",
     "optionalReceipt(fields, \"terminal_receipt\")": "optional_terminal_receipt_decoder",
@@ -19703,9 +21207,51 @@ for required_test in (
     "authority-proof-key",
     "terminal_receipt is required",
     "retired receipt alias",
+    "invocation result contains noncanonical field state_code",
+    "runtimeDescriptorResolverRejectsNoncanonicalResponseFields",
+    "descriptor resolver response contains noncanonical field state_code",
 ):
     if required_test not in tests:
         raise SystemExit(f"java_runtime_receipt_projection:missing_test:{required_test}")
+PY
+}
+
+check_java_sdk_runtime_receipt_seam_tests_execute_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local java_root="$cli_root/sdk/java"
+  local pom="$java_root/pom.xml"
+  local runtime_report="$java_root/target/surefire-reports/TEST-run.runtime.sdk.RuntimeCoreSeamTest.xml"
+  local sidecar_report="$java_root/target/surefire-reports/TEST-run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntimeTest.xml"
+
+  [[ -f "$pom" ]] || fail "Java SDK Maven project is missing: ${pom#$cli_root/}"
+  command -v mvn >/dev/null 2>&1 || fail "Java SDK receipt seam gate requires Maven"
+
+  local log
+  log="$(mktemp -t easynet-java-sdk-receipt-seam.XXXXXX.log)"
+  if ! (cd "$java_root" && mvn -q clean test) >"$log" 2>&1; then
+    sed -n '1,220p' "$log" >&2 || true
+    fail "Java SDK receipt proof-fact seam tests failed from a clean Maven build"
+  fi
+
+  "$PYTHON_BIN" - "$runtime_report" "$sidecar_report" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+runtime_report, sidecar_report = map(Path, sys.argv[1:])
+for report, suite in (
+    (runtime_report, "run.runtime.sdk.RuntimeCoreSeamTest"),
+    (sidecar_report, "run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntimeTest"),
+):
+    if not report.is_file():
+        raise SystemExit(f"java_runtime_receipt_seam_tests:missing_report:{report}")
+    root = ET.parse(report).getroot()
+    if root.attrib.get("name") != suite:
+        raise SystemExit(f"java_runtime_receipt_seam_tests:wrong_suite:{report}")
+    if int(root.attrib.get("tests", "0")) < 1:
+        raise SystemExit(f"java_runtime_receipt_seam_tests:no_tests:{suite}")
+    if int(root.attrib.get("failures", "0")) != 0 or int(root.attrib.get("errors", "0")) != 0:
+        raise SystemExit(f"java_runtime_receipt_seam_tests:failed:{suite}")
 PY
 }
 
@@ -19992,6 +21538,101 @@ for required_test in (
 PY
 }
 
+check_sdk_invocation_cancel_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local java_cancel="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationCancel.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local go_projection="$cli_root/sdk/go/runtime_projection.go"
+  local go_runtime="$cli_root/sdk/go/runtime.go"
+  local go_tests="$cli_root/sdk/go/runtime_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local py_tests="$cli_root/sdk/python/tests/test_runtime.py"
+  local node_runtime="$cli_root/sdk/node/index.js"
+  local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local swift_runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  [[ -f "$java_cancel" ]] || fail "Java InvocationCancel source is missing: ${java_cancel#$cli_root/}"
+  [[ -f "$java_tests" ]] || fail "Java runtime seam tests are missing: ${java_tests#$cli_root/}"
+  [[ -f "$go_projection" ]] || fail "Go runtime projection helper is missing: ${go_projection#$cli_root/}"
+  [[ -f "$go_runtime" ]] || fail "Go Runtime source is missing: ${go_runtime#$cli_root/}"
+  [[ -f "$go_tests" ]] || fail "Go runtime tests are missing: ${go_tests#$cli_root/}"
+  [[ -f "$py_runtime" ]] || fail "Python Runtime source is missing: ${py_runtime#$cli_root/}"
+  [[ -f "$py_tests" ]] || fail "Python runtime tests are missing: ${py_tests#$cli_root/}"
+  [[ -f "$node_runtime" ]] || fail "Node runtime source is missing: ${node_runtime#$cli_root/}"
+  [[ -f "$node_tests" ]] || fail "Node runtime tests are missing: ${node_tests#$cli_root/}"
+  [[ -f "$swift_runtime" ]] || fail "Swift runtime source is missing: ${swift_runtime#$cli_root/}"
+  [[ -f "$swift_tests" ]] || fail "Swift runtime tests are missing: ${swift_tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$java_cancel" "$java_tests" "$go_projection" "$go_runtime" "$go_tests" "$py_runtime" "$py_tests" "$node_runtime" "$node_tests" "$swift_runtime" "$swift_tests" <<'PY'
+import sys
+from pathlib import Path
+
+(
+    java_cancel,
+    java_tests,
+    go_projection,
+    go_runtime,
+    go_tests,
+    py_runtime,
+    py_tests,
+    node_runtime,
+    node_tests,
+    swift_runtime,
+    swift_tests,
+) = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+canonical_fields = (
+    "handle_id",
+    "request_accepted",
+    "deduplicated",
+    "cancelled",
+    "state",
+    "terminal",
+)
+
+for field in canonical_fields:
+    if f'"{field}"' not in java_cancel:
+        raise SystemExit(f"sdk_invocation_cancel_projection:java_missing_field:{field}")
+    if f'"{field}"' not in go_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:go_missing_field:{field}")
+    if f'"{field}"' not in py_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:python_missing_field:{field}")
+    if f'"{field}"' not in node_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:node_missing_field:{field}")
+    if f'"{field}"' not in swift_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:swift_missing_field:{field}")
+
+for fragment, label, source in (
+    ("rejectUnknown(fields", "java_exact_schema_guard_missing", java_cancel),
+    ("invocation cancel contains noncanonical field", "java_unknown_field_error_missing", java_cancel),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"invocation cancel\"", "go_exact_schema_guard_missing", go_runtime),
+    ("func rejectUnknownRuntimeProjectionFields", "go_exact_schema_helper_missing", go_projection),
+    ("contains noncanonical field", "go_unknown_field_error_missing", go_projection),
+    ("_require_runtime_exact_keys(", "python_exact_schema_guard_missing", py_runtime),
+    ("contains noncanonical field {key}", "python_unknown_field_error_missing", py_runtime),
+    ("rejectRuntimeFields(value, [", "node_exact_schema_guard_missing", node_runtime),
+    ("runtimeRequireExactProjectionKeys(", "swift_exact_schema_guard_missing", swift_runtime),
+    ("contains noncanonical field \\(key)", "swift_unknown_field_error_missing", swift_runtime),
+):
+    if fragment not in source:
+        raise SystemExit(f"sdk_invocation_cancel_projection:{label}")
+
+for tests, language in (
+    (java_tests, "java"),
+    (go_tests, "go"),
+    (py_tests, "python"),
+    (swift_tests, "swift"),
+):
+    if "state_code" not in tests:
+        raise SystemExit(f"sdk_invocation_cancel_projection:{language}_state_code_negative_test_missing")
+    if "invocation cancel contains noncanonical field state_code" not in tests:
+        raise SystemExit(f"sdk_invocation_cancel_projection:{language}_unknown_field_negative_test_missing")
+
+if "InvocationCancel" not in node_tests:
+    raise SystemExit("sdk_invocation_cancel_projection:node_cancel_test_coverage_missing")
+PY
+}
+
 check_swift_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
@@ -20176,15 +21817,21 @@ check_sdk_session_authority_binding_facade_contract() {
   local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   local swift_runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
   local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  local go_axon_pb="$cli_root/sdk/go/internal/axonpb/types.pb.go"
+  local py_axon_pb="$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/v1/types_pb2.py"
+  local py_axon_pyi="$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/v1/types_pb2.pyi"
+  local daemon_dispatch_client="$cli_root/src/daemon/invocation/dispatch/client.rs"
   for path in "$go_runtime" "$go_direct" "$go_tests" "$py_runtime" "$py_direct" "$py_tests" \
     "$py_direct_tests" "$node_runtime" "$node_tests" "$java_proof" "$java_tests" \
-    "$swift_runtime" "$swift_tests"; do
+    "$swift_runtime" "$swift_tests" "$go_axon_pb" "$py_axon_pb" "$py_axon_pyi" \
+    "$daemon_dispatch_client"; do
     [[ -f "$path" ]] || fail "SDK session authority binding facade file is missing: ${path#$cli_root/}"
   done
 
   "$PYTHON_BIN" - "$go_runtime" "$go_direct" "$go_tests" "$py_runtime" "$py_direct" \
     "$py_tests" "$py_direct_tests" "$node_runtime" "$node_tests" "$java_proof" \
-    "$java_tests" "$swift_runtime" "$swift_tests" <<'PY'
+    "$java_tests" "$swift_runtime" "$swift_tests" "$go_axon_pb" "$py_axon_pb" "$py_axon_pyi" \
+    "$daemon_dispatch_client" <<'PY'
 import sys
 from pathlib import Path
 
@@ -20202,7 +21849,29 @@ from pathlib import Path
     java_tests,
     swift_runtime,
     swift_tests,
+    go_axon_pb,
+    py_axon_pb,
+    py_axon_pyi,
+    daemon_dispatch_client,
 ) = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+for language, source, forbidden in [
+    (
+        "go-generated",
+        go_axon_pb,
+        ["BackendUra", "UserUra", "GetBackendUra", "GetUserUra", "backend_ura", "user_ura"],
+    ),
+    (
+        "python-generated",
+        py_axon_pb + "\n" + py_axon_pyi,
+        ["BackendUra", "UserUra", "backend_ura", "user_ura"],
+    ),
+]:
+    for fragment in forbidden:
+        if fragment in source:
+            raise SystemExit(
+                f"sdk_session_authority_binding_facade:{language}:retired_generated_field:{fragment}"
+            )
 
 for language, source, forbidden in [
     (
@@ -20306,14 +21975,25 @@ for language, source, required, forbidden in [
     (
         "go-direct",
         go_direct,
-        ['"issuer_ura":       value.GetBackendUra()', '"subject_ura":      value.GetUserUra()'],
-        ['"backend_ura":      value.GetBackendUra()', '"user_ura":         value.GetUserUra()'],
+        ['"issuer_ura":       value.GetIssuerUra()', '"subject_ura":      value.GetSubjectUra()'],
+        [
+            '"backend_ura":      value.GetBackendUra()',
+            '"user_ura":         value.GetUserUra()',
+            '"issuer_ura":       value.GetBackendUra()',
+            '"subject_ura":      value.GetUserUra()',
+        ],
     ),
     (
         "python-direct",
         py_direct,
-        ['"issuer_ura": value.backend_ura', '"subject_ura": value.user_ura'],
-        ['"backend_ura": value.backend_ura', '"user_ura": value.user_ura'],
+        ['"issuer_ura": value.issuer_ura', '"subject_ura": value.subject_ura'],
+        [
+            '"backend_ura": value.backend_ura',
+            '"user_ura": value.user_ura',
+            '"issuer_ura": value.backend_ura',
+            '"subject_ura": value.user_ura',
+            '("backend_ura", "user_ura", _AXON_AUTHORITY_LINK_FIELD)',
+        ],
     ),
 ]:
     for fragment in required:
@@ -20326,6 +22006,26 @@ for language, source, required, forbidden in [
             raise SystemExit(
                 f"sdk_session_authority_binding_facade:{language}:projection_leaks_generated_field:{fragment}"
             )
+
+for fragment in (
+    '"issuer_ura": value.issuer_ura',
+    '"subject_ura": value.subject_ura',
+    "session_authority_summary_uses_public_generic_fields",
+):
+    if fragment not in daemon_dispatch_client:
+        raise SystemExit(
+            f"sdk_session_authority_binding_facade:daemon-dispatch:generic_field_missing:{fragment}"
+        )
+for fragment in (
+    '"issuer_ura": value.backend_ura',
+    '"subject_ura": value.user_ura',
+    "backend_ura: \"easynet",
+    "user_ura: \"easynet",
+):
+    if fragment in daemon_dispatch_client:
+        raise SystemExit(
+            f"sdk_session_authority_binding_facade:daemon-dispatch:retired_generated_field:{fragment}"
+        )
 
 required_tests = {
     "go": (
@@ -21077,6 +22777,18 @@ EOF
     "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-shallow-copy-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt shallow-copy mutability gate to fail"
+  fi
+  mkdir -p "$tmp/cli-java-receipt-seam-no-pom/sdk/java"
+  if ( CLI_ROOT="$tmp/cli-java-receipt-seam-no-pom"; check_java_sdk_runtime_receipt_seam_tests_execute_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK receipt seam test binding gate to fail without Maven project"
+  fi
+  mkdir -p "$tmp/cli-java-receipt-seam-compile-fail/sdk/java"
+  cp "$ROOT/sdk/java/pom.xml" "$tmp/cli-java-receipt-seam-compile-fail/sdk/java/pom.xml"
+  cp -R "$ROOT/sdk/java/src" "$tmp/cli-java-receipt-seam-compile-fail/sdk/java/src"
+  printf '\n  private void canonicalReceiptValidatorBrokenForSelfTest() {}\n' \
+    >> "$tmp/cli-java-receipt-seam-compile-fail/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  if ( CLI_ROOT="$tmp/cli-java-receipt-seam-compile-fail"; check_java_sdk_runtime_receipt_seam_tests_execute_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK receipt seam clean compile gate to fail"
   fi
   mkdir -p "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go"
   cp "$ROOT/sdk/go/runtime.go" "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go/runtime.go"
@@ -22444,51 +24156,6 @@ EOF
   if ( CLI_ROOT="$tmp/ledger-route-caller-fallback"; check_daemon_runtime_assembly_contract ) >/dev/null 2>&1; then
     fail "self-test expected ledger route caller fallback gate to fail"
   fi
-  mkdir -p "$tmp/agent-invoke-sidecar-retired/src/daemon/ability/builtins/agents"
-  cat >"$tmp/agent-invoke-sidecar-retired/src/daemon/ability/builtins/agents/invoke.rs" <<'EOF'
-#[derive(Debug, Clone, PartialEq)]
-struct InvokeArgs {
-    args: serde_json::Value,
-    metadata: InvokeMetadata,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-struct InvokeMetadata {
-    request_id: String,
-    caller_ura: String,
-}
-
-impl InvokeArgs {
-    fn parse(raw: &serde_json::Value) -> anyhow::Result<Self> {
-        let obj = raw.as_object().unwrap();
-        const KNOWN: &[&str] = &["ability_ura", "args"];
-        for key in obj.keys() {
-            if KNOWN.contains(&key.as_str()) {
-                continue;
-            }
-            if key.starts_with('_') {
-                continue;
-            }
-            anyhow::bail!("invalid_args: unknown field {key:?}; known: {:?}", KNOWN);
-        }
-        let metadata = InvokeMetadata {
-            request_id: obj.get("_request_id").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
-            caller_ura: obj.get("_caller_ura").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
-        };
-        Ok(InvokeArgs { args: serde_json::json!({}), metadata })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    fn parse_accepts_underscore_prefixed_sidecar_fields() {}
-    fn parse_drops_unread_underscore_fields_silently() {}
-    fn parse_tolerates_non_string_sidecar_values() {}
-}
-EOF
-  if ( CLI_ROOT="$tmp/agent-invoke-sidecar-retired"; check_agent_invoke_strict_args_contract ) >/dev/null 2>&1; then
-    fail "self-test expected agent invoke sidecar compatibility gate to fail"
-  fi
   mkdir -p "$tmp/cli-sidecar-template/src/cli/commands/groups"
   cp "$ROOT/src/cli/commands/groups/plugin_template.rs" \
     "$tmp/cli-sidecar-template/src/cli/commands/groups/plugin_template.rs"
@@ -23054,7 +24721,7 @@ EOF
     fail "self-test expected ability.deploy product vocabulary gate to fail"
   fi
   mkdir -p "$tmp/cli-device-ability-mutation-compat/src/daemon/ability/builtins/device_control/ability_management"
-  printf 'fn federation_not_wired() {}\nfn deploy(cell: Cell) { let _ = cell.device_registrar.get().cloned(); }\n' \
+  printf 'fn federation_not_wired() {}\nfn deploy(cell: Cell) { let _ = cell.ability_deployment_registrar.get().cloned(); }\n' \
     > "$tmp/cli-device-ability-mutation-compat/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
   if ( CLI_ROOT="$tmp/cli-device-ability-mutation-compat"; check_device_ability_mutation_target_contract ) >/dev/null 2>&1; then
     fail "self-test expected device ability mutation compat gate to fail"
@@ -23761,7 +25428,7 @@ EOF
   printf '%s\n' \
     '#[derive(Debug, Clone, Deserialize)]' \
     'pub struct AdvertiseAgentRequest {' \
-    '  pub signing_authority: Option<AdvertiseSigningAuthorityRequest>,' \
+    '  pub agent_ura: String,' \
     '  pub host_ura: Option<String>,' \
     '}' \
     'pub struct AdvertiseAgentResponse { pub ack: bool, pub replaced_prior: bool }' \
@@ -23770,7 +25437,14 @@ EOF
   printf '%s\n' \
     'pub struct AdvertiseAgentReceipt { pub ack: bool, pub replaced_prior: bool }' \
     'fn advertise_agent_receipt_rejects_retired_fields() {}' \
+    'pub struct AdvertiseAgentArgs { pub agent_ura: String, pub generation: u64 }' \
     > "$tmp/advertise-agent-legacy/src/daemon/federation/client/ability_contract.rs"
+  mkdir -p "$tmp/advertise-agent-legacy/ability-descriptors/system/federation"
+  printf '%s\n' \
+    'descriptor_version = "1.0.0"' \
+    'required = ["agent_ura"]' \
+    'additionalProperties = true' \
+    > "$tmp/advertise-agent-legacy/ability-descriptors/system/federation/federation.advertise_agent.ability.toml"
   if ( check_advertise_agent_ingress_contract "$tmp/advertise-agent-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected advertise_agent retired host_ura ingress gate to fail"
   fi
@@ -23806,11 +25480,14 @@ EOF
   if ( check_invocation_history_get_key_contract "$tmp/invocation-history-attempt-key" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history.get attempt_id key gate to fail"
   fi
-  mkdir -p "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance"
+  mkdir -p "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance" \
+    "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability" \
+    "$tmp/invocation-history-ledger-ura-legacy/src/cli/commands/groups" \
+    "$tmp/invocation-history-ledger-ura-legacy/sdk/node/test"
   cat >"$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
 fn ledger_resource_ura() -> Option<String> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
-    let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_agent_ura()?).ok()?;
+    let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_ura()?).ok()?;
     let owner = format!("device.{}", parsed.device_id()?);
     Some(crate::core::ura::resource_dot_ura(&parsed.realm, &owner, "billing/invocations"))
 }
@@ -23823,7 +25500,50 @@ fn history_key_schema_excludes_attempt_id() {}
 #[test]
 fn get_history_rejects_attempt_id_key() {}
 EOF
-  if ( check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
+  printf '%s\n' 'struct LedgerGovernanceAuthority;' \
+    > "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/dispatch.rs"
+  cat >"$tmp/invocation-history-ledger-ura-legacy/src/cli/commands/groups/invocation.rs" <<'EOF'
+struct HistoryListResponse { ledger_ura: String }
+struct HistoryGetResponse { ledger_ura: String }
+struct TraceGetResponse { ledger_ura: String }
+struct HistoryPathResponse { ledger_ura: String }
+trait InvocationHistoryResponse {}
+fn validate_history_ledger_ura(value: &str) {
+    let trimmed = value.trim();
+    let parsed = parse_ura(trimmed);
+    let _ = URAKind::Resource;
+}
+fn invocation_history_responses_require_canonical_ledger_ura() {}
+EOF
+  cat >"$tmp/invocation-history-ledger-ura-legacy/sdk/node/index.js" <<'EOF'
+function receiptLedgerSource(output) {
+  const source = output.source;
+  return source || "invocation.history.list";
+}
+
+function requiredHistoryLedgerURA(value, field) {
+  if (!value) throw new Error(`${field} is required`);
+  const ledgerURA = value.trim();
+  if (!canonicalResourceSubject(ledgerURA)) throw new Error("ledger_ura must be a canonical Resource URA");
+  return ledgerURA;
+}
+
+function authorityMetadataValue() {}
+
+export class ReceiptHistoryPage {
+  constructor(value) {
+    this.source = requiredHistoryLedgerURA(value.source, "source");
+  }
+}
+
+export class SessionHistoryOperations {}
+EOF
+  cat >"$tmp/invocation-history-ledger-ura-legacy/sdk/node/test/runtime-core.test.mjs" <<'EOF'
+test("runtime receipt provider rejects legacy history source field", () => {});
+test("runtime receipt provider requires canonical ledger_ura", () => {});
+const receiptLedgerURA = "easynet:///r/example/resource/user.alice/runtime/invocation-history";
+EOF
+  if ( AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"; check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history ledger_ura projection fallback gate to fail"
   fi
   mkdir -p "$tmp/core-ura-realm-projection-legacy/src/core/ura" \
@@ -25849,6 +27569,20 @@ EOF
   if ( check_product_e2e_invocation_history_exact_scope_contract "$tmp/product-e2e-history-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected product e2e invocation history fallback gate to fail"
   fi
+  mkdir -p "$tmp/product-media-bidi-e2e-incomplete/tools/scripts"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'if [[ "${1:-}" == "--self-test" ]]; then' \
+    '  bash -n "$0"' \
+    '  echo "docker-media-bidi-e2e self-test ok"' \
+    '  exit 0' \
+    'fi' \
+    > "$tmp/product-media-bidi-e2e-incomplete/tools/scripts/docker-media-bidi-e2e.sh"
+  chmod +x "$tmp/product-media-bidi-e2e-incomplete/tools/scripts/docker-media-bidi-e2e.sh"
+  if ( check_product_media_bidi_e2e_contract "$tmp/product-media-bidi-e2e-incomplete" ) >/dev/null 2>&1; then
+    fail "self-test expected product media/bidi e2e missing assertion gate to fail"
+  fi
   mkdir -p "$tmp/observe-health-legacy/src/daemon/ability/builtins/governance"
   cat >"$tmp/observe-health-legacy/src/daemon/ability/builtins/governance/health.rs" <<'EOF'
 fn handler(args: Value) -> anyhow::Result<Value> {
@@ -25977,6 +27711,22 @@ struct SessionAuthorityRaw {
 fn parse_and_verify_delegation_proof() {}
 fn parse_and_verify_session_authority() {}
 fn admission_authority_raw_wire_requires_payload_and_signature() {}
+EOF
+  cat >"$tmp/admission-authority-raw-default-legacy/src/daemon/invocation/admission/authority_metadata.rs" <<'EOF'
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDelegationAuthorityWire {
+    payload: serde_json::Value,
+    signature: String,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSessionAuthorityWire {
+    payload: serde_json::Value,
+    signature: String,
+}
+fn decode_delegation_authority_wire() {}
+fn decode_session_authority_wire() {}
 EOF
   if ( check_admission_authority_raw_wire_strict_contract "$tmp/admission-authority-raw-default-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected admission authority raw wire default gate to fail"
@@ -27146,6 +28896,44 @@ EOF
   if ( CLI_ROOT="$tmp/cli-device-directory-alias-legacy"; check_cli_device_directory_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected CLI device directory alias gate to fail"
   fi
+  mkdir -p "$tmp/cli-network-device-backend-bypass/src/cli/commands/groups" \
+    "$tmp/cli-network-device-backend-bypass/src/cli/commands" \
+    "$tmp/cli-network-device-backend-bypass/src/daemon/federation" \
+    "$tmp/cli-network-device-backend-bypass/src/daemon/invocation/routing"
+  cat >"$tmp/cli-network-device-backend-bypass/src/cli/commands/groups/device.rs" <<'EOF'
+fn run(action: DeviceAction) {
+    match action {
+        DeviceAction::List(a) => devices::run(a),
+    }
+}
+EOF
+  cat >"$tmp/cli-network-device-backend-bypass/src/cli/commands/devices.rs" <<'EOF'
+fn fetch_directory_entries() {
+    let _ = auth_get_json("/api/v1/devices");
+}
+EOF
+  cat >"$tmp/cli-network-device-backend-bypass/src/daemon/federation/directory_reader.rs" <<'EOF'
+fn read() {
+    invoke_federation_discover_for_user(None, "user");
+    invoke_federation_discover_for_operator_audit(None);
+}
+EOF
+  cat >"$tmp/cli-network-device-backend-bypass/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+fn invoke_federation_discover_with_scope() {
+    let _ = RemoteAbilityInvocationTarget::for_target_owned_selector(
+        scope.query_target_ura(),
+        "federation.discover",
+    );
+    let request_envelope = ProtoEnvelope::from_target();
+    request_envelope.signed_descriptor_ref_invoke_request_with_signer();
+    let mut client = crate::daemon::invocation::transport::invocation_client(channel);
+    client.invoke(request);
+    ensure_completed_invoke_response("federation.discover", &response);
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-network-device-backend-bypass"; check_cli_network_device_invocation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI Network device backend bypass gate to fail"
+  fi
   mkdir -p "$tmp/cli-device-show-projection-error-legacy/src/cli/commands/groups"
   cat >"$tmp/cli-device-show-projection-error-legacy/src/cli/commands/groups/device.rs" <<'EOF'
 fn device_show_abilities() {
@@ -27698,7 +29486,7 @@ EOF
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LocalAgentsFile {
     #[serde(default)]
-    pub host_device_agent_ura: String,
+    pub host_device_ura: String,
     #[serde(default)]
     pub hosted_agents: Vec<HostedAgentEntry>,
 }
@@ -28685,6 +30473,7 @@ EOF
   if ( CLI_ROOT="$tmp/runtime-bootstrap-legacy-tenant"; check_runtime_bootstrap_self_identity_ingress_contract ) >/dev/null 2>&1; then
     fail "self-test expected runtime bootstrap tenant/display_name gate to fail"
   fi
+  AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
@@ -28731,6 +30520,7 @@ EOF
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
   check_invocation_history_ledger_ura_contract
+  check_sdk_governance_read_single_ingress_contract
   check_core_ura_realm_projection_contract
   check_resolve_key_request_dto_contract
   check_join_authority_wiring_required_contract
@@ -28779,6 +30569,7 @@ EOF
   check_sdk_go_python_history_public_route_cutover_contract
   check_sdk_cross_language_history_public_ingress_cutover_contract
   check_sdk_node_stream_bidi_explicit_terminality_contract
+  check_sdk_stream_bidi_projection_strict_contract
 	  check_sdk_descriptor_resolution_error_vocabulary_contract
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -28795,6 +30586,7 @@ EOF
 	  check_sdk_direct_runtime_state_projection_contract
 	  check_sdk_direct_runtime_metadata_string_map_contract
 	  check_sdk_causal_context_dag_alias_contract
+	  check_daemon_causal_context_projection_contract
 	  check_sdk_direct_runtime_descriptor_not_found_contract
   check_sdk_cabi_descriptor_error_projection_contract
   check_principal_lifecycle_cli_schema_contract
@@ -28818,6 +30610,7 @@ EOF
   check_runtime_trust_user_key_write_scope_contract
   check_device_trust_sync_caller_classification_contract
   check_product_e2e_invocation_history_exact_scope_contract
+  check_product_media_bidi_e2e_contract
   check_observe_health_contract_projection_contract
   check_ability_health_store_recovery_contract
   check_admission_owner_credentials_contract
@@ -28839,11 +30632,12 @@ EOF
   check_pairing_response_strict_schema_contract
   check_runtime_bootstrap_self_identity_ingress_contract
   check_federation_receipt_facts_strict_contract
-  check_federation_revoke_ingress_strict_contract
-  check_federation_discover_caller_scope_contract
-  check_federated_key_resolver_user_keyset_contract
-  check_admission_facade_user_role_projection_contract
-  check_invocation_boot_federated_bindings_store_contract
+	  check_federation_revoke_ingress_strict_contract
+	  check_federation_discover_caller_scope_contract
+	  check_federated_key_resolver_user_keyset_contract
+	  check_forwarded_finalization_federated_receipt_resolver_contract
+	  check_admission_facade_user_role_projection_contract
+	  check_invocation_boot_federated_bindings_store_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_mission_ability_strict_ingress_contract
@@ -28882,7 +30676,9 @@ EOF
   check_eal_trace_schema_version_strict_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
+  check_namespace_resolver_typed_query_ingress_contract
   check_namespace_proxy_resolve_exact_tuple_ingress_contract
+  check_federation_resolve_canonical_filter_ingress_contract
   check_federation_list_user_devices_exact_tuple_ingress_contract
   check_presence_registry_canonical_principal_key_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -28893,11 +30689,11 @@ EOF
   check_ffi_last_error_typed_tls_contract
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
-  check_agent_invoke_strict_args_contract
   check_runtime_plane_requirement_contract
   check_catalog_exact_runtime_key_contract
   check_federation_directory_device_projection_contract
   check_cli_device_directory_projection_contract
+  check_cli_network_device_invocation_contract
   check_cli_device_show_projection_error_contract
   check_plugin_sidecar_helper_matrix_contract
   check_plugin_schema_rejection_vocabulary_contract
@@ -28952,6 +30748,7 @@ EOF
   check_go_sdk_runtime_receipt_projection_contract
   check_python_sdk_runtime_receipt_projection_contract
   check_node_sdk_runtime_receipt_projection_contract
+  check_sdk_invocation_cancel_projection_contract
   check_swift_sdk_runtime_receipt_projection_contract
   check_sdk_receipt_profile_convergence_contract
   check_sdk_session_authority_binding_facade_contract
@@ -29003,6 +30800,7 @@ check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
+check_sdk_governance_read_single_ingress_contract
 check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
 check_join_authority_wiring_required_contract
@@ -29049,7 +30847,9 @@ check_daemon_lifecycle_control_vocabulary_contract
 check_sdk_history_authority_subject_contract
 check_sdk_go_python_history_public_route_cutover_contract
 check_sdk_cross_language_history_public_ingress_cutover_contract
+check_sdk_runtime_ability_descriptor_bound_subject_parity_contract
 check_sdk_node_stream_bidi_explicit_terminality_contract
+check_sdk_stream_bidi_projection_strict_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract
@@ -29067,6 +30867,7 @@ check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_state_projection_contract
 check_sdk_direct_runtime_metadata_string_map_contract
 check_sdk_causal_context_dag_alias_contract
+check_daemon_causal_context_projection_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_sdk_cabi_descriptor_error_projection_contract
 check_principal_lifecycle_cli_schema_contract
@@ -29090,6 +30891,7 @@ check_runtime_trust_user_key_inventory_scope_contract
 check_runtime_trust_user_key_write_scope_contract
 check_device_trust_sync_caller_classification_contract
 check_product_e2e_invocation_history_exact_scope_contract
+check_product_media_bidi_e2e_contract
 check_observe_health_contract_projection_contract
 check_ability_health_store_recovery_contract
 check_admission_owner_credentials_contract
@@ -29160,7 +30962,9 @@ check_eal_trace_schema_version_strict_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
+check_namespace_resolver_typed_query_ingress_contract
 check_namespace_proxy_resolve_exact_tuple_ingress_contract
+check_federation_resolve_canonical_filter_ingress_contract
 check_federation_list_user_devices_exact_tuple_ingress_contract
 check_presence_registry_canonical_principal_key_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -29177,11 +30981,11 @@ check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_cli_ability_catalog_row_boundary_contract
 check_daemon_runtime_assembly_contract
-check_agent_invoke_strict_args_contract
 check_runtime_plane_requirement_contract
 check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract
 check_cli_device_directory_projection_contract
+check_cli_network_device_invocation_contract
 check_cli_device_show_projection_error_contract
 check_plugin_sidecar_helper_matrix_contract
 check_plugin_schema_rejection_vocabulary_contract
@@ -29243,9 +31047,11 @@ check_python_sdk_signed_submission_complete_tuple_contract
 check_java_sdk_signer_policy_custody_contract
 check_swift_sdk_signer_policy_custody_contract
 check_java_sdk_runtime_receipt_projection_contract
+check_java_sdk_runtime_receipt_seam_tests_execute_contract
 check_go_sdk_runtime_receipt_projection_contract
 check_python_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
+check_sdk_invocation_cancel_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_catalog_schema_projection_boundary_contract
 check_catalog_description_projection_boundary_contract
@@ -29253,6 +31059,7 @@ check_control_plane_manifest_materialization_boundary_contract
 check_daemon_invocation_contract_metadata_boundary_contract
 check_static_registration_manifest_boundary_contract
 check_remote_public_governance_read_boundary_contract
+check_backend_product_dto_drift_contract
 check_sdk_receipt_profile_convergence_contract
 check_sdk_session_authority_binding_facade_contract
 check_sdk_provider_managed_signing_custody_contract

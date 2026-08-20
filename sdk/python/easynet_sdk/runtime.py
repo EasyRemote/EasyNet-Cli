@@ -33,7 +33,6 @@ from ._runtime_governance import (
     governance_descriptor_provider_for_ability,
 )
 from ._runtime_subjects import is_runtime_governance_read_subject_ura
-from .axon_addressing import authority_ura, parse_ura
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .invocation_state import InvocationLifecycleState
@@ -74,6 +73,13 @@ class RuntimeTransport(Protocol):
     def free_handle(self, control: "InvocationControlCapability") -> None: ...
 
     def close(self) -> None: ...
+
+
+@runtime_checkable
+class _GovernanceReadTransport(Protocol):
+    """Provider-backed seam for runtime governance observations."""
+
+    def governance_read(self, draft_json: bytes) -> bytes: ...
 
 
 @runtime_checkable
@@ -506,8 +512,15 @@ class RuntimeReceipt:
     parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
+        raw = _immutable_runtime_receipt_projection(
+            _canonical_runtime_receipt_projection(
+                _mutable_runtime_receipt_projection(self.raw)
+            ),
+            "runtime receipt",
+        )
+        object.__setattr__(self, "raw", raw)
         decoded = _decode_runtime_receipt_mapping(
-            _mutable_runtime_receipt_projection(self.raw)
+            _mutable_runtime_receipt_projection(raw)
         )
         for decoded_field in fields(_DecodedRuntimeReceipt):
             name = decoded_field.name
@@ -521,6 +534,7 @@ class RuntimeReceipt:
     def from_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
         """Decode the only accepted canonical runtime receipt projection."""
 
+        decoded = _canonical_runtime_receipt_projection(decoded)
         raw = _immutable_runtime_receipt_projection(decoded, "runtime receipt")
         projection = _decode_runtime_receipt_mapping(
             _mutable_runtime_receipt_projection(raw)
@@ -728,6 +742,26 @@ def _mutable_runtime_receipt_value(value: object) -> object:
     return value
 
 
+def _canonical_runtime_receipt_projection(
+    decoded: Mapping[str, object],
+) -> dict[str, object]:
+    projection = _mutable_runtime_receipt_projection(decoded)
+    receipt_id = _optional_string(projection.get("receipt_id"), "receipt_id") or ""
+    if not receipt_id:
+        invocation_id = (
+            _optional_string(projection.get("invocation_id"), "invocation_id") or ""
+        ).strip()
+        if not invocation_id:
+            raise _invalid_runtime("runtime receipt summary is missing invocation_id")
+        if "/" in invocation_id:
+            raise _invalid_runtime(
+                "runtime receipt invocation_id must be owner-local for receipt_id"
+            )
+        index = _optional_non_negative_int(projection.get("index"), "index")
+        projection["receipt_id"] = f"{invocation_id}:{index}"
+    return projection
+
+
 @dataclass(frozen=True)
 class InvocationResult:
     """Unary invocation terminal result projection."""
@@ -835,11 +869,15 @@ class InvocationResult:
             if admission_receipt is not None
             else None
         )
+        if admission_receipt_summary is not None:
+            admission_receipt = admission_receipt_summary.to_json_dict()
         terminal_receipt_summary = (
             RuntimeReceipt.from_mapping(terminal_receipt)
             if terminal_receipt is not None
             else None
         )
+        if terminal_receipt_summary is not None:
+            terminal_receipt = terminal_receipt_summary.to_json_dict()
         invocation_id = (
             _optional_string(decoded.get("invocation_id"), "invocation_id") or ""
         )
@@ -1078,6 +1116,16 @@ def _invocation_cancel_from_json(
         raise _invalid_runtime(f"decode invocation cancel JSON: {exc}", exc) from exc
     if not isinstance(decoded, dict):
         raise _invalid_runtime("invocation cancel JSON must be an object")
+    _require_runtime_exact_keys(
+        decoded,
+        "invocation cancel",
+        "handle_id",
+        "request_accepted",
+        "deduplicated",
+        "cancelled",
+        "state",
+        "terminal",
+    )
     handle_id = _required_positive_int(decoded, "handle_id")
     if expected_control is not None:
         if expected_control._adapter_handle_id() != handle_id:
@@ -1164,6 +1212,18 @@ class RuntimeClient:
             raise _transport_error("invoke transport failed", exc) from exc
         return InvocationResult.from_json(raw)
 
+    def _governance_read(self, draft: InvocationDraft) -> InvocationResult:
+        transport = self._require_open()
+        if not isinstance(transport, _GovernanceReadTransport):
+            raise _invalid_runtime("runtime transport does not expose governance read")
+        try:
+            raw = transport.governance_read(draft.to_json().encode("utf-8"))
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("governance read transport failed", exc) from exc
+        return InvocationResult.from_json(raw)
+
     def invoke_builder(self, builder: InvocationBuilder) -> InvocationResult:
         """Invoke a builder and consume it only after dispatch succeeds."""
 
@@ -1192,7 +1252,7 @@ class RuntimeClient:
             raise _invalid_runtime("signed invocation is not submit-ready")
         try:
             stream_transport, open_json = transport.open_stream(
-                signed.to_json().encode("utf-8")
+                signed.to_invocation_draft().to_json().encode("utf-8")
             )
         except SDKError:
             raise
@@ -1237,7 +1297,7 @@ class RuntimeClient:
                 sort_keys=True,
             ).encode("utf-8")
             bidi_transport, open_json = transport.open_bidi(
-                signed.to_json().encode("utf-8"),
+                signed.to_invocation_draft().to_json().encode("utf-8"),
                 streams_json,
             )
         except SDKError:
@@ -1458,6 +1518,17 @@ def _required_mapping(
     return value
 
 
+def _require_runtime_exact_keys(
+    value: Mapping[str, object],
+    field_name: str,
+    *allowed_keys: str,
+) -> None:
+    allowed = set(allowed_keys)
+    for key in value:
+        if key not in allowed:
+            raise _invalid_runtime(f"{field_name} contains noncanonical field {key}")
+
+
 def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> int:
     value = decoded.get(field_name)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
@@ -1586,27 +1657,9 @@ def _admit_ability_descriptor_provider_subject(
     callee_ura: str,
     subject_ura: str,
 ) -> None:
-    try:
-        callee = parse_ura(callee_ura)
-    except SDKError as exc:
+    if not is_runtime_governance_read_subject_ura(subject_ura, callee_ura):
         raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor callee_ura must be canonical"
-        ) from exc
-    try:
-        subject = parse_ura(subject_ura)
-    except SDKError as exc:
-        raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor subject_ura must be canonical"
-        ) from exc
-    if subject.kind != "authority":
-        raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA"
-        )
-    expected_subject = authority_ura(callee.realm)
-    if subject.realm != callee.realm or subject_ura != expected_subject:
-        raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor subject_ura must be the "
-            "callee realm authority subject"
+            "descriptor_ref provider ability_descriptor subject_ura must be a runtime governance read subject"
         )
 
 
@@ -1788,6 +1841,8 @@ def _runtime_receipt_base64(
         decoded = base64.b64decode(text, validate=True)
     except (ValueError, TypeError) as error:
         raise _invalid_runtime(f"{field_name} must be valid base64", error) from error
+    if base64.b64encode(decoded).decode("ascii") != text:
+        raise _invalid_runtime(f"{field_name} must be canonical base64")
     if not decoded and not allow_empty:
         raise _invalid_runtime(f"{field_name} must decode to non-empty bytes")
     if expected_length is not None and len(decoded) != expected_length:
@@ -2358,11 +2413,11 @@ def _runtime_receipt_authority_binding(
     if kind == "session":
         return _AxonAuthorityBinding.session(
             _AxonSessionAuthorityBody(
-                backend_ura=_required_receipt_text(
+                issuer_ura=_required_receipt_text(
                     value.get("issuer_ura"),
                     f"{field_name}.issuer_ura",
                 ),
-                user_ura=_required_receipt_text(
+                subject_ura=_required_receipt_text(
                     value.get("subject_ura"),
                     f"{field_name}.subject_ura",
                 ),

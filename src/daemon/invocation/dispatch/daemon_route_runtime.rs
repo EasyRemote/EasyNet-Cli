@@ -47,6 +47,7 @@ use crate::daemon::ability::CallMode as DescriptorCallMode;
 use crate::daemon::invocation::admission::hosted_agent_delegation::{
     HostedAgentDelegationIngress, HostedAgentDelegationIssuer,
 };
+use crate::daemon::invocation::admission::register_device_pubkey::verify_user_register_pubkey_bootstrap_claim;
 use crate::daemon::invocation::dispatch::cancellation::{
     InvocationCancellationRegistry, RegisteredInvocationLifecycle,
 };
@@ -55,6 +56,7 @@ use crate::daemon::invocation::dispatch::daemon_invocation_service::{
 };
 use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility;
 use crate::daemon::invocation::dispatch::invocation_wire::status_from_axon_invoke_error;
+use crate::daemon::invocation::dispatch::transport_stream::TransportDropNotifyStream;
 use crate::daemon::invocation::dispatch::unary_dispatcher::{
     rpc_dispatch_outcome_response, DaemonUnaryRouteProvider,
 };
@@ -82,33 +84,63 @@ pub(crate) enum DaemonRouteIngress {
     ExternalSigned,
     TrustedLocalSystem,
     Bootstrap {
-        proof: BootstrapJoinProof,
+        proof: BootstrapCandidateProof,
         key_provider: Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider>,
     },
 }
 
-/// Self-contained federation bootstrap claim derived from the join key.
+fn exact_route_host_device_ura_for_delegation(
+    metadata: &std::collections::HashMap<String, String>,
+    callee_ura: &str,
+) -> Result<String, Status> {
+    if !metadata
+        .get(crate::daemon::ability::HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY)
+        .map(String::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Ok(callee_ura.to_string());
+    }
+    let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
+        Status::invalid_argument(format!(
+            "hosted-agent delegation exact route callee URA is invalid: {error}"
+        ))
+    })?;
+    if let Some((device_id, _agent_id)) = parsed.device_agent_ids() {
+        return Ok(crate::core::ura::device_ura(&parsed.realm, device_id));
+    }
+    Err(Status::invalid_argument(format!(
+        "hosted-agent delegation exact route requires a device-sponsored SystemAgent callee to derive host Device, got `{callee_ura}`"
+    )))
+}
+
+/// Self-contained first-key bootstrap claim derived from the presented key.
 ///
-/// This value proves that the canonical membership caller, membership subject,
-/// realm, route, public key, and payload are one immutable claim. It is
-/// transport policy context only: accepting its signature and nonce still
-/// belongs exclusively to Axon LocalRuntime's bootstrap admission mode.
+/// This value proves that the canonical caller, subject, route, public key,
+/// and payload are one immutable claim. It is transport policy context only:
+/// accepting its signature and nonce still belongs exclusively to Axon
+/// LocalRuntime's bootstrap admission mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BootstrapJoinProof {
+pub(crate) struct BootstrapCandidateProof {
     public_key: [u8; 32],
-    membership_ura: String,
-    realm: String,
+    principal_ura: String,
     ability: &'static str,
     args_digest: [u8; 32],
 }
 
-impl BootstrapJoinProof {
+impl BootstrapCandidateProof {
     pub(crate) fn verify(route: DaemonUnaryRoute, request: &InvokeRequest) -> Result<Self, Status> {
-        if route != DaemonUnaryRoute::FederationJoin {
-            return Err(Status::permission_denied(
-                "bootstrap join is restricted to federation.join",
-            ));
+        match route {
+            DaemonUnaryRoute::FederationJoin => Self::verify_federation_join(request),
+            DaemonUnaryRoute::IdentityRegisterPubkey => {
+                Self::verify_identity_register_pubkey(request)
+            }
+            _ => Err(Status::permission_denied(
+                "bootstrap candidate is restricted to federation.join and identity.register_pubkey",
+            )),
         }
+    }
+
+    fn verify_federation_join(request: &InvokeRequest) -> Result<Self, Status> {
         let envelope = request.envelope.as_ref().ok_or_else(|| {
             Status::invalid_argument("federation.join bootstrap envelope is required")
         })?;
@@ -132,9 +164,21 @@ impl BootstrapJoinProof {
         validate_join_tuple(envelope, &join)?;
         Ok(Self {
             public_key,
-            membership_ura: join.membership_ura,
-            realm: join.realm,
+            principal_ura: join.membership_ura,
             ability: DaemonUnaryRoute::FederationJoin.name(),
+            args_digest: Sha256::digest(&request.arguments).into(),
+        })
+    }
+
+    fn verify_identity_register_pubkey(request: &InvokeRequest) -> Result<Self, Status> {
+        let envelope = request.envelope.as_ref().ok_or_else(|| {
+            Status::invalid_argument("identity.register_pubkey bootstrap envelope is required")
+        })?;
+        let claim = verify_user_register_pubkey_bootstrap_claim(envelope, &request.arguments)?;
+        Ok(Self {
+            public_key: claim.public_key(),
+            principal_ura: claim.principal_ura().to_string(),
+            ability: DaemonUnaryRoute::IdentityRegisterPubkey.name(),
             args_digest: Sha256::digest(&request.arguments).into(),
         })
     }
@@ -146,35 +190,74 @@ impl BootstrapJoinProof {
     ) -> Result<(), Status> {
         if route.name() != self.ability {
             return Err(Status::permission_denied(
-                "bootstrap join route binding mismatch",
+                "bootstrap candidate route binding mismatch",
             ));
         }
-        let envelope = request.envelope.as_ref().ok_or_else(|| {
-            Status::invalid_argument("federation.join bootstrap envelope is required")
-        })?;
         let presented_args_digest: [u8; 32] = Sha256::digest(&request.arguments).into();
         if !constant_time_eq_32(&presented_args_digest, &self.args_digest) {
             return Err(Status::permission_denied(
-                "federation.join bootstrap claim changed after verification",
+                "bootstrap candidate claim changed after verification",
             ));
         }
+        match route {
+            DaemonUnaryRoute::FederationJoin => self.validate_federation_join_request(request),
+            DaemonUnaryRoute::IdentityRegisterPubkey => {
+                self.validate_identity_register_pubkey_request(request)
+            }
+            _ => Err(Status::permission_denied(
+                "bootstrap candidate route binding mismatch",
+            )),
+        }
+    }
+
+    fn validate_federation_join_request(&self, request: &InvokeRequest) -> Result<(), Status> {
+        let envelope = request.envelope.as_ref().ok_or_else(|| {
+            Status::invalid_argument("federation.join bootstrap envelope is required")
+        })?;
         let join: crate::daemon::invocation::dispatch::federation_wrappers::JoinRequest =
             serde_json::from_slice(&request.arguments).map_err(|error| {
                 Status::invalid_argument(format!(
                     "federation.join bootstrap arguments JSON decode failed: {error}"
                 ))
             })?;
+        let public_key_bytes = hex::decode(join.public_key_hex.trim()).map_err(|error| {
+            Status::invalid_argument(format!(
+                "federation.join bootstrap public_key_hex is invalid: {error}"
+            ))
+        })?;
+        let public_key: [u8; 32] = public_key_bytes.try_into().map_err(|bytes: Vec<u8>| {
+            Status::invalid_argument(format!(
+                "federation.join bootstrap public key must be 32 bytes, got {}",
+                bytes.len()
+            ))
+        })?;
         validate_join_tuple(envelope, &join)?;
-        if join.membership_ura != self.membership_ura
-            || join.realm != self.realm
-            || hex::decode(join.public_key_hex.trim()).ok().as_deref()
-                != Some(self.public_key.as_slice())
-        {
+        if join.membership_ura != self.principal_ura || public_key != self.public_key {
             return Err(Status::permission_denied(
                 "federation.join bootstrap claim binding mismatch",
             ));
         }
         Ok(())
+    }
+
+    fn validate_identity_register_pubkey_request(
+        &self,
+        request: &InvokeRequest,
+    ) -> Result<(), Status> {
+        let envelope = request.envelope.as_ref().ok_or_else(|| {
+            Status::invalid_argument("identity.register_pubkey bootstrap envelope is required")
+        })?;
+        let claim = verify_user_register_pubkey_bootstrap_claim(envelope, &request.arguments)?;
+        if claim.principal_ura() != self.principal_ura || claim.public_key() != self.public_key {
+            return Err(Status::permission_denied(
+                "identity.register_pubkey bootstrap claim binding mismatch",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn public_key(&self) -> [u8; 32] {
+        self.public_key
     }
 }
 
@@ -312,6 +395,8 @@ impl DaemonRouteRuntimeAdapter {
         let registered_ref = bound
             .descriptor_ref_for_mode("daemon exact unary route", callee_ura, CallMode::Rpc, None)?
             .into_descriptor_ref();
+        let host_device_ura =
+            exact_route_host_device_ura_for_delegation(&request.metadata, callee_ura)?;
 
         let wire = match ingress {
             DaemonRouteIngress::Bootstrap {
@@ -323,6 +408,7 @@ impl DaemonRouteRuntimeAdapter {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::BootstrapCandidate,
+                    &host_device_ura,
                     route.name(),
                 )?;
                 let signed_ref = bound
@@ -347,6 +433,7 @@ impl DaemonRouteRuntimeAdapter {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::TrustedLocalSystem,
+                    &host_device_ura,
                     route.name(),
                 )?;
                 crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -361,6 +448,7 @@ impl DaemonRouteRuntimeAdapter {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::ExternalSigned,
+                    &host_device_ura,
                     route.name(),
                 )?;
                 let signed_ref = bound
@@ -431,12 +519,15 @@ impl DaemonRouteRuntimeAdapter {
                 None,
             )?
             .into_descriptor_ref();
+        let host_device_ura =
+            exact_route_host_device_ura_for_delegation(&request.metadata, callee_ura)?;
 
         let wire = if local_system_ingress {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &request.metadata,
                 &envelope,
                 HostedAgentDelegationIngress::TrustedLocalSystem,
+                &host_device_ura,
                 route.name(),
             )?;
             crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -450,6 +541,7 @@ impl DaemonRouteRuntimeAdapter {
                 &request.metadata,
                 &envelope,
                 HostedAgentDelegationIngress::ExternalSigned,
+                &host_device_ura,
                 route.name(),
             )?;
             let signed_ref = bound
@@ -543,6 +635,8 @@ impl DaemonRouteRuntimeAdapter {
         let local_system_ingress = self
             .admission
             .accepts_local_system_envelope(envelope_open.envelope.as_ref());
+        let host_device_ura =
+            exact_route_host_device_ura_for_delegation(&envelope_open.metadata, callee_ura)?;
         let mut metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
             &envelope_open.metadata,
             &envelope,
@@ -551,6 +645,7 @@ impl DaemonRouteRuntimeAdapter {
             } else {
                 HostedAgentDelegationIngress::ExternalSigned
             },
+            &host_device_ura,
             route.name(),
         )?;
         if let Some(extension) = envelope_open.session_ext.as_ref() {
@@ -647,8 +742,12 @@ impl DaemonRouteRuntimeAdapter {
         };
         let (runtime_input, mut runtime_output) = handle.split();
         let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+        let (transport_closed_tx, mut transport_closed_rx) =
+            tokio::sync::mpsc::channel::<String>(2);
 
+        let transport_closed_tx_for_input = transport_closed_tx.clone();
         let input_bridge = tokio::spawn(async move {
+            let mut close_reason = "InvokeBidi transport input closed".to_string();
             while let Some(frame_result) = up.next().await {
                 match frame_result {
                     Ok(frame) => {
@@ -661,10 +760,12 @@ impl DaemonRouteRuntimeAdapter {
                             .await
                             .is_err()
                         {
+                            close_reason = "InvokeBidi runtime input channel closed".to_string();
                             break;
                         }
                     }
                     Err(status) => {
+                        close_reason = format!("InvokeBidi transport input error: {status}");
                         let _ = runtime_input
                             .send(
                                 BidiInputFrame::new(status.to_string().into_bytes())
@@ -678,14 +779,37 @@ impl DaemonRouteRuntimeAdapter {
                 }
             }
             let _ = runtime_input.close_input().await;
+            let _ = transport_closed_tx_for_input.send(close_reason).await;
         });
 
         tokio::spawn(async move {
             let mut admission_pending = Some(admission_frame);
             let mut terminal_authority_observed = false;
-            while let Some(frame_result) = runtime_output.next_frame().await {
+            loop {
+                let frame_result = tokio::select! {
+                    biased;
+                    close_reason = transport_closed_rx.recv() => {
+                        let reason = close_reason.unwrap_or_else(|| {
+                            "InvokeBidi transport input bridge closed".to_string()
+                        });
+                        let projected = crate::daemon::invocation::bidi::bidi_dispatcher::cancel_registered_bidi(
+                            &lifecycle,
+                            reason.clone(),
+                        )
+                        .await
+                        .map_err(|status| Status::internal(format!("{reason}; {status}")));
+                        terminal_authority_observed = true;
+                        if send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
+                            let _ = down_tx.send(projected).await;
+                        }
+                        break;
+                    }
+                    frame_result = runtime_output.next_frame() => frame_result,
+                };
+
                 match frame_result {
-                    Ok(frame) if frame.terminal => {
+                    None => break,
+                    Some(Ok(frame)) if frame.terminal => {
                         let projected =
                             crate::daemon::invocation::bidi::bidi_dispatcher::project_registered_finalized_bidi_receipt(
                                 &lifecycle,
@@ -697,7 +821,7 @@ impl DaemonRouteRuntimeAdapter {
                         }
                         break;
                     }
-                    Ok(frame) => {
+                    Some(Ok(frame)) => {
                         if frame.content_type
                             != crate::daemon::invocation::bidi::bidi_dispatcher::SESSION_RUNTIME_FRAME_CONTENT_TYPE
                         {
@@ -759,7 +883,7 @@ impl DaemonRouteRuntimeAdapter {
                             break;
                         }
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         let projected =
                             crate::daemon::invocation::bidi::bidi_dispatcher::project_registered_finalized_bidi_receipt(
                                 &lifecycle,
@@ -790,8 +914,11 @@ impl DaemonRouteRuntimeAdapter {
             input_bridge.abort();
         });
 
-        let stream =
-            crate::daemon::invocation::bidi::bidi_dispatcher::LocalBidiDownStream::new(down_rx);
+        let stream = TransportDropNotifyStream::new(
+            crate::daemon::invocation::bidi::bidi_dispatcher::LocalBidiDownStream::new(down_rx),
+            transport_closed_tx,
+            "InvokeBidi response stream dropped",
+        );
         Ok(Response::new(Box::pin(stream)))
     }
 }
@@ -869,8 +996,51 @@ fn constant_time_eq_32(left: &[u8; 32], right: &[u8; 32]) -> bool {
 }
 
 #[cfg(test)]
-mod bootstrap_join_proof_tests {
+mod hosted_agent_delegation_route_tests {
     use super::*;
+
+    fn delegation_metadata() -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::from([(
+            crate::daemon::ability::HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            "1".to_string(),
+        )])
+    }
+
+    #[test]
+    fn delegation_exact_route_rejects_direct_device_callee() {
+        let metadata = delegation_metadata();
+        let error = exact_route_host_device_ura_for_delegation(
+            &metadata,
+            "easynet:///r/test-realm/device/edge-01",
+        )
+        .expect_err("delegation must not derive host from direct Device callee");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error.message().contains("device-sponsored SystemAgent")
+                && !error.message().contains("Device or"),
+            "unexpected delegation callee error: {}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn delegation_exact_route_derives_host_from_system_agent_callee() {
+        let metadata = delegation_metadata();
+        let host = exact_route_host_device_ura_for_delegation(
+            &metadata,
+            "easynet:///r/test-realm/agent/device.edge-01.runtime-health",
+        )
+        .expect("device-sponsored SystemAgent callee must derive host Device");
+
+        assert_eq!(host, "easynet:///r/test-realm/device/edge-01");
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_candidate_proof_tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
     fn join_request(public_key: [u8; 32]) -> InvokeRequest {
         let public_key_hex = hex::encode(public_key);
@@ -891,6 +1061,31 @@ mod bootstrap_join_proof_tests {
         .expect("join request")
     }
 
+    fn identity_register_request(public_key: [u8; 32]) -> InvokeRequest {
+        let principal_ura = "easynet:///r/bootstrap-test/user/alice";
+        let hub_ura = crate::core::ura::hub_ura("bootstrap-test");
+        let descriptor_subject = crate::core::ura::owner_ability_ura(
+            &hub_ura,
+            DaemonUnaryRoute::IdentityRegisterPubkey.name(),
+        )
+        .expect("identity.register_pubkey descriptor subject");
+        let arguments = serde_json::to_vec(&serde_json::json!({
+            "principal_ura": principal_ura,
+            "public_key_b64": BASE64_STANDARD.encode(public_key),
+            "role": "user",
+        }))
+        .expect("identity.register_pubkey arguments");
+        crate::daemon::invocation::ProtoEnvelope::from_target(
+            principal_ura,
+            hub_ura,
+            descriptor_subject,
+            crate::daemon::invocation::InvocationDerivationPolicy::FreshRoot,
+        )
+        .expect("identity.register_pubkey envelope")
+        .invoke_request(DaemonUnaryRoute::IdentityRegisterPubkey.name(), arguments)
+        .expect("identity.register_pubkey request")
+    }
+
     #[test]
     fn non_ura_caller_is_rejected() {
         let mut request = join_request([0x11; 32]);
@@ -902,7 +1097,9 @@ mod bootstrap_join_proof_tests {
             .as_mut()
             .expect("caller")
             .ura = "not-a-ura".to_string();
-        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
+        assert!(
+            BootstrapCandidateProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err()
+        );
     }
 
     #[test]
@@ -916,7 +1113,9 @@ mod bootstrap_join_proof_tests {
             .as_mut()
             .expect("caller")
             .ura = "easynet:///r/bootstrap-test/device/other-node".to_string();
-        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
+        assert!(
+            BootstrapCandidateProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err()
+        );
     }
 
     #[test]
@@ -929,13 +1128,15 @@ mod bootstrap_join_proof_tests {
         }))
         .expect("substituted join arguments");
         request.arguments = arguments;
-        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
+        assert!(
+            BootstrapCandidateProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err()
+        );
     }
 
     #[test]
-    fn payload_substitution_after_proof_is_rejected() {
+    fn federation_join_payload_substitution_after_proof_is_rejected() {
         let mut request = join_request([0x33; 32]);
-        let proof = BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request)
+        let proof = BootstrapCandidateProof::verify(DaemonUnaryRoute::FederationJoin, &request)
             .expect("valid proof");
         request.arguments.push(b' ');
         assert!(proof
@@ -946,7 +1147,72 @@ mod bootstrap_join_proof_tests {
     #[test]
     fn bootstrap_candidate_on_non_join_route_is_rejected() {
         let request = join_request([0x44; 32]);
-        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationStatus, &request).is_err());
+        assert!(
+            BootstrapCandidateProof::verify(DaemonUnaryRoute::FederationStatus, &request).is_err()
+        );
+    }
+
+    #[test]
+    fn identity_register_user_self_key_bootstrap_is_accepted() {
+        let request = identity_register_request([0x55; 32]);
+        let proof =
+            BootstrapCandidateProof::verify(DaemonUnaryRoute::IdentityRegisterPubkey, &request)
+                .expect("valid identity.register_pubkey bootstrap proof");
+        proof
+            .validate_request(DaemonUnaryRoute::IdentityRegisterPubkey, &request)
+            .expect("bootstrap request remains bound");
+    }
+
+    #[test]
+    fn identity_register_device_caller_is_rejected() {
+        let mut request = identity_register_request([0x66; 32]);
+        request
+            .envelope
+            .as_mut()
+            .expect("envelope")
+            .caller
+            .as_mut()
+            .expect("caller")
+            .ura = "easynet:///r/bootstrap-test/device/not-user".to_string();
+        assert!(BootstrapCandidateProof::verify(
+            DaemonUnaryRoute::IdentityRegisterPubkey,
+            &request
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn identity_register_payload_substitution_after_proof_is_rejected() {
+        let mut request = identity_register_request([0x77; 32]);
+        let proof =
+            BootstrapCandidateProof::verify(DaemonUnaryRoute::IdentityRegisterPubkey, &request)
+                .expect("valid proof");
+        request.arguments = serde_json::to_vec(&serde_json::json!({
+            "principal_ura": "easynet:///r/bootstrap-test/user/alice",
+            "public_key_b64": BASE64_STANDARD.encode([0x78; 32]),
+            "role": "user",
+        }))
+        .expect("substituted identity.register_pubkey arguments");
+        assert!(proof
+            .validate_request(DaemonUnaryRoute::IdentityRegisterPubkey, &request)
+            .is_err());
+    }
+
+    #[test]
+    fn identity_register_owner_binding_is_rejected() {
+        let mut request = identity_register_request([0x88; 32]);
+        request.arguments = serde_json::to_vec(&serde_json::json!({
+            "principal_ura": "easynet:///r/bootstrap-test/user/alice",
+            "public_key_b64": BASE64_STANDARD.encode([0x88; 32]),
+            "role": "user",
+            "principal_owner_ura": "easynet:///r/bootstrap-test/user/bob",
+        }))
+        .expect("owner-bound identity.register_pubkey arguments");
+        assert!(BootstrapCandidateProof::verify(
+            DaemonUnaryRoute::IdentityRegisterPubkey,
+            &request
+        )
+        .is_err());
     }
 }
 

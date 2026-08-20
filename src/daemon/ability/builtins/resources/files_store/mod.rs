@@ -2,10 +2,10 @@
 // =====================================================================
 //
 // File: src/daemon/ability/builtins/resources/files_store/mod.rs
-// Description: registration entry point for the user-rooted files
+// Description: registration entry point for the user-scoped files
 //              namespace, complement to Pages (RFC-006-B v0.6).
 //              Registers owner-local `files.<verb>` abilities under the
-//              daemon-native `<user>.files` executor root.
+//              daemon-native `agent/<user>.files` executor root.
 //
 // What this is for:
 //   `/v1/chat/completions` accepts OpenAI-shape multimodal messages
@@ -49,11 +49,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::daemon::ability::descriptors::AdmissionAction;
-use crate::daemon::ability::dispatch::{
-    AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
-};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 use crate::daemon::ability::manifest::AbilityManifest;
-use crate::daemon::ability::AuthorityScope;
 use serde_json::{json, Value};
 
 /// Installation parameters for the Files reference system. Mirror
@@ -135,37 +132,32 @@ fn list_input_schema() -> Value {
     })
 }
 
-fn files_authority_scope(realm: &str, user: &str) -> AuthorityScope {
-    AuthorityScope::new(format!("user:{user}"), management_agent_ura(realm, user))
-        .expect("Files authority scope is well-formed")
+pub(crate) fn description_for(name: &str) -> Option<&'static str> {
+    match name {
+        "files.put" => Some("Write a content-addressed file blob for the user account."),
+        "files.get" => Some("Read a content-addressed file blob for the user account."),
+        "files.list" => Some("List content-addressed file blobs for the user account."),
+        _ => None,
+    }
 }
 
-/// Execution host for the user-owned content-addressed Files family.
-///
-/// The user remains the accountable owner projection. This Agent URA only names
-/// the daemon-native executor that serves `files.put/get/list`, matching the
-/// Pages management split.
-pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
-    crate::core::ura::agent_ura(realm, user, "files")
+pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
+    match name {
+        "files.put" => Some(put_input_schema()),
+        "files.get" => Some(get_input_schema()),
+        "files.list" => Some(list_input_schema()),
+        _ => None,
+    }
 }
 
 fn register_files_rpc(
     reg: &mut AxonAbilityCatalog,
     ability: &'static str,
     owner: OwnerKind,
-    authority_scope: AuthorityScope,
     manifest: AbilityManifest,
     handler: LocalRpcHandler,
 ) {
-    reg.register_rpc_with_spec_impl_and_authority_scope(
-        ability,
-        owner,
-        authority_scope,
-        manifest,
-        handler,
-        ControlPlaneImplementation::native_daemon(),
-    )
-    .expect("files_store authority scope must be declared before registration")
+    reg.register_rpc_with_spec(ability, owner, manifest, handler)
 }
 
 /// Wire the Files reference system into the registry. Called
@@ -184,8 +176,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
             return;
         }
     };
-    let owner = OwnerKind::User(config.user.clone());
-    let authority_scope = files_authority_scope(&config.realm, &config.user);
+    let owner = OwnerKind::files_system();
 
     let user = config.user.clone();
     let realm = config.realm.clone();
@@ -196,7 +187,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
         reg,
         "files.put",
         owner.clone(),
-        authority_scope.clone(),
         files_manifest(
             "put",
             "Write a content-addressed file blob for the user account.",
@@ -213,7 +203,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
         reg,
         "files.get",
         owner.clone(),
-        authority_scope.clone(),
         files_manifest(
             "get",
             "Read a content-addressed file blob for the user account.",
@@ -232,7 +221,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
         reg,
         "files.list",
         owner,
-        authority_scope,
         files_manifest(
             "list",
             "List content-addressed file blobs for the user account.",

@@ -705,6 +705,8 @@ def _decode_canonical_input(value: str) -> bytes:
         raise invalid_key_service_input(
             "canonical signing material must be base64", exc
         ) from exc
+    if base64.b64encode(decoded).decode("ascii") != value:
+        raise invalid_key_service_input("canonical signing material must be canonical base64")
     if not decoded:
         raise invalid_key_service_input("canonical signing material is required")
     if len(decoded) > MAX_KEY_SERVICE_CANONICAL_BYTES:

@@ -1423,9 +1423,9 @@ mod cases {
             .outputs
             .get("review.result")
             .expect("review.result must be exported on winning iter");
-        assert!(
-            winner.contains("winner"),
-            "result must carry verify final output; got: {winner}"
+        assert_eq!(
+            winner.get("payload").and_then(Value::as_str),
+            Some("winner")
         );
     }
 

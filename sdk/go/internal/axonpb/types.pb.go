@@ -1850,20 +1850,20 @@ func (x *PolicyGrant) GetPolicyUra() string {
 	return ""
 }
 
-// Session authority is not user delegation. It proves that the
-// trusted backend is acting under an authenticated interactive user
-// session, and is signed by the backend identity. It does not claim
-// that the user private key signed the invocation authority.
+// Session authority is not user delegation. It proves that a trusted
+// issuer is acting under an authenticated interactive subject session,
+// and is signed by the issuer identity. It does not claim that the
+// subject private key signed the invocation authority.
 type SessionAuthority struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
-	BackendUra  string                 `protobuf:"bytes,1,opt,name=backend_ura,json=backendUra,proto3" json:"backend_ura,omitempty"`
-	UserUra     string                 `protobuf:"bytes,2,opt,name=user_ura,json=userUra,proto3" json:"user_ura,omitempty"`
+	IssuerUra   string                 `protobuf:"bytes,1,opt,name=issuer_ura,json=issuerUra,proto3" json:"issuer_ura,omitempty"`
+	SubjectUra  string                 `protobuf:"bytes,2,opt,name=subject_ura,json=subjectUra,proto3" json:"subject_ura,omitempty"`
 	SessionId   string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	Scopes      []string               `protobuf:"bytes,4,rep,name=scopes,proto3" json:"scopes,omitempty"`
 	Audiences   []string               `protobuf:"bytes,5,rep,name=audiences,proto3" json:"audiences,omitempty"`
 	IssuedAtMs  int64                  `protobuf:"varint,6,opt,name=issued_at_ms,json=issuedAtMs,proto3" json:"issued_at_ms,omitempty"`
 	ExpiresAtMs int64                  `protobuf:"varint,7,opt,name=expires_at_ms,json=expiresAtMs,proto3" json:"expires_at_ms,omitempty"`
-	// ed25519 signature by backend over canonical_session_authority_payload_json.
+	// ed25519 signature by issuer over canonical_session_authority_payload_json.
 	Signature     []byte `protobuf:"bytes,8,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1899,16 +1899,16 @@ func (*SessionAuthority) Descriptor() ([]byte, []int) {
 	return file_axon_v1_types_proto_rawDescGZIP(), []int{18}
 }
 
-func (x *SessionAuthority) GetBackendUra() string {
+func (x *SessionAuthority) GetIssuerUra() string {
 	if x != nil {
-		return x.BackendUra
+		return x.IssuerUra
 	}
 	return ""
 }
 
-func (x *SessionAuthority) GetUserUra() string {
+func (x *SessionAuthority) GetSubjectUra() string {
 	if x != nil {
-		return x.UserUra
+		return x.SubjectUra
 	}
 	return ""
 }
@@ -3820,11 +3820,12 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x0ecapability_ura\x18\x01 \x01(\tR\rcapabilityUra\",\n" +
 	"\vPolicyGrant\x12\x1d\n" +
 	"\n" +
-	"policy_ura\x18\x01 \x01(\tR\tpolicyUra\"\x87\x02\n" +
-	"\x10SessionAuthority\x12\x1f\n" +
-	"\vbackend_ura\x18\x01 \x01(\tR\n" +
-	"backendUra\x12\x19\n" +
-	"\buser_ura\x18\x02 \x01(\tR\auserUra\x12\x1d\n" +
+	"policy_ura\x18\x01 \x01(\tR\tpolicyUra\"\x8b\x02\n" +
+	"\x10SessionAuthority\x12\x1d\n" +
+	"\n" +
+	"issuer_ura\x18\x01 \x01(\tR\tissuerUra\x12\x1f\n" +
+	"\vsubject_ura\x18\x02 \x01(\tR\n" +
+	"subjectUra\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x03 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06scopes\x18\x04 \x03(\tR\x06scopes\x12\x1c\n" +

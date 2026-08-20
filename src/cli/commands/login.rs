@@ -16,7 +16,8 @@
 // - Delegate HTTP auth to the existing `auth` command provider.
 //
 // Usage Contract:
-// - `login` establishes account session only; it does not enroll this device.
+// - `login` establishes account session and, by default, reconciles the current
+//   device into that profile.
 // - `logout` clears account session only; it does not remove device membership.
 //
 // Architectural Position:
@@ -25,10 +26,13 @@
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use clap::Args;
 
-use crate::cli::commands::{auth, profile};
+use crate::cli::commands::{auth, join, profile};
+use crate::core::ura;
+use crate::daemon::persistence::config;
+use crate::support::platform::{output, sysinfo};
 
 #[derive(Debug, Args)]
 pub struct LoginArgs {
@@ -58,6 +62,14 @@ pub struct LoginArgs {
     /// Nickname to use when --register-if-missing creates a new account.
     #[arg(long)]
     pub nickname: Option<String>,
+
+    /// Skip automatic current-device enrollment after login.
+    #[arg(long)]
+    pub no_join: bool,
+
+    /// Do not start the daemon after automatic device enrollment.
+    #[arg(long)]
+    pub no_start: bool,
 }
 
 #[derive(Debug, Args)]
@@ -73,8 +85,29 @@ pub(crate) struct LoginOutcome {
 }
 
 pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
+    let should_join = !args.no_join;
+    let join_boot = if args.no_start {
+        join::JoinBoot::No
+    } else {
+        join::JoinBoot::Yes
+    };
     let outcome = login_and_select_profile(args)?;
     render_login_outcome(&outcome);
+    if should_join {
+        let membership = join::reconcile_current_profile_membership(
+            outcome.profile.clone(),
+            join::ProfileJoinOptions::quickstart_login(join_boot),
+        )
+        .with_context(|| {
+            format!(
+                "login succeeded and profile '{}' was saved, but current-device onboarding failed",
+                outcome.profile.profile_name
+            )
+        })?;
+        render_device_onboarding_outcome(&outcome, membership);
+    } else {
+        render_skipped_device_onboarding(&outcome);
+    }
     Ok(())
 }
 
@@ -115,9 +148,73 @@ pub(crate) fn login_and_select_profile(args: LoginArgs) -> anyhow::Result<LoginO
 pub(crate) fn render_login_outcome(outcome: &LoginOutcome) {
     auth::render_login_success(&outcome.session);
     println!("  profile: {}", outcome.profile.profile_name);
+}
+
+fn render_skipped_device_onboarding(outcome: &LoginOutcome) {
+    println!();
+    output::info("Current-device onboarding skipped (--no-join).");
+    println!("Next:");
+    println!("  easynet join --profile {}", outcome.profile.profile_name);
+    println!("  easynet status");
+}
+
+fn render_device_onboarding_outcome(
+    outcome: &LoginOutcome,
+    membership: join::CurrentProfileMembership,
+) {
+    match membership {
+        join::CurrentProfileMembership::AlreadyJoined(credentials) => {
+            println!();
+            output::success("current device already joined");
+            render_current_device_summary(&credentials);
+            render_ready_next_steps();
+        }
+        join::CurrentProfileMembership::JoinedNow(credentials) => {
+            println!();
+            output::success("current device joined");
+            render_current_device_summary(&credentials);
+            render_ready_next_steps();
+        }
+        join::CurrentProfileMembership::BlockedByDifferentDevice(credentials) => {
+            println!();
+            output::warn(
+                "This host is already joined to a different profile; login did not overwrite device credentials.",
+            );
+            render_current_device_summary(&credentials);
+            println!("Next:");
+            println!(
+                "  easynet join --profile {} --yes",
+                outcome.profile.profile_name
+            );
+            println!("  easynet status");
+        }
+    }
+}
+
+fn render_current_device_summary(credentials: &config::Credentials) {
+    let info = sysinfo::collect_system_info();
+    let realm = credentials.realm_str();
+    let device_ura = ura::device_ura(realm, &credentials.node_id);
+    let platform = local_platform_label(&info);
+    let mut rows: Vec<(&str, &str)> = vec![
+        ("Name", info.display_name.as_str()),
+        ("Platform", platform.as_str()),
+        ("Device", device_ura.as_str()),
+        ("Realm", realm),
+    ];
+    if let Some(user_id) = credentials.user_id.as_deref() {
+        rows.push(("User", user_id));
+    }
+    output::kv_section_stdout(&rows);
+}
+
+fn local_platform_label(info: &sysinfo::DeviceInfo) -> String {
+    format!("{} {}", info.os, info.arch)
+}
+
+fn render_ready_next_steps() {
     println!();
     println!("Next:");
-    println!("  easynet join");
     println!("  easynet status");
 }
 
@@ -156,4 +253,21 @@ pub(crate) fn resolve_login_target(args: &LoginArgs) -> anyhow::Result<profile::
         args.user.as_deref(),
         args.realm.as_deref(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_platform_label_preserves_pairing_metadata_shape() {
+        let info = sysinfo::DeviceInfo {
+            display_name: "host".to_string(),
+            os: "macos",
+            arch: "aarch64",
+            hostname: "host".to_string(),
+        };
+
+        assert_eq!(local_platform_label(&info), "macos aarch64");
+    }
 }

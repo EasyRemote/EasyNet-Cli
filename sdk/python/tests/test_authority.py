@@ -30,7 +30,7 @@ class AuthorityTests(unittest.TestCase):
                 session_id="session-1",
                 session_owner_user_id="alice",
                 creator_principal_id="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
@@ -53,7 +53,7 @@ class AuthorityTests(unittest.TestCase):
                     session_id="session-2",
                     session_owner_user_id="alice",
                     creator_principal_id="easynet:///r/example/agent/backend",
-                    callee_ura="easynet:///r/example/device/dev-a",
+                    callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/resource/user.alice/session/session-2",
                     audience="easynet:///r/example/device/dev-a",
                     scopes=("device.observe.*",),
@@ -104,6 +104,55 @@ class AuthorityTests(unittest.TestCase):
         metadata = authority.metadata()
         self.assertEqual(metadata.key, SESSION_AUTHORITY_METADATA_KEY)
         self.assertEqual(metadata.value, value)
+
+    def test_authority_metadata_rejects_noncanonical_fields(self) -> None:
+        with self.assertRaisesRegex(
+            SDKError, "delegation contains noncanonical field legacy_signature"
+        ):
+            DelegationProof.from_metadata(
+                _authority_metadata(
+                    {
+                        "issuer_ura": "easynet:///r/example/user/alice",
+                        "subject_ura": "easynet:///r/example/user/alice",
+                        "caller_ura": "easynet:///r/example/agent/backend",
+                        "audience": "easynet:///r/example/device/dev-a",
+                        "scopes": ["device.observe.*"],
+                        "issued_at_ms": 1000,
+                        "expires_at_ms": 2000,
+                    },
+                    b"delegation-signature",
+                    wire_extra={"legacy_signature": "opaque"},
+                )
+            )
+
+        delegation_payload = {
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": "easynet:///r/example/user/alice",
+            "caller_ura": "easynet:///r/example/agent/backend",
+            "audience": "easynet:///r/example/device/dev-a",
+            "scopes": ["device.observe.*"],
+            "issued_at_ms": 1000,
+            "expires_at_ms": 2000,
+            "legacy_subject": "easynet:///r/example/user/alice",
+        }
+        with self.assertRaisesRegex(
+            SDKError,
+            "delegation metadata payload contains noncanonical field legacy_subject",
+        ):
+            DelegationProof.from_metadata(
+                _authority_metadata(delegation_payload, b"delegation-signature")
+            )
+
+        session_payload = _session_authority_payload()
+        session_payload["backend_ura"] = "easynet:///r/example/agent/backend"
+        session_payload["user_ura"] = "easynet:///r/example/user/alice"
+        with self.assertRaisesRegex(
+            SDKError,
+            "session authority metadata payload contains noncanonical field backend_ura",
+        ):
+            SessionAuthority.from_metadata(
+                _authority_metadata(session_payload, b"session-signature")
+            )
 
     def test_session_authority_rejects_all_zero_owner(self) -> None:
         payload = _session_authority_payload()
@@ -173,7 +222,7 @@ class AuthorityTests(unittest.TestCase):
                     session_id="session-1",
                     session_owner_user_id="alice",
                     creator_principal_id="easynet:///r/example/agent/backend",
-                    callee_ura="easynet:///r/example/device/dev-a",
+                    callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/device/dev-a",
                     audience="easynet:///r/example/device/dev-a",
                     scopes=("device.observe.*",),
@@ -204,9 +253,9 @@ class AuthorityTests(unittest.TestCase):
         draft = (
             InvocationBuilder()
             .with_caller_ura("easynet:///r/example/agent/backend")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/user/alice")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -226,9 +275,9 @@ class AuthorityTests(unittest.TestCase):
             (
                 InvocationBuilder()
                 .with_caller_ura("easynet:///r/example/agent/backend")
-                .with_callee_ura("easynet:///r/example/device/dev-a")
+                .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
                 .with_descriptor_ref(
-                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
                 .with_subject_ura("easynet:///r/example/user/alice")
                 .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -298,7 +347,7 @@ class AuthorityTests(unittest.TestCase):
                 session_id="session-1",
                 session_owner_user_id="alice",
                 creator_principal_id="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
@@ -332,7 +381,7 @@ class AuthorityTests(unittest.TestCase):
                 creator_principal_id="",
                 session_owner_ura="easynet:///r/example/user/alice",
                 creator_principal_ura="easynet:///r/example/authority",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
@@ -360,7 +409,7 @@ class AuthorityTests(unittest.TestCase):
             session_id="session-1",
             session_owner_user_id="alice",
             creator_principal_id="easynet:///r/example/authority",
-            callee_ura="easynet:///r/example/device/dev-a",
+            callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
             subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
             audience="easynet:///r/example/device/dev-a",
             scopes=("device.observe.*",),
@@ -388,7 +437,7 @@ class AuthorityTests(unittest.TestCase):
                     session_owner_user_id="bob",
                     session_owner_ura="easynet:///r/example/user/alice",
                     creator_principal_id="easynet:///r/example/agent/backend",
-                    callee_ura="easynet:///r/example/device/dev-a",
+                    callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                     audience="easynet:///r/example/device/dev-a",
                     scopes=("device.observe.*",),
@@ -427,7 +476,7 @@ class AuthorityTests(unittest.TestCase):
                     session_id="session-1",
                     session_owner_user_id="alice",
                     creator_principal_id="easynet:///r/example/agent/backend",
-                    callee_ura="easynet:///r/example/device/dev-a",
+                    callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                     audience="easynet:///r/example/device/dev-a",
                     scopes=("device.observe.*",),
@@ -441,12 +490,20 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(transport.session_calls, 0)
 
 
-def _authority_metadata(payload: dict[str, object], signature: bytes) -> str:
+def _authority_metadata(
+    payload: dict[str, object],
+    signature: bytes,
+    *,
+    wire_extra: dict[str, object] | None = None,
+) -> str:
+    wire_object = {
+        "payload": payload,
+        "signature": base64.b64encode(signature).decode("ascii"),
+    }
+    if wire_extra:
+        wire_object.update(wire_extra)
     wire = json.dumps(
-        {
-            "payload": payload,
-            "signature": base64.b64encode(signature).decode("ascii"),
-        },
+        wire_object,
         separators=(",", ":"),
     ).encode("utf-8")
     return base64.b64encode(wire).decode("ascii")
@@ -458,7 +515,7 @@ def _session_authority_payload() -> dict[str, object]:
         "session_id": "session-1",
         "session_owner_user_id": "alice",
         "creator_principal_id": "easynet:///r/example/agent/backend",
-        "callee_ura": "easynet:///r/example/device/dev-a",
+        "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
         "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
         "audience": "easynet:///r/example/device/dev-a",
         "scopes": ["device.observe.*"],

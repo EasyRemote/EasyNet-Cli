@@ -26,6 +26,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use crate::core::domain::{ScheduleEntry, ScheduleId, TenantId};
@@ -54,9 +55,9 @@ impl ScheduleStore {
     }
 
     /// Read every `*.json` file under the store's directory and
-    /// parse into `ScheduleEntry`. Files that fail to parse are
-    /// logged to stderr and skipped — one corrupt schedule must
-    /// not poison the rest of the daemon.
+    /// parse into `ScheduleEntry`. A corrupt or obsolete record is an
+    /// explicit boot error: silently dropping durable automation would make
+    /// the runtime's state disagree with its authoritative store.
     pub fn load_all(&self) -> anyhow::Result<Vec<ScheduleEntry>> {
         let mut out = Vec::new();
         let entries = match std::fs::read_dir(&self.dir) {
@@ -65,30 +66,16 @@ impl ScheduleStore {
             Err(e) => return Err(e.into()),
         };
         for ent in entries {
-            let ent = match ent {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("[schedule] read_dir entry error: {e}");
-                    continue;
-                }
-            };
+            let ent = ent.context("read schedule directory entry")?;
             let path = ent.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            match std::fs::read_to_string(&path) {
-                Ok(s) => match parse_on_disk_schedule(&s) {
-                    Ok(d) => out.push(d.entry),
-                    Err(e) => eprintln!(
-                        "[schedule] failed to parse {}: {e} (skipping)",
-                        path.display()
-                    ),
-                },
-                Err(e) => eprintln!(
-                    "[schedule] failed to read {}: {e} (skipping)",
-                    path.display()
-                ),
-            }
+            let body = std::fs::read_to_string(&path)
+                .with_context(|| format!("read schedule record {}", path.display()))?;
+            let record = parse_on_disk_schedule(&body)
+                .with_context(|| format!("parse schedule record {}", path.display()))?;
+            out.push(record.entry);
         }
         Ok(out)
     }
@@ -161,7 +148,8 @@ fn serialize_on_disk_schedule(on_disk: &OnDisk) -> anyhow::Result<String> {
 mod tests {
     use super::*;
     use crate::core::domain::{
-        AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
+        AgentId, DeferredInvocationAuthority, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId,
+        TenantId,
     };
 
     fn temp_tenant() -> TenantId {
@@ -177,11 +165,23 @@ mod tests {
             tenant: TenantId::default_v1(),
             target_node: NodeId::new("self"),
             target_agent: AgentId::new("alice"),
+            authority: DeferredInvocationAuthority {
+                accountable_user_ura: crate::core::ura::user_ura("default", "test-user"),
+                creator_invocation_id: "test-schedule-create".to_string(),
+                controller_callee_ura: crate::core::ura::device_agent_ura(
+                    "default",
+                    "self",
+                    crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+                ),
+                target_callee_ura: crate::core::ura::agent_ura("default", "test-user", "alice"),
+                execution_host_ura: crate::core::ura::device_ura("default", "self"),
+            },
             cron_expr: "0 9 * * *".into(),
             misfire_policy: MisfirePolicy::Skip,
             catch_up_window_secs: None,
             enabled: true,
             prompt: "Run {{target_agent}} for {{schedule_id}}".to_string(),
+            fire_ledger: std::collections::BTreeMap::new(),
         }
     }
 
@@ -209,23 +209,21 @@ mod tests {
     }
 
     #[test]
-    fn load_all_skips_unparseable_files_without_failing() {
-        // Spirit: a hand-edited corrupt schedule must not stop the
-        // daemon from booting. Plant a bogus file alongside a
-        // valid one and assert load_all returns the valid one.
+    fn load_all_rejects_unparseable_files() {
         let tenant = temp_tenant();
         let store = ScheduleStore::open(&tenant).unwrap();
         store.save(&entry("good")).unwrap();
         std::fs::write(store.dir().join("bad.json"), "{ not valid json").unwrap();
-        let loaded = store.load_all().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, ScheduleId::new("good"));
+        let error = store
+            .load_all()
+            .expect_err("corrupt durable state must fail closed");
+        assert!(error.to_string().contains("bad.json"), "{error:#}");
         // Cleanup.
         std::fs::remove_dir_all(store.dir()).ok();
     }
 
     #[test]
-    fn load_all_skips_records_missing_current_schema_facts() {
+    fn load_all_rejects_records_missing_current_schema_facts() {
         let tenant = temp_tenant();
         let store = ScheduleStore::open(&tenant).unwrap();
         store.save(&entry("good")).unwrap();
@@ -291,9 +289,10 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = store.load_all().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, ScheduleId::new("good"));
+        let error = store
+            .load_all()
+            .expect_err("obsolete durable state must fail closed");
+        assert!(error.to_string().contains(".json"), "{error:#}");
         std::fs::remove_dir_all(store.dir()).ok();
     }
 

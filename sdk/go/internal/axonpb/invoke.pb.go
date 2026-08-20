@@ -46,6 +46,64 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Transport method used to submit a canonical Invocation.
+//
+// This is deliberately independent from the descriptor-bound admission
+// action. For example, an RPC may require the `stream` permission without
+// becoming a server-streaming transport call. Session carriers cannot infer
+// one fact from the other.
+type InvocationCallMode int32
+
+const (
+	InvocationCallMode_INVOCATION_CALL_MODE_UNSPECIFIED InvocationCallMode = 0
+	InvocationCallMode_INVOCATION_CALL_MODE_RPC         InvocationCallMode = 1
+	InvocationCallMode_INVOCATION_CALL_MODE_STREAM      InvocationCallMode = 2
+	InvocationCallMode_INVOCATION_CALL_MODE_BIDI        InvocationCallMode = 3
+)
+
+// Enum value maps for InvocationCallMode.
+var (
+	InvocationCallMode_name = map[int32]string{
+		0: "INVOCATION_CALL_MODE_UNSPECIFIED",
+		1: "INVOCATION_CALL_MODE_RPC",
+		2: "INVOCATION_CALL_MODE_STREAM",
+		3: "INVOCATION_CALL_MODE_BIDI",
+	}
+	InvocationCallMode_value = map[string]int32{
+		"INVOCATION_CALL_MODE_UNSPECIFIED": 0,
+		"INVOCATION_CALL_MODE_RPC":         1,
+		"INVOCATION_CALL_MODE_STREAM":      2,
+		"INVOCATION_CALL_MODE_BIDI":        3,
+	}
+)
+
+func (x InvocationCallMode) Enum() *InvocationCallMode {
+	p := new(InvocationCallMode)
+	*p = x
+	return p
+}
+
+func (x InvocationCallMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (InvocationCallMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_axon_v1_invoke_proto_enumTypes[0].Descriptor()
+}
+
+func (InvocationCallMode) Type() protoreflect.EnumType {
+	return &file_axon_v1_invoke_proto_enumTypes[0]
+}
+
+func (x InvocationCallMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use InvocationCallMode.Descriptor instead.
+func (InvocationCallMode) EnumDescriptor() ([]byte, []int) {
+	return file_axon_v1_invoke_proto_rawDescGZIP(), []int{0}
+}
+
 type InvokeRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Envelope        *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
@@ -1672,8 +1730,9 @@ type DispatchCall struct {
 	CallId uint64 `protobuf:"varint,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
 	// The complete canonical invocation, forwarded verbatim.
 	Request *InvokeRequest `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
-	// true = long-lived local bidi semantics (the former BidiOpen).
-	OpenBidi      bool `protobuf:"varint,3,opt,name=open_bidi,json=openBidi,proto3" json:"open_bidi,omitempty"`
+	// Explicit transport method. Receivers reject UNSPECIFIED and must not
+	// derive this value from descriptor admission_action.
+	CallMode      InvocationCallMode `protobuf:"varint,3,opt,name=call_mode,json=callMode,proto3,enum=axon.v1.InvocationCallMode" json:"call_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1722,11 +1781,11 @@ func (x *DispatchCall) GetRequest() *InvokeRequest {
 	return nil
 }
 
-func (x *DispatchCall) GetOpenBidi() bool {
+func (x *DispatchCall) GetCallMode() InvocationCallMode {
 	if x != nil {
-		return x.OpenBidi
+		return x.CallMode
 	}
-	return false
+	return InvocationCallMode_INVOCATION_CALL_MODE_UNSPECIFIED
 }
 
 // Device → authority: result + finalized receipt checkpoints.
@@ -1842,8 +1901,8 @@ type ReverseDispatchCall struct {
 	CallId []byte                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
 	// Complete canonical invocation, same rationale as DispatchCall.
 	Request *InvokeRequest `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
-	// true = the reverse request opens long-lived bidi semantics.
-	OpenBidi      bool `protobuf:"varint,3,opt,name=open_bidi,json=openBidi,proto3" json:"open_bidi,omitempty"`
+	// Explicit transport method, independent from descriptor admission_action.
+	CallMode      InvocationCallMode `protobuf:"varint,3,opt,name=call_mode,json=callMode,proto3,enum=axon.v1.InvocationCallMode" json:"call_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1892,16 +1951,17 @@ func (x *ReverseDispatchCall) GetRequest() *InvokeRequest {
 	return nil
 }
 
-func (x *ReverseDispatchCall) GetOpenBidi() bool {
+func (x *ReverseDispatchCall) GetCallMode() InvocationCallMode {
 	if x != nil {
-		return x.OpenBidi
+		return x.CallMode
 	}
-	return false
+	return InvocationCallMode_INVOCATION_CALL_MODE_UNSPECIFIED
 }
 
 // Device → authority input for a reverse bidi request opened by
-// ReverseDispatchCall.open_bidi. The 16-byte call_id is the reverse
-// request nonce, not the authority→callee session-local call id.
+// ReverseDispatchCall.call_mode = INVOCATION_CALL_MODE_BIDI. The 16-byte
+// call_id is the reverse request nonce, not the authority→callee session-local
+// call id.
 type ReverseBidiInput struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	CallId []byte                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
@@ -2093,8 +2153,9 @@ func (x *ReverseDispatchResult) GetResultContentType() string {
 // Frame-0 up extension (rides EnvelopeOpen.session_ext).
 type SessionOpenExt struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Dispatch-frame contract version. This RFC = 1. Receivers reject
-	// 0/absent because those values cannot carry canonical Invocation frames.
+	// Dispatch-frame contract version. Version 2 carries explicit call_mode.
+	// Receivers reject older values because they cannot distinguish transport
+	// mode from descriptor-bound admission action.
 	ContractVersion uint32 `protobuf:"varint,1,opt,name=contract_version,json=contractVersion,proto3" json:"contract_version,omitempty"`
 	// T1.2: random 16 bytes per process boot — the session slot
 	// claimant fingerprint. Distinguishes same-device restart from
@@ -2856,11 +2917,11 @@ const file_axon_v1_invoke_proto_rawDesc = "" +
 	"\x06signal\x18\x01 \x01(\x05R\x06signal\"?\n" +
 	"\x0eMediaTimestamp\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\rR\bstreamId\x12\x10\n" +
-	"\x03pts\x18\x02 \x01(\x04R\x03pts\"v\n" +
+	"\x03pts\x18\x02 \x01(\x04R\x03pts\"\x93\x01\n" +
 	"\fDispatchCall\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\x04R\x06callId\x120\n" +
-	"\arequest\x18\x02 \x01(\v2\x16.axon.v1.InvokeRequestR\arequest\x12\x1b\n" +
-	"\topen_bidi\x18\x03 \x01(\bR\bopenBidi\"\xd8\x02\n" +
+	"\arequest\x18\x02 \x01(\v2\x16.axon.v1.InvokeRequestR\arequest\x128\n" +
+	"\tcall_mode\x18\x03 \x01(\x0e2\x1b.axon.v1.InvocationCallModeR\bcallMode\"\xd8\x02\n" +
 	"\x0eDispatchResult\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\x04R\x06callId\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x1a\n" +
@@ -2868,11 +2929,11 @@ const file_axon_v1_invoke_proto_rawDesc = "" +
 	"\afailure\x18\x05 \x01(\v2\x0e.axon.v1.ErrorR\afailure\x12G\n" +
 	"\x11admission_receipt\x18\x06 \x01(\v2\x1a.axon.v1.InvocationReceiptR\x10admissionReceipt\x12E\n" +
 	"\x10terminal_receipt\x18\a \x01(\v2\x1a.axon.v1.InvocationReceiptR\x0fterminalReceipt\x12.\n" +
-	"\x13result_content_type\x18\b \x01(\tR\x11resultContentTypeJ\x04\b\x04\x10\x05R\areceipt\"}\n" +
+	"\x13result_content_type\x18\b \x01(\tR\x11resultContentTypeJ\x04\b\x04\x10\x05R\areceipt\"\x9a\x01\n" +
 	"\x13ReverseDispatchCall\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\fR\x06callId\x120\n" +
-	"\arequest\x18\x02 \x01(\v2\x16.axon.v1.InvokeRequestR\arequest\x12\x1b\n" +
-	"\topen_bidi\x18\x03 \x01(\bR\bopenBidi\"\xa1\x01\n" +
+	"\arequest\x18\x02 \x01(\v2\x16.axon.v1.InvokeRequestR\arequest\x128\n" +
+	"\tcall_mode\x18\x03 \x01(\x0e2\x1b.axon.v1.InvocationCallModeR\bcallMode\"\xa1\x01\n" +
 	"\x10ReverseBidiInput\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\fR\x06callId\x129\n" +
 	"\fbinary_chunk\x18\x02 \x01(\v2\x14.axon.v1.BinaryChunkH\x00R\vbinaryChunk\x120\n" +
@@ -2947,7 +3008,12 @@ const file_axon_v1_invoke_proto_rawDesc = "" +
 	"\x04tags\x18\b \x03(\v2!.axon.v1.SupervisorSpec.TagsEntryR\x04tags\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xdb\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\x98\x01\n" +
+	"\x12InvocationCallMode\x12$\n" +
+	" INVOCATION_CALL_MODE_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18INVOCATION_CALL_MODE_RPC\x10\x01\x12\x1f\n" +
+	"\x1bINVOCATION_CALL_MODE_STREAM\x10\x02\x12\x1d\n" +
+	"\x19INVOCATION_CALL_MODE_BIDI\x10\x032\xdb\x01\n" +
 	"\n" +
 	"Invocation\x129\n" +
 	"\x06Invoke\x12\x16.axon.v1.InvokeRequest\x1a\x17.axon.v1.InvokeResponse\x12P\n" +
@@ -2967,136 +3033,140 @@ func file_axon_v1_invoke_proto_rawDescGZIP() []byte {
 	return file_axon_v1_invoke_proto_rawDescData
 }
 
+var file_axon_v1_invoke_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_axon_v1_invoke_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_axon_v1_invoke_proto_goTypes = []any{
-	(*InvokeRequest)(nil),             // 0: axon.v1.InvokeRequest
-	(*InvokeResponse)(nil),            // 1: axon.v1.InvokeResponse
-	(*InvocationEvent)(nil),           // 2: axon.v1.InvocationEvent
-	(*InvokeServerStreamRequest)(nil), // 3: axon.v1.InvokeServerStreamRequest
-	(*InvokeStreamChunk)(nil),         // 4: axon.v1.InvokeStreamChunk
-	(*InvokeBidiUp)(nil),              // 5: axon.v1.InvokeBidiUp
-	(*InvokeBidiDown)(nil),            // 6: axon.v1.InvokeBidiDown
-	(*EnvelopeOpen)(nil),              // 7: axon.v1.EnvelopeOpen
-	(*StreamDescriptor)(nil),          // 8: axon.v1.StreamDescriptor
-	(*BinaryChunk)(nil),               // 9: axon.v1.BinaryChunk
-	(*BidiControl)(nil),               // 10: axon.v1.BidiControl
-	(*BidiSessionEstablished)(nil),    // 11: axon.v1.BidiSessionEstablished
-	(*PtyResize)(nil),                 // 12: axon.v1.PtyResize
-	(*PtySignal)(nil),                 // 13: axon.v1.PtySignal
-	(*MediaTimestamp)(nil),            // 14: axon.v1.MediaTimestamp
-	(*DispatchCall)(nil),              // 15: axon.v1.DispatchCall
-	(*DispatchResult)(nil),            // 16: axon.v1.DispatchResult
-	(*ReverseDispatchCall)(nil),       // 17: axon.v1.ReverseDispatchCall
-	(*ReverseBidiInput)(nil),          // 18: axon.v1.ReverseBidiInput
-	(*ReverseDispatchResult)(nil),     // 19: axon.v1.ReverseDispatchResult
-	(*SessionOpenExt)(nil),            // 20: axon.v1.SessionOpenExt
-	(*InvocationReceipt)(nil),         // 21: axon.v1.InvocationReceipt
-	(*InvocationUsage)(nil),           // 22: axon.v1.InvocationUsage
-	(*SupervisorSpec)(nil),            // 23: axon.v1.SupervisorSpec
-	nil,                               // 24: axon.v1.InvokeRequest.MetadataEntry
-	nil,                               // 25: axon.v1.InvokeServerStreamRequest.MetadataEntry
-	nil,                               // 26: axon.v1.EnvelopeOpen.MetadataEntry
-	nil,                               // 27: axon.v1.SupervisorSpec.TagsEntry
-	(*Envelope)(nil),                  // 28: axon.v1.Envelope
-	(*InvocationTarget)(nil),          // 29: axon.v1.InvocationTarget
-	(*PayloadRef)(nil),                // 30: axon.v1.PayloadRef
-	(*ContentEnvelope)(nil),           // 31: axon.v1.ContentEnvelope
-	(*ResponseHeader)(nil),            // 32: axon.v1.ResponseHeader
-	(InvocationState)(0),              // 33: axon.v1.InvocationState
-	(*Error)(nil),                     // 34: axon.v1.Error
-	(*CausalContext)(nil),             // 35: axon.v1.CausalContext
-	(*AgentIdentity)(nil),             // 36: axon.v1.AgentIdentity
-	(*SubjectIdentity)(nil),           // 37: axon.v1.SubjectIdentity
-	(*CalleeSignature)(nil),           // 38: axon.v1.CalleeSignature
-	(*AuthorityBinding)(nil),          // 39: axon.v1.AuthorityBinding
-	(*EntityRef)(nil),                 // 40: axon.v1.EntityRef
-	(*InvocationAuthorityProof)(nil),  // 41: axon.v1.InvocationAuthorityProof
-	(*ReceiptRef)(nil),                // 42: axon.v1.ReceiptRef
+	(InvocationCallMode)(0),           // 0: axon.v1.InvocationCallMode
+	(*InvokeRequest)(nil),             // 1: axon.v1.InvokeRequest
+	(*InvokeResponse)(nil),            // 2: axon.v1.InvokeResponse
+	(*InvocationEvent)(nil),           // 3: axon.v1.InvocationEvent
+	(*InvokeServerStreamRequest)(nil), // 4: axon.v1.InvokeServerStreamRequest
+	(*InvokeStreamChunk)(nil),         // 5: axon.v1.InvokeStreamChunk
+	(*InvokeBidiUp)(nil),              // 6: axon.v1.InvokeBidiUp
+	(*InvokeBidiDown)(nil),            // 7: axon.v1.InvokeBidiDown
+	(*EnvelopeOpen)(nil),              // 8: axon.v1.EnvelopeOpen
+	(*StreamDescriptor)(nil),          // 9: axon.v1.StreamDescriptor
+	(*BinaryChunk)(nil),               // 10: axon.v1.BinaryChunk
+	(*BidiControl)(nil),               // 11: axon.v1.BidiControl
+	(*BidiSessionEstablished)(nil),    // 12: axon.v1.BidiSessionEstablished
+	(*PtyResize)(nil),                 // 13: axon.v1.PtyResize
+	(*PtySignal)(nil),                 // 14: axon.v1.PtySignal
+	(*MediaTimestamp)(nil),            // 15: axon.v1.MediaTimestamp
+	(*DispatchCall)(nil),              // 16: axon.v1.DispatchCall
+	(*DispatchResult)(nil),            // 17: axon.v1.DispatchResult
+	(*ReverseDispatchCall)(nil),       // 18: axon.v1.ReverseDispatchCall
+	(*ReverseBidiInput)(nil),          // 19: axon.v1.ReverseBidiInput
+	(*ReverseDispatchResult)(nil),     // 20: axon.v1.ReverseDispatchResult
+	(*SessionOpenExt)(nil),            // 21: axon.v1.SessionOpenExt
+	(*InvocationReceipt)(nil),         // 22: axon.v1.InvocationReceipt
+	(*InvocationUsage)(nil),           // 23: axon.v1.InvocationUsage
+	(*SupervisorSpec)(nil),            // 24: axon.v1.SupervisorSpec
+	nil,                               // 25: axon.v1.InvokeRequest.MetadataEntry
+	nil,                               // 26: axon.v1.InvokeServerStreamRequest.MetadataEntry
+	nil,                               // 27: axon.v1.EnvelopeOpen.MetadataEntry
+	nil,                               // 28: axon.v1.SupervisorSpec.TagsEntry
+	(*Envelope)(nil),                  // 29: axon.v1.Envelope
+	(*InvocationTarget)(nil),          // 30: axon.v1.InvocationTarget
+	(*PayloadRef)(nil),                // 31: axon.v1.PayloadRef
+	(*ContentEnvelope)(nil),           // 32: axon.v1.ContentEnvelope
+	(*ResponseHeader)(nil),            // 33: axon.v1.ResponseHeader
+	(InvocationState)(0),              // 34: axon.v1.InvocationState
+	(*Error)(nil),                     // 35: axon.v1.Error
+	(*CausalContext)(nil),             // 36: axon.v1.CausalContext
+	(*AgentIdentity)(nil),             // 37: axon.v1.AgentIdentity
+	(*SubjectIdentity)(nil),           // 38: axon.v1.SubjectIdentity
+	(*CalleeSignature)(nil),           // 39: axon.v1.CalleeSignature
+	(*AuthorityBinding)(nil),          // 40: axon.v1.AuthorityBinding
+	(*EntityRef)(nil),                 // 41: axon.v1.EntityRef
+	(*InvocationAuthorityProof)(nil),  // 42: axon.v1.InvocationAuthorityProof
+	(*ReceiptRef)(nil),                // 43: axon.v1.ReceiptRef
 }
 var file_axon_v1_invoke_proto_depIdxs = []int32{
-	28, // 0: axon.v1.InvokeRequest.envelope:type_name -> axon.v1.Envelope
-	29, // 1: axon.v1.InvokeRequest.target:type_name -> axon.v1.InvocationTarget
-	24, // 2: axon.v1.InvokeRequest.metadata:type_name -> axon.v1.InvokeRequest.MetadataEntry
-	30, // 3: axon.v1.InvokeRequest.payload_ref:type_name -> axon.v1.PayloadRef
-	31, // 4: axon.v1.InvokeRequest.content_envelope:type_name -> axon.v1.ContentEnvelope
-	32, // 5: axon.v1.InvokeResponse.header:type_name -> axon.v1.ResponseHeader
-	33, // 6: axon.v1.InvokeResponse.state:type_name -> axon.v1.InvocationState
-	30, // 7: axon.v1.InvokeResponse.result_ref:type_name -> axon.v1.PayloadRef
-	21, // 8: axon.v1.InvokeResponse.admission_receipt:type_name -> axon.v1.InvocationReceipt
-	21, // 9: axon.v1.InvokeResponse.terminal_receipt:type_name -> axon.v1.InvocationReceipt
-	34, // 10: axon.v1.InvokeResponse.proof_error:type_name -> axon.v1.Error
-	34, // 11: axon.v1.InvokeResponse.error:type_name -> axon.v1.Error
-	33, // 12: axon.v1.InvocationEvent.state:type_name -> axon.v1.InvocationState
-	34, // 13: axon.v1.InvocationEvent.error:type_name -> axon.v1.Error
-	30, // 14: axon.v1.InvocationEvent.result_ref:type_name -> axon.v1.PayloadRef
-	35, // 15: axon.v1.InvocationEvent.causal_context:type_name -> axon.v1.CausalContext
-	28, // 16: axon.v1.InvokeServerStreamRequest.envelope:type_name -> axon.v1.Envelope
-	29, // 17: axon.v1.InvokeServerStreamRequest.target:type_name -> axon.v1.InvocationTarget
-	25, // 18: axon.v1.InvokeServerStreamRequest.metadata:type_name -> axon.v1.InvokeServerStreamRequest.MetadataEntry
-	30, // 19: axon.v1.InvokeServerStreamRequest.payload_ref:type_name -> axon.v1.PayloadRef
-	31, // 20: axon.v1.InvokeServerStreamRequest.content_envelope:type_name -> axon.v1.ContentEnvelope
-	32, // 21: axon.v1.InvokeStreamChunk.header:type_name -> axon.v1.ResponseHeader
-	33, // 22: axon.v1.InvokeStreamChunk.state:type_name -> axon.v1.InvocationState
-	21, // 23: axon.v1.InvokeStreamChunk.admission_receipt:type_name -> axon.v1.InvocationReceipt
-	21, // 24: axon.v1.InvokeStreamChunk.terminal_receipt:type_name -> axon.v1.InvocationReceipt
-	34, // 25: axon.v1.InvokeStreamChunk.proof_error:type_name -> axon.v1.Error
-	34, // 26: axon.v1.InvokeStreamChunk.error:type_name -> axon.v1.Error
-	7,  // 27: axon.v1.InvokeBidiUp.envelope_open:type_name -> axon.v1.EnvelopeOpen
-	9,  // 28: axon.v1.InvokeBidiUp.binary_chunk:type_name -> axon.v1.BinaryChunk
-	10, // 29: axon.v1.InvokeBidiUp.control:type_name -> axon.v1.BidiControl
-	16, // 30: axon.v1.InvokeBidiUp.dispatch_result:type_name -> axon.v1.DispatchResult
-	17, // 31: axon.v1.InvokeBidiUp.reverse_dispatch_call:type_name -> axon.v1.ReverseDispatchCall
-	18, // 32: axon.v1.InvokeBidiUp.reverse_bidi_input:type_name -> axon.v1.ReverseBidiInput
-	21, // 33: axon.v1.InvokeBidiDown.receipt:type_name -> axon.v1.InvocationReceipt
-	9,  // 34: axon.v1.InvokeBidiDown.binary_chunk:type_name -> axon.v1.BinaryChunk
-	10, // 35: axon.v1.InvokeBidiDown.control:type_name -> axon.v1.BidiControl
-	15, // 36: axon.v1.InvokeBidiDown.dispatch_call:type_name -> axon.v1.DispatchCall
-	19, // 37: axon.v1.InvokeBidiDown.reverse_dispatch_result:type_name -> axon.v1.ReverseDispatchResult
-	28, // 38: axon.v1.EnvelopeOpen.envelope:type_name -> axon.v1.Envelope
-	29, // 39: axon.v1.EnvelopeOpen.target:type_name -> axon.v1.InvocationTarget
-	8,  // 40: axon.v1.EnvelopeOpen.streams:type_name -> axon.v1.StreamDescriptor
-	26, // 41: axon.v1.EnvelopeOpen.metadata:type_name -> axon.v1.EnvelopeOpen.MetadataEntry
-	31, // 42: axon.v1.EnvelopeOpen.content_envelope:type_name -> axon.v1.ContentEnvelope
-	20, // 43: axon.v1.EnvelopeOpen.session_ext:type_name -> axon.v1.SessionOpenExt
-	12, // 44: axon.v1.BidiControl.pty_resize:type_name -> axon.v1.PtyResize
-	13, // 45: axon.v1.BidiControl.pty_signal:type_name -> axon.v1.PtySignal
-	14, // 46: axon.v1.BidiControl.media_pts:type_name -> axon.v1.MediaTimestamp
-	11, // 47: axon.v1.BidiControl.session_established:type_name -> axon.v1.BidiSessionEstablished
-	0,  // 48: axon.v1.DispatchCall.request:type_name -> axon.v1.InvokeRequest
-	34, // 49: axon.v1.DispatchResult.failure:type_name -> axon.v1.Error
-	21, // 50: axon.v1.DispatchResult.admission_receipt:type_name -> axon.v1.InvocationReceipt
-	21, // 51: axon.v1.DispatchResult.terminal_receipt:type_name -> axon.v1.InvocationReceipt
-	0,  // 52: axon.v1.ReverseDispatchCall.request:type_name -> axon.v1.InvokeRequest
-	9,  // 53: axon.v1.ReverseBidiInput.binary_chunk:type_name -> axon.v1.BinaryChunk
-	10, // 54: axon.v1.ReverseBidiInput.control:type_name -> axon.v1.BidiControl
-	34, // 55: axon.v1.ReverseDispatchResult.failure:type_name -> axon.v1.Error
-	21, // 56: axon.v1.ReverseDispatchResult.admission_receipt:type_name -> axon.v1.InvocationReceipt
-	21, // 57: axon.v1.ReverseDispatchResult.terminal_receipt:type_name -> axon.v1.InvocationReceipt
-	33, // 58: axon.v1.InvocationReceipt.state:type_name -> axon.v1.InvocationState
-	36, // 59: axon.v1.InvocationReceipt.caller_binding:type_name -> axon.v1.AgentIdentity
-	36, // 60: axon.v1.InvocationReceipt.callee_binding:type_name -> axon.v1.AgentIdentity
-	37, // 61: axon.v1.InvocationReceipt.subject_binding:type_name -> axon.v1.SubjectIdentity
-	35, // 62: axon.v1.InvocationReceipt.causal_binding:type_name -> axon.v1.CausalContext
-	38, // 63: axon.v1.InvocationReceipt.callee_signature:type_name -> axon.v1.CalleeSignature
-	36, // 64: axon.v1.InvocationReceipt.signer_binding:type_name -> axon.v1.AgentIdentity
-	39, // 65: axon.v1.InvocationReceipt.authority_binding:type_name -> axon.v1.AuthorityBinding
-	34, // 66: axon.v1.InvocationReceipt.failure:type_name -> axon.v1.Error
-	22, // 67: axon.v1.InvocationReceipt.usage:type_name -> axon.v1.InvocationUsage
-	40, // 68: axon.v1.InvocationReceipt.subject_ref:type_name -> axon.v1.EntityRef
-	41, // 69: axon.v1.InvocationReceipt.authority_proof:type_name -> axon.v1.InvocationAuthorityProof
-	42, // 70: axon.v1.InvocationReceipt.parent_receipts:type_name -> axon.v1.ReceiptRef
-	27, // 71: axon.v1.SupervisorSpec.tags:type_name -> axon.v1.SupervisorSpec.TagsEntry
-	0,  // 72: axon.v1.Invocation.Invoke:input_type -> axon.v1.InvokeRequest
-	3,  // 73: axon.v1.Invocation.InvokeStream:input_type -> axon.v1.InvokeServerStreamRequest
-	5,  // 74: axon.v1.Invocation.InvokeBidi:input_type -> axon.v1.InvokeBidiUp
-	1,  // 75: axon.v1.Invocation.Invoke:output_type -> axon.v1.InvokeResponse
-	4,  // 76: axon.v1.Invocation.InvokeStream:output_type -> axon.v1.InvokeStreamChunk
-	6,  // 77: axon.v1.Invocation.InvokeBidi:output_type -> axon.v1.InvokeBidiDown
-	75, // [75:78] is the sub-list for method output_type
-	72, // [72:75] is the sub-list for method input_type
-	72, // [72:72] is the sub-list for extension type_name
-	72, // [72:72] is the sub-list for extension extendee
-	0,  // [0:72] is the sub-list for field type_name
+	29, // 0: axon.v1.InvokeRequest.envelope:type_name -> axon.v1.Envelope
+	30, // 1: axon.v1.InvokeRequest.target:type_name -> axon.v1.InvocationTarget
+	25, // 2: axon.v1.InvokeRequest.metadata:type_name -> axon.v1.InvokeRequest.MetadataEntry
+	31, // 3: axon.v1.InvokeRequest.payload_ref:type_name -> axon.v1.PayloadRef
+	32, // 4: axon.v1.InvokeRequest.content_envelope:type_name -> axon.v1.ContentEnvelope
+	33, // 5: axon.v1.InvokeResponse.header:type_name -> axon.v1.ResponseHeader
+	34, // 6: axon.v1.InvokeResponse.state:type_name -> axon.v1.InvocationState
+	31, // 7: axon.v1.InvokeResponse.result_ref:type_name -> axon.v1.PayloadRef
+	22, // 8: axon.v1.InvokeResponse.admission_receipt:type_name -> axon.v1.InvocationReceipt
+	22, // 9: axon.v1.InvokeResponse.terminal_receipt:type_name -> axon.v1.InvocationReceipt
+	35, // 10: axon.v1.InvokeResponse.proof_error:type_name -> axon.v1.Error
+	35, // 11: axon.v1.InvokeResponse.error:type_name -> axon.v1.Error
+	34, // 12: axon.v1.InvocationEvent.state:type_name -> axon.v1.InvocationState
+	35, // 13: axon.v1.InvocationEvent.error:type_name -> axon.v1.Error
+	31, // 14: axon.v1.InvocationEvent.result_ref:type_name -> axon.v1.PayloadRef
+	36, // 15: axon.v1.InvocationEvent.causal_context:type_name -> axon.v1.CausalContext
+	29, // 16: axon.v1.InvokeServerStreamRequest.envelope:type_name -> axon.v1.Envelope
+	30, // 17: axon.v1.InvokeServerStreamRequest.target:type_name -> axon.v1.InvocationTarget
+	26, // 18: axon.v1.InvokeServerStreamRequest.metadata:type_name -> axon.v1.InvokeServerStreamRequest.MetadataEntry
+	31, // 19: axon.v1.InvokeServerStreamRequest.payload_ref:type_name -> axon.v1.PayloadRef
+	32, // 20: axon.v1.InvokeServerStreamRequest.content_envelope:type_name -> axon.v1.ContentEnvelope
+	33, // 21: axon.v1.InvokeStreamChunk.header:type_name -> axon.v1.ResponseHeader
+	34, // 22: axon.v1.InvokeStreamChunk.state:type_name -> axon.v1.InvocationState
+	22, // 23: axon.v1.InvokeStreamChunk.admission_receipt:type_name -> axon.v1.InvocationReceipt
+	22, // 24: axon.v1.InvokeStreamChunk.terminal_receipt:type_name -> axon.v1.InvocationReceipt
+	35, // 25: axon.v1.InvokeStreamChunk.proof_error:type_name -> axon.v1.Error
+	35, // 26: axon.v1.InvokeStreamChunk.error:type_name -> axon.v1.Error
+	8,  // 27: axon.v1.InvokeBidiUp.envelope_open:type_name -> axon.v1.EnvelopeOpen
+	10, // 28: axon.v1.InvokeBidiUp.binary_chunk:type_name -> axon.v1.BinaryChunk
+	11, // 29: axon.v1.InvokeBidiUp.control:type_name -> axon.v1.BidiControl
+	17, // 30: axon.v1.InvokeBidiUp.dispatch_result:type_name -> axon.v1.DispatchResult
+	18, // 31: axon.v1.InvokeBidiUp.reverse_dispatch_call:type_name -> axon.v1.ReverseDispatchCall
+	19, // 32: axon.v1.InvokeBidiUp.reverse_bidi_input:type_name -> axon.v1.ReverseBidiInput
+	22, // 33: axon.v1.InvokeBidiDown.receipt:type_name -> axon.v1.InvocationReceipt
+	10, // 34: axon.v1.InvokeBidiDown.binary_chunk:type_name -> axon.v1.BinaryChunk
+	11, // 35: axon.v1.InvokeBidiDown.control:type_name -> axon.v1.BidiControl
+	16, // 36: axon.v1.InvokeBidiDown.dispatch_call:type_name -> axon.v1.DispatchCall
+	20, // 37: axon.v1.InvokeBidiDown.reverse_dispatch_result:type_name -> axon.v1.ReverseDispatchResult
+	29, // 38: axon.v1.EnvelopeOpen.envelope:type_name -> axon.v1.Envelope
+	30, // 39: axon.v1.EnvelopeOpen.target:type_name -> axon.v1.InvocationTarget
+	9,  // 40: axon.v1.EnvelopeOpen.streams:type_name -> axon.v1.StreamDescriptor
+	27, // 41: axon.v1.EnvelopeOpen.metadata:type_name -> axon.v1.EnvelopeOpen.MetadataEntry
+	32, // 42: axon.v1.EnvelopeOpen.content_envelope:type_name -> axon.v1.ContentEnvelope
+	21, // 43: axon.v1.EnvelopeOpen.session_ext:type_name -> axon.v1.SessionOpenExt
+	13, // 44: axon.v1.BidiControl.pty_resize:type_name -> axon.v1.PtyResize
+	14, // 45: axon.v1.BidiControl.pty_signal:type_name -> axon.v1.PtySignal
+	15, // 46: axon.v1.BidiControl.media_pts:type_name -> axon.v1.MediaTimestamp
+	12, // 47: axon.v1.BidiControl.session_established:type_name -> axon.v1.BidiSessionEstablished
+	1,  // 48: axon.v1.DispatchCall.request:type_name -> axon.v1.InvokeRequest
+	0,  // 49: axon.v1.DispatchCall.call_mode:type_name -> axon.v1.InvocationCallMode
+	35, // 50: axon.v1.DispatchResult.failure:type_name -> axon.v1.Error
+	22, // 51: axon.v1.DispatchResult.admission_receipt:type_name -> axon.v1.InvocationReceipt
+	22, // 52: axon.v1.DispatchResult.terminal_receipt:type_name -> axon.v1.InvocationReceipt
+	1,  // 53: axon.v1.ReverseDispatchCall.request:type_name -> axon.v1.InvokeRequest
+	0,  // 54: axon.v1.ReverseDispatchCall.call_mode:type_name -> axon.v1.InvocationCallMode
+	10, // 55: axon.v1.ReverseBidiInput.binary_chunk:type_name -> axon.v1.BinaryChunk
+	11, // 56: axon.v1.ReverseBidiInput.control:type_name -> axon.v1.BidiControl
+	35, // 57: axon.v1.ReverseDispatchResult.failure:type_name -> axon.v1.Error
+	22, // 58: axon.v1.ReverseDispatchResult.admission_receipt:type_name -> axon.v1.InvocationReceipt
+	22, // 59: axon.v1.ReverseDispatchResult.terminal_receipt:type_name -> axon.v1.InvocationReceipt
+	34, // 60: axon.v1.InvocationReceipt.state:type_name -> axon.v1.InvocationState
+	37, // 61: axon.v1.InvocationReceipt.caller_binding:type_name -> axon.v1.AgentIdentity
+	37, // 62: axon.v1.InvocationReceipt.callee_binding:type_name -> axon.v1.AgentIdentity
+	38, // 63: axon.v1.InvocationReceipt.subject_binding:type_name -> axon.v1.SubjectIdentity
+	36, // 64: axon.v1.InvocationReceipt.causal_binding:type_name -> axon.v1.CausalContext
+	39, // 65: axon.v1.InvocationReceipt.callee_signature:type_name -> axon.v1.CalleeSignature
+	37, // 66: axon.v1.InvocationReceipt.signer_binding:type_name -> axon.v1.AgentIdentity
+	40, // 67: axon.v1.InvocationReceipt.authority_binding:type_name -> axon.v1.AuthorityBinding
+	35, // 68: axon.v1.InvocationReceipt.failure:type_name -> axon.v1.Error
+	23, // 69: axon.v1.InvocationReceipt.usage:type_name -> axon.v1.InvocationUsage
+	41, // 70: axon.v1.InvocationReceipt.subject_ref:type_name -> axon.v1.EntityRef
+	42, // 71: axon.v1.InvocationReceipt.authority_proof:type_name -> axon.v1.InvocationAuthorityProof
+	43, // 72: axon.v1.InvocationReceipt.parent_receipts:type_name -> axon.v1.ReceiptRef
+	28, // 73: axon.v1.SupervisorSpec.tags:type_name -> axon.v1.SupervisorSpec.TagsEntry
+	1,  // 74: axon.v1.Invocation.Invoke:input_type -> axon.v1.InvokeRequest
+	4,  // 75: axon.v1.Invocation.InvokeStream:input_type -> axon.v1.InvokeServerStreamRequest
+	6,  // 76: axon.v1.Invocation.InvokeBidi:input_type -> axon.v1.InvokeBidiUp
+	2,  // 77: axon.v1.Invocation.Invoke:output_type -> axon.v1.InvokeResponse
+	5,  // 78: axon.v1.Invocation.InvokeStream:output_type -> axon.v1.InvokeStreamChunk
+	7,  // 79: axon.v1.Invocation.InvokeBidi:output_type -> axon.v1.InvokeBidiDown
+	77, // [77:80] is the sub-list for method output_type
+	74, // [74:77] is the sub-list for method input_type
+	74, // [74:74] is the sub-list for extension type_name
+	74, // [74:74] is the sub-list for extension extendee
+	0,  // [0:74] is the sub-list for field type_name
 }
 
 func init() { file_axon_v1_invoke_proto_init() }
@@ -3136,13 +3206,14 @@ func file_axon_v1_invoke_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_axon_v1_invoke_proto_rawDesc), len(file_axon_v1_invoke_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_axon_v1_invoke_proto_goTypes,
 		DependencyIndexes: file_axon_v1_invoke_proto_depIdxs,
+		EnumInfos:         file_axon_v1_invoke_proto_enumTypes,
 		MessageInfos:      file_axon_v1_invoke_proto_msgTypes,
 	}.Build()
 	File_axon_v1_invoke_proto = out.File

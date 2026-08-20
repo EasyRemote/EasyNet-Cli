@@ -33,9 +33,10 @@
 
 use axon_sdk::invocation::axiom::authority_proof_expected_hash;
 use axon_sdk::invocation::{
-    sha256, AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    sha256, AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+    AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
     DescriptorBoundEnvelope, InvocationAuthorityProof, KeyResolver, LocalRuntime,
-    ReceiptSigningAuthority, StreamingInvocationHandle, VerifiedAdmissionPolicy,
+    ReceiptSigningAuthority, StreamingInvocationHandle, UraProfile, VerifiedAdmissionPolicy,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -57,7 +58,7 @@ use easynet_cli::daemon::invocation::routing::target::{
     CallMode, InvocationTarget, SystemInvocationTargetIssuer,
 };
 use easynet_cli::daemon::resources::files::{
-    resource_ref_for_local_path, FilesystemResourceCapability,
+    FilesystemResourceCapability, FilesystemResourceProvider,
 };
 use easynet_cli::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
 
@@ -93,9 +94,14 @@ impl CanonicalReceiptProvider for SmokeCanonicalReceiptProvider {
         &self,
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-        let binding = AuthorityBinding::Self_ {
-            principal_ura: envelope.envelope().caller.ura.clone(),
-        };
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
         let mut proof = InvocationAuthorityProof::new(
             "smoke-verified-admission",
             Some(binding.clone()),
@@ -312,11 +318,16 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&scratch)?;
     let out = scratch.join("greeting.txt");
     let _ = std::fs::remove_file(&out);
+    let credentials = easynet_cli::daemon::persistence::config::load_credentials()?;
+    let filesystem = FilesystemResourceProvider::for_device(easynet_cli::core::ura::device_ura(
+        &credentials.realm,
+        &credentials.node_id,
+    ))?;
 
     let resp = d().execute_rpc(target(
         "fs.write",
         json!({
-            "resource_ref": resource_ref_for_local_path(
+            "resource_ref": filesystem.resource_ref_for_local_path(
                 &out,
                 FilesystemResourceCapability::Write,
             )?,
@@ -335,7 +346,7 @@ fn main() -> anyhow::Result<()> {
     let read_resp = d().execute_rpc(target(
         "fs.read",
         json!({
-            "resource_ref": resource_ref_for_local_path(
+            "resource_ref": filesystem.resource_ref_for_local_path(
                 &out,
                 FilesystemResourceCapability::Read,
             )?,

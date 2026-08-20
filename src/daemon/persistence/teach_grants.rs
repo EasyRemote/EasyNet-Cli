@@ -490,14 +490,14 @@ impl TeachGrantAuthoritySnapshot {
                 let delegated_ability = canonical_envelope_ability(ability).with_context(|| {
                     format!("invalid teach grant hosted-agent authority ability {ability:?}")
                 })?;
+                validate_hosted_delegation_snapshot_callee(&snapshot.callee_ura)?;
                 if agent_ura != &grant.owner_ura
                     || host_device_ura != &grant.granted_by_ura
                     || snapshot.caller_ura != crate::core::ura::LOCAL_SYSTEM_AGENT_URA
-                    || snapshot.callee_ura != *host_device_ura
                     || delegated_ability != TEACH_GRANT_ENVELOPE_ABILITY
                 {
                     anyhow::bail!(
-                        "teach grant hosted-agent authority does not match owner/host/caller/callee/ability"
+                        "teach grant hosted-agent authority does not match owner/host/caller/ability"
                     );
                 }
             }
@@ -511,6 +511,24 @@ fn require_non_empty(field: &'static str, value: &str) -> anyhow::Result<()> {
         anyhow::bail!("{field} must not be empty");
     }
     Ok(())
+}
+
+fn validate_hosted_delegation_snapshot_callee(callee_ura: &str) -> anyhow::Result<()> {
+    let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
+        anyhow::anyhow!("teach grant hosted-agent callee URA is invalid: {error}")
+    })?;
+    if parsed.kind == crate::core::ura::URAKind::Device {
+        anyhow::bail!(
+            "teach grant hosted-agent callee must be an Agent/SystemAgent or Authority; \
+             host Device belongs in hosted authority host_device_ura"
+        );
+    }
+    match parsed.kind {
+        crate::core::ura::URAKind::Agent | crate::core::ura::URAKind::Authority => Ok(()),
+        other => anyhow::bail!(
+            "teach grant hosted-agent callee must be an Agent/SystemAgent or Authority, got {other:?}"
+        ),
+    }
 }
 
 fn canonical_envelope_ability(raw: &str) -> anyhow::Result<String> {
@@ -1392,7 +1410,7 @@ mod tests {
             subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
             envelope_ability: "meta.teach".to_string(),
             invocation_nonce_hex: hex::encode([0xA5; 16]),
-            causal_context: serde_json::json!({"kind": "none"}),
+            causal_context: serde_json::json!({"form": "none"}),
             authority: TeachGrantAuthoritySnapshot::direct_owner("easynet:///r/acme/agent/mentor"),
             granted_ability: "mentor.quote".to_string(),
             granted_ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
@@ -1498,13 +1516,14 @@ mod tests {
     }
 
     #[test]
-    fn hosted_delegation_snapshot_binds_caller_to_local_system_and_callee_to_host() {
+    fn hosted_delegation_snapshot_binds_caller_to_local_system_and_callee_to_system_agent() {
         let learner = "easynet:///r/acme/agent/apprentice";
         let host = "easynet:///r/acme/device/host-1";
+        let callee = "easynet:///r/acme/agent/device.host-1.descriptor-transfer";
         let owner = "easynet:///r/acme/agent/mentor";
         // The daemon presents the signed delegation under its local-system
-        // identity (caller), while the host device it delegates for is the
-        // envelope callee. Both bindings are load-bearing.
+        // identity (caller), while the descriptor-transfer SystemAgent is the
+        // envelope callee and the host Device remains the delegated authority.
         let mut grant = TeachGrant::from_draft(TeachGrantDraft {
             ability: "mentor.quote".to_string(),
             ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
@@ -1519,11 +1538,11 @@ mod tests {
                 TeachGrantAdmissionSnapshotDraft {
                     invocation_id: "hosted-teach".to_string(),
                     caller_ura: crate::core::ura::LOCAL_SYSTEM_AGENT_URA.to_string(),
-                    callee_ura: host.to_string(),
+                    callee_ura: callee.to_string(),
                     subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
                     envelope_ability: "meta.teach".to_string(),
                     invocation_nonce_hex: hex::encode([0xB6; 16]),
-                    causal_context: serde_json::json!({"kind": "none"}),
+                    causal_context: serde_json::json!({"form": "none"}),
                     authority: TeachGrantAuthoritySnapshot::hosted_agent_delegation(
                         owner,
                         host,
@@ -1551,6 +1570,52 @@ mod tests {
     }
 
     #[test]
+    fn hosted_delegation_snapshot_rejects_device_callee() {
+        let learner = "easynet:///r/acme/agent/apprentice";
+        let host = "easynet:///r/acme/device/host-1";
+        let owner = "easynet:///r/acme/agent/mentor";
+        let grant = TeachGrant::from_draft(TeachGrantDraft {
+            ability: "mentor.quote".to_string(),
+            ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+            owner_ura: owner.to_string(),
+            granted_by_ura: host.to_string(),
+            owner_agent: "mentor".to_string(),
+            learner_ura: learner.to_string(),
+            manifest_hash: TEST_MANIFEST_HASH.to_string(),
+            execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
+            granted_at: "t0".to_string(),
+            admission_snapshot: TeachGrantAdmissionSnapshot::from_draft(
+                TeachGrantAdmissionSnapshotDraft {
+                    invocation_id: "hosted-teach".to_string(),
+                    caller_ura: crate::core::ura::LOCAL_SYSTEM_AGENT_URA.to_string(),
+                    callee_ura: host.to_string(),
+                    subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+                    envelope_ability: "meta.teach".to_string(),
+                    invocation_nonce_hex: hex::encode([0xB6; 16]),
+                    causal_context: serde_json::json!({"form": "none"}),
+                    authority: TeachGrantAuthoritySnapshot::hosted_agent_delegation(
+                        owner,
+                        host,
+                        "meta.teach",
+                    ),
+                    granted_ability: "mentor.quote".to_string(),
+                    granted_ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+                    owner_ura: owner.to_string(),
+                    granted_by_ura: host.to_string(),
+                    learner_ura: learner.to_string(),
+                    manifest_hash: TEST_MANIFEST_HASH.to_string(),
+                },
+            )
+            .expect("hosted snapshot shape is valid"),
+        });
+
+        let err = grant
+            .validate_stored()
+            .expect_err("hosted delegation snapshots must reject Device public callees");
+        assert!(err.to_string().contains("host Device belongs"), "{err}");
+    }
+
+    #[test]
     fn grant_is_scoped_to_one_learner() {
         let mut file = TeachGrantsFile::default();
         file.grants.push(TeachGrant::from_draft(TeachGrantDraft {
@@ -1571,7 +1636,7 @@ mod tests {
                     subject_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
                     envelope_ability: "meta.teach".to_string(),
                     invocation_nonce_hex: hex::encode([0xA5; 16]),
-                    causal_context: serde_json::json!({"kind": "none"}),
+                    causal_context: serde_json::json!({"form": "none"}),
                     authority: TeachGrantAuthoritySnapshot::direct_owner(
                         "easynet:///r/acme/agent/testbot",
                     ),

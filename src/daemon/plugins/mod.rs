@@ -23,6 +23,10 @@ pub mod sidecar;
 pub mod surface;
 pub mod wire;
 
+#[cfg(feature = "browser-cdp")]
+#[path = "../../../plugins/browser/src/embedded.rs"]
+pub mod browser;
+
 #[cfg(feature = "remote-desktop")]
 #[path = "../../../plugins/remote-desktop/src/embedded.rs"]
 pub mod remote_desktop;
@@ -44,7 +48,7 @@ pub use contribution::{
     PluginContributionSet, PluginImplementationBinding, PluginPackageContribution,
     PluginRequirementSet,
 };
-pub use descriptor::{PluginAbilityMetadata, PluginDescriptorProjector};
+pub use descriptor::{plugin_ability_contract, PluginAbilityMetadata, PluginDescriptorProjector};
 pub use errors::{PluginHostError, Result};
 pub use host_api::{PluginHotReloadReport, PluginRealtimeActivationHint, PluginRuntimeHost};
 pub use index::{PluginPackageIndex, PluginPackageIndexError, PluginPackageIndexLoadReport};
@@ -89,6 +93,10 @@ pub fn builtin_bindings() -> Vec<BuiltinPluginBinding> {
     registry
         .register(desktop_menubar_provider())
         .expect("desktop menubar provider registration is static and unique");
+    #[cfg(feature = "browser-cdp")]
+    registry
+        .register(crate::daemon::plugins::browser::provider())
+        .expect("browser provider registration is static and unique");
     #[cfg(feature = "remote-desktop")]
     registry
         .register(crate::daemon::plugins::remote_desktop::provider())

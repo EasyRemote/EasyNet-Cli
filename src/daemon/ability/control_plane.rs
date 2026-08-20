@@ -278,6 +278,16 @@ impl MaterializedAbilityControlPlaneRegistration {
             self.stage,
             AbilityControlPlaneRegistrationStage::Materialized
         );
+        // The live control plane owns the currently active executable binding,
+        // not descriptor history. Re-registering one authority/ability/mode
+        // atomically replaces its prior version across all three facets. The
+        // outer registration transaction snapshots this slice before commit,
+        // so a failed runtime sync restores the exact previous active record.
+        registry.remove_for_authority_mode(
+            self.record.key.authority_root(),
+            self.record.key.ability(),
+            self.record.key.call_mode(),
+        );
         registry
             .descriptors
             .register(self.record.key.clone(), self.record.descriptor.clone());
@@ -369,13 +379,13 @@ impl AbilityControlPlaneRegistry {
         descriptors_removed || authorities_removed || implementations_removed
     }
 
-    /// Snapshot every descriptor-version row for one authority-owned call mode.
+    /// Snapshot the active descriptor row for one authority-owned call mode.
     ///
-    /// What this is NOT: a lookup helper for dispatch. Dispatch needs a unique
-    /// descriptor version and should call [`Self::get_for_authority_mode`].
-    /// Registration transactions use this method before an overwrite so rollback
-    /// can restore the exact prior control-plane facts instead of merely deleting
-    /// the failed write.
+    /// Registration transactions use this method before an active-version
+    /// replacement so rollback can restore the exact prior control-plane facts
+    /// instead of merely deleting the failed write. The vector shape is retained
+    /// for corruption-safe restoration but a valid live registry contains at
+    /// most one row for this slice.
     pub fn records_for_authority_mode(
         &self,
         authority_root: &str,
@@ -717,6 +727,7 @@ mod tests {
     use serde_json::json;
 
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
+    const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/default/agent/device.local.locomotion";
     const LOCAL_AGENT_URA: &str = "easynet:///r/default/agent/user.assistant";
 
     fn native_registration<'a>(
@@ -766,7 +777,7 @@ mod tests {
                 CallMode::Rpc,
                 AdmissionAction::Read,
                 None,
-                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
             ))
             .unwrap();
@@ -950,7 +961,7 @@ mod tests {
     }
 
     #[test]
-    fn register_version_keeps_same_ability_versions_distinct() {
+    fn register_version_atomically_replaces_active_ability_version() {
         let manifest_v1 = crate::daemon::ability::manifest::AbilityManifest::new(
             "read",
             "read local file",
@@ -975,7 +986,7 @@ mod tests {
                     CallMode::Rpc,
                     AdmissionAction::Read,
                     Some(&manifest_v1),
-                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:v1").unwrap(),
                     AbilityImplSource::NativeDaemon,
                 )
@@ -989,7 +1000,7 @@ mod tests {
                     CallMode::Rpc,
                     AdmissionAction::Read,
                     Some(&manifest_v2),
-                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:v2").unwrap(),
                     AbilityImplSource::NativeDaemon,
                 )
@@ -997,32 +1008,20 @@ mod tests {
             )
             .unwrap();
 
-        let v1 = registry
+        assert!(registry
             .get_version("fs.read", "1.0.0")
-            .expect("v1 lookup is unambiguous")
-            .expect("v1 record");
+            .expect("retired v1 lookup is unambiguous")
+            .is_none());
         let v2 = registry
             .get_version("fs.read", "2.0.0")
             .expect("v2 lookup is unambiguous")
             .expect("v2 record");
-        assert_eq!(v1.implementation().runtime_env().label(), "env:v1");
         assert_eq!(v2.implementation().runtime_env().label(), "env:v2");
-        assert_ne!(
-            v1.implementation().impl_hash(),
-            v2.implementation().impl_hash()
-        );
-        let err = registry
+        let active = registry
             .get_for_mode("fs.read", CallMode::Rpc)
-            .expect_err("mode lookup must not choose between descriptor versions");
-        assert_eq!(err.descriptor_version, "<unique>");
-        assert_eq!(err.matches.len(), 2);
-        assert_eq!(
-            err.matches
-                .iter()
-                .map(|m| m.descriptor_version.as_str())
-                .collect::<Vec<_>>(),
-            vec!["1.0.0", "2.0.0"]
-        );
+            .expect("active mode lookup is unambiguous")
+            .expect("active record");
+        assert_eq!(active.descriptor().version, "2.0.0");
     }
 
     #[test]

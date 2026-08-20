@@ -127,6 +127,7 @@ func TestFileControlDiscoveryReaderReadsControlJSON(t *testing.T) {
 	raw := []byte(`{
 		"socket_path":"/tmp/control.sock",
 		"invocation_endpoint":"unix:///tmp/daemon.sock",
+		"daemon_identity":{"mode":"device","realm":"localhost","node_id":"node-1"},
 		"pid":42,
 		"daemon_version":"0.91.30",
 		"supported_ipc_versions":{"min":1,"max":1},
@@ -145,6 +146,12 @@ func TestFileControlDiscoveryReaderReadsControlJSON(t *testing.T) {
 		discovery.pid != 42 ||
 		len(discovery.capabilityFlags) != 2 {
 		t.Fatalf("discovery = %#v", discovery)
+	}
+	if discovery.runtimeHostIdentity == nil ||
+		discovery.runtimeHostIdentity.Realm != "localhost" ||
+		discovery.runtimeHostIdentity.RuntimeInstanceID == nil ||
+		*discovery.runtimeHostIdentity.RuntimeInstanceID != "node-1" {
+		t.Fatalf("runtime host identity = %#v", discovery.runtimeHostIdentity)
 	}
 }
 
@@ -198,6 +205,26 @@ func TestFileControlDiscoveryReaderRejectsLooseControlJSON(t *testing.T) {
 				"pid":42,
 				"daemon_version":"0.91.30",
 				"supported_ipc_versions":{"min":1,"max":1}
+			}`,
+		},
+		{
+			name: "incomplete runtime host identity",
+			raw: `{
+				"daemon_identity":{"mode":"device","realm":"   "},
+				"pid":42,
+				"daemon_version":"0.91.30",
+				"supported_ipc_versions":{"min":1,"max":1},
+				"capability_flags":["invocation"]
+			}`,
+		},
+		{
+			name: "unknown runtime host identity field",
+			raw: `{
+				"daemon_identity":{"mode":"device","realm":"localhost","retired_role":"agent"},
+				"pid":42,
+				"daemon_version":"0.91.30",
+				"supported_ipc_versions":{"min":1,"max":1},
+				"capability_flags":["invocation"]
 			}`,
 		},
 	}

@@ -8,7 +8,7 @@
 
 use axon_sdk::invocation::{
     AgentIdentity, AxonError, CanonicalReceiptProvider, ErrorCode, ErrorStage, KeyResolver,
-    SecurityClass, UraProfile,
+    SecurityClass, UraProfile, MAX_KEYS_PER_AGENT_URA,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use std::sync::{Arc, OnceLock};
@@ -139,13 +139,7 @@ pub(crate) fn system_verifying_key() -> Result<VerifyingKey, super::self_identit
 #[cfg(not(test))]
 fn ensure_key_service_ready_for_local_system_identity(
 ) -> Result<(), super::self_identity::SelfIdentityError> {
-    crate::daemon::keyring::lifecycle::ensure_key_service_running().map_err(|error| {
-        super::self_identity::SelfIdentityError::Rejected {
-            kind: "key_service_lifecycle".to_string(),
-            message: format!("ensure daemon-local key service before system signing: {error:#}"),
-        }
-    })?;
-    Ok(())
+    super::self_identity::KeyringClient::default_path().health()
 }
 
 /// Device URA used by local daemon clients when a real local device identity
@@ -182,7 +176,7 @@ fn persisted_local_device_ura() -> Option<String> {
     let hosted_identity =
         crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_status()
             .ok()?;
-    let ura = hosted_identity.host_device_agent_ura()?;
+    let ura = hosted_identity.host_device_ura()?;
     let parsed = crate::core::ura::parse_ura(ura).ok()?;
     if parsed.kind == crate::core::ura::URAKind::Device {
         Some(ura.to_string())
@@ -239,6 +233,9 @@ pub struct CanonicalAdmissionKeyResolver {
     bootstrap_candidate:
         Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider>,
     receipt_signers: Arc<dyn CanonicalReceiptProvider>,
+    invocation_verification_keys: Option<
+        Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
+    >,
 }
 
 impl CanonicalAdmissionKeyResolver {
@@ -257,7 +254,18 @@ impl CanonicalAdmissionKeyResolver {
             bootstrap_identities,
             bootstrap_candidate,
             receipt_signers,
+            invocation_verification_keys: None,
         }
+    }
+
+    pub(crate) fn with_invocation_verification_keys(
+        mut self,
+        provider: Arc<
+            dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider,
+        >,
+    ) -> Self {
+        self.invocation_verification_keys = Some(provider);
+        self
     }
 
     pub(crate) fn bootstrap_identity_provider(
@@ -310,6 +318,11 @@ impl KeyResolver for CanonicalAdmissionKeyResolver {
         if let Some(key) = self.receipt_signers.resolve_signer_key(agent_ura)? {
             Self::append_unique(&mut keys, key);
         }
+        if let Some(provider) = self.invocation_verification_keys.as_ref() {
+            if let Some(key) = provider.resolve_invocation_verifying_key(agent_ura)? {
+                Self::append_unique(&mut keys, key);
+            }
+        }
         if let Some(bootstrap_keys) = self.bootstrap_identities.keys_for(agent_ura)? {
             for key in bootstrap_keys {
                 Self::append_unique(&mut keys, key);
@@ -328,10 +341,10 @@ impl KeyResolver for CanonicalAdmissionKeyResolver {
             Err(error) => return Err(error),
         }
         if keys.is_empty() {
-            Err(Self::unknown_agent_key(agent_ura))
-        } else {
-            Ok(keys)
+            return Err(Self::unknown_agent_key(agent_ura));
         }
+        keys.truncate(MAX_KEYS_PER_AGENT_URA);
+        Ok(keys)
     }
 }
 
@@ -392,6 +405,23 @@ mod tests {
         }
     }
 
+    struct FixedTrustedIdentityResolver {
+        keys: Vec<VerifyingKey>,
+    }
+
+    impl KeyResolver for FixedTrustedIdentityResolver {
+        fn resolve(&self, _agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+            self.keys
+                .first()
+                .copied()
+                .ok_or_else(|| AxonError::invalid_argument(ErrorCode::CallerKeyNotFound.as_str()))
+        }
+
+        fn resolve_all(&self, _agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+            Ok(self.keys.clone())
+        }
+    }
+
     fn admission_resolver_with_trusted_error(
         signer_ura: &'static str,
         trusted_error: AxonError,
@@ -424,6 +454,86 @@ mod tests {
         let (resolver, receipt_key) = admission_resolver_with_trusted_error(SIGNER_URA, missing);
 
         assert_eq!(resolver.resolve_all(SIGNER_URA).unwrap(), vec![receipt_key]);
+    }
+
+    fn verifying_key(bytes: [u8; 32]) -> VerifyingKey {
+        VerifyingKey::from_bytes(&bytes).expect("valid verifying key fixture")
+    }
+
+    #[test]
+    fn admission_resolver_caps_combined_user_keys_and_keeps_bootstrap_candidate_first() {
+        const USER_URA: &str = "easynet:///r/acme/user/alice";
+        let trusted_keys = vec![
+            verifying_key([
+                0x43, 0xa7, 0x2e, 0x71, 0x44, 0x01, 0x76, 0x2d, 0xf6, 0x6b, 0x68, 0xc2, 0x6d, 0xfb,
+                0xdf, 0x26, 0x82, 0xaa, 0xec, 0x9f, 0x24, 0x74, 0xec, 0xa4, 0x61, 0x3e, 0x42, 0x4a,
+                0x0f, 0xba, 0xfd, 0x3c,
+            ]),
+            verifying_key([
+                0x66, 0xbe, 0x7e, 0x33, 0x2c, 0x7a, 0x45, 0x33, 0x32, 0xbd, 0x9d, 0x0a, 0x7f, 0x7d,
+                0xb0, 0x55, 0xf5, 0xc5, 0xef, 0x1a, 0x06, 0xad, 0xa6, 0x6d, 0x98, 0xb3, 0x9f, 0xb6,
+                0x81, 0x0c, 0x47, 0x3a,
+            ]),
+            verifying_key([
+                0x0b, 0x51, 0x3a, 0xd9, 0xb4, 0x92, 0x40, 0x15, 0xca, 0x09, 0x02, 0xed, 0x07, 0x90,
+                0x44, 0xd3, 0xac, 0x5d, 0xbe, 0xc2, 0x30, 0x6f, 0x06, 0x94, 0x8c, 0x10, 0xda, 0x8e,
+                0xb6, 0xe3, 0x9f, 0x2d,
+            ]),
+            verifying_key([
+                0x91, 0xa2, 0x8a, 0x0b, 0x74, 0x38, 0x15, 0x93, 0xa4, 0xd9, 0x46, 0x95, 0x79, 0x20,
+                0x89, 0x26, 0xaf, 0xc8, 0xad, 0x82, 0xc8, 0x83, 0x9b, 0x76, 0x44, 0x35, 0x9b, 0x9e,
+                0xba, 0x9a, 0x4b, 0x3a,
+            ]),
+            verifying_key([
+                0x0b, 0xee, 0xf5, 0xa9, 0xe6, 0x79, 0xe6, 0xa3, 0xe1, 0x34, 0xfe, 0x27, 0x83, 0x7b,
+                0xff, 0x32, 0xc7, 0xcb, 0x5f, 0x5d, 0x44, 0xea, 0x09, 0xbc, 0xb0, 0xe5, 0x42, 0xba,
+                0xd6, 0xa4, 0xc0, 0xcc,
+            ]),
+            verifying_key([
+                0xd9, 0xbf, 0x21, 0x48, 0x74, 0x8a, 0x85, 0xc8, 0x9d, 0xa5, 0xaa, 0xd8, 0xee, 0x0b,
+                0x0f, 0xc2, 0xd1, 0x05, 0xfd, 0x39, 0xd4, 0x1a, 0x4c, 0x79, 0x65, 0x36, 0x35, 0x4f,
+                0x0a, 0xe2, 0x90, 0x0c,
+            ]),
+            verifying_key([
+                0x5c, 0x9c, 0x6d, 0xf2, 0x61, 0xc9, 0xcb, 0x84, 0x04, 0x75, 0x77, 0x6a, 0xae, 0xfc,
+                0xd9, 0x44, 0xb4, 0x05, 0x32, 0x8f, 0xab, 0x28, 0xf9, 0xb3, 0xa9, 0x5e, 0xf4, 0x04,
+                0x90, 0xd3, 0xde, 0x84,
+            ]),
+            verifying_key([
+                0xd0, 0x4a, 0xb2, 0x32, 0x74, 0x2b, 0xb4, 0xab, 0x3a, 0x13, 0x68, 0xbd, 0x46, 0x15,
+                0xe4, 0xe6, 0xd0, 0x22, 0x4a, 0xb7, 0x1a, 0x01, 0x6b, 0xaf, 0x85, 0x20, 0xa3, 0x32,
+                0xc9, 0x77, 0x87, 0x37,
+            ]),
+        ];
+        let candidate_key = verifying_key([
+            0x8a, 0x88, 0xe3, 0xdd, 0x74, 0x09, 0xf1, 0x95, 0xfd, 0x52, 0xdb, 0x2d, 0x3c, 0xba,
+            0x5d, 0x72, 0xca, 0x67, 0x09, 0xbf, 0x1d, 0x94, 0x12, 0x1b, 0xf3, 0x74, 0x88, 0x01,
+            0xb4, 0x0f, 0x6f, 0x5c,
+        ]);
+        let candidate_provider = Arc::new(BootstrapCandidateKeyProvider::default());
+        let _lease = candidate_provider
+            .lease_candidate(USER_URA, candidate_key)
+            .expect("lease bootstrap candidate");
+        let receipt_signers: Arc<dyn CanonicalReceiptProvider> =
+            Arc::new(FixedReceiptKeyProjection {
+                signer_ura: "easynet:///r/acme/device/receipt-signer",
+                key: verifying_key([
+                    0x81, 0x39, 0x77, 0x0e, 0xa8, 0x7d, 0x17, 0x5f, 0x56, 0xa3, 0x54, 0x66, 0xc3,
+                    0x4c, 0x7e, 0xcc, 0xcb, 0x8d, 0x8a, 0x91, 0xb4, 0xee, 0x37, 0xa2, 0x5d, 0xf6,
+                    0x0f, 0x5b, 0x8f, 0xc9, 0xb3, 0x94,
+                ]),
+            });
+        let resolver = CanonicalAdmissionKeyResolver::new(
+            Arc::new(FixedTrustedIdentityResolver { keys: trusted_keys }),
+            Arc::new(RuntimeBootstrapIdentityProvider::default()),
+            candidate_provider,
+            receipt_signers,
+        );
+
+        let keys = resolver.resolve_all(USER_URA).expect("resolve user keys");
+
+        assert_eq!(keys.len(), axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA);
+        assert_eq!(keys[0], candidate_key);
     }
 
     #[test]

@@ -29,6 +29,28 @@
 - [x] Close RF-1 through RF-9 acceptance gates for the checked-out CLI/Axon
       source state.
 
+## 2026-08-01 Canonical Session Stability Closure
+
+- [x] Inject the catalogue-owned `InvocationCancellationRegistry` into both
+      the daemon invocation service and the local session dispatcher; remove
+      the dispatcher's private default registry path.
+- [x] Admit descriptor-bound `invocation.cancel` as generic runtime lifecycle
+      control while retaining caller, authority, lifecycle-hash and target-ID
+      checks in the canonical cancellation registry.
+- [x] Keep Go and Python bidi provider facades aligned: carrier failure no
+      longer fabricates runtime terminality, and bounded diagnostic history no
+      longer acts as a second backpressure queue.
+- [x] Publish paired-user signer custody before pinned `resolve_key` and prove
+      the signer key plus locally known trust keys with the paired User caller.
+- [x] Pass the complete Rust library suite, Go/Python/Node/Java/Swift SDK
+      suites, both architecture gates, and architecture-gate mutation tests.
+- [x] Rebuild the Docker Hub and Linux CLI runtime artifacts, recover the host
+      daemon to admitted J800 presence, and verify browser resources plus
+      terminal create/attach/command/cancel/close on the rebuilt stack.
+- [x] Pass the product terminal WebSocket mutation probe across three
+      sequential PTY sessions, a liveness window and a wrong-host negative
+      control, with one canonical receipt-backed lifecycle path.
+
 ## Go Stream Concurrent Cancellation Closure
 
 - [x] Identify unsynchronized `StreamHandle` lifecycle state as the root cause
@@ -1266,6 +1288,28 @@
 - [x] Run final verification commands for this slice and record the results.
 
 ## Still Required Before Completion
+
+## Canonical Session Stability And Lifecycle Control Slice
+
+- [x] Remove duplicate baseline federation publication from the catalogue
+      readiness hook.
+- [x] Make completed session preludes project the canonical online/read-model
+      transition.
+- [x] Keep paired-user trust bootstrap bounded to the active signer and trust
+      anchors.
+- [x] Preserve remote provider BIDI frames as canonical opaque payloads at the
+      Hub carrier boundary.
+- [x] Model exact `invocation.cancel` + `manage` as generic lifecycle control
+      in the pure admission policy.
+- [x] Prove target hash, caller, authority, and idempotent terminal enforcement
+      remain fail-closed in the lifecycle registry.
+- [x] Inject the single catalogue-owned `InvocationCancellationRegistry` into
+      the gRPC service and session dispatcher; remove implicit/default
+      dispatcher construction.
+- [x] Rebuild the Hub/CLI artifacts and prove repeated real-browser New Session,
+      command execution, close, and reopen against an unchanged container.
+- [ ] Run the V2, architecture, format, SDK, runtime, Backend, and frontend
+      verification gates and record current evidence.
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
 - [ ] RF-3 remaining language package/vector/example audit for

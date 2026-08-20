@@ -17,12 +17,10 @@ use super::{SESSION_BACKOFF_INITIAL, SESSION_BACKOFF_MAX};
 /// open → admission → clean-close cycles at the 250 ms floor because
 /// the exponential curve never engaged.
 ///
-/// 30 s sits one order above the hub's 5 s down-keepalive cadence
-/// (`daemon_invocation_service::SESSION_DOWN_HEARTBEAT_INTERVAL`):
-/// a session that exchanged several keepalives was genuinely live,
-/// while displacement ping-pong (sub-second) and first-heartbeat
-/// teardowns (~5 s) stay on the escalating schedule toward
-/// `SESSION_BACKOFF_MAX`.
+/// 30 s spans several device-heartbeat/Hub-acknowledgement exchanges at the
+/// 5 s cadence: a session that completed those round trips was genuinely live,
+/// while displacement ping-pong (sub-second) and first-heartbeat teardowns
+/// (~5 s) stay on the escalating schedule toward `SESSION_BACKOFF_MAX`.
 pub const SESSION_HEALTHY_MIN_UPTIME: Duration = Duration::from_secs(30);
 
 /// Device-side fingerprint of a cleanly-closed `session.open`,

@@ -13,8 +13,8 @@
 #   * `easynet-keyring`          is on PATH
 #   * `libaxon_dendrite_bridge`  is at $HOME/.easynet/dendrite-bridge/native/
 #   * `easynet_cli.h`            is installed under the sandbox include dir
-#   * `easynet_cli.exports.v6`   is installed under the sandbox include dir
-#   * `ffi-abi-v6.md`            is installed under the sandbox doc dir
+#   * `easynet_cli.exports.v7`   is installed under the sandbox include dir
+#   * `ffi-abi-v7.md`            is installed under the sandbox doc dir
 #   * `EASYNET_DENDRITE_BRIDGE_LIB` env var points at that library
 #   * `axon-runtime`             is NOT installed anywhere
 #
@@ -144,8 +144,8 @@ for required in \
     easynet-keyring \
     "libaxon_dendrite_bridge.${lib_ext}" \
     include/easynet_cli.h \
-    include/easynet_cli.exports.v6 \
-    docs/spec/ffi-abi-v6.md
+    include/easynet_cli.exports.v7 \
+    docs/spec/ffi-abi-v7.md
 do
     if [ ! -f "$extract_dir/$required" ]; then
         echo "[FAIL] tarball missing required artefact: $required" >&2
@@ -169,8 +169,8 @@ mv "$extract_dir/easynet-keyring" "$install_dir/easynet-keyring"
 chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon" "$install_dir/easynet-keyring"
 mv "$extract_dir/libaxon_dendrite_bridge.${lib_ext}" "$native_dir/"
 mv "$extract_dir/include/easynet_cli.h" "$include_dir/easynet_cli.h"
-mv "$extract_dir/include/easynet_cli.exports.v6" "$include_dir/easynet_cli.exports.v6"
-mv "$extract_dir/docs/spec/ffi-abi-v6.md" "$doc_dir/ffi-abi-v6.md"
+mv "$extract_dir/include/easynet_cli.exports.v7" "$include_dir/easynet_cli.exports.v7"
+mv "$extract_dir/docs/spec/ffi-abi-v7.md" "$doc_dir/ffi-abi-v7.md"
 
 # Step 5: env stamping (mirror packaging/release/install.sh::setup_env). We don't
 # write into a real shell profile — the harness's caller picks up
@@ -195,8 +195,8 @@ for assert in \
     "$install_dir/easynet-keyring:executable" \
     "$native_dir/libaxon_dendrite_bridge.${lib_ext}:exists" \
     "$include_dir/easynet_cli.h:exists" \
-    "$include_dir/easynet_cli.exports.v6:exists" \
-    "$doc_dir/ffi-abi-v6.md:exists"
+    "$include_dir/easynet_cli.exports.v7:exists" \
+    "$doc_dir/ffi-abi-v7.md:exists"
 do
     path="${assert%:*}"
     kind="${assert##*:}"
@@ -228,19 +228,19 @@ if [ "$fail" != 0 ]; then
     exit 1
 fi
 
-if ! grep -q '#define RUNTIME_ABI_VERSION 6u' "$include_dir/easynet_cli.h"; then
+if ! grep -q '#define RUNTIME_ABI_VERSION 7u' "$include_dir/easynet_cli.h"; then
     echo "[FAIL] installed easynet_cli.h does not declare ABI version 5" >&2
     fail=1
 fi
 
-if [ "$(wc -l < "$include_dir/easynet_cli.exports.v6" | tr -d ' ')" != "55" ] ||
-   ! LC_ALL=C sort -c "$include_dir/easynet_cli.exports.v6" 2>/dev/null; then
-    echo "[FAIL] installed easynet_cli.exports.v6 is not the exact sorted 55-symbol contract" >&2
+if [ "$(wc -l < "$include_dir/easynet_cli.exports.v7" | tr -d ' ')" != "56" ] ||
+   ! LC_ALL=C sort -c "$include_dir/easynet_cli.exports.v7" 2>/dev/null; then
+    echo "[FAIL] installed easynet_cli.exports.v7 is not the exact sorted 56-symbol contract" >&2
     fail=1
 fi
 
-if ! grep -q 'include/easynet_cli.h' "$doc_dir/ffi-abi-v6.md"; then
-    echo "[FAIL] installed ffi-abi-v6.md does not reference the C header contract" >&2
+if ! grep -q 'include/easynet_cli.h' "$doc_dir/ffi-abi-v7.md"; then
+    echo "[FAIL] installed ffi-abi-v7.md does not reference the C header contract" >&2
     fail=1
 fi
 
@@ -293,7 +293,7 @@ echo "  doc_dir:     $doc_dir"
 echo "  env file:    $env_file"
 echo "  binaries:    easynet, easynet-daemon, easynet-keyring"
 echo "  library:     libaxon_dendrite_bridge.${lib_ext}"
-echo "  c abi:       easynet_cli.h + easynet_cli.exports.v6 (generic ABI v6)"
+echo "  c abi:       easynet_cli.h + easynet_cli.exports.v7 (generic ABI v7)"
 echo "  forbidden:   axon-runtime (absent ✓)"
 echo
 # Last-line contract for Phase C consumers: env=<path> + prefix=<path>

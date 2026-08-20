@@ -1,0 +1,13 @@
+[package]
+name = "easynet-plugin-browser"
+version = "0.139.14"
+edition = "2021"
+publish = false
+description = "Package-owned Chrome DevTools Protocol provider for EasyNet browser abilities."
+
+[lib]
+name = "easynet_plugin_browser"
+path = "src/lib.rs"
+
+[dependencies]
+easynet_cli = { package = "easynet", path = "../..", features = ["browser-cdp"] }

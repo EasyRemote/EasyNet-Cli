@@ -27,7 +27,9 @@ public record DelegationProof(
   }
 
   public static DelegationProof fromMetadata(String value) {
-    AuthoritySupport.DecodedAuthority decoded = AuthoritySupport.decodeAuthorityMetadata(value, "delegation");
+    AuthoritySupport.DecodedAuthority decoded =
+        AuthoritySupport.decodeAuthorityMetadata(
+            value, "delegation", AuthoritySupport.DELEGATION_AUTHORITY_PAYLOAD_FIELDS);
     Map<String, Object> payload = decoded.payload();
     return new DelegationProof(
         AuthoritySupport.requiredString(payload.get("issuer_ura"), "issuer_ura"),

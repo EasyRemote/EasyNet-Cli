@@ -17,11 +17,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 #[cfg(feature = "axon-pb")]
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(feature = "axon-pb")]
+use std::path::PathBuf;
 #[cfg(feature = "axon-pb")]
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -134,7 +136,6 @@ pub(crate) async fn connect_channel(
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalDaemonSystemCalleePolicy {
-    LocalDaemon,
     Explicit(String),
 }
 
@@ -163,6 +164,8 @@ struct LocalDaemonSystemTuplePlan {
     callee_policy: LocalDaemonSystemCalleePolicy,
     subject_policy: LocalDaemonSystemSubjectPolicy,
     derivation_policy: LocalDaemonSystemDerivationPolicy,
+    authority_metadata:
+        Option<crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata>,
     timeout: Duration,
 }
 
@@ -172,6 +175,7 @@ pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
     pub callee_ura: &'a str,
     pub subject_ura: &'a str,
     pub invocation_nonce: [u8; 16],
+    pub causal_context: axon_sdk::invocation::CausalContext,
     pub timeout: Duration,
     pub input_frames: Vec<serde_json::Value>,
     pub max_frames: Option<usize>,
@@ -179,10 +183,6 @@ pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
 
 #[cfg(feature = "axon-pb")]
 impl LocalDaemonSystemCalleePolicy {
-    fn local_daemon() -> Self {
-        Self::LocalDaemon
-    }
-
     fn explicit(callee_ura: &str) -> anyhow::Result<Self> {
         Ok(Self::Explicit(normalized_local_daemon_ura(
             callee_ura,
@@ -192,7 +192,6 @@ impl LocalDaemonSystemCalleePolicy {
 
     fn resolve(&self) -> anyhow::Result<String> {
         match self {
-            Self::LocalDaemon => local_daemon_identity_ura(),
             Self::Explicit(callee_ura) => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
@@ -211,10 +210,6 @@ impl LocalDaemonSystemSubjectPolicy {
         match self {
             Self::Explicit(subject) => normalized_local_daemon_ura(subject, "subject_ura"),
         }
-    }
-
-    fn explicit(subject: &str) -> anyhow::Result<Self> {
-        normalized_local_daemon_ura(subject, "subject_ura").map(Self::Explicit)
     }
 }
 
@@ -259,22 +254,6 @@ impl LocalDaemonSystemDerivationPolicy {
 
 #[cfg(feature = "axon-pb")]
 impl LocalDaemonSystemTuplePlan {
-    fn local_root_for_subject(
-        function_name: &str,
-        payload_json: serde_json::Value,
-        subject_ura: &str,
-        timeout: Duration,
-    ) -> anyhow::Result<Self> {
-        Self::new(
-            function_name,
-            payload_json,
-            LocalDaemonSystemCalleePolicy::local_daemon(),
-            LocalDaemonSystemSubjectPolicy::explicit(subject_ura)?,
-            LocalDaemonSystemDerivationPolicy::fresh_root(),
-            timeout,
-        )
-    }
-
     fn targeted_root_for_subject(
         function_name: &str,
         payload_json: serde_json::Value,
@@ -333,8 +312,17 @@ impl LocalDaemonSystemTuplePlan {
             callee_policy,
             subject_policy,
             derivation_policy,
+            authority_metadata: None,
             timeout,
         })
+    }
+
+    fn with_authority_metadata(
+        mut self,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    ) -> Self {
+        self.authority_metadata = Some(authority_metadata);
+        self
     }
 
     fn into_invocation(self) -> anyhow::Result<LocalDaemonSystemInvocation> {
@@ -411,22 +399,6 @@ fn ensure_local_daemon_accepting() -> anyhow::Result<std::path::PathBuf> {
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    subject_ura: &str,
-    timeout: Duration,
-) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonSystemTuplePlan::local_root_for_subject(
-        function_name,
-        payload_json,
-        subject_ura,
-        timeout,
-    )?;
-    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
-}
-
-#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
@@ -444,13 +416,61 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
 }
 
+/// Invoke one daemon-system ability through an explicitly attached daemon
+/// Invocation endpoint and verify its terminal receipt before returning the
+/// business payload.
+///
+/// This is the session-bound counterpart of the process-default local issuer.
+/// C ABI handles use it when their `control.json` names a daemon other than the
+/// process default; silently consulting the default socket would cross runtime
+/// and tenant attachment boundaries.
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
+pub(crate) fn invoke_attached_daemon_system_ability_targeted_root_timeout(
+    endpoint: PathBuf,
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    subject_ura: &str,
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        timeout,
+    )?;
+    invoke_local_daemon_ability_with_tuple_plan_at_verified(endpoint, tuple_plan)
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_system_ability_targeted_root_with_authority_timeout(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    subject_ura: &str,
+    authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        timeout,
+    )?
+    .with_authority_metadata(authority_metadata);
+    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_targeted_explicit_causal_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
     let tuple_plan = LocalDaemonSystemTuplePlan::targeted_explicit_causal(
@@ -459,11 +479,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
         callee_ura,
         subject_ura,
         invocation_nonce,
-        axon_sdk::pb::axon::v1::CausalContext {
-            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
-                axon_sdk::pb::axon::v1::Empty {},
-            )),
-        },
+        public_causal_context_to_wire(&causal_context),
         timeout,
     )?;
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
@@ -496,12 +512,17 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "stable facade preserves the complete explicit invocation tuple for existing callers"
+)]
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_causal(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
@@ -511,11 +532,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
         callee_ura,
         subject_ura,
         invocation_nonce,
-        axon_sdk::pb::axon::v1::CausalContext {
-            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
-                axon_sdk::pb::axon::v1::Empty {},
-            )),
-        },
+        public_causal_context_to_wire(&causal_context),
         timeout,
     )?;
     invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
@@ -524,7 +541,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
 /// Open a daemon-hosted bidirectional ability through Axon's local
 /// Invocation gRPC transport and drain JSON-frame down output.
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_causal(
     request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     let LocalDaemonTargetedBidiRequest {
@@ -533,6 +550,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_roo
         callee_ura,
         subject_ura,
         invocation_nonce,
+        causal_context,
         timeout,
         input_frames,
         max_frames,
@@ -543,11 +561,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_roo
         callee_ura,
         subject_ura,
         invocation_nonce,
-        axon_sdk::pb::axon::v1::CausalContext {
-            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
-                axon_sdk::pb::axon::v1::Empty {},
-            )),
-        },
+        public_causal_context_to_wire(&causal_context),
         timeout,
     )?;
     invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
@@ -580,7 +594,7 @@ fn invoke_local_daemon_ability_stream_with_tuple_plan(
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
             .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let mut stream = client
             .invoke_stream(request)
             .await
@@ -667,13 +681,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
             .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel)
-            .max_decoding_message_size(
-                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-            )
-            .max_encoding_message_size(
-                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-            );
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
 
         let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(16);
         up_tx
@@ -735,6 +743,37 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
     })
 }
 
+#[cfg(feature = "axon-pb")]
+fn public_causal_context_to_wire(
+    causal_context: &axon_sdk::invocation::CausalContext,
+) -> axon_sdk::pb::axon::v1::CausalContext {
+    use axon_sdk::invocation::CausalContext;
+    use axon_sdk::pb::axon::v1 as pb;
+
+    let receipt_ref_to_wire = |reference: &axon_sdk::invocation::ReceiptRef| pb::ReceiptRef {
+        receipt_hash: reference.receipt_hash.to_vec(),
+        receipt_ura: reference.receipt_ura.clone(),
+    };
+
+    pb::CausalContext {
+        form: Some(match causal_context {
+            CausalContext::None => pb::causal_context::Form::None(pb::Empty {}),
+            CausalContext::Scalar(reference) => {
+                pb::causal_context::Form::Scalar(receipt_ref_to_wire(reference))
+            }
+            CausalContext::List(prior) => pb::causal_context::Form::List(pb::ReceiptList {
+                prior: prior.iter().map(receipt_ref_to_wire).collect(),
+            }),
+            CausalContext::Merkle { root, proof_ura } => {
+                pb::causal_context::Form::Merkle(pb::MerkleRoot {
+                    root: root.to_vec(),
+                    proof_ura: proof_ura.clone(),
+                })
+            }
+        }),
+    }
+}
+
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     function_name: &str,
@@ -752,12 +791,17 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "feature-disabled facade must retain the same stable signature as the enabled implementation"
+)]
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_causal(
     function_name: &str,
     _payload_json: serde_json::Value,
     _callee_ura: &str,
     _subject_ura: &str,
     _invocation_nonce: [u8; 16],
+    _causal_context: axon_sdk::invocation::CausalContext,
     _timeout: Duration,
     _max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
@@ -769,7 +813,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_causal(
     request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     let function_name = request.function_name;
@@ -789,9 +833,16 @@ fn invoke_local_daemon_ability_with_tuple_plan(
 
     let socket_path = ensure_local_daemon_accepting()?;
 
+    let authority_metadata = tuple_plan.authority_metadata.clone();
     let invocation = local_daemon_system_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
-    let request = invocation.invoke_request()?;
+    let mut request = invocation.invoke_request()?;
+    if let Some(authority_metadata) = authority_metadata {
+        request.metadata.insert(
+            authority_metadata.key().to_string(),
+            authority_metadata.value().to_string(),
+        );
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -802,10 +853,59 @@ fn invoke_local_daemon_ability_with_tuple_plan(
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
             .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let (value, _) = invoke_local_daemon_json(&mut client, request, &function_name).await?;
         Ok(value)
     })
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_local_daemon_ability_with_tuple_plan_at_verified(
+    socket_path: PathBuf,
+    tuple_plan: LocalDaemonSystemTuplePlan,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::{anyhow, Context};
+
+    let timeout = tuple_plan.timeout;
+    let invocation = local_daemon_system_invocation_from_tuple_plan(tuple_plan)?;
+    let function_name = invocation.function_name().to_string();
+    let request = invocation.invoke_request()?;
+    let submitted = SubmittedInvocationProjection::from_request(&request, &function_name)?;
+    let thread_name = format!("easynet-receipt-key-resolve-{function_name}");
+    let receipt_key_endpoint = socket_path.clone();
+    let response = std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("build tokio runtime for daemon delegated receipt key resolution")?;
+            runtime.block_on(async move {
+                let channel =
+                    connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
+                        .await
+                        .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
+                let mut client = crate::daemon::invocation::transport::invocation_client(channel);
+                let (value, response) =
+                    invoke_local_daemon_json(&mut client, request, &function_name).await?;
+                Ok::<_, anyhow::Error>((value, response, function_name))
+            })
+        })
+        .map_err(|error| anyhow!("spawn daemon delegated receipt key resolver failed: {error}"))?
+        .join()
+        .map_err(|_| anyhow!("daemon delegated receipt key resolver panicked"))??;
+    let (value, response, function_name) = response;
+    let terminal = UnverifiedTerminalInvocationProjection::from_response(
+        &response,
+        &submitted,
+        &function_name,
+    )?
+    .verify(
+        &LocalKeyServiceReceiptResolver::for_daemon_endpoint(&receipt_key_endpoint),
+        &function_name,
+    )?;
+    record_verified_causal_anchor(&terminal.causal_anchor)?;
+    Ok(value)
 }
 
 pub(crate) struct LocalDaemonTargetedInvocationMetaRequest<'a> {
@@ -824,6 +924,51 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
     request: LocalDaemonTargetedInvocationMetaRequest<'_>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     invoke_local_daemon_ability_with_invocation_meta_inner(request, None)
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_invocation_context(
+    request: LocalDaemonTargetedInvocationMetaRequest<'_>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
+    use anyhow::{anyhow, bail};
+    use axon_sdk::pb::axon::v1 as pb;
+
+    let LocalDaemonTargetedInvocationMetaRequest {
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        invocation_nonce,
+        causal_parents,
+        step_timeout,
+        trace_id: _,
+    } = request;
+    let function_name = function_name.trim().to_string();
+    if function_name.is_empty() {
+        bail!("function_name must not be empty");
+    }
+
+    let receipt_refs = verified_receipt_refs_from_causal_parents(causal_parents)?;
+    let mut refs = receipt_refs;
+    let causal_form = match refs.len() {
+        0 => pb::causal_context::Form::None(pb::Empty {}),
+        1 => pb::causal_context::Form::Scalar(refs.remove(0)),
+        _ => pb::causal_context::Form::List(pb::ReceiptList { prior: refs }),
+    };
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_explicit_causal(
+        &function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        invocation_nonce,
+        pb::CausalContext {
+            form: Some(causal_form),
+        },
+        step_timeout,
+    )
+    .map_err(|error| anyhow!("{function_name}: {error}"))?;
+    invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -980,6 +1125,17 @@ impl LocalKeyServiceReceiptResolver {
             key_service: crate::daemon::identity::self_identity::KeyringClient::default_path(),
         }
     }
+
+    pub(crate) fn for_daemon_endpoint(endpoint: impl AsRef<Path>) -> Self {
+        match daemon_state_root_child(endpoint.as_ref(), "keyring.sock") {
+            Some(socket_path) => Self {
+                key_service: crate::daemon::identity::self_identity::KeyringClient::new(
+                    socket_path,
+                ),
+            },
+            None => Self::new(),
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1003,6 +1159,14 @@ impl axon_sdk::invocation::KeyResolver for LocalKeyServiceReceiptResolver {
 pub(crate) struct CanonicalRuntimeReceiptResolver {
     realm_trust: RealmReceiptTrustSource,
     local_self_identity: LocalKeyServiceReceiptResolver,
+    daemon_federated_trust: Option<Arc<dyn axon_sdk::invocation::KeyResolver>>,
+}
+
+#[cfg(feature = "axon-pb")]
+struct DaemonFederatedReceiptResolver {
+    endpoint: PathBuf,
+    timeout: Duration,
+    cache: Mutex<HashMap<String, Vec<ed25519_dalek::VerifyingKey>>>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1039,6 +1203,15 @@ impl RealmReceiptTrustSource {
         }
     }
 
+    fn load_for_daemon_endpoint(endpoint: &Path) -> Self {
+        match daemon_state_root_child(endpoint, "realm-trust.toml") {
+            Some(path) => Self::load(path),
+            None => {
+                Self::load(crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default())
+            }
+        }
+    }
+
     fn unavailable_detail(&self) -> Option<String> {
         match self {
             Self::Loaded(_) => None,
@@ -1055,18 +1228,256 @@ impl RealmReceiptTrustSource {
             )),
         }
     }
+
+    fn resolve_all(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        match self {
+            Self::Loaded(resolver) => {
+                axon_sdk::invocation::KeyResolver::resolve_all(resolver, signer_ura)
+            }
+            source => {
+                let detail = source
+                    .unavailable_detail()
+                    .expect("non-loaded realm trust source must explain unavailability");
+                Err(axon_sdk::invocation::AxonError::permission_denied(
+                    "runtime_receipt_realm_trust_unavailable",
+                )
+                .with_message(detail))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonFederatedReceiptResolver {
+    fn new(endpoint: PathBuf) -> Self {
+        Self {
+            endpoint,
+            timeout: Duration::from_secs(10),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn resolve_keyset(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        let signer_ura = crate::core::identity::RuntimeIdentityUra::parse(signer_ura)
+            .map(crate::core::identity::RuntimeIdentityUra::into_string)
+            .map_err(|error| {
+                delegated_receipt_key_error(signer_ura, format!("invalid signer URA: {error}"))
+            })?;
+        if let Some(keys) = self
+            .cache
+            .lock()
+            .map_err(|_| {
+                delegated_receipt_key_error(&signer_ura, "daemon receipt key cache is poisoned")
+            })?
+            .get(&signer_ura)
+            .cloned()
+        {
+            return Ok(keys);
+        }
+
+        let keys = self.resolve_keyset_uncached(&signer_ura)?;
+        self.cache
+            .lock()
+            .map_err(|_| {
+                delegated_receipt_key_error(&signer_ura, "daemon receipt key cache is poisoned")
+            })?
+            .insert(signer_ura, keys.clone());
+        Ok(keys)
+    }
+
+    fn resolve_keyset_uncached(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        let function_name = crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY;
+        let callee_ura = local_daemon_identity_ura().map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("resolve local daemon identity: {error}"),
+            )
+        })?;
+        let subject_ura = crate::core::ura::owner_ability_ura(&callee_ura, function_name)
+            .ok_or_else(|| {
+                delegated_receipt_key_error(
+                    signer_ura,
+                    format!("derive {function_name} subject for {callee_ura}"),
+                )
+            })?;
+        let request = crate::daemon::federation::wire_contract::ResolveKeyRequest::new(signer_ura);
+        let payload_json = serde_json::to_value(&request).map_err(|error| {
+            delegated_receipt_key_error(signer_ura, format!("encode resolve_key request: {error}"))
+        })?;
+        let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+            function_name,
+            payload_json,
+            &callee_ura,
+            &subject_ura,
+            self.timeout,
+        )
+        .map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("build daemon delegated receipt key invocation: {error}"),
+            )
+        })?;
+        let endpoint = self.endpoint.clone();
+        let value = invoke_local_daemon_ability_with_tuple_plan_at_verified(endpoint, tuple_plan)
+            .map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("daemon delegated {function_name} failed: {error:#}"),
+            )
+        })?;
+        let response: crate::daemon::federation::wire_contract::ResolveKeyResponse =
+            serde_json::from_value(value).map_err(|error| {
+                delegated_receipt_key_error(
+                    signer_ura,
+                    format!("daemon delegated resolve_key response schema invalid: {error}"),
+                )
+            })?;
+        let mut keys = Vec::new();
+        for (index, public_key_b64) in response
+            .public_keys_b64
+            .iter()
+            .take(axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA)
+            .enumerate()
+        {
+            keys.push(decode_delegated_receipt_pubkey(
+                signer_ura,
+                public_key_b64,
+                index,
+            )?);
+        }
+        if keys.is_empty() {
+            keys.push(decode_delegated_receipt_pubkey(
+                signer_ura,
+                &response.public_key_b64,
+                0,
+            )?);
+        }
+        Ok(keys)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl axon_sdk::invocation::KeyResolver for DaemonFederatedReceiptResolver {
+    fn resolve(
+        &self,
+        signer_ura: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
+        self.resolve_keyset(signer_ura)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                delegated_receipt_key_error(signer_ura, "daemon returned no receipt signer keys")
+            })
+    }
+
+    fn resolve_all(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        self.resolve_keyset(signer_ura)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn delegated_receipt_key_error(
+    signer_ura: &str,
+    detail: impl Into<String>,
+) -> axon_sdk::invocation::AxonError {
+    axon_sdk::invocation::AxonError::permission_denied("runtime_receipt_signer_key_untrusted")
+        .with_message(format!(
+            "daemon delegated receipt trust cannot resolve signer {signer_ura:?}: {}",
+            detail.into()
+        ))
+}
+
+#[cfg(feature = "axon-pb")]
+fn decode_delegated_receipt_pubkey(
+    signer_ura: &str,
+    public_key_b64: &str,
+    index: usize,
+) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
+    use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+
+    let raw = B64_STANDARD
+        .decode(public_key_b64.as_bytes())
+        .map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("public_keys_b64[{index}] base64 invalid: {error}"),
+            )
+        })?;
+    let bytes: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
+        delegated_receipt_key_error(
+            signer_ura,
+            format!(
+                "public_keys_b64[{index}] is {} bytes; expected 32",
+                raw.len()
+            ),
+        )
+    })?;
+    ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|error| {
+        delegated_receipt_key_error(
+            signer_ura,
+            format!("public_keys_b64[{index}] is not a valid Ed25519 point: {error}"),
+        )
+    })
 }
 
 #[cfg(feature = "axon-pb")]
 impl CanonicalRuntimeReceiptResolver {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_daemon_federated_trust(None)
+    }
+
+    pub(crate) fn for_daemon_endpoint(endpoint: PathBuf) -> Self {
+        Self::with_daemon_endpoint_trust(endpoint)
+    }
+
+    #[cfg(test)]
+    fn with_daemon_federated_trust(
+        daemon_federated_trust: Option<Arc<dyn axon_sdk::invocation::KeyResolver>>,
+    ) -> Self {
         let trust_anchor_path =
             crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
         Self {
             realm_trust: RealmReceiptTrustSource::load(trust_anchor_path),
             local_self_identity: LocalKeyServiceReceiptResolver::new(),
+            daemon_federated_trust,
         }
     }
+
+    fn with_daemon_endpoint_trust(endpoint: PathBuf) -> Self {
+        Self {
+            realm_trust: RealmReceiptTrustSource::load_for_daemon_endpoint(&endpoint),
+            local_self_identity: LocalKeyServiceReceiptResolver::for_daemon_endpoint(&endpoint),
+            daemon_federated_trust: Some(Arc::new(DaemonFederatedReceiptResolver::new(endpoint))),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_test_delegated_trust(delegated: Arc<dyn axon_sdk::invocation::KeyResolver>) -> Self {
+        Self::with_daemon_federated_trust(Some(delegated))
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn daemon_state_root_child(endpoint: &Path, file_name: &str) -> Option<PathBuf> {
+    let endpoint = endpoint
+        .to_string_lossy()
+        .strip_prefix("unix://")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| endpoint.to_path_buf());
+    endpoint.parent().map(|parent| parent.join(file_name))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1075,38 +1486,68 @@ impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
         &self,
         signer_ura: &str,
     ) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
-        let local_error =
-            match axon_sdk::invocation::KeyResolver::resolve(&self.local_self_identity, signer_ura)
-            {
-                Ok(key) => return Ok(key),
-                Err(error) => error.to_string(),
-            };
-        match &self.realm_trust {
-            RealmReceiptTrustSource::Loaded(resolver) => {
-                match axon_sdk::invocation::KeyResolver::resolve(resolver, signer_ura) {
-                    Ok(key) => return Ok(key),
-                    Err(realm_error) => Err(axon_sdk::invocation::AxonError::permission_denied(
+        self.resolve_all(signer_ura)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                delegated_receipt_key_error(
+                    signer_ura,
+                    "canonical runtime trust returned no signer keys",
+                )
+            })
+    }
+
+    fn resolve_all(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        let local_error = match axon_sdk::invocation::KeyResolver::resolve_all(
+            &self.local_self_identity,
+            signer_ura,
+        ) {
+            Ok(keys) if !keys.is_empty() => return Ok(keys),
+            Ok(_) => "local self identity returned no signer keys".to_string(),
+            Err(error) => error.to_string(),
+        };
+        let realm_error = match self.realm_trust.resolve_all(signer_ura) {
+            Ok(keys) if !keys.is_empty() => return Ok(keys),
+            Ok(_) => "realm trust anchor returned no signer keys".to_string(),
+            Err(error) => error.to_string(),
+        };
+        if let Some(daemon_federated_trust) = self.daemon_federated_trust.as_ref() {
+            match daemon_federated_trust.resolve_all(signer_ura) {
+                Ok(keys) if !keys.is_empty() => return Ok(keys),
+                Ok(_) => {
+                    let daemon_error = "daemon delegated trust returned no signer keys";
+                    return Err(axon_sdk::invocation::AxonError::permission_denied(
                         "runtime_receipt_signer_key_untrusted",
                     )
                     .with_message(format!(
                         "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
-                         local_self_identity={local_error}; realm_trust={realm_error}"
-                    ))),
+                         local_self_identity={local_error}; realm_trust={realm_error}; \
+                         daemon_federated_trust={daemon_error}"
+                    )));
+                }
+                Err(daemon_error) => {
+                    return Err(axon_sdk::invocation::AxonError::permission_denied(
+                        "runtime_receipt_signer_key_untrusted",
+                    )
+                    .with_message(format!(
+                        "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+                         local_self_identity={local_error}; realm_trust={realm_error}; \
+                         daemon_federated_trust={daemon_error}"
+                    )));
                 }
             }
-            source => {
-                let realm_detail = source
-                    .unavailable_detail()
-                    .expect("non-loaded realm trust source must explain unavailability");
-                Err(axon_sdk::invocation::AxonError::permission_denied(
-                    "runtime_receipt_signer_key_untrusted",
-                )
-                .with_message(format!(
-                    "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
-                     local_self_identity={local_error}; realm_trust={realm_detail}"
-                )))
-            }
         }
+        Err(axon_sdk::invocation::AxonError::permission_denied(
+            "runtime_receipt_signer_key_untrusted",
+        )
+        .with_message(format!(
+            "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+             local_self_identity={local_error}; realm_trust={realm_error}; \
+             daemon_federated_trust=not configured"
+        )))
     }
 }
 
@@ -1115,6 +1556,7 @@ impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
 struct SubmittedInvocationProjection {
     envelope: axon_sdk::pb::axon::v1::Envelope,
     function_name: String,
+    arguments_json: serde_json::Value,
     input_hash: [u8; 32],
 }
 
@@ -1128,6 +1570,9 @@ impl SubmittedInvocationProjection {
             .envelope
             .clone()
             .ok_or_else(|| anyhow::anyhow!("{ability}: invoke request omitted its envelope"))?;
+        let arguments_json = serde_json::from_slice(&request.arguments).map_err(|error| {
+            anyhow::anyhow!("{ability}: submitted invocation args are not JSON: {error}")
+        })?;
         Ok(Self {
             envelope,
             function_name:
@@ -1136,6 +1581,7 @@ impl SubmittedInvocationProjection {
                     request.target.as_ref(),
                 )?
                 .to_string(),
+            arguments_json,
             input_hash: axon_sdk::invocation::sha256(&request.arguments),
         })
     }
@@ -1254,6 +1700,8 @@ impl UnverifiedTerminalInvocationProjection {
     ) -> anyhow::Result<VerifiedTerminalInvocationProjection> {
         use anyhow::anyhow;
 
+        let checkpoint_proof =
+            finalization_checkpoint_proof_json(&self.admission_receipt, &self.terminal_receipt)?;
         let checkpoints =
             crate::daemon::invocation::receipts::finalization_projection::verify_wire_finalization_checkpoints(
                 self.admission_receipt,
@@ -1289,6 +1737,7 @@ impl UnverifiedTerminalInvocationProjection {
             "anchor_count": causal_anchor.anchor_count,
             "cryptographic_verification": "finalization_checkpoints_verified",
             "verification_scope": "admission_and_terminal",
+            "verification_checkpoints": checkpoint_proof,
         });
         Ok(VerifiedTerminalInvocationProjection {
             invocation_id: terminal.invocation_id().to_string(),
@@ -1301,6 +1750,179 @@ impl UnverifiedTerminalInvocationProjection {
             causal_anchor,
         })
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn finalization_checkpoint_proof_json(
+    admission: &axon_sdk::pb::axon::v1::InvocationReceipt,
+    terminal: &axon_sdk::pb::axon::v1::InvocationReceipt,
+) -> anyhow::Result<serde_json::Value> {
+    use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+    use prost::Message as _;
+
+    fn encode_receipt(
+        receipt: &axon_sdk::pb::axon::v1::InvocationReceipt,
+    ) -> anyhow::Result<String> {
+        let mut bytes = Vec::with_capacity(receipt.encoded_len());
+        receipt.encode(&mut bytes)?;
+        Ok(B64_STANDARD.encode(bytes))
+    }
+
+    Ok(serde_json::json!({
+        "encoding": "prost.base64",
+        "admission_receipt_b64": encode_receipt(admission)?,
+        "terminal_receipt_b64": encode_receipt(terminal)?,
+    }))
+}
+
+#[cfg(feature = "axon-pb")]
+fn decode_checkpoint_receipt_b64(
+    value: &serde_json::Value,
+    field: &'static str,
+) -> anyhow::Result<axon_sdk::pb::axon::v1::InvocationReceipt> {
+    use anyhow::Context;
+    use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+    use prost::Message as _;
+
+    let encoded = value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("verified invocation proof missing {field}"))?;
+    let bytes = B64_STANDARD
+        .decode(encoded)
+        .with_context(|| format!("decode verified invocation proof {field}"))?;
+    axon_sdk::pb::axon::v1::InvocationReceipt::decode(bytes.as_slice())
+        .with_context(|| format!("decode verified invocation proof {field} as InvocationReceipt"))
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn import_verified_causal_parent_from_invocation_meta(
+    metadata: &serde_json::Value,
+    expected_ability: &str,
+    expected_subject_ura: &str,
+) -> anyhow::Result<serde_json::Value> {
+    import_verified_causal_parent_from_invocation_meta_with_resolver(
+        metadata,
+        expected_ability,
+        expected_subject_ura,
+        &LocalKeyServiceReceiptResolver::new(),
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn import_verified_causal_parent_from_invocation_meta_with_resolver(
+    metadata: &serde_json::Value,
+    expected_ability: &str,
+    expected_subject_ura: &str,
+    resolver: &dyn axon_sdk::invocation::KeyResolver,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::{anyhow, bail};
+    use axon_sdk::invocation::InvocationState;
+
+    let expected_ability = expected_ability.trim();
+    if expected_ability.is_empty() {
+        bail!("verified invocation import expected_ability must not be empty");
+    }
+    let expected_subject_ura = expected_subject_ura.trim();
+    if expected_subject_ura.is_empty() {
+        bail!("verified invocation import expected_subject_ura must not be empty");
+    }
+
+    if let Some(projected_ability) = metadata
+        .get("ability")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if projected_ability != expected_ability {
+            bail!(
+                "verified invocation proof ability {projected_ability:?} does not match expected {expected_ability:?}"
+            );
+        }
+    }
+
+    let proof = metadata
+        .get("receipt")
+        .and_then(|receipt| receipt.get("verification_checkpoints"))
+        .ok_or_else(|| {
+            anyhow!("verified invocation metadata missing receipt.verification_checkpoints")
+        })?;
+    let encoding = proof
+        .get("encoding")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("verified invocation proof missing encoding"))?;
+    if encoding != "prost.base64" {
+        bail!("unsupported verified invocation proof encoding {encoding:?}");
+    }
+
+    let admission_receipt = decode_checkpoint_receipt_b64(proof, "admission_receipt_b64")?;
+    let terminal_receipt = decode_checkpoint_receipt_b64(proof, "terminal_receipt_b64")?;
+
+    let terminal_state = InvocationState::try_from(terminal_receipt.state)
+        .map_err(|error| anyhow!("verified invocation proof terminal state invalid: {error}"))?;
+    if terminal_state != InvocationState::Completed {
+        bail!("verified invocation proof terminal state must be Completed, got {terminal_state:?}");
+    }
+    let terminal_subject = terminal_receipt
+        .subject_binding
+        .as_ref()
+        .map(|binding| binding.ura.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("verified invocation proof terminal receipt omitted subject"))?;
+    if terminal_subject != expected_subject_ura {
+        bail!(
+            "verified invocation proof subject {terminal_subject:?} does not match expected {expected_subject_ura:?}"
+        );
+    }
+    let ability_ura =
+        axon_sdk::invocation::ability_ura_from_descriptor_ref(&terminal_receipt.ability_binding)
+            .map_err(|error| {
+                anyhow!("verified invocation proof ability binding is invalid: {error}")
+            })?;
+    let public_name = axon_sdk::ura::qualified_ability_name(ability_ura)
+        .ok_or_else(|| anyhow!("verified invocation proof ability binding has no public name"))?;
+    if public_name != expected_ability {
+        bail!(
+            "verified invocation proof terminal ability {public_name:?} does not match expected {expected_ability:?}"
+        );
+    }
+    if let Some(request_id) = metadata
+        .get("request_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if request_id != terminal_receipt.invocation_id {
+            bail!(
+                "verified invocation proof request_id {request_id:?} does not match terminal receipt invocation {:?}",
+                terminal_receipt.invocation_id
+            );
+        }
+    }
+
+    let verified = UnverifiedTerminalInvocationProjection {
+        state: "completed",
+        admission_receipt,
+        terminal_receipt,
+    }
+    .verify(resolver, expected_ability)?;
+    record_verified_causal_anchor(&verified.causal_anchor)?;
+    Ok(verified.causal_anchor.projection())
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn import_verified_causal_parent_from_invocation_meta(
+    _metadata: &serde_json::Value,
+    expected_ability: &str,
+    _expected_subject_ura: &str,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::bail!(
+        "{expected_ability}: verified invocation proof import requires the axon-pb provider"
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1614,6 +2236,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         "submitted_callee_ura": submitted_callee_ura,
         "submitted_subject_ura": submitted_subject_ura,
         "ability": function_name,
+        "args": submitted.arguments_json,
         "nonce": nonce_hex,
         "causal_context": { "parents": causal_parents },
         "receipt": terminal.receipt,
@@ -1700,6 +2323,19 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
 }
 
 #[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_invocation_context(
+    request: LocalDaemonTargetedInvocationMetaRequest<'_>,
+    _max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
+    let function_name = request.function_name;
+    anyhow::bail!(
+        "streaming `{}` through the local daemon Invocation endpoint requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`",
+        function_name
+    )
+}
+
+#[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
     request: LocalDaemonTargetedInvocationMetaRequest<'_>,
     _hosted_agent_ura: &str,
@@ -1713,24 +2349,9 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
-    function_name: &str,
-    _payload_json: serde_json::Value,
-    _subject_ura: &str,
-    _timeout: Duration,
-) -> anyhow::Result<serde_json::Value> {
-    Err(anyhow::Error::new(
-        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "invoking daemon-system `{function_name}` through the local daemon Invocation endpoint requires the \
-             `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
-        )),
-    ))
-}
-
-#[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
-    payload_json: serde_json::Value,
+    _payload_json: serde_json::Value,
     _callee_ura: &str,
     _subject_ura: &str,
     _timeout: Duration,
@@ -1744,12 +2365,30 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
+pub(crate) fn invoke_local_daemon_system_ability_targeted_root_with_authority_timeout(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _callee_ura: &str,
+    _subject_ura: &str,
+    _authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    _timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    Err(anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "invoking authority-bound `{function_name}` through the local daemon Invocation endpoint requires the \
+             `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
+        )),
+    ))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_targeted_explicit_causal_timeout(
     function_name: &str,
     _payload_json: serde_json::Value,
     _callee_ura: &str,
     _subject_ura: &str,
     _invocation_nonce: [u8; 16],
+    _causal_context: axon_sdk::invocation::CausalContext,
     _timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
     Err(anyhow::Error::new(
@@ -1776,12 +2415,36 @@ mod tests {
 
     use axon_sdk::invocation::axiom::authority_proof_expected_hash;
     use axon_sdk::invocation::{
-        AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+        AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+        AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
         DescriptorBoundEnvelope, InvocationAuthorityProof, ReceiptSigningAuthority, UraProfile,
         VerifiedAdmissionPolicy,
     };
     use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
     use std::sync::Arc;
+
+    struct StaticDelegatedReceiptResolver {
+        signer_ura: String,
+        keys: Vec<VerifyingKey>,
+    }
+
+    impl axon_sdk::invocation::KeyResolver for StaticDelegatedReceiptResolver {
+        fn resolve(&self, signer_ura: &str) -> Result<VerifyingKey, AxonError> {
+            self.resolve_all(signer_ura)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| AxonError::permission_denied("static_delegated_receipt_key_empty"))
+        }
+
+        fn resolve_all(&self, signer_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+            if signer_ura == self.signer_ura {
+                return Ok(self.keys.clone());
+            }
+            Err(AxonError::permission_denied(
+                "static_delegated_receipt_key_not_found",
+            ))
+        }
+    }
 
     #[test]
     fn local_system_invoke_request_does_not_pre_resolve_descriptor_ref() {
@@ -1874,20 +2537,6 @@ mod tests {
             "job.run",
             serde_json::json!({"job": 1}),
             "easynet:///r/acme/device/edge-1",
-            "",
-            Duration::from_secs(5),
-        )
-        .is_err());
-        assert!(LocalDaemonSystemTuplePlan::local_root_for_subject(
-            "job.run",
-            serde_json::json!({"job": 1}),
-            "easynet:///r/acme/resource/user.jobs/job-1",
-            Duration::ZERO,
-        )
-        .is_err());
-        assert!(LocalDaemonSystemTuplePlan::local_root_for_subject(
-            "job.run",
-            serde_json::json!({"job": 1}),
             "",
             Duration::from_secs(5),
         )
@@ -1986,6 +2635,40 @@ mod tests {
             Duration::from_secs(5),
         )
         .is_err());
+    }
+
+    #[test]
+    fn submitted_invocation_projection_preserves_json_args_bound_by_input_hash() {
+        let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+            "job.run",
+            serde_json::json!({
+                "job": 1,
+                "mode": "view_only",
+                "consent_ticket": "ticket-1"
+            }),
+            "easynet:///r/acme/device/edge-1",
+            "easynet:///r/acme/resource/user.jobs/job-1",
+            Duration::from_secs(5),
+        )
+        .expect("tuple plan");
+        let invocation = local_daemon_system_invocation_from_tuple_plan(tuple_plan)
+            .expect("local system invocation");
+        let request = invocation.invoke_request().expect("invoke request");
+        let submitted =
+            SubmittedInvocationProjection::from_request(&request, "job.run").expect("submitted");
+
+        assert_eq!(
+            submitted.arguments_json,
+            serde_json::json!({
+                "job": 1,
+                "mode": "view_only",
+                "consent_ticket": "ticket-1"
+            })
+        );
+        assert_eq!(
+            submitted.input_hash,
+            axon_sdk::invocation::sha256(&request.arguments)
+        );
     }
 
     fn completed_receipt_response_fixture(
@@ -2141,9 +2824,14 @@ mod tests {
             &self,
             envelope: &DescriptorBoundEnvelope,
         ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-            let binding = AuthorityBinding::Self_ {
-                principal_ura: envelope.envelope().caller.ura.clone(),
-            };
+            let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: AgentIdentity::new(
+                    envelope.envelope().caller.ura.clone(),
+                    UraProfile::StrictV2,
+                ),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            });
             let mut proof = InvocationAuthorityProof::new(
                 "local-daemon-grpc-fixture-verified-admission",
                 Some(binding.clone()),
@@ -2360,6 +3048,50 @@ mod tests {
     }
 
     #[test]
+    fn verified_invocation_metadata_proof_can_rehydrate_causal_parent() {
+        let (submitted, response, signing_key) =
+            completed_receipt_response_fixture(0x34, "inv-rehydrated-proof");
+        let resolver = fixture_resolver(&response, &signing_key);
+        let projection =
+            UnverifiedTerminalInvocationProjection::from_response(&response, &submitted, "job.run")
+                .expect("well-formed unverified projection")
+                .verify(&resolver, "job.run")
+                .expect("cryptographically verified finalization projection");
+        let parent = causal_parent_claim(&response);
+        let error = verified_receipt_refs_from_causal_parents(&[parent.clone()])
+            .expect_err("fixture parent must not be accepted before proof import");
+        assert!(error
+            .to_string()
+            .contains("was not cryptographically verified"));
+
+        let metadata = serde_json::json!({
+            "ability": "job.run",
+            "request_id": projection.invocation_id,
+            "receipt": projection.receipt,
+        });
+        let imported = import_verified_causal_parent_from_invocation_meta_with_resolver(
+            &metadata,
+            "job.run",
+            &projection.subject_ura,
+            &resolver,
+        )
+        .expect("verified metadata proof imports causal parent");
+
+        assert_eq!(imported["receipt_ura"], parent["receipt_ura"]);
+        assert_eq!(imported["receipt_hash"], parent["receipt_hash"]);
+        let refs = verified_receipt_refs_from_causal_parents(&[parent])
+            .expect("imported proof restores causal receipt capability");
+        assert_eq!(
+            refs[0].receipt_hash,
+            response
+                .terminal_receipt
+                .as_ref()
+                .expect("terminal receipt")
+                .self_hash
+        );
+    }
+
+    #[test]
     fn tampered_terminal_receipt_never_becomes_a_verified_projection() {
         let (submitted, mut response, signing_key) =
             completed_receipt_response_fixture(0x32, "inv-tampered-terminal");
@@ -2475,6 +3207,66 @@ added_at_unix_ms = 1
             !message.contains("empty or unavailable"),
             "missing trust source must not collapse to legacy availability wording: {message}"
         );
+    }
+
+    #[test]
+    fn attached_canonical_receipt_resolver_uses_daemon_state_root_trust() {
+        let _guard = crate::cli::commands::test_support::env_lock();
+        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        let env_dir = tempfile::tempdir().expect("env tempdir");
+        let state_root = tempfile::tempdir().expect("daemon state root");
+        let env_trust = env_dir.path().join("env-realm-trust.toml");
+        std::fs::write(&env_trust, "").expect("write env trust");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &env_trust);
+
+        let endpoint = state_root.path().join("daemon.sock");
+        let expected_state_trust = state_root.path().join("realm-trust.toml");
+        let resolver = CanonicalRuntimeReceiptResolver::for_daemon_endpoint(endpoint);
+        let error =
+            axon_sdk::invocation::KeyResolver::resolve(&resolver, "easynet:///r/local/authority")
+                .expect_err("missing attached state-root trust source must fail closed");
+        let message = error.to_string();
+
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+        }
+
+        assert!(
+            message.contains(&expected_state_trust.display().to_string()),
+            "attached resolver must use daemon sibling realm-trust.toml, got: {message}"
+        );
+        assert!(
+            !message.contains(&env_trust.display().to_string()),
+            "attached resolver must not use process-default trust path, got: {message}"
+        );
+    }
+
+    #[test]
+    fn canonical_receipt_resolver_uses_delegated_trust_after_local_and_realm_miss() {
+        let _guard = crate::cli::commands::test_support::env_lock();
+        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing-realm-trust.toml");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &missing);
+        let signer_ura = "easynet:///r/peer/device/dev-1".to_string();
+        let key_a = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        let key_b = SigningKey::from_bytes(&[8u8; 32]).verifying_key();
+        let delegated = Arc::new(StaticDelegatedReceiptResolver {
+            signer_ura: signer_ura.clone(),
+            keys: vec![key_a, key_b],
+        });
+        let resolver = CanonicalRuntimeReceiptResolver::with_test_delegated_trust(delegated);
+
+        let resolved = axon_sdk::invocation::KeyResolver::resolve_all(&resolver, &signer_ura)
+            .expect("delegated receipt trust should resolve remote signer keyset");
+
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+        }
+
+        assert_eq!(resolved, vec![key_a, key_b]);
     }
 
     #[test]

@@ -47,9 +47,10 @@ pub(crate) struct MissionInvocationRequest {
 /// Product-neutral execution target for one composite-ability child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MissionInvocationTarget {
-    LocalDevice,
+    LocalDeviceHost,
     HostedAgent(String),
-    RemoteNode(String),
+    RemoteDeviceHost(String),
+    RemoteCallee(String),
 }
 
 /// Downstream policy capability applied to a runtime-derived Mission child.
@@ -58,8 +59,13 @@ pub(crate) enum MissionInvocationTarget {
 /// receipts. Implementations stage only runtime admission that cannot be encoded
 /// in the canonical descriptor-bound envelope.
 pub(crate) trait MissionChildAdmissionProvider: Send + Sync {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the provider stages the complete descriptor-bound child invocation tuple without defaults"
+    )]
     fn stage_child(
         &self,
+        parent: &AbilityContext,
         descriptor_bound: &axon_sdk::invocation::DescriptorBoundEnvelope,
         signed_envelope: &axon_sdk::invocation::SignedEnvelope,
         arguments: Vec<u8>,
@@ -84,6 +90,7 @@ impl MissionChildAdmissionProvider
 {
     fn stage_child(
         &self,
+        parent: &AbilityContext,
         descriptor_bound: &axon_sdk::invocation::DescriptorBoundEnvelope,
         signed_envelope: &axon_sdk::invocation::SignedEnvelope,
         arguments: Vec<u8>,
@@ -94,6 +101,7 @@ impl MissionChildAdmissionProvider
     ) -> anyhow::Result<Box<dyn PendingMissionChildAdmission>> {
         let lease = self
             .stage(
+                parent,
                 descriptor_bound,
                 signed_envelope,
                 arguments,
@@ -120,12 +128,12 @@ impl PendingMissionChildAdmission
 }
 
 impl MissionInvocationRequest {
-    /// Invoke a device-owned system ability.
+    /// Invoke a SystemAgent-owned ability on the local Device execution host.
     pub(crate) fn system(ability: impl Into<String>, args: Value) -> Self {
         Self {
             ability: ability.into(),
             args,
-            target: MissionInvocationTarget::LocalDevice,
+            target: MissionInvocationTarget::LocalDeviceHost,
             timeout: default_child_timeout(),
             dependency_receipts: Vec::new(),
             trace_id: None,
@@ -148,7 +156,7 @@ impl MissionInvocationRequest {
         }
     }
 
-    pub(crate) fn remote_node(
+    pub(crate) fn remote_target(
         target_ura: impl Into<String>,
         ability: impl Into<String>,
         args: Value,
@@ -159,17 +167,28 @@ impl MissionInvocationRequest {
             .map_err(|error| anyhow::anyhow!("invalid remote Mission target URA: {error}"))?;
         if !matches!(
             parsed.kind,
-            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
+            crate::core::ura::URAKind::Device
+                | crate::core::ura::URAKind::Agent
+                | crate::core::ura::URAKind::Authority
         ) {
             anyhow::bail!(
-                "remote Mission target must be a Device or Authority URA, got {}",
+                "remote Mission target must be a Device, Agent, or Authority URA, got {}",
                 parsed.kind
             );
         }
+        let target = match parsed.kind {
+            crate::core::ura::URAKind::Device => {
+                MissionInvocationTarget::RemoteDeviceHost(target_ura.to_string())
+            }
+            crate::core::ura::URAKind::Agent | crate::core::ura::URAKind::Authority => {
+                MissionInvocationTarget::RemoteCallee(target_ura.to_string())
+            }
+            _ => unreachable!("validated remote Mission target kind"),
+        };
         Ok(Self {
             ability: ability.into(),
             args,
-            target: MissionInvocationTarget::RemoteNode(target_ura.to_string()),
+            target,
             timeout: default_child_timeout(),
             dependency_receipts: Vec::new(),
             trace_id: None,
@@ -229,19 +248,84 @@ pub(crate) trait MissionInvocationGateway: Send + Sync {
 }
 
 trait MissionChildTargetResolver: Send + Sync {
-    fn callee_ura(&self, request: &MissionInvocationRequest) -> anyhow::Result<String>;
+    fn resolve(
+        &self,
+        request: &MissionInvocationRequest,
+    ) -> anyhow::Result<ResolvedMissionChildTarget>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissionChildDispatch {
+    Local,
+    Remote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedMissionChildTarget {
+    callee: AgentIdentity,
+    subject: SubjectIdentity,
+    dispatch: MissionChildDispatch,
+}
+
+impl ResolvedMissionChildTarget {
+    fn new(
+        callee_ura: impl Into<String>,
+        subject_ura: impl Into<String>,
+        dispatch: MissionChildDispatch,
+    ) -> anyhow::Result<Self> {
+        let callee = AgentIdentity::new(callee_ura, UraProfile::StrictV2);
+        let subject = SubjectIdentity::new(subject_ura, UraProfile::StrictV2);
+        crate::core::ura::parse_ura(&callee.ura)
+            .map_err(|error| anyhow::anyhow!("invalid Mission child callee URA: {error}"))?;
+        crate::core::ura::parse_ura(&subject.ura)
+            .map_err(|error| anyhow::anyhow!("invalid Mission child subject URA: {error}"))?;
+        Ok(Self {
+            callee,
+            subject,
+            dispatch,
+        })
+    }
 }
 
 #[derive(Debug, Default)]
 struct PersistedMissionChildTargetResolver;
 
 impl MissionChildTargetResolver for PersistedMissionChildTargetResolver {
-    fn callee_ura(&self, request: &MissionInvocationRequest) -> anyhow::Result<String> {
+    fn resolve(
+        &self,
+        request: &MissionInvocationRequest,
+    ) -> anyhow::Result<ResolvedMissionChildTarget> {
         let agent_name = match &request.target {
-            MissionInvocationTarget::LocalDevice => {
-                return crate::daemon::identity::local_invocation::local_device_ura();
+            MissionInvocationTarget::LocalDeviceHost => {
+                let host_ura = crate::daemon::identity::local_invocation::local_device_ura()?;
+                let callee_ura = crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+                    &host_ura,
+                    &request.ability,
+                )?;
+                return ResolvedMissionChildTarget::new(
+                    callee_ura,
+                    host_ura,
+                    MissionChildDispatch::Local,
+                );
             }
-            MissionInvocationTarget::RemoteNode(target) => return Ok(target.clone()),
+            MissionInvocationTarget::RemoteDeviceHost(host_ura) => {
+                let callee_ura = crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+                    host_ura,
+                    &request.ability,
+                )?;
+                return ResolvedMissionChildTarget::new(
+                    callee_ura,
+                    host_ura.clone(),
+                    MissionChildDispatch::Remote,
+                );
+            }
+            MissionInvocationTarget::RemoteCallee(callee_ura) => {
+                return ResolvedMissionChildTarget::new(
+                    callee_ura.clone(),
+                    callee_ura.clone(),
+                    MissionChildDispatch::Remote,
+                );
+            }
             MissionInvocationTarget::HostedAgent(agent_name) => agent_name,
         };
         let agent_name = agent_name.trim();
@@ -258,7 +342,11 @@ impl MissionChildTargetResolver for PersistedMissionChildTargetResolver {
                     "Mission child hosted Agent {agent_name:?} is not registered in the Agent aggregate"
                 )
             })?;
-        Ok(agent_ura.to_string())
+        ResolvedMissionChildTarget::new(
+            agent_ura.to_string(),
+            agent_ura.to_string(),
+            MissionChildDispatch::Local,
+        )
     }
 }
 
@@ -295,7 +383,6 @@ pub(crate) struct DaemonMissionInvocationGateway {
     parent: Arc<AbilityContext>,
     runtime: Arc<LocalRuntime>,
     child_admission: MissionChildAdmission,
-    parent_subject: SubjectIdentity,
     trace_id: Option<String>,
     target_resolver: Arc<dyn MissionChildTargetResolver>,
 }
@@ -361,13 +448,12 @@ impl DaemonMissionInvocationGateway {
         child_admission: MissionChildAdmission,
         target_resolver: Arc<dyn MissionChildTargetResolver>,
     ) -> anyhow::Result<Self> {
-        let signed_parent = parent.signed_envelope().ok_or_else(|| {
+        parent.signed_envelope().ok_or_else(|| {
             anyhow::anyhow!(
                 "Mission child dispatch parent {} has no admitted signed envelope",
                 parent.invocation_id
             )
         })?;
-        let parent_subject = signed_parent.envelope.subject.clone();
         let trace_id = parent
             .request_metadata
             .get(AXON_TRACE_CONTEXT_METADATA_KEY)
@@ -377,7 +463,6 @@ impl DaemonMissionInvocationGateway {
             parent,
             runtime,
             child_admission,
-            parent_subject,
             trace_id,
             target_resolver,
         })
@@ -387,11 +472,12 @@ impl DaemonMissionInvocationGateway {
         &self,
         request: MissionInvocationRequest,
     ) -> anyhow::Result<ChildInvocationOutcome> {
-        let callee_ura = self.target_resolver.callee_ura(&request)?;
+        let resolved_target = self.target_resolver.resolve(&request)?;
+        let callee_ura = resolved_target.callee.ura.clone();
         let MissionInvocationRequest {
             ability,
             args,
-            target: execution_target,
+            target: _,
             timeout,
             dependency_receipts,
             trace_id,
@@ -399,21 +485,27 @@ impl DaemonMissionInvocationGateway {
         let runtime_ability =
             crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(&callee_ura, &ability)
                 .map_err(|error| anyhow::anyhow!("resolve Mission child ability URA: {error}"))?;
-        let descriptor_ref = match &execution_target {
-            MissionInvocationTarget::RemoteNode(_) => {
-                crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        let call_mode = match resolved_target.dispatch {
+            MissionChildDispatch::Remote => CallMode::Rpc,
+            MissionChildDispatch::Local => {
+                resolve_local_child_call_mode(&self.runtime, &runtime_ability).await?
+            }
+        };
+        let descriptor_ref = match resolved_target.dispatch {
+            MissionChildDispatch::Remote => {
+                crate::daemon::axon_bridge::descriptor_ref::remote_descriptor_ref_for_wire(
                     &callee_ura,
                     &ability,
                     crate::daemon::ability::CallMode::Rpc,
                 )
                 .map_err(|error| anyhow::anyhow!("bind remote Mission child descriptor: {error}"))?
             }
-            _ => {
+            MissionChildDispatch::Local => {
                 let descriptor_binding =
                     crate::daemon::axon_bridge::descriptor_ref::registered_descriptor_binding(
                         &self.runtime,
                         &runtime_ability,
-                        CallMode::Rpc,
+                        call_mode,
                     )
                     .await
                     .map_err(|error| {
@@ -427,14 +519,13 @@ impl DaemonMissionInvocationGateway {
                 .map_err(|error| anyhow::anyhow!("bind Mission child descriptor: {error}"))?
             }
         };
-        let descriptor_target = DescriptorBoundInvocationTarget::new(
-            AgentIdentity::new(callee_ura, UraProfile::StrictV2),
-            descriptor_ref,
-        )
-        .map_err(|error| anyhow::anyhow!("construct Mission child target: {error}"))?;
+        let descriptor_target =
+            DescriptorBoundInvocationTarget::new(resolved_target.callee, descriptor_ref)
+                .map_err(|error| anyhow::anyhow!("construct Mission child target: {error}"))?;
         let payload = serde_json::to_vec(&args).context("encode Mission child arguments")?;
         let child =
-            ChildInvocationRequest::new(descriptor_target, self.parent_subject.clone(), payload)
+            ChildInvocationRequest::new(descriptor_target, resolved_target.subject, payload)
+                .with_call_mode(call_mode)
                 .with_supervisor(SupervisorSpec {
                     resource_limit: ResourceLimit {
                         wall_seconds: Some(timeout.as_secs_f64()),
@@ -466,68 +557,84 @@ impl DaemonMissionInvocationGateway {
             descriptor_request = descriptor_request.with_trace_id(trace_id);
         }
         descriptor_request = descriptor_request.with_request_metadata(request_metadata.clone());
-        let (value, invocation_id, receipt_index, receipt_hash) =
-            if matches!(execution_target, MissionInvocationTarget::RemoteNode(_)) {
-                self.forward_remote_child(
-                    &ability,
-                    descriptor_request,
-                    &signed_child,
-                    inherited_deadline,
-                    trace_id,
-                )
-                .await?
-            } else {
-                let runtime_admission = match &self.child_admission {
-                    MissionChildAdmission::Daemon(admission) => Some(
-                        admission
-                            .stage_child(
-                                descriptor_request.envelope(),
-                                &signed_child,
-                                descriptor_request.payload().to_vec(),
-                                request_metadata,
-                                child_admission_request_id,
-                                &ability,
-                                CallMode::Rpc,
+        let (value, invocation_id, receipt_index, receipt_hash) = if matches!(
+            resolved_target.dispatch,
+            MissionChildDispatch::Remote
+        ) {
+            self.forward_remote_child(
+                &ability,
+                descriptor_request,
+                &signed_child,
+                inherited_deadline,
+                trace_id,
+            )
+            .await?
+        } else {
+            let runtime_admission = match &self.child_admission {
+                MissionChildAdmission::Daemon(admission) => Some(
+                    admission
+                        .stage_child(
+                            self.parent.as_ref(),
+                            descriptor_request.envelope(),
+                            &signed_child,
+                            descriptor_request.payload().to_vec(),
+                            request_metadata,
+                            child_admission_request_id,
+                            &ability,
+                            call_mode,
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "stage Mission child {ability} runtime admission: {error}"
                             )
-                            .map_err(|error| {
-                                anyhow::anyhow!(
-                                    "stage Mission child {ability} runtime admission: {error}"
-                                )
-                            })?,
-                    ),
-                    #[cfg(test)]
-                    MissionChildAdmission::CanonicalOnly => None,
-                };
-                let (handle, _) = self
-                    .runtime
-                    .invoke_descriptor_bound_request_async(descriptor_request)
-                    .await
-                    .map_err(|error| anyhow::anyhow!("admit Mission child {ability}: {error}"))?;
-                if let Some(runtime_admission) = runtime_admission {
-                    runtime_admission.commit().map_err(|error| {
-                        anyhow::anyhow!("commit Mission child {ability} runtime admission: {error}")
-                    })?;
-                }
-                let finalized = handle.finalized().await.map_err(|error| {
-                    anyhow::anyhow!("finalize Mission child {ability}: {error}")
-                })?;
-                if finalized.terminal_state != InvocationState::Completed {
-                    if let Some(error) = finalized.failure {
-                        return Err(anyhow::anyhow!(error))
-                            .with_context(|| format!("Mission child {ability} failed"));
-                    }
-                    anyhow::bail!(
-                        "Mission child {ability} ended in {:?}",
-                        finalized.terminal_state
-                    );
-                }
-                (
-                    decode_child_output(finalized.output(), &ability)?,
-                    finalized.terminal_receipt.invocation_id().to_string(),
-                    finalized.terminal_receipt.index(),
-                    finalized.terminal_receipt.self_hash(),
-                )
+                        })?,
+                ),
+                #[cfg(test)]
+                MissionChildAdmission::CanonicalOnly => None,
             };
+            let child = match call_mode {
+                CallMode::Rpc => {
+                    let (handle, _) = self
+                        .runtime
+                        .invoke_descriptor_bound_request_async(descriptor_request)
+                        .await
+                        .map_err(|error| {
+                            anyhow::anyhow!("admit Mission child {ability}: {error}")
+                        })?;
+                    if let Some(runtime_admission) = runtime_admission {
+                        runtime_admission.commit().map_err(|error| {
+                            anyhow::anyhow!(
+                                "commit Mission child {ability} runtime admission: {error}"
+                            )
+                        })?;
+                    }
+                    finalize_rpc_child(handle, &ability).await?
+                }
+                CallMode::Stream => {
+                    let (handle, _) = self
+                        .runtime
+                        .invoke_descriptor_bound_stream_request_async(descriptor_request)
+                        .await
+                        .map_err(|error| {
+                            anyhow::anyhow!("admit Mission stream child {ability}: {error}")
+                        })?;
+                    if let Some(runtime_admission) = runtime_admission {
+                        runtime_admission.commit().map_err(|error| {
+                            anyhow::anyhow!(
+                                "commit Mission stream child {ability} runtime admission: {error}"
+                            )
+                        })?;
+                    }
+                    finalize_stream_child(handle, &ability).await?
+                }
+                CallMode::Bidi => {
+                    anyhow::bail!(
+                            "Mission child {ability} is bidi-only; scalar Agent invoke cannot supply a bidirectional session"
+                        )
+                }
+            };
+            child
+        };
         let invocation_ura = canonical_invocation_ura(&invocation_id, &signed_child.envelope)?;
         let terminal_receipt = ChildInvocationReceiptAnchor::new(
             invocation_ura.clone(),
@@ -555,7 +662,6 @@ impl DaemonMissionInvocationGateway {
         trace_id: Option<&str>,
     ) -> anyhow::Result<(Value, String, u64, [u8; 32])> {
         use axon_sdk::invocation::{project_wire_envelope, WireEnvelopeMetadata};
-        use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
         use axon_sdk::pb::axon::v1::{ContentEnvelope, InvokeRequest};
 
         let descriptor_ref = signed_child.envelope.ability.clone();
@@ -632,7 +738,7 @@ impl DaemonMissionInvocationGateway {
                 anyhow::bail!("Mission parent deadline elapsed while remote child {ability} was connecting")
             }
         };
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let response = tokio::select! {
             response = client.invoke(request) => response
                 .map_err(|status| anyhow::anyhow!(
@@ -709,6 +815,99 @@ impl DaemonMissionInvocationGateway {
     }
 }
 
+async fn resolve_local_child_call_mode(
+    runtime: &Arc<LocalRuntime>,
+    runtime_ability: &str,
+) -> anyhow::Result<CallMode> {
+    let options = runtime
+        .ability_options(runtime_ability)
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+            "resolve Mission child call mode: unknown_ability {runtime_ability:?} is not registered"
+        )
+        })?;
+    if options.proof_for_mode(CallMode::Rpc).is_some() {
+        return Ok(CallMode::Rpc);
+    }
+    if options.proof_for_mode(CallMode::Stream).is_some() {
+        return Ok(CallMode::Stream);
+    }
+    if options.proof_for_mode(CallMode::Bidi).is_some() {
+        return Ok(CallMode::Bidi);
+    }
+    anyhow::bail!(
+        "resolve Mission child call mode: runtime registration for {runtime_ability:?} has no descriptor proof"
+    )
+}
+
+async fn finalize_rpc_child(
+    handle: axon_sdk::invocation::InvocationHandle,
+    ability: &str,
+) -> anyhow::Result<(Value, String, u64, [u8; 32])> {
+    let finalized = handle
+        .finalized()
+        .await
+        .map_err(|error| anyhow::anyhow!("finalize Mission child {ability}: {error}"))?;
+    ensure_child_completed(&finalized, ability)?;
+    Ok((
+        decode_child_output(finalized.output(), ability)?,
+        finalized.terminal_receipt.invocation_id().to_string(),
+        finalized.terminal_receipt.index(),
+        finalized.terminal_receipt.self_hash(),
+    ))
+}
+
+async fn finalize_stream_child(
+    mut handle: axon_sdk::invocation::StreamingInvocationHandle,
+    ability: &str,
+) -> anyhow::Result<(Value, String, u64, [u8; 32])> {
+    let mut values = Vec::new();
+    while let Some(frame) = handle.next_frame().await {
+        let frame = frame
+            .map_err(|error| anyhow::anyhow!("Mission stream child {ability} failed: {error}"))?;
+        if !frame.payload.is_empty() {
+            values.push(decode_child_output(&frame.payload, ability)?);
+        }
+        if frame.terminal {
+            break;
+        }
+    }
+    let finalized = handle
+        .finalized()
+        .await
+        .map_err(|error| anyhow::anyhow!("finalize Mission stream child {ability}: {error}"))?;
+    ensure_child_completed(&finalized, ability)?;
+    let value = match values.len() {
+        0 => decode_child_output(finalized.output(), ability)?,
+        1 => values.pop().expect("one stream value exists"),
+        _ => Value::Array(values),
+    };
+    Ok((
+        value,
+        finalized.terminal_receipt.invocation_id().to_string(),
+        finalized.terminal_receipt.index(),
+        finalized.terminal_receipt.self_hash(),
+    ))
+}
+
+fn ensure_child_completed(
+    finalized: &axon_sdk::invocation::FinalizedInvocation,
+    ability: &str,
+) -> anyhow::Result<()> {
+    if finalized.terminal_state == InvocationState::Completed {
+        return Ok(());
+    }
+    if let Some(error) = &finalized.failure {
+        return Err(anyhow::anyhow!(error.clone()))
+            .with_context(|| format!("Mission child {ability} failed"));
+    }
+    anyhow::bail!(
+        "Mission child {ability} ended in {:?}",
+        finalized.terminal_state
+    )
+}
+
 fn decode_child_output(output: &[u8], ability: &str) -> anyhow::Result<Value> {
     if output.is_empty() {
         return Ok(Value::Null);
@@ -783,9 +982,9 @@ impl MissionInvocationGateway for CatalogMissionInvocationGateway {
     fn invoke(&self, request: MissionInvocationRequest) -> anyhow::Result<ChildInvocationOutcome> {
         let ability = match request.target {
             MissionInvocationTarget::HostedAgent(agent) => format!("{agent}.{}", request.ability),
-            MissionInvocationTarget::LocalDevice | MissionInvocationTarget::RemoteNode(_) => {
-                request.ability
-            }
+            MissionInvocationTarget::LocalDeviceHost
+            | MissionInvocationTarget::RemoteDeviceHost(_)
+            | MissionInvocationTarget::RemoteCallee(_) => request.ability,
         };
         let invocation_target =
             crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
@@ -856,11 +1055,19 @@ mod tests {
 
     struct FixedChildTargetResolver {
         callee_ura: String,
+        subject_ura: String,
     }
 
     impl MissionChildTargetResolver for FixedChildTargetResolver {
-        fn callee_ura(&self, _request: &MissionInvocationRequest) -> anyhow::Result<String> {
-            Ok(self.callee_ura.clone())
+        fn resolve(
+            &self,
+            _request: &MissionInvocationRequest,
+        ) -> anyhow::Result<ResolvedMissionChildTarget> {
+            ResolvedMissionChildTarget::new(
+                self.callee_ura.clone(),
+                self.subject_ura.clone(),
+                MissionChildDispatch::Local,
+            )
         }
     }
 
@@ -965,7 +1172,7 @@ mod tests {
     ) {
         crate::daemon::persistence::local_agents::save(
             &crate::daemon::persistence::local_agents::LocalAgentsFile {
-                host_device_agent_ura: "easynet:///r/mission-test/device/dev-1".to_string(),
+                host_device_ura: "easynet:///r/mission-test/device/dev-1".to_string(),
                 hosted_agents: entries,
             },
         )
@@ -996,15 +1203,22 @@ mod tests {
         )]);
         let resolver = PersistedMissionChildTargetResolver;
 
-        let callee = resolver
-            .callee_ura(&MissionInvocationRequest::hosted_agent(
+        let target = resolver
+            .resolve(&MissionInvocationRequest::hosted_agent(
                 "worker",
                 "demo.run",
                 serde_json::json!({}),
             ))
             .expect("resolve hosted Mission child");
 
-        assert_eq!(callee, "easynet:///r/mission-test/agent/user.worker");
+        assert_eq!(
+            target.callee.ura,
+            "easynet:///r/mission-test/agent/user.worker"
+        );
+        assert_eq!(
+            target.subject.ura,
+            "easynet:///r/mission-test/agent/user.worker"
+        );
     }
 
     #[test]
@@ -1021,7 +1235,7 @@ mod tests {
         let resolver = PersistedMissionChildTargetResolver;
 
         let error = resolver
-            .callee_ura(&MissionInvocationRequest::hosted_agent(
+            .resolve(&MissionInvocationRequest::hosted_agent(
                 "same",
                 "demo.run",
                 serde_json::json!({}),
@@ -1031,6 +1245,52 @@ mod tests {
         assert!(
             format!("{error}").contains("ambiguous"),
             "error should preserve ambiguity: {error}"
+        );
+    }
+
+    #[test]
+    fn device_host_target_projects_system_agent_callee_and_device_subject() {
+        let resolver = PersistedMissionChildTargetResolver;
+        let device_ura = "easynet:///r/mission-test/device/worker-1";
+        let request = MissionInvocationRequest::remote_target(
+            device_ura,
+            crate::daemon::ability::names::device_control::PROCESS_EXEC,
+            serde_json::json!({"argv": ["true"]}),
+        )
+        .expect("canonical remote Device selector");
+
+        let target = resolver
+            .resolve(&request)
+            .expect("project declared SystemAgent owner");
+
+        assert_eq!(
+            target.callee.ura,
+            "easynet:///r/mission-test/agent/device.worker-1.locomotion"
+        );
+        assert_eq!(target.subject.ura, device_ura);
+        assert_eq!(target.dispatch, MissionChildDispatch::Remote);
+    }
+
+    #[test]
+    fn device_host_target_rejects_unknown_ability_without_device_callee_fallback() {
+        let resolver = PersistedMissionChildTargetResolver;
+        let device_ura = "easynet:///r/mission-test/device/worker-1";
+        let request = MissionInvocationRequest::remote_target(
+            device_ura,
+            "dynamic.unknown",
+            serde_json::json!({}),
+        )
+        .expect("canonical remote Device selector");
+
+        let error = resolver
+            .resolve(&request)
+            .expect_err("unknown Device-host ability must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("no registry-owned device-sponsored SystemAgent"),
+            "unexpected error: {error}"
         );
     }
 
@@ -1114,6 +1374,10 @@ mod tests {
             .expect("register Mission test ability");
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the test fixture makes every signed parent-invocation fact explicit"
+    )]
     async fn invoke_parent(
         runtime: &Arc<LocalRuntime>,
         caller: &AgentIdentity,
@@ -1159,7 +1423,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn child_is_receipt_anchored_and_inherits_subject_trace_and_parent_deadline() {
+    async fn child_is_receipt_anchored_and_derives_subject_while_inheriting_trace_and_deadline() {
         let root_caller = identity("easynet:///r/mission-test/agent/root.caller");
         let parent_callee = identity("easynet:///r/mission-test/device/parent-device");
         let child_callee = identity("easynet:///r/mission-test/agent/worker.child");
@@ -1203,6 +1467,8 @@ mod tests {
         let (record_tx, mut record_rx) = mpsc::unbounded_channel();
         let runtime_for_parent = Arc::clone(&runtime);
         let child_ura = child_callee.ura.clone();
+        let child_subject = subject("child-target/worker");
+        let child_subject_ura = child_subject.ura.clone();
         register_rpc(
             &runtime,
             &parent_callee,
@@ -1210,6 +1476,7 @@ mod tests {
             make_ability(move |ctx: Arc<AbilityContext>| {
                 let runtime = Arc::clone(&runtime_for_parent);
                 let child_ura = child_ura.clone();
+                let child_subject_ura = child_subject_ura.clone();
                 let parent_deadline_tx = parent_deadline_tx.clone();
                 let record_tx = record_tx.clone();
                 async move {
@@ -1222,6 +1489,7 @@ mod tests {
                         MissionChildAdmission::CanonicalOnly,
                         Arc::new(FixedChildTargetResolver {
                             callee_ura: child_ura,
+                            subject_ura: child_subject_ura,
                         }),
                     )
                     .map_err(gateway_error)?;
@@ -1288,7 +1556,11 @@ mod tests {
         assert!(child_anchor.receipt_ura.contains(parent.invocation_id()));
         assert_eq!(child.signed_envelope.envelope.caller, parent_callee);
         assert_eq!(child.signed_envelope.envelope.callee, child_callee);
-        assert_eq!(child.signed_envelope.envelope.subject, expected_subject);
+        assert_eq!(child.signed_envelope.envelope.subject, child_subject);
+        assert_ne!(
+            child.signed_envelope.envelope.subject, expected_subject,
+            "Mission child subject must come from its own target plan"
+        );
         assert!(child
             .signed_envelope
             .envelope
@@ -1356,6 +1628,7 @@ mod tests {
 
         let runtime_for_parent = Arc::clone(&runtime);
         let child_ura = child_callee.ura.clone();
+        let child_subject_ura = subject("cancel-child").ura;
         register_rpc(
             &runtime,
             &parent_callee,
@@ -1363,6 +1636,7 @@ mod tests {
             make_ability(move |ctx: Arc<AbilityContext>| {
                 let runtime = Arc::clone(&runtime_for_parent);
                 let child_ura = child_ura.clone();
+                let child_subject_ura = child_subject_ura.clone();
                 async move {
                     let gateway = DaemonMissionInvocationGateway::from_runtime_context(
                         Arc::clone(&ctx),
@@ -1370,6 +1644,7 @@ mod tests {
                         MissionChildAdmission::CanonicalOnly,
                         Arc::new(FixedChildTargetResolver {
                             callee_ura: child_ura,
+                            subject_ura: child_subject_ura,
                         }),
                     )
                     .map_err(gateway_error)?;

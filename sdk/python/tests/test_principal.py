@@ -5,6 +5,7 @@ import unittest
 
 import easynet_sdk.principal as principal_module
 from easynet_sdk._principal_routes import _PRINCIPAL_ROUTE_MANIFEST_SHA256
+from easynet_sdk.errors import SDKError
 from easynet_sdk.principal import (
     BindPrincipalKeyRequest,
     IssueEnrollmentRequest,
@@ -110,6 +111,20 @@ class PrincipalTests(unittest.TestCase):
         )
         self.assertEqual(len(result.grants), 1)
         self.assertNotIn("private_key", request)
+
+    def test_runtime_call_context_rejects_short_nonce(self) -> None:
+        call = _call()
+        with self.assertRaisesRegex(SDKError, "nonce_base64 must decode to 16 bytes"):
+            RuntimePrincipalProvider(
+                _MemoryAbility(),
+                RuntimeCallContext(
+                    caller_ura=call.caller_ura,
+                    callee_ura=call.callee_ura,
+                    subject_ura=call.subject_ura,
+                    nonce_base64="bm9uY2U=",
+                    causal_context=call.causal_context,
+                ),
+            )
 
     def test_runtime_principal_provider_lowers_enrollment_authority(self) -> None:
         ability = _MemoryAbility()
@@ -353,8 +368,8 @@ def _call() -> RuntimeCallContext:
         caller_ura="easynet:///r/example/user/admin",
         callee_ura="easynet:///r/example/authority",
         subject_ura="easynet:///r/example/user/alice",
-        nonce_base64="bm9uY2U=",
-        causal_context={"kind": "none"},
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
     )
 
 

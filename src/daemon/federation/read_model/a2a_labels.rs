@@ -90,10 +90,11 @@ fn skill_from_descriptor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::agent::spec::RuntimeKind;
     use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    use crate::daemon::persistence::agent_registry::AgentEntry;
 
-    fn registry(names: &[(&str, AgentType)]) -> AgentRegistry {
+    fn registry(names: &[(&str, RuntimeKind)]) -> AgentRegistry {
         let mut registry = AgentRegistry::default();
         for (name, agent_type) in names {
             registry
@@ -123,7 +124,7 @@ mod tests {
     #[test]
     fn empty_publication_emits_no_roster_only_agents() {
         let envelope = build_agents_envelope(
-            &registry(&[("alice", AgentType::ClaudeCode)]),
+            &registry(&[("alice", RuntimeKind::ClaudeCode)]),
             &LocalAbilityPublicationSnapshot::default(),
         );
         assert_eq!(envelope, json!({"agents": []}));
@@ -137,8 +138,10 @@ mod tests {
             descriptor("alice", "invoke", CallMode::Rpc),
             descriptor("alice", "events", CallMode::Stream),
         ]);
-        let envelope =
-            build_agents_envelope(&registry(&[("alice", AgentType::ClaudeCode)]), &publication);
+        let envelope = build_agents_envelope(
+            &registry(&[("alice", RuntimeKind::ClaudeCode)]),
+            &publication,
+        );
         let skills = envelope["agents"][0]["skills"].as_array().unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0]["name"], "alice.chat");
@@ -153,7 +156,10 @@ mod tests {
             descriptor("bob", "chat", CallMode::Rpc),
         ]);
         let envelope = build_agents_envelope(
-            &registry(&[("alice", AgentType::ClaudeCode), ("bob", AgentType::Codex)]),
+            &registry(&[
+                ("alice", RuntimeKind::ClaudeCode),
+                ("bob", RuntimeKind::Codex),
+            ]),
             &publication,
         );
         assert_eq!(envelope["agents"][0]["skills"][0]["name"], "alice.chat");
@@ -166,7 +172,7 @@ mod tests {
             descriptor("alice", "search", CallMode::Rpc),
             descriptor("alice", "chat", CallMode::Rpc),
         ]);
-        let roster = registry(&[("alice", AgentType::ClaudeCode)]);
+        let roster = registry(&[("alice", RuntimeKind::ClaudeCode)]);
         assert_eq!(
             build_agents_envelope(&roster, &publication),
             build_agents_envelope(&roster, &publication)

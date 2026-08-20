@@ -77,7 +77,7 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 	}
 	presigned, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
 		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
@@ -115,6 +115,49 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 	}
 }
 
+func TestRuntimeSigningTransportForwardsGovernanceReadCapability(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	signer, err := NewSigner(signerHandle(""), provider)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+
+	var seen map[string]any
+	transport, err := NewRuntimeSigningTransport(RuntimeTransportFunc{
+		InvokeFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatalf("governance read must not delegate through public Invoke")
+			return nil, nil
+		},
+		GovernanceReadFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(draftJSON, &seen); err != nil {
+				t.Fatalf("decode signed governance draft: %v", err)
+			}
+			return runtimeSigningResult(seen, "inv-governance-signing-1"), nil
+		},
+	}, signer)
+	if err != nil {
+		t.Fatalf("NewRuntimeSigningTransport: %v", err)
+	}
+
+	result, err := NewRuntimeClientMust(t, transport).governanceRead(context.Background(), completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("governanceRead: %v", err)
+	}
+	if !result.OK() {
+		t.Fatalf("result not ok: %#v", result)
+	}
+	assertRuntimeSigningSignature(t, seen)
+	if provider.material.DescriptorRef() != runtimeTestDescriptorRef {
+		t.Fatalf("provider material descriptor = %q", provider.material.DescriptorRef())
+	}
+	if provider.material.CanonicalBytesBase64() == "" {
+		t.Fatal("provider did not receive canonical bytes")
+	}
+	if provider.material.CanonicalHashHex() == "" {
+		t.Fatal("provider did not receive canonical commitment")
+	}
+}
+
 func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testing.T) {
 	provider := &memorySignatureProvider{}
 	signer, err := NewSigner(signerHandle(""), provider)
@@ -123,7 +166,7 @@ func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testin
 	}
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/user/bob").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
 		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/user/bob").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
@@ -153,19 +196,27 @@ func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testin
 	}
 }
 
-func TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases(t *testing.T) {
-	canonical, err := causalContextForInvocationDraft(map[string]any{
-		"form":      "dag",
+func TestRuntimeSigningCausalContextRejectsRetiredAliases(t *testing.T) {
+	root, err := CausalContextFromJSON(map[string]any{"form": "none"})
+	if err != nil {
+		t.Fatalf("canonical root causal context: %v", err)
+	}
+	if root.Kind != CausalContextNull {
+		t.Fatalf("canonical root causal context = %#v", root)
+	}
+
+	canonical, err := CausalContextFromJSON(map[string]any{
+		"form":      "merkle",
 		"root_hex":  strings.Repeat("ab", 32),
 		"proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
 	})
 	if err != nil {
-		t.Fatalf("canonical DAG causal context: %v", err)
+		t.Fatalf("canonical merkle causal context: %v", err)
 	}
 	if canonical.Kind != CausalContextDAG ||
 		canonical.DAGRootHex != strings.Repeat("ab", 32) ||
 		canonical.DAGProofURA != "easynet:///r/example/resource/agent.alice/proof/causal" {
-		t.Fatalf("canonical DAG causal context = %#v", canonical)
+		t.Fatalf("canonical merkle causal context = %#v", canonical)
 	}
 
 	for _, test := range []struct {
@@ -173,9 +224,63 @@ func TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases(t *testing.T) 
 		value map[string]any
 	}{
 		{
+			name: "retired root reason",
+			value: map[string]any{
+				"form":   "none",
+				"reason": "legacy audit label",
+			},
+		},
+		{
+			name: "retired kind selector",
+			value: map[string]any{
+				"kind": "none",
+			},
+		},
+		{
+			name: "retired empty form",
+			value: map[string]any{
+				"form": "empty",
+			},
+		},
+		{
+			name: "retired null form",
+			value: map[string]any{
+				"form": "null",
+			},
+		},
+		{
+			name: "retired vector form",
+			value: map[string]any{
+				"form": "vector",
+				"vector": []any{
+					map[string]any{
+						"receipt_hash_hex": strings.Repeat("cd", 32),
+						"receipt_ura":      "easynet:///r/example/resource/receipt/1",
+					},
+				},
+			},
+		},
+		{
+			name: "retired receipt ura alias",
+			value: map[string]any{
+				"form":     "scalar",
+				"ura":      "easynet:///r/example/resource/receipt/1",
+				"hash_hex": strings.Repeat("cd", 32),
+			},
+		},
+		{
+			name: "unknown scalar field",
+			value: map[string]any{
+				"form":             "scalar",
+				"receipt_hash_hex": strings.Repeat("cd", 32),
+				"receipt_ura":      "easynet:///r/example/resource/receipt/1",
+				"receipt_hash":     strings.Repeat("ef", 32),
+			},
+		},
+		{
 			name: "retired proof alias",
 			value: map[string]any{
-				"form":          "dag",
+				"form":          "merkle",
 				"root_hex":      strings.Repeat("ab", 32),
 				"dag_proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
 			},
@@ -183,16 +288,24 @@ func TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases(t *testing.T) 
 		{
 			name: "retired root alias",
 			value: map[string]any{
-				"form":         "dag",
+				"form":         "merkle",
 				"dag_root_hex": strings.Repeat("ab", 32),
 				"proof_ura":    "easynet:///r/example/resource/agent.alice/proof/causal",
 			},
 		},
+		{
+			name: "retired dag form",
+			value: map[string]any{
+				"form":      "dag",
+				"root_hex":  strings.Repeat("ab", 32),
+				"proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := causalContextForInvocationDraft(test.value)
+			_, err := CausalContextFromJSON(test.value)
 			if !IsCode(err, ErrInvalidArgument) {
-				t.Fatalf("retired DAG alias error = %v, want %s", err, ErrInvalidArgument)
+				t.Fatalf("retired causal context alias error = %v, want %s", err, ErrInvalidArgument)
 			}
 		})
 	}
@@ -267,7 +380,7 @@ func TestRuntimeSigningTransportPreservesDescriptorResolverCapability(t *testing
 	}
 
 	descriptorRef, err := NewRuntimeClientMust(t, transport).ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA:  "easynet:///r/example/device/dev-a",
+		CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 		Ability:    "observe.health",
 		CallMode:   "stream",
 		CallerURA:  "easynet:///r/example/agent/alice.sdk",
@@ -276,7 +389,7 @@ func TestRuntimeSigningTransportPreservesDescriptorResolverCapability(t *testing
 	if err != nil {
 		t.Fatalf("ResolveDescriptorRef: %v", err)
 	}
-	if descriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream" {
+	if descriptorRef != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream" {
 		t.Fatalf("descriptor_ref = %q", descriptorRef)
 	}
 	if seen.CallMode != "stream" || seen.CallerURA != "easynet:///r/example/agent/alice.sdk" {
@@ -299,7 +412,7 @@ func TestRuntimeSigningTransportReportsMissingDescriptorResolver(t *testing.T) {
 	}
 
 	_, err = NewRuntimeClientMust(t, transport).ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA: "easynet:///r/example/device/dev-a",
+		CalleeURA: "easynet:///r/example/agent/device.dev-a.runtime-health",
 		Ability:   "observe.health",
 	})
 	if !IsCode(err, ErrInvalidArgument) {

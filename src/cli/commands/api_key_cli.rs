@@ -256,6 +256,8 @@ mod tests {
         let _home = HomeGuard::new();
         let _user = EnvGuard::set("EASYNET_PAGES_USER", " alice ");
         let _realm = EnvGuard::set("EASYNET_PAGES_REALM", " localhost ");
+        save_credentials(&paired_credentials(Some("alice")))
+            .expect("dev override still requires an immutable runtime owner");
 
         let principal = current_api_key_principal().expect("env override");
 

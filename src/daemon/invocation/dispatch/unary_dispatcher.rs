@@ -53,8 +53,11 @@ use crate::daemon::invocation::admission::owner_projection_publication::OwnerPro
 use crate::daemon::invocation::admission::peer_envelope_signer::{
     PeerInvocationSubject, PeerInvokeRequest,
 };
-use crate::daemon::invocation::admission::register_device_pubkey::handle as handle_register_device_pubkey;
-use crate::daemon::invocation::admission::register_device_pubkey::parse_register_pubkey_intent;
+use crate::daemon::invocation::admission::register_device_pubkey::{
+    handle as handle_register_device_pubkey, parse_register_pubkey_intent,
+    verify_user_register_pubkey_bootstrap_claim, RegisterPubkeyBootstrapTuple,
+    ABILITY_IDENTITY_REGISTER_PUBKEY,
+};
 use crate::daemon::invocation::admission::revoke_user_pubkey::{
     handle_with_outcome as handle_revoke_user_pubkey_with_outcome, parse_revoke_user_pubkey_intent,
 };
@@ -67,11 +70,13 @@ use crate::daemon::invocation::admission::target_gate::{
     TargetGate,
 };
 use crate::daemon::invocation::bidi::session_wire::{
-    build_carrier_v1_dispatch_frame, require_canonical_dispatch_session, SessionRequestError,
+    build_canonical_dispatch_frame, require_canonical_dispatch_session, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
-use crate::daemon::invocation::dispatch::daemon_route_runtime::runtime_status_to_axon_error;
+use crate::daemon::invocation::dispatch::daemon_route_runtime::{
+    runtime_status_to_axon_error, BootstrapCandidateProof,
+};
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RuntimePlane, SessionPlane,
 };
@@ -90,13 +95,111 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
     FEDERATION_RESULT_CONTENT_TYPE,
 };
-use crate::daemon::invocation::dispatch::remote_failure::{
-    is_admission_denial_message, status_from_remote_failure,
-};
+use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
 };
-use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedPrincipalOwner};
+
+/// Fail-closed ownership predicate for user-scoped directory projections.
+///
+/// Presence answers whether a runtime principal is online; it does not answer
+/// who may observe that principal. The realm trust anchor owns the canonical
+/// principal-to-user fact, so user-scoped discovery must satisfy both immutable
+/// owner fields before merging an online principal into the response.
+struct PrincipalOwnerFilter {
+    owner_user_segment: String,
+    owner_ura: String,
+    trust_anchor: Arc<RealmTrustAnchor>,
+}
+
+enum FederationDiscoverReadScope {
+    OperatorAudit,
+    User(PrincipalOwnerFilter),
+}
+
+impl FederationDiscoverReadScope {
+    fn resolve(
+        request: &federation_wrappers::DiscoverRequest,
+        envelope: &Envelope,
+        session_realm: Option<&str>,
+        local_daemon_ura: Option<&str>,
+        trust_anchor: Arc<RealmTrustAnchor>,
+    ) -> Result<Self, Status> {
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim())
+            .filter(|caller| !caller.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "federation.discover requires canonical envelope.caller.ura",
+                )
+            })?;
+
+        let Some(owner_user_segment) = request.local_user_id.as_deref() else {
+            if Some(caller_ura) != local_daemon_ura {
+                return Err(Status::permission_denied(
+                    "federation.discover unfiltered operator/audit scope requires the local daemon principal",
+                ));
+            }
+            return Ok(Self::OperatorAudit);
+        };
+
+        let realm = session_realm
+            .map(str::trim)
+            .filter(|realm| !realm.is_empty())
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "federation.discover user scope requires a session realm",
+                )
+            })?;
+        let caller = crate::core::ura::parse_ura(caller_ura).map_err(|error| {
+            Status::permission_denied(format!(
+                "federation.discover user scope requires a canonical User caller: {error}"
+            ))
+        })?;
+        if caller.kind != crate::core::ura::URAKind::User
+            || caller.realm != realm
+            || caller.user_id() != Some(owner_user_segment)
+        {
+            return Err(Status::permission_denied(format!(
+                "federation.discover user scope does not admit caller `{caller_ura}` for local_user_id `{owner_user_segment}`"
+            )));
+        }
+
+        Ok(Self::User(PrincipalOwnerFilter::new(
+            realm,
+            owner_user_segment,
+            trust_anchor,
+        )))
+    }
+
+    fn owner_filter(&self) -> Option<&PrincipalOwnerFilter> {
+        match self {
+            Self::OperatorAudit => None,
+            Self::User(filter) => Some(filter),
+        }
+    }
+}
+
+impl PrincipalOwnerFilter {
+    fn new(realm: &str, owner_user_segment: &str, trust_anchor: Arc<RealmTrustAnchor>) -> Self {
+        Self {
+            owner_user_segment: owner_user_segment.to_string(),
+            owner_ura: crate::core::ura::user_ura(realm, owner_user_segment),
+            trust_anchor,
+        }
+    }
+
+    fn admits(&self, principal_ura: &str) -> bool {
+        self.trust_anchor
+            .lookup_principal_owner(principal_ura)
+            .is_some_and(|owner| {
+                owner.owner_user_id == self.owner_user_segment && owner.owner_ura == self.owner_ura
+            })
+    }
+}
 
 pub(crate) fn rpc_dispatch_outcome_response(
     outcome: crate::daemon::axon_bridge::descriptor_bound_dispatch::RpcDispatchOutcome,
@@ -276,7 +379,7 @@ fn admitted_join_principal_owner(
                 "federation.join: principal_enrollment.principal_ura is not canonical: {err}"
             ))
         })?;
-    let Some(owner_user_id) = parsed_principal.user_id().map(str::to_string) else {
+    let Some(owner_user_segment) = parsed_principal.user_id().map(str::to_string) else {
         return Err(Status::invalid_argument(
             "federation.join: principal_enrollment.principal_ura missing user id",
         ));
@@ -293,7 +396,7 @@ fn admitted_join_principal_owner(
     )?;
     Ok(Some(TrustedPrincipalOwner {
         principal_ura: request.membership_ura.trim().to_string(),
-        owner_user_id,
+        owner_user_id: owner_user_segment,
         owner_ura: principal_identity.into_string(),
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
     }))
@@ -361,9 +464,13 @@ impl DaemonUnaryRouteProvider {
             DaemonUnaryRoute::FederationAdvertiseAgent => self
                 .dispatcher
                 .dispatch_federation_advertise_agent(arguments, Some(&envelope)),
-            DaemonUnaryRoute::FederationAdvertiseAbilities => self
-                .dispatcher
-                .dispatch_federation_advertise_abilities(arguments, Some(&envelope)),
+            DaemonUnaryRoute::FederationAdvertiseAbilities => {
+                self.dispatcher.dispatch_federation_advertise_abilities(
+                    arguments,
+                    Some(&envelope),
+                    Some(context.authority_binding()),
+                )
+            }
             DaemonUnaryRoute::FederationHeartbeat => {
                 self.dispatcher.dispatch_federation_heartbeat(arguments)
             }
@@ -377,9 +484,9 @@ impl DaemonUnaryRouteProvider {
             DaemonUnaryRoute::FederationResolveKey => {
                 self.dispatcher.dispatch_federation_resolve_key(arguments)
             }
-            DaemonUnaryRoute::FederationDiscover => {
-                self.dispatcher.dispatch_federation_discover(arguments)
-            }
+            DaemonUnaryRoute::FederationDiscover => self
+                .dispatcher
+                .dispatch_federation_discover(arguments, &envelope),
             DaemonUnaryRoute::FederationListUserDevices => self
                 .dispatcher
                 .dispatch_federation_list_user_devices(Some(&envelope), arguments),
@@ -393,12 +500,18 @@ impl DaemonUnaryRouteProvider {
                     .dispatch_namespace_proxy_resolve(Some(&envelope), arguments)
                     .await
             }
-            DaemonUnaryRoute::FederationRevoke => {
-                self.dispatcher.dispatch_federation_revoke(arguments)
-            }
-            DaemonUnaryRoute::IdentityRegisterPubkey => self
+            DaemonUnaryRoute::FederationRevoke => self
                 .dispatcher
-                .dispatch_register_device_pubkey(Some(&envelope), arguments),
+                .dispatch_federation_revoke(Some(&envelope), arguments),
+            DaemonUnaryRoute::IdentityRegisterPubkey => {
+                self.dispatcher.dispatch_register_device_pubkey(
+                    Some(&envelope),
+                    arguments,
+                    identity_register_user_self_bootstrap(&envelope, arguments)
+                        .map_err(runtime_status_to_axon_error)?
+                        .as_ref(),
+                )
+            }
             DaemonUnaryRoute::IdentityRevokeUserPubkey => self
                 .dispatcher
                 .dispatch_revoke_user_pubkey(Some(&envelope), arguments),
@@ -439,6 +552,24 @@ fn runtime_context_envelope(context: &AbilityContext) -> Result<Envelope, AxonEr
             ..axon_sdk::invocation::WireEnvelopeMetadata::default()
         },
     )
+}
+
+fn identity_register_user_self_bootstrap(
+    envelope: &Envelope,
+    arguments: &[u8],
+) -> Result<
+    Option<crate::daemon::invocation::admission::identity_write_gate::UserSelfRegisterBootstrap>,
+    Status,
+> {
+    if !RegisterPubkeyBootstrapTuple::matches(envelope) {
+        return Ok(None);
+    }
+    let claim = verify_user_register_pubkey_bootstrap_claim(envelope, arguments)?;
+    Ok(Some(
+        crate::daemon::invocation::admission::identity_write_gate::UserSelfRegisterBootstrap::new(
+            claim.principal_ura(),
+        ),
+    ))
 }
 
 impl UnaryDispatcher {
@@ -500,7 +631,7 @@ impl UnaryDispatcher {
             .register_pubkey_with_owner(
                 request.membership_ura.clone(),
                 public_key_b64,
-                TrustedAgentRole::Device,
+                TrustAnchorRole::Device,
                 owner,
             )?;
         let response = federation_wrappers::handle_join(&request);
@@ -562,32 +693,54 @@ impl UnaryDispatcher {
         request: &federation_wrappers::AdvertiseAgentRequest,
         publication: HostedAgentPublication,
     ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
         let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
             Status::failed_precondition(
                 "federation.advertise_agent: this hub was booted without the trust-write surface",
             )
         })?;
+        // Durable host custody is the transaction fence. Persist it before
+        // exposing either the owner binding or the in-memory route. If the
+        // following trust write fails, retry is idempotent and projections
+        // remain fail-closed because the binding/read model is still absent.
+        let command = publication.registration_command(request);
+        let registration =
+            federation_wrappers::register_advertised_agent(command).map_err(|error| {
+                Status::failed_precondition(format!(
+                    "federation.advertise_agent durable inventory failed: {error:#}"
+                ))
+            })?;
         RuntimeTrust::new(&ctx.daemon_realm, &ctx.trust_anchor_path, &ctx.cell)
             .bind_principal_owner(publication.into_owner_binding(
                 crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
             ))?;
-        let response = federation_wrappers::handle_advertise_agent(
-            request,
-            Some(self.directory.advertised_agents.as_ref()),
-        )
-        .map_err(|error| {
-            Status::failed_precondition(format!(
-                "federation.advertise_agent durable inventory failed: {error:#}"
-            ))
-        })?;
-        encode_json_payload(&response)
+        let stored = self
+            .directory
+            .advertised_agents
+            .upsert(registration.record.clone().into());
+        if !stored.is_stored() {
+            return Err(Status::aborted(format!(
+                "federation.advertise_agent read-model commit rejected after durable commit: {stored:?}"
+            )));
+        }
+        encode_json_payload(&federation_wrappers::advertise_agent_response(registration))
     }
 
     pub(crate) fn dispatch_federation_advertise_abilities(
         &self,
         arguments: &[u8],
         envelope: Option<&Envelope>,
+        authority_binding: Option<&axon_sdk::invocation::AuthorityOrBootstrap>,
     ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
         let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
         let envelope = envelope.ok_or_else(|| {
             Status::invalid_argument("federation.advertise_abilities: envelope is required")
@@ -599,6 +752,7 @@ impl UnaryDispatcher {
             self.directory.advertised_agents.as_ref(),
             trust_anchor.as_ref(),
             self.admission.daemon_ura(),
+            authority_binding,
         )
         .map_err(|err| {
             Status::permission_denied(format!(
@@ -613,6 +767,11 @@ impl UnaryDispatcher {
         arguments: &[u8],
         caller_device_ura: &str,
     ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
         let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
         let hub_ura = self.admission.daemon_ura().ok_or_else(|| {
             Status::failed_precondition(
@@ -710,12 +869,13 @@ impl UnaryDispatcher {
 
         let selection = self
             .gate
-            .route_resolver()
-            .await
             .resolve_canonical_route(&target_ura, ability, CallMode::Rpc)
+            .await
             .map_err(route_negative_status)?;
 
-        if let CanonicalRouteDispatch::Local(selected_route) = selection.dispatch() {
+        if let CanonicalRouteDispatch::Local(selected_route)
+        | CanonicalRouteDispatch::HubSession(selected_route) = selection.dispatch()
+        {
             if !selected_route.is_authoritative_local_or_better() {
                 return Err(route_profile_blocked_status(selected_route));
             }
@@ -735,16 +895,7 @@ impl UnaryDispatcher {
         let arguments = request.arguments.as_slice();
         let selection = match self.resolve_canonical_rpc_route(request).await {
             Ok(selection) => selection,
-            Err(status) => {
-                if let Some(handle) = self.sessions.escalation.as_ref() {
-                    return (
-                        self.escalate_canonical_invoke(handle, request, status)
-                            .await,
-                        false,
-                    );
-                }
-                return (Err(status), false);
-            }
+            Err(status) => return (Err(status), false),
         };
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
@@ -752,6 +903,20 @@ impl UnaryDispatcher {
             CanonicalRouteDispatch::Peer(route) => {
                 return (
                     self.dispatch_peer_canonical_invoke(request, &route).await,
+                    false,
+                )
+            }
+            CanonicalRouteDispatch::HubSession(route) => {
+                return (
+                    self.dispatch_hub_session_canonical_invoke(request, &route)
+                        .await,
+                    false,
+                )
+            }
+            CanonicalRouteDispatch::UpstreamHub(route) => {
+                return (
+                    self.dispatch_upstream_hub_canonical_invoke(request, &route)
+                        .await,
                     false,
                 )
             }
@@ -839,6 +1004,7 @@ impl UnaryDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::TrustedLocalSystem,
+                    &selected_route.execution_host_ura,
                     ability,
                 ) {
                     Ok(metadata) => metadata,
@@ -851,11 +1017,63 @@ impl UnaryDispatcher {
                     metadata,
                 )
             }
+            Some(envelope)
+                if ability == ABILITY_IDENTITY_REGISTER_PUBKEY
+                    && call_mode == CallMode::Rpc
+                    && RegisterPubkeyBootstrapTuple::matches(&envelope) =>
+            {
+                let proof = match BootstrapCandidateProof::verify(
+                    DaemonUnaryRoute::IdentityRegisterPubkey,
+                    request,
+                ) {
+                    Ok(proof) => proof,
+                    Err(status) => return (Err(status), false),
+                };
+                let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
+                    &request.metadata,
+                    &envelope,
+                    HostedAgentDelegationIngress::BootstrapCandidate,
+                    &selected_route.execution_host_ura,
+                    ability,
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(status) => return (Err(status), false),
+                };
+                let signed_descriptor_ref = match bound_ability.signed_descriptor_ref_from_target(
+                    "Invoke",
+                    &selected_route.callee_ura,
+                    call_mode,
+                    request.target.as_ref(),
+                ) {
+                    Ok(ref_) => ref_.into_descriptor_ref(),
+                    Err(status) => return (Err(status), false),
+                };
+                let key_provider = match self.runtime.daemon_admission_graph() {
+                    Some(graph) => graph.bootstrap_candidate_provider(),
+                    None => {
+                        return (
+                            Err(Status::failed_precondition(
+                                "identity.register_pubkey bootstrap requires the LocalRuntime admission resolver",
+                            )),
+                            false,
+                        )
+                    }
+                };
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::bootstrap_candidate_from_wire_parts(
+                    envelope,
+                    signed_descriptor_ref,
+                    arguments.to_vec(),
+                    metadata,
+                    proof.public_key(),
+                    &key_provider,
+                )
+            }
             Some(envelope) => {
                 let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::ExternalSigned,
+                    &selected_route.execution_host_ura,
                     ability,
                 ) {
                     Ok(metadata) => metadata,
@@ -918,6 +1136,9 @@ impl UnaryDispatcher {
         &self,
         caller_envelope: Option<&Envelope>,
         arguments: &[u8],
+        bootstrap: Option<
+            &crate::daemon::invocation::admission::identity_write_gate::UserSelfRegisterBootstrap,
+        >,
     ) -> Result<Vec<u8>, Status> {
         let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
             Status::failed_precondition(
@@ -934,7 +1155,7 @@ impl UnaryDispatcher {
                 self.admission.transport_boundary(),
                 ctx.daemon_realm.clone(),
             );
-        write_gate.authorize_register_pubkey(caller_envelope, &intent)?;
+        write_gate.authorize_register_pubkey(caller_envelope, &intent, bootstrap)?;
         let body = handle_register_device_pubkey(
             arguments,
             &ctx.daemon_realm,
@@ -1035,8 +1256,7 @@ impl UnaryDispatcher {
 
     pub(crate) fn dispatch_federation_resolve(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
         let request: federation_wrappers::ResolveRequest =
-            parse_json_args::<federation_wrappers::ResolveRequestIngressV1>(arguments)?
-                .into_canonical();
+            parse_json_args::<federation_wrappers::ResolveRequest>(arguments)?;
         let response = federation_wrappers::handle_resolve(
             &request,
             &self.directory.presence,
@@ -1141,8 +1361,19 @@ impl UnaryDispatcher {
     /// Pure read; no I/O — single-realm daemons that haven't
     /// accumulated any peer views just return an empty
     /// response, gracefully degrading to local-only behaviour.
-    pub(crate) fn dispatch_federation_discover(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
+    pub(crate) fn dispatch_federation_discover(
+        &self,
+        arguments: &[u8],
+        envelope: &Envelope,
+    ) -> Result<Vec<u8>, Status> {
         let request: federation_wrappers::DiscoverRequest = parse_json_args(arguments)?;
+        let read_scope = FederationDiscoverReadScope::resolve(
+            &request,
+            envelope,
+            self.identity.session_realm.as_deref(),
+            self.admission.daemon_ura(),
+            self.admission.trust_anchor_snapshot(),
+        )?;
         let federated_response = match request.local_user_id.as_deref() {
             Some(_user_id) => {
                 let bindings = self.directory.federated_bindings.as_ref().ok_or_else(|| {
@@ -1169,14 +1400,18 @@ impl UnaryDispatcher {
                 federation_wrappers::handle_discover(&request, &self.directory.federated_directory)
             }
         };
-        let response =
-            self.merge_local_presence_into_discover_response(&request, federated_response)?;
+        let response = self.merge_local_presence_into_discover_response(
+            &request,
+            &read_scope,
+            federated_response,
+        )?;
         encode_json_payload(&response)
     }
 
     fn merge_local_presence_into_discover_response(
         &self,
         request: &federation_wrappers::DiscoverRequest,
+        read_scope: &FederationDiscoverReadScope,
         federated_response: federation_wrappers::DiscoverResponse,
     ) -> Result<federation_wrappers::DiscoverResponse, Status> {
         let mut by_agent_ura = BTreeMap::new();
@@ -1198,6 +1433,12 @@ impl UnaryDispatcher {
                     .agent_ura
                     .as_deref()
                     .is_some_and(|filter| filter != entry.agent_ura)
+                {
+                    continue;
+                }
+                if read_scope
+                    .owner_filter()
+                    .is_some_and(|filter| !filter.admits(&entry.agent_ura))
                 {
                     continue;
                 }
@@ -1244,7 +1485,7 @@ impl UnaryDispatcher {
         let is_hub_role = trust_anchor.lookup(caller_ura).is_some_and(|entry| {
             matches!(
                 entry.role,
-                crate::daemon::trust::anchor::TrustedAgentRole::Hub
+                crate::daemon::trust::anchor::TrustAnchorRole::Hub
             )
         });
         let is_local_self = self
@@ -1284,7 +1525,7 @@ impl UnaryDispatcher {
         let is_backend_role = trusted_entry.is_some_and(|entry| {
             matches!(
                 entry.role,
-                crate::daemon::trust::anchor::TrustedAgentRole::Backend
+                crate::daemon::trust::anchor::TrustAnchorRole::Backend
             )
         });
         let is_local_hub_identity = self
@@ -1296,8 +1537,8 @@ impl UnaryDispatcher {
             && trusted_entry.is_some_and(|entry| {
                 matches!(
                     entry.role,
-                    crate::daemon::trust::anchor::TrustedAgentRole::Backend
-                        | crate::daemon::trust::anchor::TrustedAgentRole::Hub
+                    crate::daemon::trust::anchor::TrustAnchorRole::Backend
+                        | crate::daemon::trust::anchor::TrustAnchorRole::Hub
                 )
             });
         let is_local_self = self
@@ -1574,13 +1815,44 @@ impl UnaryDispatcher {
         ))
     }
 
-    pub(crate) fn dispatch_federation_revoke(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
+    pub(crate) fn dispatch_federation_revoke(
+        &self,
+        caller_envelope: Option<&Envelope>,
+        arguments: &[u8],
+    ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
+        let envelope = caller_envelope
+            .ok_or_else(|| Status::invalid_argument("federation.revoke requires an envelope"))?;
         let request: federation_wrappers::RevokeRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_revoke(
-            &request,
+        let subject_ura = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.ura.trim())
+            .filter(|subject| !subject.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument("federation.revoke requires an envelope subject")
+            })?;
+        let intent = request
+            .bind_to_subject(subject_ura)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim())
+            .filter(|caller| !caller.is_empty());
+        let presence_mode = caller_ura
+            .map(federation_wrappers::RevokePresenceMode::defer_current_caller)
+            .unwrap_or(federation_wrappers::RevokePresenceMode::Immediate);
+        let response = federation_wrappers::handle_revoke_with_presence_mode(
+            &intent,
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
             self.directory.ability_catalog.as_ref(),
+            presence_mode,
         )
         .map_err(|error| {
             Status::failed_precondition(format!(
@@ -1619,7 +1891,8 @@ impl UnaryDispatcher {
         // Self-targeted invocations belong to the local-runtime arms; refuse
         // loudly here rather than treating local runtime presence as a remote
         // dispatch channel.
-        self.reject_self_presence_host(selected_route, label)?;
+        self.reject_self_presence_host(selected_route, label)
+            .await?;
         let pending = self.sessions.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(format!(
                 "{label}: daemon was constructed without a PendingDispatchMap; call \
@@ -1704,15 +1977,19 @@ impl UnaryDispatcher {
         Ok((call_id, result, carrier_version))
     }
 
-    fn reject_self_presence_host(
+    async fn reject_self_presence_host(
         &self,
         selected_route: &SelectedInvokeRoute,
         label: &str,
     ) -> Result<(), Status> {
         if self
-            .admission
-            .daemon_ura()
-            .is_some_and(|self_ura| self_ura == selected_route.execution_host_ura)
+            .gate
+            .matches_self_target_ura(&selected_route.execution_host_ura)
+            .await
+            || self
+                .directory
+                .presence
+                .is_resolve_only(&selected_route.execution_host_ura)
         {
             crate::op_event!(
                 component = daemon_invocation,
@@ -1759,6 +2036,7 @@ impl UnaryDispatcher {
         match client.invoke(&endpoint, request.clone()).await {
             Ok(response) => {
                 ensure_forwarded_response_receipt_signer_keys(
+                    receipt_resolver.as_ref(),
                     self.sessions.device_trust_sync.as_ref(),
                     &response,
                     "remote Invoke peer delegation",
@@ -1772,7 +2050,7 @@ impl UnaryDispatcher {
                 Ok(Response::new(finalized.into_response()))
             }
             Err(err) => {
-                if let Some(status) = target_admission_denial_status(&err) {
+                if let Some(status) = target_peer_status(&err) {
                     return Err(status);
                 }
                 Err(Status::unavailable(format!(
@@ -1782,27 +2060,67 @@ impl UnaryDispatcher {
         }
     }
 
-    async fn escalate_canonical_invoke(
+    async fn dispatch_hub_session_canonical_invoke(
         &self,
-        handle: &Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
         request: &InvokeRequest,
-        local_route_failure: Status,
+        route: &SelectedInvokeRoute,
     ) -> Result<Response<InvokeResponse>, Status> {
-        if matches!(
-            local_route_failure.code(),
-            tonic::Code::InvalidArgument | tonic::Code::PermissionDenied
-        ) {
-            return Err(local_route_failure);
-        }
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_hub_session_selected_route,
+            callee_ura = route.callee_ura.as_str(),
+            execution_host_ura = route.execution_host_ura.as_str(),
+            route_ura = route.route_ura.as_str(),
+        );
+        self.forward_canonical_invoke_through_upstream_hub(
+            request,
+            "remote Invoke HubSession dispatch",
+        )
+        .await
+    }
+
+    /// Forward the caller's original signed invocation to the authenticated
+    /// upstream Hub. A Device never turns a Hub DELEGATION answer into a peer
+    /// dial: peer topology and federation credentials remain Hub-owned.
+    async fn dispatch_upstream_hub_canonical_invoke(
+        &self,
+        request: &InvokeRequest,
+        route: &DelegatedInvokeRoute,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_upstream_hub_peer_delegation,
+            callee_ura = route.owner_ura.as_str(),
+            peer_realm = route.realm.as_str(),
+            peer_hub_ura = route.hub_ura.as_str(),
+        );
+        self.forward_canonical_invoke_through_upstream_hub(
+            request,
+            "remote Invoke upstream-Hub peer delegation",
+        )
+        .await
+    }
+
+    async fn forward_canonical_invoke_through_upstream_hub(
+        &self,
+        request: &InvokeRequest,
+        context: &'static str,
+    ) -> Result<Response<InvokeResponse>, Status> {
         require_complete_signed_remote_request(request)?;
+        let Some(handle) = self.sessions.escalation.as_ref() else {
+            return Err(Status::failed_precondition(format!(
+                "{context}: authenticated upstream session is not configured"
+            )));
+        };
         let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         match handle.escalate_invoke(request.clone()).await {
             Ok(response) => {
                 ensure_forwarded_response_receipt_signer_keys(
+                    receipt_resolver.as_ref(),
                     self.sessions.device_trust_sync.as_ref(),
                     &response,
-                    "remote Invoke session escalation",
+                    context,
                 )
                 .await?;
                 let finalized = ForwardedFinalizedInvocation::verify_response(
@@ -1812,18 +2130,18 @@ impl UnaryDispatcher {
                 )?;
                 Ok(Response::new(finalized.into_response()))
             }
-            Err(SessionRequestError::TargetOffline) => Err(Status::failed_precondition(
-                "remote Invoke target is offline",
-            )),
+            Err(SessionRequestError::TargetOffline) => {
+                Err(Status::unavailable("remote Invoke target is offline"))
+            }
             Err(SessionRequestError::PermissionDenied { reason }) => {
                 Err(Status::permission_denied(reason))
             }
-            Err(SessionRequestError::UpstreamFailure { reason }) => Err(Status::unavailable(
-                format!("remote Invoke session escalation failed: {reason}"),
-            )),
-            Err(SessionRequestError::UpstreamTimeout) => Err(Status::deadline_exceeded(
-                "remote Invoke session escalation timed out",
-            )),
+            Err(SessionRequestError::UpstreamFailure { reason }) => {
+                Err(Status::unavailable(format!("{context} failed: {reason}")))
+            }
+            Err(SessionRequestError::UpstreamTimeout) => {
+                Err(Status::deadline_exceeded(format!("{context} timed out")))
+            }
         }
     }
 
@@ -1859,20 +2177,22 @@ impl UnaryDispatcher {
             &request.arguments,
         )?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
+        self.reject_self_presence_host(selected_route, "Invoke")
+            .await?;
         ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
             self.sessions.device_trust_sync.as_ref(),
             &selected_route.execution_host_ura,
             "Invoke",
         )
         .await?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
-        self.reject_self_presence_host(selected_route, "Invoke")?;
         let (_call_id, dispatch_result, carrier_version) = self
             .dispatch_frame_to_presence(selected_route, "Invoke", |call_id| {
-                Ok(build_carrier_v1_dispatch_frame(
+                Ok(build_canonical_dispatch_frame(
                     call_id,
                     request.clone(),
-                    matches!(call_mode, CallMode::Bidi),
+                    call_mode,
                 ))
             })
             .await?;
@@ -2004,18 +2324,16 @@ pub(crate) fn require_complete_signed_remote_request(
     Ok(())
 }
 
-fn target_admission_denial_status(error: &FederationClientError) -> Option<Status> {
-    let FederationClientError::InnerInvokeFailed { status, .. } = error else {
+fn target_peer_status(error: &FederationClientError) -> Option<Status> {
+    let FederationClientError::InnerInvokeFailed {
+        status_code,
+        status_message,
+        ..
+    } = error
+    else {
         return None;
     };
-    if !is_admission_denial_message(status) {
-        return None;
-    }
-    if status.contains("code=InvalidArgument") {
-        Some(Status::invalid_argument(status.clone()))
-    } else {
-        Some(Status::permission_denied(status.clone()))
-    }
+    Some(Status::new(*status_code, status_message.clone()))
 }
 
 fn sorted_non_empty_urls(urls: Vec<String>) -> Vec<String> {
@@ -2194,5 +2512,39 @@ fn non_empty_json_string(value: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod peer_status_tests {
+    use super::*;
+    use tonic::Code;
+
+    #[test]
+    fn peer_authorization_status_is_not_reclassified_as_offline() {
+        let peer_error = FederationClientError::InnerInvokeFailed {
+            endpoint: "https://hub-b.example:50443".to_string(),
+            status_code: Code::PermissionDenied,
+            status_message: "AUTHORITY_ISSUER_DENIED: forged issuer".to_string(),
+        };
+
+        let status = target_peer_status(&peer_error).expect("typed peer status");
+
+        assert_eq!(status.code(), Code::PermissionDenied);
+        assert_eq!(status.message(), "AUTHORITY_ISSUER_DENIED: forged issuer");
+    }
+
+    #[test]
+    fn peer_status_projection_preserves_non_authorization_code() {
+        let peer_error = FederationClientError::InnerInvokeFailed {
+            endpoint: "https://hub-b.example:50443".to_string(),
+            status_code: Code::InvalidArgument,
+            status_message: "REQUEST_PAYLOAD_INVALID: schema mismatch".to_string(),
+        };
+
+        let status = target_peer_status(&peer_error).expect("typed peer status");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.message(), "REQUEST_PAYLOAD_INVALID: schema mismatch");
     }
 }

@@ -1,27 +1,29 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axon_sdk::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tonic::{transport::Channel, Status};
 
 use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
 use super::SessionError;
-use crate::daemon::ability::builtins::resources::pages::identity::pages_user_from_env_or_credentials;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
-use crate::daemon::identity::self_identity::CanonicalSigner;
+use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentHostedAdvertiseEntry,
 };
-use crate::daemon::trust::anchor::TrustedAgentRole;
+use crate::daemon::trust::anchor::TrustAnchorRole;
 
 pub struct SessionPreludeInputs<'a> {
     pub(super) ability_descriptors: &'a [AbilityDescriptor],
     pub(super) authority_published_abilities: Arc<AuthorityPublishedAbilityStore>,
+    paired_user_signer: Option<PairedUserTrustSigner>,
 }
 
 impl<'a> SessionPreludeInputs<'a> {
@@ -33,7 +35,20 @@ impl<'a> SessionPreludeInputs<'a> {
         Self {
             ability_descriptors,
             authority_published_abilities,
+            paired_user_signer: None,
         }
+    }
+
+    /// Supply only the paired User signing authority needed by owner projection.
+    ///
+    /// This is intentionally independent from [`UserTrustSync`]: publishing a
+    /// User-owned Agent and continuously synchronizing trust are separate
+    /// lifecycle responsibilities, even though production uses the same key
+    /// source for both.
+    #[must_use]
+    pub fn with_paired_user_signer(mut self, signer: PairedUserTrustSigner) -> Self {
+        self.paired_user_signer = Some(signer);
+        self
     }
 }
 
@@ -80,14 +95,12 @@ pub(super) async fn run_session_preludes(
     } = request;
     let caller_ura = signer.owner_ura().to_string();
     let ability_descriptors = inputs.ability_descriptors;
-    let owner_descriptors = committed_owner_ability_descriptors(
-        ability_descriptors,
-        &caller_ura,
-        crate::core::ura::parse_ura(&caller_ura)
-            .ok()
-            .and_then(|parsed| parsed.device_id().map(str::to_string))
-            .as_deref(),
-    );
+    let paired_user_signer = inputs
+        .paired_user_signer
+        .as_ref()
+        .or_else(|| user_trust_sync.map(|sync| &sync.user_signer));
+    let owner_projections =
+        committed_device_native_owner_descriptors(ability_descriptors, &caller_ura);
     let authority_published_abilities = inputs.authority_published_abilities;
 
     run_join_prelude(
@@ -105,7 +118,7 @@ pub(super) async fn run_session_preludes(
         hub_endpoint,
         &caller_ura,
         signer.as_ref(),
-        &owner_descriptors,
+        &owner_projections,
     )
     .await?;
 
@@ -121,6 +134,16 @@ pub(super) async fn run_session_preludes(
         endpoint: hub_endpoint.to_string(),
         source,
     })?;
+    run_user_service_owner_projection_prelude(
+        client,
+        phase,
+        hub_endpoint,
+        &caller_ura,
+        signer.as_ref(),
+        paired_user_signer,
+        ability_descriptors,
+    )
+    .await?;
     let federation_heartbeat = spawn_federation_heartbeat(
         channels.federation_heartbeat,
         Arc::clone(&signer),
@@ -132,6 +155,7 @@ pub(super) async fn run_session_preludes(
         phase,
         hub_endpoint,
         signer.as_ref(),
+        paired_user_signer,
         ability_descriptors,
     )
     .await?;
@@ -189,50 +213,143 @@ async fn run_owner_projection_prelude(
     hub_endpoint: &str,
     caller_ura: &str,
     signer: &dyn CanonicalSigner,
-    ability_descriptors: &[AbilityDescriptor],
+    owner_projections: &BTreeMap<String, Vec<AbilityDescriptor>>,
 ) -> Result<(), SessionError> {
     phase.transition(
         DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection),
         "join_prelude_done",
     );
-    if ability_descriptors.is_empty() {
+    if owner_projections.is_empty() {
         return Ok(());
     }
 
-    let ability_count = ability_descriptors.len();
+    let ability_count = owner_projections.values().map(Vec::len).sum::<usize>();
+    let owner_count = owner_projections.len();
     crate::op_event!(
         component = session,
         kind = advertise_abilities_prelude_sending,
         ability_count = ability_count,
+        owner_count = owner_count,
     );
-    if let Err(status) = send_advertise_abilities_prelude(
-        client,
-        caller_ura,
-        caller_ura,
-        signer,
-        ability_descriptors,
-    )
-    .await
-    {
-        let code = status.code();
-        let msg = status.message();
-        crate::op_event!(
-            component = session,
-            kind = advertise_abilities_prelude_failed,
-            code = code,
-            error = msg,
-            message = "owner projection publish failed; reconnecting instead of exposing an online owner with empty abilities",
-        );
-        return Err(SessionError::OwnerProjectionFailed {
-            endpoint: hub_endpoint.to_string(),
-            status,
-        });
+    for (owner_ura, descriptors) in owner_projections {
+        if let Err(status) =
+            send_advertise_abilities_prelude(client, owner_ura, caller_ura, signer, descriptors)
+                .await
+        {
+            let code = status.code();
+            let msg = status.message();
+            crate::op_event!(
+                component = session,
+                kind = advertise_abilities_prelude_failed,
+                owner_ura = owner_ura,
+                code = code,
+                error = msg,
+                message = "device-native owner projection publish failed; reconnecting instead of exposing an online host with an incomplete namespace",
+            );
+            return Err(SessionError::OwnerProjectionFailed {
+                endpoint: hub_endpoint.to_string(),
+                status,
+            });
+        }
     }
 
     crate::op_event!(
         component = session,
         kind = advertise_abilities_prelude_ok,
         ability_count = ability_count,
+        owner_count = owner_count,
+    );
+    Ok(())
+}
+
+async fn run_user_service_owner_projection_prelude(
+    client: &mut InvocationClient<Channel>,
+    phase: &mut SessionPhaseTracker,
+    hub_endpoint: &str,
+    caller_ura: &str,
+    device_signer: &dyn CanonicalSigner,
+    paired_user_signer: Option<&PairedUserTrustSigner>,
+    ability_descriptors: &[AbilityDescriptor],
+) -> Result<(), SessionError> {
+    if !ability_descriptors
+        .iter()
+        .any(|descriptor| is_service_owner_ura(&descriptor.owner_ura))
+    {
+        return Ok(());
+    }
+    let user_ura =
+        resolve_runtime_user_ura_for_owner_projection(hub_endpoint, "user-scoped Service")?;
+    let service_owner_projections =
+        committed_user_service_owner_descriptors(ability_descriptors, &user_ura);
+    if service_owner_projections.is_empty() {
+        return Ok(());
+    }
+    phase.transition(
+        DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection),
+        "user_trust_bootstrap_done",
+    );
+    let Some(user_signer_source) = paired_user_signer else {
+        let status = tonic::Status::failed_precondition(
+            "user-scoped Service owner projection requires the paired User signer",
+        );
+        return Err(SessionError::OwnerProjectionFailed {
+            endpoint: hub_endpoint.to_string(),
+            status,
+        });
+    };
+    let user_signer = user_signer_source
+        .load(&user_ura)
+        .await
+        .map_err(|error| SessionError::OwnerProjectionFailed {
+            endpoint: hub_endpoint.to_string(),
+            status: tonic::Status::failed_precondition(format!(
+                "load paired User signer for user-scoped Service owner projection `{user_ura}`: {error}"
+            )),
+        })?;
+
+    let ability_count = service_owner_projections
+        .values()
+        .map(Vec::len)
+        .sum::<usize>();
+    let owner_count = service_owner_projections.len();
+    crate::op_event!(
+        component = session,
+        kind = advertise_service_abilities_prelude_sending,
+        ability_count = ability_count,
+        owner_count = owner_count,
+    );
+    for (owner_ura, descriptors) in service_owner_projections {
+        if let Err(status) = send_user_service_advertise_abilities_prelude(
+            client,
+            &owner_ura,
+            caller_ura,
+            device_signer,
+            user_signer.as_ref(),
+            &descriptors,
+        )
+        .await
+        {
+            let code = status.code();
+            let msg = status.message();
+            crate::op_event!(
+                component = session,
+                kind = advertise_service_abilities_prelude_failed,
+                owner_ura = owner_ura,
+                code = code,
+                error = msg,
+                message = "user-scoped Service owner projection publish failed; reconnecting instead of exposing an online host with an incomplete namespace",
+            );
+            return Err(SessionError::OwnerProjectionFailed {
+                endpoint: hub_endpoint.to_string(),
+                status,
+            });
+        }
+    }
+    crate::op_event!(
+        component = session,
+        kind = advertise_service_abilities_prelude_ok,
+        ability_count = ability_count,
+        owner_count = owner_count,
     );
     Ok(())
 }
@@ -252,17 +369,16 @@ async fn run_user_trust_bootstrap_and_spawn_resync(
         "owner_projection_published",
     );
     sync_realm_hub_trust_prelude(client, signer.as_ref(), sync).await;
-    let outcome = sync_paired_user_trust_prelude(client, signer.as_ref(), sync).await?;
+    let outcome = sync_paired_user_trust_prelude(client, sync).await?;
     log_user_trust_bootstrap_outcome(&outcome);
     let sync = sync.clone();
     Ok(Some(AbortOnDrop(tokio::spawn(async move {
-        let mut resync_client = InvocationClient::new(resync_channel);
+        let mut resync_client =
+            crate::daemon::invocation::transport::invocation_client(resync_channel);
         loop {
             tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
             sync_realm_hub_trust_prelude(&mut resync_client, signer.as_ref(), &sync).await;
-            if let Err(err) =
-                sync_paired_user_trust_prelude(&mut resync_client, signer.as_ref(), &sync).await
-            {
+            if let Err(err) = sync_paired_user_trust_prelude(&mut resync_client, &sync).await {
                 let error = err.to_string();
                 crate::op_event!(
                     component = session,
@@ -279,6 +395,7 @@ async fn run_hosted_agent_advertise_prelude(
     phase: &mut SessionPhaseTracker,
     hub_endpoint: &str,
     signer: &dyn CanonicalSigner,
+    paired_user_signer: Option<&PairedUserTrustSigner>,
     ability_descriptors: &[AbilityDescriptor],
 ) -> Result<(), SessionError> {
     let caller_ura = signer.owner_ura();
@@ -309,14 +426,23 @@ async fn run_hosted_agent_advertise_prelude(
         );
         return Ok(());
     }
-    // The agent owner-prefix is the USERNAME slug (`<username>.<agent>`, e.g.
-    // `dev.pages`), NOT the user UUID. This is the §15.1-3 dual grammar: subject
-    // URAs anchor on the stable UUID, but owner-prefixed agent/resource URAs keep
-    // the username slug. The backend resolves these owners via
-    // `svc.UsernameForUID` (username), so advertising under the UUID
-    // (`<uuid>.pages`) lands a directory entry the resolver never queries →
-    // `namespace.resolve NXDOMAIN: owner is not online` on `project_list`/etc.
     let user_segment = resolve_hosted_agent_user_segment(hub_endpoint)?;
+    let user_ura = crate::core::ura::user_ura(&realm, &user_segment);
+    let user_signer = paired_user_signer
+        .ok_or_else(|| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "hosted-agent owner projection for `{user_ura}` requires the paired User signer source"
+            ),
+        })?
+        .load(&user_ura)
+        .await
+        .map_err(|error| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "load paired User signer for hosted-agent owner projection `{user_ura}`: {error}"
+            ),
+        })?;
 
     let hosted_identity =
         AgentAggregateRepository::load_hosted_identity_snapshot().map_err(|error| {
@@ -362,6 +488,7 @@ async fn run_hosted_agent_advertise_prelude(
             ability_descriptors,
             entry,
             signer,
+            user_signer.as_ref(),
         )
         .await
         .map_err(|reason| SessionError::HostedAgentPreludeFailed {
@@ -379,22 +506,78 @@ async fn run_hosted_agent_advertise_prelude(
 }
 
 fn resolve_hosted_agent_user_segment(hub_endpoint: &str) -> Result<String, SessionError> {
-    let credentials =
-        crate::daemon::persistence::config::load_credentials_optional().map_err(|error| {
-            SessionError::HostedAgentPreludeFailed {
+    let user_ura = resolve_runtime_user_ura_for_owner_projection(hub_endpoint, "hosted-agent")?;
+    let parsed = crate::core::ura::parse_ura(&user_ura).map_err(|error| {
+        SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for hosted-agent owner projection: invalid user URA `{user_ura}`: {error}"
+            ),
+        }
+    })?;
+    parsed
+        .user_id()
+        .map(str::to_string)
+        .ok_or_else(|| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for hosted-agent owner projection: user URA `{user_ura}` has no user id"
+            ),
+        })
+}
+
+fn resolve_runtime_user_ura_for_owner_projection(
+    hub_endpoint: &str,
+    owner_kind: &str,
+) -> Result<String, SessionError> {
+    let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()
+        .map_err(|error| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!("load credentials for {owner_kind} owner projection: {error}"),
+        })?
+    else {
+        return Err(SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for {owner_kind} owner projection: no paired credentials are available"
+            ),
+        });
+    };
+    let user_ura = match credentials.runtime_user_binding().map_err(|error| {
+        SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for {owner_kind} owner projection: {error}"
+            ),
+        }
+    })? {
+        crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } => user_ura,
+        crate::daemon::persistence::config::RuntimeUserBinding::Unbound { reason } => {
+            return Err(SessionError::HostedAgentPreludeFailed {
                 endpoint: hub_endpoint.to_string(),
-                reason: format!("load credentials for hosted-agent owner projection: {error}"),
-            }
-        })?;
-    pages_user_from_env_or_credentials(credentials.as_ref())
-    .map_err(|error| SessionError::HostedAgentPreludeFailed {
-        endpoint: hub_endpoint.to_string(),
-        reason: format!("project username for hosted-agent owner projection: {error}"),
-    })?
-    .ok_or_else(|| SessionError::HostedAgentPreludeFailed {
-        endpoint: hub_endpoint.to_string(),
-        reason: "project username for hosted-agent owner projection: no user-root Pages identity is bound".to_string(),
-    })
+                reason: format!(
+                    "project runtime user binding for {owner_kind} owner projection: {reason}"
+                ),
+            });
+        }
+    };
+    let parsed = crate::core::ura::parse_ura(&user_ura).map_err(|error| {
+        SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for {owner_kind} owner projection: invalid user URA `{user_ura}`: {error}"
+            ),
+        }
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::User {
+        return Err(SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for {owner_kind} owner projection: expected User URA, got `{user_ura}`"
+            ),
+        });
+    }
+    Ok(user_ura)
 }
 
 async fn advertise_hosted_agent_entry(
@@ -404,19 +587,20 @@ async fn advertise_hosted_agent_entry(
     ability_descriptors: &[AbilityDescriptor],
     entry: &AgentHostedAdvertiseEntry,
     signer: &dyn CanonicalSigner,
+    user_signer: &dyn CanonicalSigner,
 ) -> Result<(), String> {
     let host_for_advertise = caller_node_id.as_deref();
-    let plan = HostedAgentPreludePublicationPlan::prepare(
-        entry.agent_ura(),
-        caller_ura,
-        host_for_advertise,
-        ability_descriptors,
-    )?;
-    send_advertise_agent_prelude(
+    let plan =
+        crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
+            entry.agent_ura(),
+            caller_ura,
+            host_for_advertise,
+            ability_descriptors,
+        )?;
+    let assignment = send_advertise_agent_prelude(
         client,
         entry.agent_ura(),
-        plan.generation(),
-        host_for_advertise,
+        plan.identity_payload_bytes()?,
         signer,
     )
     .await
@@ -428,57 +612,27 @@ async fn advertise_hosted_agent_entry(
             error.message()
         )
     })?;
-    let mut advertise_ctx = HostedAgentAbilityAdvertiseContext { client, signer };
-    advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &plan).await
+    let active = plan.activate(assignment)?;
+    let mut advertise_ctx = HostedAgentAbilityAdvertiseContext {
+        client,
+        device_signer: signer,
+        user_signer,
+    };
+    advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &active).await
 }
 
 struct HostedAgentAbilityAdvertiseContext<'a> {
     client: &'a mut InvocationClient<Channel>,
-    signer: &'a dyn CanonicalSigner,
-}
-
-struct HostedAgentPreludePublicationPlan {
-    descriptors: Vec<AbilityDescriptor>,
-    publication:
-        crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication,
-}
-
-impl HostedAgentPreludePublicationPlan {
-    fn prepare(
-        agent_ura: &str,
-        host_device_ura: &str,
-        host_node_id: Option<&str>,
-        ability_descriptors: &[AbilityDescriptor],
-    ) -> Result<Self, String> {
-        let descriptors =
-            committed_owner_ability_descriptors(ability_descriptors, agent_ura, host_node_id);
-        let publication =
-            crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
-                agent_ura,
-                host_device_ura,
-                &descriptors,
-            )?;
-        Ok(Self {
-            descriptors,
-            publication,
-        })
-    }
-
-    fn generation(&self) -> u64 {
-        self.publication.generation
-    }
-
-    fn ability_count(&self) -> usize {
-        self.descriptors.len()
-    }
+    device_signer: &'a dyn CanonicalSigner,
+    user_signer: &'a dyn CanonicalSigner,
 }
 
 async fn advertise_hosted_agent_abilities(
     ctx: &mut HostedAgentAbilityAdvertiseContext<'_>,
     entry: &AgentHostedAdvertiseEntry,
-    plan: &HostedAgentPreludePublicationPlan,
+    plan: &crate::daemon::federation::hosted_agent_publication::AssignedHostedAgentPublication,
 ) -> Result<(), String> {
-    let ability_count = plan.ability_count();
+    let ability_count = plan.ability_count;
     crate::op_event!(
         component = session,
         kind = advertise_hosted_agent_abilities_prelude_sending,
@@ -488,7 +642,8 @@ async fn advertise_hosted_agent_abilities(
     send_prepared_advertise_abilities_prelude(
         ctx.client,
         entry.agent_ura(),
-        ctx.signer,
+        ctx.device_signer,
+        PreludeOwnerProjectionAuthority::UserDelegation(ctx.user_signer),
         &plan.publication,
     )
     .await
@@ -500,6 +655,7 @@ async fn advertise_hosted_agent_abilities(
             error.message()
         )
     })?;
+    plan.mark_published()?;
     crate::op_event!(
         component = session,
         kind = advertise_hosted_agent_abilities_prelude_ok,
@@ -604,37 +760,32 @@ fn federation_join_public_key_hex(signer: &dyn CanonicalSigner) -> Result<String
 async fn send_advertise_agent_prelude(
     client: &mut InvocationClient<Channel>,
     agent_ura: &str,
-    generation: u64,
-    host_node_id: Option<&str>,
+    arguments: Vec<u8>,
     signer: &dyn CanonicalSigner,
-) -> Result<(), tonic::Status> {
-    let caller_ura = signer.owner_ura();
-    let mut body = serde_json::json!({
-        "agent_ura": agent_ura,
-        "generation": generation,
-        "signing_authority": {
-            "kind": "hosted_by",
-            "host_ura": caller_ura,
-        },
-    });
-    if let Some(node_id) = host_node_id {
-        if let Some(map) = body.as_object_mut() {
-            map.insert(
-                "host_node_id".to_string(),
-                serde_json::Value::String(node_id.to_string()),
-            );
-        }
-    }
-    let arguments = serde_json::to_vec(&body).map_err(|e| {
-        tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
-    })?;
-
+) -> Result<
+    crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment,
+    tonic::Status,
+> {
     let request =
         signed_prelude_request(signer, agent_ura, "federation.advertise_agent", arguments).await?;
-
-    invoke_prelude_unary(client, request, "federation.advertise_agent")
-        .await
-        .map(|_| ())
+    let response = invoke_prelude_unary(client, request, "federation.advertise_agent").await?;
+    let receipt: crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAgentResponse =
+        serde_json::from_slice(&response.result).map_err(|error| {
+            tonic::Status::failed_precondition(format!(
+                "federation.advertise_agent assignment invalid: {error}"
+            ))
+        })?;
+    if !receipt.ack {
+        return Err(tonic::Status::failed_precondition(
+            "federation.advertise_agent did not acknowledge the assignment",
+        ));
+    }
+    receipt.assignment.validate().map_err(|error| {
+        tonic::Status::failed_precondition(format!(
+            "federation.advertise_agent assignment invalid: {error}"
+        ))
+    })?;
+    Ok(receipt.assignment)
 }
 
 async fn send_advertise_abilities_prelude(
@@ -654,13 +805,55 @@ async fn send_advertise_abilities_prelude(
             "federation.advertise_abilities prelude projection: {e}"
         ))
     })?;
-    send_prepared_advertise_abilities_prelude(client, owner_ura, signer, &projection).await
+    send_prepared_advertise_abilities_prelude(
+        client,
+        owner_ura,
+        signer,
+        PreludeOwnerProjectionAuthority::SponsorDevice,
+        &projection,
+    )
+    .await
+}
+
+async fn send_user_service_advertise_abilities_prelude(
+    client: &mut InvocationClient<Channel>,
+    owner_ura: &str,
+    host_device_ura: &str,
+    device_signer: &dyn CanonicalSigner,
+    user_signer: &dyn CanonicalSigner,
+    descriptors: &[AbilityDescriptor],
+) -> Result<(), tonic::Status> {
+    let projection = crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
+        owner_ura,
+        host_device_ura,
+        descriptors,
+    )
+    .map_err(|e| {
+        tonic::Status::internal(format!(
+            "federation.advertise_abilities Service prelude projection: {e}"
+        ))
+    })?;
+    send_prepared_advertise_abilities_prelude(
+        client,
+        owner_ura,
+        device_signer,
+        PreludeOwnerProjectionAuthority::UserDelegation(user_signer),
+        &projection,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum PreludeOwnerProjectionAuthority<'a> {
+    SponsorDevice,
+    UserDelegation(&'a dyn CanonicalSigner),
 }
 
 async fn send_prepared_advertise_abilities_prelude(
     client: &mut InvocationClient<Channel>,
     owner_ura: &str,
-    signer: &dyn CanonicalSigner,
+    device_signer: &dyn CanonicalSigner,
+    authority: PreludeOwnerProjectionAuthority<'_>,
     projection: &crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication,
 ) -> Result<(), tonic::Status> {
     let body = serde_json::json!({
@@ -678,17 +871,64 @@ async fn send_prepared_advertise_abilities_prelude(
         ))
     })?;
 
-    let request = signed_prelude_request(
-        signer,
+    let mut request = signed_prelude_request(
+        device_signer,
         owner_ura,
         "federation.advertise_abilities",
         arguments,
     )
     .await?;
+    attach_owner_projection_authority(&mut request, owner_ura, device_signer, authority).await?;
 
-    invoke_prelude_unary(client, request, "federation.advertise_abilities")
+    let response = invoke_prelude_unary(client, request, "federation.advertise_abilities").await?;
+    crate::daemon::federation::advertise::decode_advertise_abilities_response(
+        &response.result,
+        projection.ability_summaries.len(),
+    )
+    .map(|_| ())
+    .map_err(tonic::Status::failed_precondition)
+}
+
+async fn attach_owner_projection_authority(
+    request: &mut InvokeRequest,
+    owner_ura: &str,
+    device_signer: &dyn CanonicalSigner,
+    authority: PreludeOwnerProjectionAuthority<'_>,
+) -> Result<(), tonic::Status> {
+    let issuer_signer = match authority {
+        PreludeOwnerProjectionAuthority::SponsorDevice => device_signer,
+        PreludeOwnerProjectionAuthority::UserDelegation(user_signer) => user_signer,
+    };
+    let now_ms = i64::try_from(crate::daemon::invocation::admission::runtime_trust::now_unix_ms())
+        .map_err(|_| tonic::Status::internal("runtime clock exceeded signed delegation range"))?;
+    let hub_ura = session_hub_ura(device_signer.owner_ura())?;
+    let claims = crate::daemon::ability::DelegationAuthorityClaims::new(
+        issuer_signer.owner_ura(),
+        owner_ura,
+        device_signer.owner_ura(),
+        &hub_ura,
+        [crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES],
+        now_ms,
+        now_ms + 60_000,
+    )
+    .map_err(|error| {
+        tonic::Status::failed_precondition(format!(
+            "federation.advertise_abilities delegation claims: {error}"
+        ))
+    })?;
+    let metadata = claims
+        .signed_metadata_value(issuer_signer)
         .await
-        .map(|_| ())
+        .map_err(|error| {
+            tonic::Status::failed_precondition(format!(
+                "federation.advertise_abilities delegation signing: {error}"
+            ))
+        })?;
+    request.metadata.insert(
+        crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
+        metadata,
+    );
+    Ok(())
 }
 
 pub(super) async fn signed_prelude_request(
@@ -702,7 +942,7 @@ pub(super) async fn signed_prelude_request(
     let descriptor_subject_ura =
         descriptor_prelude_subject_ura(&hub_ura, subject_ura, function_name)?;
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             &hub_ura,
             function_name,
             crate::daemon::ability::CallMode::Rpc,
@@ -771,6 +1011,72 @@ pub struct UserTrustSync {
     pub daemon_realm: String,
     pub trust_anchor_path: PathBuf,
     pub cell: crate::daemon::trust::cell::SharedTrustAnchor,
+    pub user_signer: PairedUserTrustSigner,
+}
+
+/// Narrow signer source for paired User trust bootstrap.
+///
+/// Device session preludes normally sign as the Device. User trust publication
+/// is different: `identity.register_pubkey` for a User trust row must be
+/// authored by the User caller. Keeping this as a small source object avoids
+/// leaking the key-service port into the whole session supervisor while making
+/// tests inject an explicit User signer.
+#[derive(Clone)]
+pub struct PairedUserTrustSigner {
+    source: PairedUserTrustSignerSource,
+}
+
+#[derive(Clone)]
+enum PairedUserTrustSignerSource {
+    RuntimeCaller,
+    #[cfg(test)]
+    Fixed(Arc<dyn CanonicalSigner>),
+}
+
+impl PairedUserTrustSigner {
+    #[must_use]
+    pub fn runtime_caller() -> Self {
+        Self {
+            source: PairedUserTrustSignerSource::RuntimeCaller,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixed(signer: Arc<dyn CanonicalSigner>) -> Self {
+        Self {
+            source: PairedUserTrustSignerSource::Fixed(signer),
+        }
+    }
+
+    async fn load(&self, user_ura: &str) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
+        match &self.source {
+            PairedUserTrustSignerSource::RuntimeCaller => {
+                let user_ura = user_ura.to_string();
+                tokio::task::spawn_blocking(move || {
+                    crate::daemon::identity::self_identity::load_runtime_caller_signer(user_ura)
+                })
+                .await
+                .map_err(|error| {
+                    SelfIdentityError::Transport(format!(
+                        "paired user signer loader task failed: {error}"
+                    ))
+                })?
+            }
+            #[cfg(test)]
+            PairedUserTrustSignerSource::Fixed(signer) => {
+                if signer.owner_ura() != user_ura {
+                    return Err(SelfIdentityError::Rejected {
+                        kind: "policy".into(),
+                        message: format!(
+                            "fixed paired user signer owner `{}` does not match `{user_ura}`",
+                            signer.owner_ura()
+                        ),
+                    });
+                }
+                Ok(Arc::clone(signer))
+            }
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -783,6 +1089,9 @@ pub enum UserTrustBootstrapError {
         user_ura: String,
         status: tonic::Status,
     },
+
+    #[error("paired user runtime signer for `{user_ura}` is unavailable: {message}")]
+    SignerUnavailable { user_ura: String, message: String },
 
     #[error("paired user `{user_ura}` has no public key registered at the Hub")]
     MissingAtHub { user_ura: String },
@@ -900,7 +1209,7 @@ async fn sync_realm_hub_trust_prelude(
 
     for pubkey_b64 in pubkeys {
         let register_args =
-            match RegisterPubkeyRequest::new(hub_ura.as_str(), pubkey_b64, TrustedAgentRole::Hub)
+            match RegisterPubkeyRequest::new(hub_ura.as_str(), pubkey_b64, TrustAnchorRole::Hub)
                 .to_arguments_bytes()
             {
                 Ok(v) => v,
@@ -943,7 +1252,6 @@ async fn sync_realm_hub_trust_prelude(
 
 async fn sync_paired_user_trust_prelude(
     client: &mut InvocationClient<Channel>,
-    signer: &dyn CanonicalSigner,
     sync: &UserTrustSync,
 ) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {
     let Some(creds) =
@@ -969,20 +1277,33 @@ async fn sync_paired_user_trust_prelude(
     if realm != sync.daemon_realm {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
     }
+    let user_signer = sync.user_signer.load(&user_ura).await.map_err(|error| {
+        UserTrustBootstrapError::SignerUnavailable {
+            user_ura: user_ura.clone(),
+            message: error.to_string(),
+        }
+    })?;
+    let signer_public_key_b64 =
+        paired_user_signer_public_key_b64(user_signer.as_ref()).map_err(|error| {
+            UserTrustBootstrapError::SignerUnavailable {
+                user_ura: user_ura.clone(),
+                message: error.to_string(),
+            }
+        })?;
     let local_public_keys = paired_user_public_keys(sync, &user_ura);
-    if !local_public_keys.is_empty() {
-        publish_paired_user_keys_prelude(client, signer, &user_ura, &local_public_keys).await?;
-    }
+    let publish_public_keys = paired_user_publish_public_keys(&signer_public_key_b64);
+    publish_paired_user_keys_prelude(
+        client,
+        user_signer.as_ref(),
+        &user_ura,
+        &publish_public_keys,
+    )
+    .await?;
 
-    let mut resolve_inputs: Vec<Option<&str>> = local_public_keys
-        .iter()
-        .map(|public_key| Some(public_key.as_str()))
-        .collect();
-    if resolve_inputs.is_empty() {
-        resolve_inputs.push(None);
-    }
+    let resolve_inputs =
+        paired_user_resolve_public_keys(&signer_public_key_b64, &local_public_keys);
     let mut pubkeys = Vec::new();
-    for presented_pubkey_b64 in resolve_inputs {
+    for presented_pubkey_b64 in &resolve_inputs {
         let args =
             paired_user_resolve_key_args(&user_ura, presented_pubkey_b64).map_err(|err| {
                 UserTrustBootstrapError::ResolveFailed {
@@ -993,7 +1314,7 @@ async fn sync_paired_user_trust_prelude(
                 }
             })?;
         let request = match signed_prelude_request(
-            signer,
+            user_signer.as_ref(),
             &user_ura,
             crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
             args,
@@ -1007,6 +1328,24 @@ async fn sync_paired_user_trust_prelude(
         };
         let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
             Ok(resp) => resp,
+            // A locally-trusted key the hub does not know is stale local
+            // state (hub-side cap eviction or debris from an earlier
+            // pairing), not a session-fatal condition. Only the active
+            // signer key is required to resolve; without this tolerance a
+            // single stale trust-anchor row keeps the device offline
+            // forever.
+            Err(status)
+                if status.code() == tonic::Code::NotFound
+                    && presented_pubkey_b64 != &signer_public_key_b64 =>
+            {
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_stale_local_key_skipped,
+                    user_ura = user_ura,
+                    presented_pubkey_b64 = presented_pubkey_b64.as_str(),
+                );
+                continue;
+            }
             Err(status) => {
                 let code = status.code();
                 let msg = status.message();
@@ -1044,17 +1383,18 @@ async fn sync_paired_user_trust_prelude(
     let mut last_import_error = None;
     for pubkey_b64 in pubkeys {
         let register_args =
-            match RegisterPubkeyRequest::new(user_ura.as_str(), pubkey_b64, TrustedAgentRole::User)
+            match RegisterPubkeyRequest::new(user_ura.as_str(), pubkey_b64, TrustAnchorRole::User)
                 .to_arguments_bytes()
             {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-        match crate::daemon::invocation::admission::register_device_pubkey::handle(
+        match crate::daemon::invocation::admission::register_device_pubkey::handle_protecting(
             &register_args,
             &sync.daemon_realm,
             &sync.trust_anchor_path,
             &sync.cell,
+            Some(signer_public_key_b64.as_str()),
         ) {
             Ok(_) => {
                 accepted_key_count += 1;
@@ -1126,23 +1466,16 @@ fn resolved_public_keys(result: &[u8]) -> anyhow::Result<Vec<String>> {
 
 fn paired_user_resolve_key_args(
     user_ura: &str,
-    presented_pubkey_b64: Option<&str>,
-) -> serde_json::Result<Vec<u8>> {
-    let mut args = serde_json::Map::new();
-    args.insert(
-        "agent_ura".to_string(),
-        serde_json::Value::String(user_ura.to_string()),
-    );
-    if let Some(public_key) = presented_pubkey_b64
-        .map(str::trim)
-        .filter(|public_key| !public_key.is_empty())
-    {
-        args.insert(
-            "presented_pubkey_b64".to_string(),
-            serde_json::Value::String(public_key.to_string()),
-        );
+    presented_pubkey_b64: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let presented_pubkey_b64 = presented_pubkey_b64.trim();
+    if presented_pubkey_b64.is_empty() {
+        anyhow::bail!("paired_user_resolve_key_presented_pubkey_empty");
     }
-    serde_json::to_vec(&serde_json::Value::Object(args))
+    crate::daemon::federation::wire_contract::ResolveKeyRequest::new(user_ura)
+        .with_presented_pubkey_b64(presented_pubkey_b64)
+        .to_arguments_bytes()
+        .map_err(Into::into)
 }
 
 fn paired_user_trust_present(sync: &UserTrustSync, user_ura: &str) -> bool {
@@ -1160,6 +1493,37 @@ fn paired_user_public_keys(sync: &UserTrustSync, user_ura: &str) -> Vec<String> 
         .collect()
 }
 
+fn paired_user_signer_public_key_b64(
+    signer: &dyn CanonicalSigner,
+) -> Result<String, SelfIdentityError> {
+    signer
+        .signing_public_key()
+        .map(|key| BASE64_STANDARD.encode(key.to_bytes()))
+}
+
+fn paired_user_publish_public_keys(signer_public_key_b64: &str) -> Vec<String> {
+    vec![signer_public_key_b64.trim().to_string()]
+}
+
+fn paired_user_resolve_public_keys(
+    signer_public_key_b64: &str,
+    local_public_keys: &[String],
+) -> Vec<String> {
+    let mut keys = Vec::with_capacity(local_public_keys.len() + 1);
+    push_unique_public_key(&mut keys, signer_public_key_b64);
+    for public_key in local_public_keys {
+        push_unique_public_key(&mut keys, public_key);
+    }
+    keys
+}
+
+fn push_unique_public_key(keys: &mut Vec<String>, public_key_b64: &str) {
+    let public_key = public_key_b64.trim();
+    if !public_key.is_empty() && !keys.iter().any(|existing| existing == public_key) {
+        keys.push(public_key.to_string());
+    }
+}
+
 async fn publish_paired_user_keys_prelude(
     client: &mut InvocationClient<Channel>,
     signer: &dyn CanonicalSigner,
@@ -1167,7 +1531,7 @@ async fn publish_paired_user_keys_prelude(
     public_keys_b64: &[String],
 ) -> Result<(), UserTrustBootstrapError> {
     for public_key_b64 in public_keys_b64 {
-        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustedAgentRole::User)
+        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustAnchorRole::User)
             .to_arguments_bytes()
             .map_err(|err| UserTrustBootstrapError::PublishFailed {
                 user_ura: user_ura.to_string(),
@@ -1234,6 +1598,7 @@ pub(super) async fn invoke_prelude_unary(
     Ok(response)
 }
 
+#[cfg(test)]
 pub(super) fn committed_owner_ability_descriptors(
     descriptors: &[AbilityDescriptor],
     owner_ura: &str,
@@ -1250,23 +1615,123 @@ pub(super) fn committed_owner_ability_descriptors(
         .collect()
 }
 
+/// Partition the committed device-native namespace by its real public owner.
+///
+/// DeviceProfileProjection rows remain a same-device migration cursor. Every
+/// executable daemon-native family is published under the device-sponsored
+/// SystemAgent that owns/can receive it; the Device is carried separately as
+/// `host_device_ura`. User-owned hosted Agents are intentionally excluded and
+/// use the identity + ability publication transaction below.
+pub(super) fn committed_device_native_owner_descriptors(
+    descriptors: &[AbilityDescriptor],
+    host_device_ura: &str,
+) -> BTreeMap<String, Vec<AbilityDescriptor>> {
+    let Ok(host) = crate::core::ura::parse_ura(host_device_ura) else {
+        return BTreeMap::new();
+    };
+    if host.kind != crate::core::ura::URAKind::Device {
+        return BTreeMap::new();
+    }
+    let Some(host_device_id) = host.device_id() else {
+        return BTreeMap::new();
+    };
+
+    let mut by_owner = BTreeMap::<String, Vec<AbilityDescriptor>>::new();
+    for descriptor in descriptors {
+        let owner_ura = descriptor.owner_ura.as_str();
+        let is_same_device_profile = owner_ura == host_device_ura;
+        let is_sponsored_system_agent = crate::core::ura::parse_ura(owner_ura)
+            .ok()
+            .filter(|owner| owner.realm == host.realm)
+            .is_some_and(|owner| {
+                owner
+                    .device_agent_ids()
+                    .is_some_and(|(device_id, system_agent_id)| {
+                        device_id == host_device_id
+                            && crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
+                                system_agent_id,
+                            )
+                    })
+            });
+        if is_same_device_profile || is_sponsored_system_agent {
+            by_owner
+                .entry(owner_ura.to_string())
+                .or_default()
+                .push(descriptor.clone());
+        }
+    }
+    by_owner
+}
+
+/// Partition committed user-scoped Service descriptors by their public owner.
+///
+/// A Service is accountable to a User Principal while a Device hosts the
+/// executable implementation. It therefore cannot use the device-native
+/// `SponsorDevice` publication path; the advertise prelude must carry a
+/// paired User delegation over the Service owner URA.
+pub(super) fn committed_user_service_owner_descriptors(
+    descriptors: &[AbilityDescriptor],
+    user_ura: &str,
+) -> BTreeMap<String, Vec<AbilityDescriptor>> {
+    let Ok(user) = crate::core::ura::parse_ura(user_ura) else {
+        return BTreeMap::new();
+    };
+    if user.kind != crate::core::ura::URAKind::User {
+        return BTreeMap::new();
+    }
+    let Some(user_id) = user.user_id() else {
+        return BTreeMap::new();
+    };
+
+    let mut by_owner = BTreeMap::<String, Vec<AbilityDescriptor>>::new();
+    for descriptor in descriptors {
+        let owner_ura = descriptor.owner_ura.as_str();
+        let is_user_service = crate::core::ura::parse_ura(owner_ura)
+            .ok()
+            .filter(|owner| owner.realm == user.realm)
+            .and_then(|owner| {
+                owner.service_ids().map(|(principal_id, _service_id)| {
+                    owner.kind == crate::core::ura::URAKind::Service && principal_id == user_id
+                })
+            })
+            .unwrap_or(false);
+        if is_user_service {
+            by_owner
+                .entry(owner_ura.to_string())
+                .or_default()
+                .push(descriptor.clone());
+        }
+    }
+    by_owner
+}
+
+fn is_service_owner_ura(owner_ura: &str) -> bool {
+    crate::core::ura::parse_ura(owner_ura)
+        .ok()
+        .is_some_and(|owner| owner.kind == crate::core::ura::URAKind::Service)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_federation_join_receipt, paired_user_resolve_key_args, paired_user_trust_present,
+        apply_federation_join_receipt, attach_owner_projection_authority,
+        committed_user_service_owner_descriptors, paired_user_publish_public_keys,
+        paired_user_resolve_key_args, paired_user_resolve_public_keys,
+        paired_user_signer_public_key_b64, paired_user_trust_present,
         resolve_hosted_agent_user_segment, resolved_public_keys,
-        run_hosted_agent_advertise_prelude, sync_paired_user_trust_prelude,
-        HostedAgentPreludePublicationPlan, UserTrustBootstrapError, UserTrustBootstrapOutcome,
-        UserTrustSync,
+        run_hosted_agent_advertise_prelude, signed_prelude_request, sync_paired_user_trust_prelude,
+        PairedUserTrustSigner, PreludeOwnerProjectionAuthority, RegisterPubkeyRequest,
+        UserTrustBootstrapError, UserTrustBootstrapOutcome, UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
     use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
     use crate::daemon::trust::cell::SharedTrustAnchor;
-    use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+    use axon_sdk::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
+    use base64::Engine as _;
     use std::sync::Arc;
     use tonic::transport::Channel;
 
@@ -1276,7 +1741,7 @@ mod tests {
             descriptor: serde_json::to_value(
                 AbilityDescriptor::new(
                     name,
-                    &crate::core::ura::hub_ura("realm"),
+                    crate::core::ura::hub_ura("realm"),
                     Visibility::Public,
                     AdmissionAction::Read,
                 )
@@ -1384,6 +1849,60 @@ mod tests {
         assert_eq!(store.snapshot()[0].public_name(), "test.scope");
     }
 
+    #[test]
+    fn user_service_owner_projection_is_partitioned_for_user_delegation() {
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let pages_service = crate::core::ura::service_ura("realm", "user-dev", "pages");
+        let foreign_service = crate::core::ura::service_ura("realm", "other-user", "pages");
+        let system_agent = crate::core::ura::device_agent_ura("realm", "n1", "runtime-health");
+        let descriptors = vec![
+            AbilityDescriptor::new(
+                "project_list",
+                &pages_service,
+                Visibility::Scoped,
+                AdmissionAction::Read,
+            )
+            .expect("Pages Service descriptor"),
+            AbilityDescriptor::new(
+                "project_list",
+                &foreign_service,
+                Visibility::Scoped,
+                AdmissionAction::Read,
+            )
+            .expect("foreign Service descriptor"),
+            AbilityDescriptor::new(
+                "observe.health",
+                &system_agent,
+                Visibility::Scoped,
+                AdmissionAction::Read,
+            )
+            .expect("SystemAgent descriptor"),
+        ];
+
+        let by_owner = committed_user_service_owner_descriptors(&descriptors, user_ura);
+
+        assert_eq!(by_owner.len(), 1);
+        assert_eq!(by_owner[&pages_service][0].public_name(), "project_list");
+        assert!(!by_owner.contains_key(&foreign_service));
+        assert!(!by_owner.contains_key(&system_agent));
+    }
+
+    #[test]
+    fn user_service_owner_projection_requires_canonical_user_ura() {
+        let pages_service = crate::core::ura::service_ura("realm", "user-dev", "pages");
+        let descriptors = vec![AbilityDescriptor::new(
+            "project_list",
+            &pages_service,
+            Visibility::Scoped,
+            AdmissionAction::Read,
+        )
+        .expect("Pages Service descriptor")];
+
+        let by_owner = committed_user_service_owner_descriptors(&descriptors, "not-a-user-ura");
+
+        assert!(by_owner.is_empty());
+    }
+
     fn user_trust_sync_with_key(user_ura: &str) -> UserTrustSync {
         UserTrustSync {
             daemon_realm: "realm".to_string(),
@@ -1392,7 +1911,7 @@ mod tests {
                 RealmTrustAnchor::from_entries(vec![TrustedAgent {
                     agent_ura: user_ura.to_string(),
                     public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-                    role: TrustedAgentRole::User,
+                    role: TrustAnchorRole::User,
                     added_at_unix_ms: 1_700_000_000_000,
                     origin_realm: None,
                     hub_endpoint: None,
@@ -1400,6 +1919,9 @@ mod tests {
                 }])
                 .expect("user anchor"),
             )),
+            user_signer: PairedUserTrustSigner::fixed(Arc::new(TestCanonicalSigner::new(
+                user_ura, [0x22; 32],
+            ))),
         }
     }
 
@@ -1436,17 +1958,6 @@ mod tests {
     }
 
     #[test]
-    fn hosted_agent_owner_segment_accepts_explicit_dev_override() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        std::env::set_var("EASYNET_PAGES_USER", " dev ");
-
-        let user_segment =
-            resolve_hosted_agent_user_segment("https://hub:50443").expect("env user segment");
-
-        assert_eq!(user_segment, "dev");
-    }
-
-    #[test]
     fn hosted_agent_owner_segment_reads_valid_paired_credentials() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save_credentials(&paired_credentials(Some("dev"))).expect("save credentials");
@@ -1454,17 +1965,17 @@ mod tests {
         let user_segment = resolve_hosted_agent_user_segment("https://hub:50443")
             .expect("credential user segment");
 
-        assert_eq!(user_segment, "dev");
+        assert_eq!(user_segment, "user-dev");
     }
 
     #[test]
-    fn hosted_agent_owner_segment_rejects_federation_native_credentials_without_username() {
+    fn hosted_agent_owner_segment_rejects_federation_native_credentials_without_user_binding() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save_credentials(&federation_native_credentials_without_user_binding())
             .expect("save federation-native device credential");
 
         let error = resolve_hosted_agent_user_segment("https://hub:50443")
-            .expect_err("missing username must fail hosted-agent prelude");
+            .expect_err("missing user binding must fail hosted-agent prelude");
 
         match error {
             crate::daemon::invocation::bidi::session_initiator::SessionError::HostedAgentPreludeFailed {
@@ -1472,10 +1983,10 @@ mod tests {
                 ..
             } => {
                 assert!(
-                    reason.contains("project username for hosted-agent owner projection"),
+                    reason.contains("project runtime user binding for hosted-agent owner projection"),
                     "{reason}"
                 );
-                assert!(reason.contains("no user-root Pages identity is bound"), "{reason}");
+                assert!(reason.contains("not bound"), "{reason}");
             }
             other => panic!("expected hosted-agent credential projection failure, got {other:?}"),
         }
@@ -1499,9 +2010,8 @@ mod tests {
         let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
         let mut client =
             InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
-        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
 
-        let outcome = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+        let outcome = sync_paired_user_trust_prelude(&mut client, &sync)
             .await
             .expect("missing credentials are the only not-required local state");
         assert_eq!(outcome, UserTrustBootstrapOutcome::NotRequired);
@@ -1515,9 +2025,8 @@ mod tests {
         let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
         let mut client =
             InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
-        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
 
-        let outcome = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+        let outcome = sync_paired_user_trust_prelude(&mut client, &sync)
             .await
             .expect("device-only runtime has no paired-user trust prelude");
         assert_eq!(outcome, UserTrustBootstrapOutcome::NotRequired);
@@ -1538,6 +2047,7 @@ mod tests {
             &mut phase,
             "https://hub.example:50443",
             &signer,
+            None,
             &[],
         )
         .await
@@ -1553,9 +2063,8 @@ mod tests {
         let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
         let mut client =
             InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
-        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
 
-        let err = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+        let err = sync_paired_user_trust_prelude(&mut client, &sync)
             .await
             .expect_err("malformed credentials must fail prelude, not project NotRequired");
         match err {
@@ -1567,11 +2076,114 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn paired_user_register_pubkey_prelude_is_bootstrap_candidate_tuple() {
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let signer = TestCanonicalSigner::new(user_ura, [0x33; 32]);
+        let public_key_b64 = base64::engine::general_purpose::STANDARD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[0x33; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustAnchorRole::User)
+            .to_arguments_bytes()
+            .expect("identity.register_pubkey user args");
+
+        let request = signed_prelude_request(
+            &signer,
+            user_ura,
+            crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY,
+            args,
+        )
+        .await
+        .expect("signed identity.register_pubkey prelude request");
+        let envelope = request.envelope.as_ref().expect("prelude envelope");
+
+        assert!(
+            crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyBootstrapTuple::matches(envelope),
+            "paired user trust prelude must be classified as a bootstrap candidate before Axon caller-key resolution"
+        );
+        crate::daemon::invocation::admission::register_device_pubkey::verify_user_register_pubkey_bootstrap_claim(
+            envelope,
+            &request.arguments,
+        )
+        .expect("prelude arguments must bind the presented user key");
+    }
+
+    #[tokio::test]
+    async fn hosted_agent_projection_carries_exact_user_delegation() {
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let device_ura = "easynet:///r/realm/device/device-dev";
+        let agent_ura = "easynet:///r/realm/agent/user-dev.worker";
+        let user_signer = TestCanonicalSigner::new(user_ura, [0x31; 32]);
+        let device_signer = TestCanonicalSigner::new(device_ura, [0x32; 32]);
+        let mut request = InvokeRequest::default();
+
+        attach_owner_projection_authority(
+            &mut request,
+            agent_ura,
+            &device_signer,
+            PreludeOwnerProjectionAuthority::UserDelegation(&user_signer),
+        )
+        .await
+        .expect("hosted Agent projection delegation");
+
+        let raw = request
+            .metadata
+            .get(crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY)
+            .expect("signed runtime delegation metadata");
+        let wire = crate::daemon::invocation::admission::authority_metadata::decode_delegation_authority_wire(raw)
+            .expect("canonical delegation wire");
+        assert_eq!(wire.payload.issuer_ura(), user_ura);
+        assert_eq!(wire.payload.caller_ura(), device_ura);
+        assert_eq!(wire.payload.subject_ura(), agent_ura);
+        assert_eq!(wire.payload.audience(), "easynet:///r/realm/authority");
+        assert_eq!(
+            wire.payload.scopes(),
+            [crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES]
+        );
+    }
+
+    #[tokio::test]
+    async fn system_agent_projection_carries_sponsor_device_delegation() {
+        let device_ura = "easynet:///r/realm/device/device-dev";
+        let system_agent_ura = "easynet:///r/realm/agent/device.device-dev.remote-desktop";
+        let device_signer = TestCanonicalSigner::new(device_ura, [0x42; 32]);
+        let mut request = InvokeRequest::default();
+
+        attach_owner_projection_authority(
+            &mut request,
+            system_agent_ura,
+            &device_signer,
+            PreludeOwnerProjectionAuthority::SponsorDevice,
+        )
+        .await
+        .expect("SystemAgent projection sponsor-device delegation");
+
+        let raw = request
+            .metadata
+            .get(crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY)
+            .expect("signed sponsor-device runtime delegation metadata");
+        let wire =
+            crate::daemon::invocation::admission::authority_metadata::decode_delegation_authority_wire(
+                raw,
+            )
+            .expect("canonical delegation wire");
+        assert_eq!(wire.payload.issuer_ura(), device_ura);
+        assert_eq!(wire.payload.caller_ura(), device_ura);
+        assert_eq!(wire.payload.subject_ura(), system_agent_ura);
+        assert_eq!(wire.payload.audience(), "easynet:///r/realm/authority");
+        assert_eq!(
+            wire.payload.scopes(),
+            [crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES]
+        );
+    }
+
     #[test]
     fn paired_user_resolve_key_args_carries_presented_pubkey() {
         let body = paired_user_resolve_key_args(
             "easynet:///r/realm/user/user-dev",
-            Some(" AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "),
+            " AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ",
         )
         .expect("encode paired user resolve args");
         let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
@@ -1584,10 +2196,70 @@ mod tests {
     }
 
     #[test]
-    fn hosted_agent_prelude_plan_uses_retired_owner_cursor_generation() {
+    fn paired_user_resolve_key_args_rejects_missing_presented_pubkey() {
+        let error = paired_user_resolve_key_args("easynet:///r/realm/user/user-dev", "   ")
+            .expect_err("paired user resolve_key must pin the local signer key");
+
+        assert!(
+            error
+                .to_string()
+                .contains("paired_user_resolve_key_presented_pubkey_empty"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn paired_user_trust_bootstrap_publishes_only_current_signer_key() {
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let signer = TestCanonicalSigner::new(user_ura, [0x33; 32]);
+        let signer_key = paired_user_signer_public_key_b64(&signer).expect("signer key");
+        let stale_or_browser_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string();
+
+        assert_eq!(
+            paired_user_publish_public_keys(&signer_key),
+            vec![signer_key.clone()],
+            "current signer may only self-register its own public key"
+        );
+        assert_eq!(
+            paired_user_resolve_public_keys(
+                &signer_key,
+                &[stale_or_browser_key.clone(), signer_key.clone()],
+            ),
+            vec![signer_key, stale_or_browser_key],
+            "non-signer local user keys may be resolved/imported, but must not be signer-published"
+        );
+    }
+
+    #[test]
+    fn hosted_agent_prelude_plan_rejects_empty_runtime_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let owner = "easynet:///r/realm/agent/dev.worker";
+        let result =
+            crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
+                owner,
+                "easynet:///r/realm/device/n1",
+                Some("n1"),
+                &[],
+            );
+        let error = match result {
+            Ok(_) => panic!("an empty hosted owner must not be published as online"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains(owner), "{error}");
+        assert!(
+            error.contains("no committed LocalRuntime descriptors"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn hosted_agent_prelude_plan_persists_and_reuses_pending_incarnation() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let owner = "easynet:///r/realm/agent/dev.anthropic";
         let host = "easynet:///r/realm/device/n1";
+        crate::daemon::persistence::local_agents::save_test_llm_publication_owner(host, owner)
+            .expect("persist explicit local publication ownership");
         let descriptors = vec![AbilityDescriptor::new(
             "chat",
             owner,
@@ -1596,28 +2268,27 @@ mod tests {
         )
         .expect("hosted-agent descriptor")];
 
-        let first = crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
-            owner,
-            host,
-            &descriptors,
-        )
-        .expect("first owner projection");
-        let tombstone =
-            crate::daemon::federation::read_model::owner_projection::prepare_removal_and_persist(
-                owner, host,
+        let first =
+            crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
+                owner,
+                host,
+                Some("n1"),
+                &descriptors,
             )
-            .expect("retire owner projection")
-            .expect("active cursor produces tombstone");
+            .expect("first hosted-agent plan");
+        let retry =
+            crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
+                owner,
+                host,
+                Some("n1"),
+                &descriptors,
+            )
+            .expect("retry hosted-agent plan");
 
-        let plan =
-            HostedAgentPreludePublicationPlan::prepare(owner, host, Some("n1"), &descriptors)
-                .expect("recreated hosted-agent plan");
-
-        assert_eq!(first.generation, 1);
-        assert_eq!(tombstone.generation, first.generation);
-        assert!(
-            plan.generation() > tombstone.generation,
-            "same-URA hosted-agent prelude must publish the recreated incarnation generation"
-        );
+        assert_eq!(first.incarnation_id(), retry.incarnation_id());
+        assert!(crate::daemon::persistence::owner_projections::load()
+            .unwrap()
+            .cursor_for(owner)
+            .is_none());
     }
 }

@@ -423,8 +423,8 @@ fn run_list() -> anyhow::Result<()> {
         return Ok(());
     }
     println!(
-        "{:<3} {:<32} {:<18} {:<14} {}",
-        "", "PROFILE", "REALM", "SESSION", "ISSUER"
+        "{:<3} {:<32} {:<18} {:<14} ISSUER",
+        "", "PROFILE", "REALM", "SESSION"
     );
     for (name, profile) in store.profiles.iter() {
         let marker = if store.current_profile.as_deref() == Some(name.as_str()) {

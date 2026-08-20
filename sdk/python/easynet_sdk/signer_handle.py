@@ -95,7 +95,8 @@ def _mapping(value: Mapping[str, object], key: str) -> Mapping[str, object]:
 
 def _is_ed25519_public_key(value: str) -> bool:
     try:
-        return len(base64.b64decode(value, validate=True)) == 32
+        decoded = base64.b64decode(value, validate=True)
+        return len(decoded) == 32 and base64.b64encode(decoded).decode("ascii") == value
     except (binascii.Error, ValueError):
         return False
 

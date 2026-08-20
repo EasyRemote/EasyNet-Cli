@@ -11,13 +11,22 @@ import (
 // context needed to address one runtime ability. The SDK never manufactures a
 // caller, nonce or causal context on behalf of a product.
 type RuntimeCallContext struct {
-	CallerURA         string         `json:"caller_ura"`
-	CalleeURA         string         `json:"callee_ura"`
-	SubjectURA        string         `json:"subject_ura"`
-	DescriptorVersion string         `json:"descriptor_version,omitempty"`
-	NonceBase64       string         `json:"nonce_base64"`
-	CausalContext     map[string]any `json:"causal_context"`
-	Metadata          map[string]any `json:"metadata,omitempty"`
+	CallerURA         string `json:"caller_ura"`
+	CalleeURA         string `json:"callee_ura"`
+	SubjectURA        string `json:"subject_ura"`
+	DescriptorVersion string `json:"descriptor_version,omitempty"`
+	// SelectedDescriptorRef carries a resolver-selected descriptor identity
+	// for callees that are not descriptor-resolvable from this runtime's
+	// committed catalog (e.g. Service-owned abilities placed on a remote
+	// device, where the product boundary already resolved an executable
+	// route). When set, RuntimeAbilityClient binds it verbatim instead of
+	// calling ResolveDescriptorRef; canonical projection and authority
+	// validation still apply. It cannot override a governance descriptor
+	// provider.
+	SelectedDescriptorRef string         `json:"selected_descriptor_ref,omitempty"`
+	NonceBase64           string         `json:"nonce_base64"`
+	CausalContext         map[string]any `json:"causal_context"`
+	Metadata              map[string]any `json:"metadata,omitempty"`
 	// Authority is the typed authority half of this complete Invocation
 	// transaction. RuntimeAbilityClient binds it to the projected tuple and
 	// materializes its metadata atomically; products must not lower it by hand.
@@ -61,7 +70,7 @@ func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy {
 func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy {
 	return runtimeAbilityDispatchPolicy{
 		allowGovernanceRead: true,
-		subjectPolicy:       runtimeAbilitySubjectRuntimeOwner,
+		subjectPolicy:       runtimeAbilitySubjectRuntimeGovernanceRead,
 		descriptorProvider:  runtimeAbilityDescriptorProvider,
 	}
 }
@@ -71,6 +80,7 @@ type runtimeAbilitySubjectPolicy int
 const (
 	runtimeAbilitySubjectDescriptorBound runtimeAbilitySubjectPolicy = iota
 	runtimeAbilitySubjectRuntimeOwner
+	runtimeAbilitySubjectRuntimeGovernanceRead
 )
 
 func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addressing Addressing, call RuntimeCallContext, abilityName string) (string, error) {
@@ -79,18 +89,53 @@ func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addre
 		return descriptorBoundSubjectURA(ctx, addressing, call.SubjectURA, abilityName)
 	case runtimeAbilitySubjectRuntimeOwner:
 		return strings.TrimSpace(call.CalleeURA), nil
+	case runtimeAbilitySubjectRuntimeGovernanceRead:
+		if authority, err := runtimeSessionAuthorityFromCall(call); err != nil {
+			return "", err
+		} else if authority != nil {
+			parts, err := ParseURAParts(strings.TrimSpace(call.SubjectURA))
+			if err != nil {
+				return "", invalidInvocation("runtime governance read subject_ura must be canonical", err)
+			}
+			return RuntimeStateReadSubjectURA(parts.Realm, authority.SessionOwnerUserID)
+		}
+		return runtimeGovernanceReadSubjectURA(call.SubjectURA, call.CalleeURA)
 	default:
 		return "", invalidRuntimePayload("runtime ability subject policy is unsupported", nil)
 	}
 }
 
+func runtimeSessionAuthorityFromCall(call RuntimeCallContext) (*SessionAuthority, error) {
+	switch typed := call.Authority.(type) {
+	case SessionAuthority:
+		return &typed, nil
+	case *SessionAuthority:
+		return typed, nil
+	case nil:
+	default:
+		return nil, nil
+	}
+	session, err := authorityMetadataValue(cloneAbilityMetadata(call.Metadata), SessionAuthorityMetadataKey)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(session) == "" {
+		return nil, nil
+	}
+	authority, err := NewSessionAuthorityFromMetadata(session)
+	if err != nil {
+		return nil, err
+	}
+	return &authority, nil
+}
+
 func (policy runtimeAbilityDispatchPolicy) descriptorResolutionSubjectURA(call RuntimeCallContext, selectedSubjectURA string) (string, error) {
 	if strings.TrimSpace(policy.descriptorProvider) == runtimeAbilityDescriptorProvider {
-		callee, err := ParseURAParts(strings.TrimSpace(call.CalleeURA))
-		if err != nil {
-			return "", invalidRuntimePayload("callee_ura must be canonical for ability descriptor provider", err)
+		if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner ||
+			policy.subjectPolicy == runtimeAbilitySubjectRuntimeGovernanceRead {
+			return strings.TrimSpace(selectedSubjectURA), nil
 		}
-		return AuthorityURA(callee.Realm), nil
+		return strings.TrimSpace(call.SubjectURA), nil
 	}
 	if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner {
 		return strings.TrimSpace(selectedSubjectURA), nil
@@ -230,6 +275,17 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if mode == "" {
 		return InvocationDraft{}, invalidRuntimePayload("call_mode is required", nil)
 	}
+	target, err := newRuntimeCatalogueReadTarget(
+		strings.TrimSpace(call.CalleeURA),
+		strings.TrimSpace(call.SubjectURA),
+		abilityName,
+		policy.descriptorProvider,
+	)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	call.CalleeURA = target.calleeURA
+	call.SubjectURA = target.subjectURA
 	subjectURA, err := policy.subjectURA(ctx, c.addressing, call, abilityName)
 	if err != nil {
 		return InvocationDraft{}, err
@@ -238,28 +294,46 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	descriptorRef, err := c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
-		CalleeURA:  strings.TrimSpace(call.CalleeURA),
-		Ability:    abilityName,
-		CallMode:   mode,
-		CallerURA:  strings.TrimSpace(call.CallerURA),
-		SubjectURA: descriptorSubjectURA,
-		Provider:   policy.descriptorProvider,
-	})
+	metadata, authority, err := projectRuntimeCallMetadata(call)
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	ability, err := newRuntimeAbilityProjection(ctx, c.addressing, strings.TrimSpace(call.CalleeURA), descriptorRef)
+	descriptorRef := strings.TrimSpace(call.SelectedDescriptorRef)
+	if descriptorRef != "" && strings.TrimSpace(policy.descriptorProvider) != "" {
+		return InvocationDraft{}, invalidRuntimePayload(
+			"selected descriptor_ref cannot override a governance descriptor provider",
+			nil,
+		)
+	}
+	if descriptorRef == "" {
+		descriptorRef, err = c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
+			CalleeURA:         target.calleeURA,
+			Ability:           abilityName,
+			CallMode:          mode,
+			CallerURA:         strings.TrimSpace(call.CallerURA),
+			SubjectURA:        descriptorSubjectURA,
+			AuthorityMetadata: descriptorResolutionAuthorityMetadata(metadata),
+			Provider:          policy.descriptorProvider,
+		})
+	}
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	metadata, err := canonicalRuntimeCallMetadata(call, subjectURA, ability)
+	ability, err := newRuntimeAbilityProjection(ctx, c.addressing, target.calleeURA, descriptorRef)
 	if err != nil {
+		return InvocationDraft{}, err
+	}
+	if authority != nil {
+		if err := validateRuntimeAuthorityBinding(authority, call, subjectURA, ability); err != nil {
+			return InvocationDraft{}, err
+		}
+	}
+	if err := validateAuthorityMetadata(metadata); err != nil {
 		return InvocationDraft{}, err
 	}
 	return NewInvocationBuilder().
 		WithCallerURA(strings.TrimSpace(call.CallerURA)).
-		WithCalleeURA(strings.TrimSpace(call.CalleeURA)).
+		WithCalleeURA(target.calleeURA).
 		WithDescriptorRef(ability.descriptorRef).
 		WithSubjectURA(subjectURA).
 		WithNonceBase64(strings.TrimSpace(call.NonceBase64)).
@@ -292,7 +366,7 @@ func (c *RuntimeAbilityClient) invokeGovernanceRead(ctx context.Context, call Ru
 	if err != nil {
 		return nil, err
 	}
-	result, err := c.runtime.Invoke(ctx, draft)
+	result, err := c.runtime.governanceRead(ctx, draft)
 	if err != nil {
 		return nil, err
 	}
@@ -434,8 +508,14 @@ func validateRuntimeCallContext(call RuntimeCallContext) error {
 			return invalidRuntimePayload(field.name+" must not be all-zero", nil)
 		}
 	}
+	if err := validateInvocationNonceBase64(call.NonceBase64); err != nil {
+		return err
+	}
 	if call.CausalContext == nil {
 		return invalidRuntimePayload("causal_context is required", nil)
+	}
+	if _, err := CausalContextFromJSON(call.CausalContext); err != nil {
+		return err
 	}
 	return nil
 }
@@ -444,6 +524,7 @@ type runtimeAbilityProjection struct {
 	descriptorRef string
 	abilityURA    string
 	publicName    string
+	action        string
 }
 
 func newRuntimeAbilityProjection(
@@ -464,9 +545,10 @@ func newRuntimeAbilityProjection(
 	}
 	abilityURA := strings.TrimSpace(projection.AbilityURA)
 	canonicalRef := strings.TrimSpace(projection.DescriptorRef)
-	if abilityURA == "" || canonicalRef == "" {
+	action := strings.TrimSpace(projection.Action)
+	if abilityURA == "" || canonicalRef == "" || action == "" {
 		return runtimeAbilityProjection{}, invalidRuntimePayload(
-			"descriptor_ref must contain a canonical Ability URA",
+			"descriptor_ref must contain a canonical Ability URA and admission action",
 			nil,
 		)
 	}
@@ -489,6 +571,7 @@ func newRuntimeAbilityProjection(
 		descriptorRef: canonicalRef,
 		abilityURA:    abilityURA,
 		publicName:    strings.TrimSpace(publicName),
+		action:        action,
 	}, nil
 }
 
@@ -510,56 +593,47 @@ func (p runtimeAbilityProjection) matchesScope(match func(string) bool) bool {
 	return false
 }
 
-func canonicalRuntimeCallMetadata(
-	call RuntimeCallContext,
-	envelopeSubjectURA string,
-	ability runtimeAbilityProjection,
-) (map[string]any, error) {
+func projectRuntimeCallMetadata(call RuntimeCallContext) (map[string]any, RuntimeInvocationAuthority, error) {
 	metadata := cloneAbilityMetadata(call.Metadata)
 	if err := validateAuthorityMetadata(metadata); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if call.Authority != nil {
 		if rawRuntimeAuthorityPresent(metadata) {
-			return nil, invalidRuntimePayload(
+			return nil, nil, invalidRuntimePayload(
 				"runtime call authority must be supplied once as a typed authority or metadata, not both",
 				nil,
 			)
 		}
 		projection, err := call.Authority.Metadata()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		metadata, err = projection.MergeInto(metadata)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if err := validateRuntimeAuthorityBinding(
-			call.Authority,
-			call,
-			envelopeSubjectURA,
-			ability,
-		); err != nil {
-			return nil, err
-		}
-		return metadata, nil
+		return metadata, call.Authority, nil
 	}
 
 	authority, err := runtimeAuthorityFromMetadata(metadata)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if authority != nil {
-		if err := validateRuntimeAuthorityBinding(
-			authority,
-			call,
-			envelopeSubjectURA,
-			ability,
-		); err != nil {
-			return nil, err
+	return metadata, authority, nil
+}
+
+func descriptorResolutionAuthorityMetadata(metadata map[string]any) map[string]string {
+	projection := make(map[string]string, 2)
+	for _, key := range []string{DelegationMetadataKey, SessionAuthorityMetadataKey} {
+		if value, _ := authorityMetadataValue(metadata, key); strings.TrimSpace(value) != "" {
+			projection[key] = value
 		}
 	}
-	return metadata, nil
+	if len(projection) == 0 {
+		return nil
+	}
+	return projection
 }
 
 func rawRuntimeAuthorityPresent(metadata map[string]any) bool {
@@ -668,10 +742,26 @@ func validateRuntimeSessionBinding(
 	if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) {
 		return invalidRuntimePayload("runtime session authority does not admit descriptor-bound subject_ura", nil)
 	}
+	if !runtimeAuthorityListAdmits(authority.AllowedActions, ability.action) {
+		return invalidRuntimePayload("runtime session authority allowed_actions do not admit "+ability.action, nil)
+	}
 	if !ability.matchesScope(authority.MatchesScope) {
 		return invalidRuntimePayload("runtime session authority scopes do not admit ability", nil)
 	}
 	return nil
+}
+
+func runtimeAuthorityListAdmits(patterns []string, value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if strings.TrimSpace(pattern) == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (c AbilityChildContext) childCall(call RuntimeCallContext) (RuntimeCallContext, error) {

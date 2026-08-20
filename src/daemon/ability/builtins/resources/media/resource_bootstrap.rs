@@ -9,13 +9,33 @@
 
 #[cfg(not(target_os = "macos"))]
 use std::collections::BTreeMap;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use serde_json::{json, Value};
 
 use crate::daemon::persistence::resources::{
-    self, upsert_resource, ResourceBinding, ResourceType, ResourceUpsert, ResourcesFile,
+    self, upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert,
+    ResourcesFile,
 };
+
+/// Freshness lease for live remote target picker rows.
+///
+/// This is not the remote desktop security boundary. Session creation still
+/// resolves the selected resource through the native capture backend and fails
+/// closed if the target is gone or no longer capturable. The lease only says a
+/// freshly observed display/window/application row remains valid long enough
+/// for the product path to complete descriptor lookup, consent, preview, and
+/// `remote_desktop.create_session` over hub-mediated invocation.
+pub const REMOTE_TARGET_FRESHNESS_TTL_MS: u64 = 60_000;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteTargetInventoryRefresh {
+    pub observed_at_ms: u64,
+    pub freshness_ttl_ms: u64,
+    pub resources: Vec<ResourceEntry>,
+    pub retired_count: usize,
+    pub screen_target_discovery_available: bool,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct DiscoveredResource {
@@ -58,6 +78,7 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
 
     let mut file = resources::load()?;
     let discovered = discover_default_resources();
+    prune_retired_local_device_owner_rows(&mut file, owner_agent);
     if discovered.screen_target_discovery.permits_stale_prune() {
         prune_stale_auto_screen_targets(&mut file, realm, owner_agent, &discovered.resources);
     }
@@ -66,6 +87,113 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
     }
     resources::save(&file)?;
     Ok(file.resources.len())
+}
+
+/// Refresh the daemon-local live remote desktop target inventory.
+///
+/// This is the mutable counterpart to `meta.list_resources`. It is owned by
+/// the daemon resource inventory layer, not by the remote desktop plugin:
+/// callers use it to obtain a fresh display/window/application projection
+/// before invoking product-specific remote desktop session abilities.
+pub fn refresh_remote_targets(
+    realm: &str,
+    owner_agent: &str,
+) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+    refresh_remote_targets_with_save_policy(realm, owner_agent, RemoteTargetSavePolicy::Always)
+}
+
+/// Observe the same host-local target inventory for
+/// `resource.watch_remote_targets`.
+///
+/// The returned projection always carries fresh observation timestamps, but the
+/// persistent resource cache is written only when the stable inventory changes
+/// (added/removed targets or target identity/geometry metadata changes). This
+/// keeps long-lived watches from rewriting `resources.json` on every polling
+/// tick solely because freshness fields changed.
+pub fn watch_remote_target_inventory(
+    realm: &str,
+    owner_agent: &str,
+) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+    refresh_remote_targets_with_save_policy(
+        realm,
+        owner_agent,
+        RemoteTargetSavePolicy::IfStableInventoryChanged,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteTargetSavePolicy {
+    Always,
+    IfStableInventoryChanged,
+}
+
+fn refresh_remote_targets_with_save_policy(
+    realm: &str,
+    owner_agent: &str,
+    save_policy: RemoteTargetSavePolicy,
+) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+    let realm = realm.trim();
+    if realm.is_empty() {
+        return Ok(RemoteTargetInventoryRefresh {
+            observed_at_ms: unix_ms_now(),
+            freshness_ttl_ms: REMOTE_TARGET_FRESHNESS_TTL_MS,
+            resources: Vec::new(),
+            retired_count: 0,
+            screen_target_discovery_available: false,
+        });
+    }
+    let observed_at_ms = unix_ms_now();
+    let mut file = resources::load()?;
+    let before_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
+    let discovered = discover_remote_target_resources();
+    let refresh =
+        apply_remote_target_refresh(&mut file, realm, owner_agent, discovered, observed_at_ms)?;
+    let after_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
+    if save_policy == RemoteTargetSavePolicy::Always || before_signature != after_signature {
+        resources::save(&file)?;
+    }
+    Ok(refresh)
+}
+
+fn stable_remote_target_cache_signature(
+    file: &ResourcesFile,
+    realm: &str,
+    owner_agent: &str,
+) -> BTreeSet<String> {
+    file.resources
+        .iter()
+        .filter(|resource| {
+            resource.owner_agent == owner_agent
+                && resource_ura_belongs_to_realm(resource, realm)
+                && is_remote_target_kind(resource.kind)
+        })
+        .map(stable_remote_target_entry_signature)
+        .collect()
+}
+
+fn stable_remote_target_entry_signature(resource: &ResourceEntry) -> String {
+    let mut metadata = resource.metadata.clone();
+    if let Value::Object(map) = &mut metadata {
+        map.remove("observed_at_ms");
+        map.remove("freshness_ttl_ms");
+        map.remove("freshness");
+    }
+    serde_json::to_string(&json!({
+        "resource_ura": resource.resource_ura,
+        "owner_agent": resource.owner_agent,
+        "type": resource.kind.as_str(),
+        "binding": resource.binding.as_str(),
+        "hardware_id": resource.hardware_id,
+        "display_name": resource.display_name,
+        "metadata": metadata,
+    }))
+    .expect("stable remote target cache signature serializes")
+}
+
+fn prune_retired_local_device_owner_rows(file: &mut ResourcesFile, owner_agent: &str) {
+    file.resources.retain(|resource| {
+        resource.binding != ResourceBinding::LocalDevice || resource.owner_agent == owner_agent
+    });
 }
 
 fn prune_stale_auto_screen_targets(
@@ -104,6 +232,125 @@ fn prune_stale_auto_screen_targets(
     });
 }
 
+fn apply_remote_target_refresh(
+    file: &mut ResourcesFile,
+    realm: &str,
+    owner_agent: &str,
+    discovered: DiscoveredResources,
+    observed_at_ms: u64,
+) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+    prune_retired_local_device_owner_rows(file, owner_agent);
+    let live_targets = discovered
+        .resources
+        .into_iter()
+        .filter(|resource| is_remote_target_kind(resource.kind))
+        .map(|resource| annotate_live_remote_target(resource, observed_at_ms))
+        .collect::<Vec<_>>();
+    let live_hardware_ids = live_targets
+        .iter()
+        .map(|resource| resource.hardware_id.clone())
+        .collect::<HashSet<_>>();
+    let before_prune_count = file.resources.len();
+    if discovered.screen_target_discovery.permits_stale_prune() {
+        prune_stale_auto_screen_targets(file, realm, owner_agent, &live_targets);
+    }
+    let retired_count = before_prune_count.saturating_sub(file.resources.len());
+    apply_discovered_resources_indexed(file, realm, owner_agent, live_targets)?;
+    let resources = file
+        .resources
+        .iter()
+        .filter(|resource| {
+            resource.owner_agent == owner_agent
+                && live_hardware_ids.contains(resource.hardware_id.as_str())
+                && resource_ura_belongs_to_realm(resource, realm)
+                && is_remote_target_kind(resource.kind)
+        })
+        .cloned()
+        .collect();
+    Ok(RemoteTargetInventoryRefresh {
+        observed_at_ms,
+        freshness_ttl_ms: REMOTE_TARGET_FRESHNESS_TTL_MS,
+        resources,
+        retired_count,
+        screen_target_discovery_available: discovered.screen_target_discovery.permits_stale_prune(),
+    })
+}
+
+fn is_remote_target_kind(kind: ResourceType) -> bool {
+    matches!(
+        kind,
+        ResourceType::Display | ResourceType::Application | ResourceType::Window
+    )
+}
+
+fn annotate_live_remote_target(
+    mut resource: DiscoveredResource,
+    observed_at_ms: u64,
+) -> DiscoveredResource {
+    let metadata = resource.metadata.as_object_mut();
+    if let Some(metadata) = metadata {
+        metadata.insert(
+            "discovery_source".to_string(),
+            Value::String("resource.refresh_remote_targets".to_string()),
+        );
+        metadata.insert("auto_prune".to_string(), Value::Bool(true));
+        metadata.insert(
+            "availability".to_string(),
+            Value::String("available".to_string()),
+        );
+        metadata.insert(
+            "observed_at_ms".to_string(),
+            Value::Number(serde_json::Number::from(observed_at_ms)),
+        );
+        metadata.insert(
+            "freshness_ttl_ms".to_string(),
+            Value::Number(serde_json::Number::from(REMOTE_TARGET_FRESHNESS_TTL_MS)),
+        );
+        metadata.insert(
+            "freshness".to_string(),
+            live_remote_target_freshness(observed_at_ms),
+        );
+        metadata.insert("stale_reason".to_string(), Value::Null);
+        metadata.insert(
+            "inventory_source".to_string(),
+            Value::String("daemon_resource_inventory".to_string()),
+        );
+    }
+    resource
+}
+
+fn live_remote_target_freshness(observed_at_ms: u64) -> Value {
+    json!({
+        "observed_at_ms": observed_at_ms,
+        "stale_after_ms": observed_at_ms.saturating_add(REMOTE_TARGET_FRESHNESS_TTL_MS),
+        "source": "live_refresh",
+    })
+}
+
+fn discover_remote_target_resources() -> DiscoveredResources {
+    let mut discovered = DiscoveredResources::default();
+    discovered.resources.extend(discover_displays());
+    match discover_screen_targets() {
+        Ok(targets) => {
+            discovered.screen_target_discovery = ScreenTargetDiscoveryState::Scanned;
+            discovered.resources.extend(targets);
+        }
+        Err(err) => {
+            discovered.screen_target_discovery = ScreenTargetDiscoveryState::Unavailable;
+            crate::op_event!(
+                component = media_resource_bootstrap,
+                kind = remote_target_refresh_failed,
+                reason = err.to_string(),
+            );
+        }
+    }
+    discovered
+}
+
+fn unix_ms_now() -> u64 {
+    chrono::Utc::now().timestamp_millis().max(0) as u64
+}
+
 fn resource_ura_belongs_to_realm(
     resource: &crate::daemon::persistence::resources::ResourceEntry,
     realm: &str,
@@ -117,8 +364,9 @@ fn apply_discovered_resource(
     file: &mut ResourcesFile,
     realm: &str,
     owner_agent: &str,
-    resource: DiscoveredResource,
+    mut resource: DiscoveredResource,
 ) -> anyhow::Result<()> {
+    annotate_host_device_ura(owner_agent, &mut resource.metadata)?;
     upsert_resource(
         file,
         ResourceUpsert {
@@ -131,6 +379,56 @@ fn apply_discovered_resource(
             metadata: resource.metadata,
         },
     )?;
+    Ok(())
+}
+
+fn apply_discovered_resources_indexed(
+    file: &mut ResourcesFile,
+    realm: &str,
+    owner_agent: &str,
+    resources: Vec<DiscoveredResource>,
+) -> anyhow::Result<()> {
+    let mut upsert_inputs = Vec::with_capacity(resources.len());
+    for mut resource in resources {
+        annotate_host_device_ura(owner_agent, &mut resource.metadata)?;
+        upsert_inputs.push((
+            resource.kind,
+            resource.hardware_id,
+            resource.display_name,
+            resource.metadata,
+        ));
+    }
+    let specs =
+        upsert_inputs.iter().map(
+            |(kind, hardware_id, display_name, metadata)| ResourceUpsert {
+                realm,
+                owner_agent,
+                kind: *kind,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id,
+                display_name,
+                metadata: metadata.clone(),
+            },
+        );
+    resources::upsert_resources_indexed(file, specs)?;
+    Ok(())
+}
+
+fn annotate_host_device_ura(owner_agent: &str, metadata: &mut Value) -> anyhow::Result<()> {
+    let parsed = crate::core::ura::parse_ura(owner_agent)?;
+    let (device_id, _system_agent_id) = parsed.device_agent_ids().ok_or_else(|| {
+        anyhow::anyhow!(
+            "media local-device resource owner_agent must be a device-sponsored SystemAgent URA, got {owner_agent}"
+        )
+    })?;
+    let host_device_ura = crate::core::ura::device_ura(&parsed.realm, device_id);
+    let metadata = metadata.as_object_mut().ok_or_else(|| {
+        anyhow::anyhow!("media local-device resource metadata must be a JSON object")
+    })?;
+    metadata.insert(
+        "host_device_ura".to_string(),
+        Value::String(host_device_ura),
+    );
     Ok(())
 }
 
@@ -304,14 +602,18 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         };
         let area = screen_target_area(width, height);
         let bounds = ScreenTargetBounds::new(x, y, width, height);
-        apps.entry(app_name.clone()).or_default().record_window(
-            id,
-            pid,
-            title.as_deref(),
-            area,
-            focused == Some(true),
-            bounds,
-        );
+        apps.entry(app_name.clone())
+            .or_default()
+            .record_window(AppWindowObservation {
+                window_id: id,
+                pid,
+                title: title.as_deref(),
+                area,
+                focused: focused == Some(true),
+                bounds,
+                display_id: None,
+                bundle_id: None,
+            });
         out.push(DiscoveredResource {
             kind: ResourceType::Window,
             hardware_id: format!("window:xcap:{}:{id}", pid.unwrap_or(0)),
@@ -388,19 +690,49 @@ struct AppAggregate {
     primary_title: Option<String>,
     primary_bounds: Option<ScreenTargetBounds>,
     primary_area: u64,
+    display_id: Option<u32>,
+    bundle_id: Option<String>,
+    app_identity: Option<String>,
+    window_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AppWindowObservation<'a> {
+    window_id: u32,
+    pid: Option<u32>,
+    title: Option<&'a str>,
+    area: u64,
+    focused: bool,
+    bounds: ScreenTargetBounds,
+    display_id: Option<u32>,
+    bundle_id: Option<&'a str>,
 }
 
 impl AppAggregate {
-    fn record_window(
-        &mut self,
-        window_id: u32,
-        pid: Option<u32>,
-        title: Option<&str>,
-        area: u64,
-        focused: bool,
-        bounds: ScreenTargetBounds,
-    ) {
+    fn record_window(&mut self, observation: AppWindowObservation<'_>) {
+        let AppWindowObservation {
+            window_id,
+            pid,
+            title,
+            area,
+            focused,
+            bounds,
+            display_id,
+            bundle_id,
+        } = observation;
         self.window_count += 1;
+        self.window_ids.push(window_id);
+        self.window_ids.sort_unstable();
+        self.window_ids.dedup();
+        if self.display_id.is_none() {
+            self.display_id = display_id;
+        }
+        if self.bundle_id.is_none() {
+            self.bundle_id = bundle_id.map(ToOwned::to_owned);
+        }
+        if self.app_identity.is_none() {
+            self.app_identity = bundle_id.map(ToOwned::to_owned);
+        }
         let better_primary =
             focused || self.primary_window_id.is_none() || area > self.primary_area;
         if better_primary {
@@ -410,6 +742,18 @@ impl AppAggregate {
             self.primary_bounds = Some(bounds);
             self.primary_area = area;
         }
+    }
+
+    fn window_set_epoch(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        self.display_id.hash(&mut hasher);
+        self.bundle_id.hash(&mut hasher);
+        self.primary_pid.hash(&mut hasher);
+        self.window_ids.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -423,8 +767,12 @@ mod macos_screen_targets {
     use std::ffi::{c_char, c_void, CStr, CString};
     use std::ptr;
 
-    use super::{screen_target_area, AppAggregate, DiscoveredResource, ScreenTargetBounds};
+    use super::{
+        screen_target_area, AppAggregate, AppWindowObservation, DiscoveredResource,
+        ScreenTargetBounds,
+    };
     use crate::daemon::persistence::resources::ResourceType;
+    use objc2_app_kit::NSRunningApplication;
 
     type CFArrayRef = *const c_void;
     type CFDictionaryRef = *const c_void;
@@ -433,6 +781,8 @@ mod macos_screen_targets {
     type CFStringRef = *const c_void;
     type CFTypeID = usize;
     type CFTypeRef = *const c_void;
+    type CGDirectDisplayID = u32;
+    type CGError = i32;
     type CGWindowID = u32;
 
     const KCG_NULL_WINDOW_ID: CGWindowID = 0;
@@ -465,6 +815,12 @@ mod macos_screen_targets {
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
         fn CGWindowListCopyWindowInfo(option: u32, relativeToWindow: CGWindowID) -> CFArrayRef;
+        fn CGGetDisplaysWithRect(
+            rect: CGRect,
+            maxDisplays: u32,
+            displays: *mut CGDirectDisplayID,
+            matchingDisplayCount: *mut u32,
+        ) -> CGError;
         fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> u8;
     }
 
@@ -568,7 +924,7 @@ mod macos_screen_targets {
         }
 
         let mut out = Vec::new();
-        let mut apps: BTreeMap<String, AppAggregate> = BTreeMap::new();
+        let mut apps: BTreeMap<String, (String, AppAggregate)> = BTreeMap::new();
         for idx in 0..count {
             let dict = unsafe { CFArrayGetValueAtIndex(array.as_ptr(), idx) as CFDictionaryRef };
             if dict.is_null() {
@@ -624,14 +980,24 @@ mod macos_screen_targets {
                 Some(width),
                 Some(height),
             );
-            apps.entry(app_name.clone()).or_default().record_window(
-                window_id,
-                pid,
-                title.as_deref(),
-                area,
-                false,
-                bounds,
-            );
+            let display_id = display_id_for_rect(rect);
+            let bundle_id = pid.and_then(bundle_id_for_pid);
+            let app_identity = bundle_id.as_deref();
+            if let Some(app_key) = app_aggregate_key(display_id, pid, app_identity) {
+                apps.entry(app_key)
+                    .or_insert_with(|| (app_name.clone(), AppAggregate::default()))
+                    .1
+                    .record_window(AppWindowObservation {
+                        window_id,
+                        pid,
+                        title: title.as_deref(),
+                        area,
+                        focused: false,
+                        bounds,
+                        display_id,
+                        bundle_id: app_identity,
+                    });
+            }
             out.push(DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: format!("window:macos:cgwindow:{}:{window_id}", pid.unwrap_or(0)),
@@ -645,6 +1011,9 @@ mod macos_screen_targets {
                     "platform_backend": "core_graphics_cgwindowlist",
                     "window_id": window_id,
                     "pid": pid,
+                    "display_id": display_id,
+                    "bundle_id": bundle_id,
+                    "app_identity": app_identity,
                     "app_name": app_name,
                     "title": title,
                     "width": width,
@@ -657,29 +1026,90 @@ mod macos_screen_targets {
             });
         }
 
-        out.extend(apps.into_iter().map(|(app_name, app)| DiscoveredResource {
-            kind: ResourceType::Application,
-            hardware_id: format!("application:macos:cgwindow:{app_name}"),
-            display_name: app_name.clone(),
-            metadata: serde_json::json!({
-                "backend": "macos_core_graphics",
-                "capture_target": "application",
-                "discovery_source": "auto_bootstrap",
-                "discovery_scope": "all_windows",
-                "auto_prune": true,
-                "platform_backend": "core_graphics_cgwindowlist",
-                "app_name": app_name,
-                "window_count": app.window_count,
-                "primary_window_id": app.primary_window_id,
-                "primary_pid": app.primary_pid,
-                "primary_title": app.primary_title,
-                "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
-                "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
-                "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
-                "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
-            }),
+        out.extend(apps.into_iter().map(|(_key, (app_name, app))| {
+            let window_set_epoch = app.window_set_epoch();
+            let display_id = app
+                .display_id
+                .expect("macOS application aggregate keys require display_id");
+            let identity_suffix = app
+                .bundle_id
+                .as_deref()
+                .map(|bundle_id| format!("bundle:{bundle_id}"))
+                .or_else(|| app.primary_pid.map(|pid| format!("pid:{pid}")))
+                .expect("macOS application aggregate keys require bundle_id or primary_pid");
+            DiscoveredResource {
+                kind: ResourceType::Application,
+                hardware_id: format!("application:macos:cgwindow:{display_id}:{identity_suffix}"),
+                display_name: format!("{app_name} on display {display_id}"),
+                metadata: serde_json::json!({
+                    "backend": "macos_core_graphics",
+                    "capture_target": "application",
+                    "discovery_source": "auto_bootstrap",
+                    "discovery_scope": "display_scoped_windows",
+                    "auto_prune": true,
+                    "platform_backend": "core_graphics_cgwindowlist",
+                    "display_scoped": true,
+                    "display_id": display_id,
+                    "app_name": app_name,
+                    "bundle_id": app.bundle_id,
+                    "app_identity": app.app_identity,
+                    "window_count": app.window_count,
+                    "resolved_window_ids": app.window_ids,
+                    "window_set_epoch": window_set_epoch,
+                    "target_identity_epoch": window_set_epoch,
+                    "primary_window_id": app.primary_window_id,
+                    "primary_pid": app.primary_pid,
+                    "primary_title": app.primary_title,
+                    "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
+                    "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
+                    "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
+                    "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
+                }),
+            }
         }));
         Ok(out)
+    }
+
+    fn display_id_for_rect(rect: CGRect) -> Option<u32> {
+        let mut displays = [0_u32; 8];
+        let mut count = 0_u32;
+        let error = unsafe {
+            CGGetDisplaysWithRect(
+                rect,
+                displays.len() as u32,
+                displays.as_mut_ptr(),
+                &mut count,
+            )
+        };
+        if error != 0 || count == 0 {
+            return None;
+        }
+        displays
+            .first()
+            .copied()
+            .filter(|display_id| *display_id != 0)
+    }
+
+    fn bundle_id_for_pid(pid: u32) -> Option<String> {
+        let app =
+            NSRunningApplication::runningApplicationWithProcessIdentifier(pid as libc::pid_t)?;
+        app.bundleIdentifier()
+            .map(|bundle_id| bundle_id.to_string())
+            .map(|bundle_id| bundle_id.trim().to_string())
+            .filter(|bundle_id| !bundle_id.is_empty())
+    }
+
+    fn app_aggregate_key(
+        display_id: Option<u32>,
+        pid: Option<u32>,
+        app_identity: Option<&str>,
+    ) -> Option<String> {
+        let display_id = display_id?;
+        app_identity
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|identity| format!("{display_id}:bundle:{identity}"))
+            .or_else(|| pid.map(|pid| format!("{display_id}:pid:{pid}")))
     }
 
     fn positive_dimension(value: f64) -> Option<u32> {
@@ -847,7 +1277,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Camera,
                 hardware_id: "camera:nokhwa:index:0".into(),
@@ -860,7 +1290,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Camera,
                 hardware_id: "camera:nokhwa:index:0".into(),
@@ -873,6 +1303,17 @@ mod tests {
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].resource_ura, first);
         assert_eq!(file.resources[0].display_name, "Renamed camera");
+        assert_eq!(
+            file.resources[0].owner_agent,
+            "easynet:///r/acme/agent/device.node-1.media"
+        );
+        assert_eq!(
+            file.resources[0]
+                .metadata
+                .get("host_device_ura")
+                .and_then(Value::as_str),
+            Some("easynet:///r/acme/device/node-1")
+        );
     }
 
     #[test]
@@ -904,8 +1345,9 @@ mod tests {
     #[test]
     fn seed_default_device_resources_writes_queryable_resources_file() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let count = seed_default_device_resources("acme", "easynet:///r/acme/device/node-1")
-            .expect("seed resources");
+        let count =
+            seed_default_device_resources("acme", "easynet:///r/acme/agent/device.node-1.media")
+                .expect("seed resources");
 
         let file = resources::load().expect("load resources");
         assert_eq!(
@@ -925,12 +1367,53 @@ mod tests {
     }
 
     #[test]
+    fn prune_retired_local_device_owner_rows_removes_previous_device_projection() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.old-device.media",
+            DiscoveredResource {
+                kind: ResourceType::Mic,
+                hardware_id: "mic:cpal:default".into(),
+                display_name: "Old mic".into(),
+                metadata: json!({"backend": "cpal"}),
+            },
+        )
+        .expect("seed old device mic");
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.current-device.media",
+            DiscoveredResource {
+                kind: ResourceType::Camera,
+                hardware_id: "camera:nokhwa:index:0".into(),
+                display_name: "Current camera".into(),
+                metadata: json!({"backend": "nokhwa"}),
+            },
+        )
+        .expect("seed current device camera");
+
+        prune_retired_local_device_owner_rows(
+            &mut file,
+            "easynet:///r/acme/agent/device.current-device.media",
+        );
+
+        assert_eq!(file.resources.len(), 1);
+        assert_eq!(
+            file.resources[0].owner_agent,
+            "easynet:///r/acme/agent/device.current-device.media"
+        );
+        assert_eq!(file.resources[0].hardware_id, "camera:nokhwa:index:0");
+    }
+
+    #[test]
     fn prune_stale_auto_screen_targets_keeps_live_window_and_removes_closed_one() {
         let mut file = ResourcesFile::default();
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:10:100".into(),
@@ -942,7 +1425,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:20:200".into(),
@@ -954,7 +1437,7 @@ mod tests {
         prune_stale_auto_screen_targets(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             &[DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:10:100".into(),
@@ -974,7 +1457,7 @@ mod tests {
             apply_discovered_resource(
                 &mut file,
                 "acme",
-                "easynet:///r/acme/device/node-1",
+                "easynet:///r/acme/agent/device.node-1.media",
                 DiscoveredResource {
                     kind: ResourceType::Display,
                     hardware_id: hardware_id.into(),
@@ -992,7 +1475,7 @@ mod tests {
         prune_stale_auto_screen_targets(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             &[DiscoveredResource {
                 kind: ResourceType::Display,
                 hardware_id: "display:xcap:live".into(),
@@ -1011,7 +1494,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:10:100".into(),
@@ -1021,7 +1504,12 @@ mod tests {
         )
         .expect("seed operator-managed target");
 
-        prune_stale_auto_screen_targets(&mut file, "acme", "easynet:///r/acme/device/node-1", &[]);
+        prune_stale_auto_screen_targets(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            &[],
+        );
 
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].hardware_id, "window:xcap:10:100");
@@ -1033,7 +1521,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:10:100".into(),
@@ -1045,7 +1533,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-2",
+            "easynet:///r/acme/agent/device.node-2.media",
             DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:20:200".into(),
@@ -1057,7 +1545,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "other",
-            "easynet:///r/other/device/node-1",
+            "easynet:///r/other/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Application,
                 hardware_id: "application:xcap:com.other.App".into(),
@@ -1067,7 +1555,12 @@ mod tests {
         )
         .expect("seed other realm application");
 
-        prune_stale_auto_screen_targets(&mut file, "acme", "easynet:///r/acme/device/node-1", &[]);
+        prune_stale_auto_screen_targets(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            &[],
+        );
 
         assert_eq!(file.resources.len(), 2);
         assert!(file
@@ -1086,7 +1579,7 @@ mod tests {
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:10:100".into(),
@@ -1104,7 +1597,7 @@ mod tests {
             prune_stale_auto_screen_targets(
                 &mut file,
                 "acme",
-                "easynet:///r/acme/device/node-1",
+                "easynet:///r/acme/agent/device.node-1.media",
                 &discovered.resources,
             );
         }
@@ -1114,12 +1607,156 @@ mod tests {
     }
 
     #[test]
+    fn stable_remote_target_cache_signature_ignores_freshness_metadata() {
+        let owner_agent = "easynet:///r/acme/agent/device.node-1.media";
+        let mut first = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut first,
+            "acme",
+            owner_agent,
+            DiscoveredResource {
+                kind: ResourceType::Window,
+                hardware_id: "window:xcap:10:100".into(),
+                display_name: "Window".into(),
+                metadata: json!({
+                    "backend": "xcap",
+                    "observed_at_ms": 10,
+                    "freshness_ttl_ms": REMOTE_TARGET_FRESHNESS_TTL_MS,
+                    "freshness": {
+                        "observed_at_ms": 10,
+                        "stale_after_ms": 10 + REMOTE_TARGET_FRESHNESS_TTL_MS,
+                        "source": "live_refresh",
+                    },
+                    "bounds": {"x": 1, "y": 2, "width": 300, "height": 200}
+                }),
+            },
+        )
+        .expect("seed first window");
+
+        let mut second = first.clone();
+        second.resources[0]
+            .metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .insert("observed_at_ms".to_string(), json!(20));
+        second.resources[0]
+            .metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .insert("freshness_ttl_ms".to_string(), json!(10_000));
+        second.resources[0]
+            .metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .insert(
+                "freshness".to_string(),
+                json!({
+                    "observed_at_ms": 20,
+                    "stale_after_ms": 10_020,
+                    "source": "live_refresh",
+                }),
+            );
+
+        assert_eq!(
+            stable_remote_target_cache_signature(&first, "acme", owner_agent),
+            stable_remote_target_cache_signature(&second, "acme", owner_agent),
+            "watch polling must not rewrite the cache solely for freshness metadata"
+        );
+
+        second.resources[0].display_name = "Window moved".to_string();
+        assert_ne!(
+            stable_remote_target_cache_signature(&first, "acme", owner_agent),
+            stable_remote_target_cache_signature(&second, "acme", owner_agent),
+            "stable inventory changes must still trigger cache persistence"
+        );
+    }
+
+    #[test]
+    fn remote_target_refresh_handles_large_persisted_inventory_with_indexed_batch() {
+        const PERSISTED_RESOURCE_COUNT: usize = 10_000;
+        const WINDOW_COUNT: usize = 2_000;
+        const APPLICATION_COUNT: usize = 200;
+
+        let realm = "acme";
+        let owner_agent = crate::core::ura::device_agent_ura(realm, "node-1", "media");
+        let mut file = ResourcesFile::default();
+        for index in 0..PERSISTED_RESOURCE_COUNT {
+            file.resources.push(ResourceEntry {
+                resource_ura: resources::build_resource_ura(realm, &format!("bulk-camera-{index}")),
+                owner_agent: owner_agent.clone(),
+                kind: ResourceType::Camera,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: format!("camera:bulk:{index}"),
+                display_name: format!("Bulk Camera {index}"),
+                metadata: json!({"backend": "bulk-fixture"}),
+                first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+            });
+        }
+
+        let mut discovered = Vec::with_capacity(WINDOW_COUNT + APPLICATION_COUNT);
+        for index in 0..WINDOW_COUNT {
+            discovered.push(DiscoveredResource {
+                kind: ResourceType::Window,
+                hardware_id: format!("window:bulk:{index}"),
+                display_name: format!("Bulk Window {index}"),
+                metadata: json!({
+                    "backend": "bulk-fixture",
+                    "capture_target": "window",
+                    "window_id": index as u64,
+                    "pid": 10_000 + index as u64,
+                }),
+            });
+        }
+        for index in 0..APPLICATION_COUNT {
+            discovered.push(DiscoveredResource {
+                kind: ResourceType::Application,
+                hardware_id: format!("application:bulk:42:com.example.App{index}"),
+                display_name: format!("Bulk App {index}"),
+                metadata: json!({
+                    "backend": "bulk-fixture",
+                    "capture_target": "application",
+                    "display_id": 42,
+                    "bundle_id": format!("com.example.App{index}"),
+                    "app_identity": format!("com.example.App{index}"),
+                    "primary_pid": 20_000 + index as u64,
+                    "resolved_window_ids": [30_000 + index as u64],
+                    "window_set_epoch": 40_000 + index as u64,
+                }),
+            });
+        }
+
+        let refresh = apply_remote_target_refresh(
+            &mut file,
+            realm,
+            &owner_agent,
+            DiscoveredResources {
+                resources: discovered,
+                screen_target_discovery: ScreenTargetDiscoveryState::Scanned,
+            },
+            123_456,
+        )
+        .expect("large remote target refresh applies");
+
+        assert_eq!(refresh.retired_count, 0);
+        assert_eq!(refresh.resources.len(), WINDOW_COUNT + APPLICATION_COUNT);
+        assert_eq!(
+            file.resources.len(),
+            PERSISTED_RESOURCE_COUNT + WINDOW_COUNT + APPLICATION_COUNT
+        );
+        assert_eq!(
+            stable_remote_target_cache_signature(&file, realm, &owner_agent),
+            stable_remote_target_cache_signature(&file, realm, &owner_agent),
+            "large refresh must leave a deterministic cache signature"
+        );
+    }
+
+    #[test]
     fn successful_empty_screen_target_scan_prunes_stale_auto_targets() {
         let mut file = ResourcesFile::default();
         apply_discovered_resource(
             &mut file,
             "acme",
-            "easynet:///r/acme/device/node-1",
+            "easynet:///r/acme/agent/device.node-1.media",
             DiscoveredResource {
                 kind: ResourceType::Window,
                 hardware_id: "window:xcap:10:100".into(),
@@ -1137,7 +1774,7 @@ mod tests {
             prune_stale_auto_screen_targets(
                 &mut file,
                 "acme",
-                "easynet:///r/acme/device/node-1",
+                "easynet:///r/acme/agent/device.node-1.media",
                 &discovered.resources,
             );
         }
@@ -1149,26 +1786,159 @@ mod tests {
     }
 
     #[test]
+    fn remote_target_refresh_annotates_live_projection_and_prunes_stale_targets() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResource {
+                kind: ResourceType::Window,
+                hardware_id: "window:xcap:stale".into(),
+                display_name: "Closed".into(),
+                metadata: json!({"backend": "xcap", "auto_prune": true}),
+            },
+        )
+        .expect("seed stale window");
+
+        let refresh = apply_remote_target_refresh(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResources {
+                resources: vec![DiscoveredResource {
+                    kind: ResourceType::Window,
+                    hardware_id: "window:xcap:live".into(),
+                    display_name: "Live".into(),
+                    metadata: json!({
+                        "backend": "xcap",
+                        "capture_target": "window",
+                        "window_id": 10,
+                        "pid": 20,
+                    }),
+                }],
+                screen_target_discovery: ScreenTargetDiscoveryState::Scanned,
+            },
+            123_456,
+        )
+        .expect("apply refresh");
+
+        assert_eq!(refresh.retired_count, 1);
+        assert_eq!(refresh.resources.len(), 1);
+        let live = &refresh.resources[0];
+        assert_eq!(live.hardware_id, "window:xcap:live");
+        assert_eq!(
+            live.owner_agent,
+            "easynet:///r/acme/agent/device.node-1.media"
+        );
+        assert_eq!(
+            live.metadata.get("host_device_ura").and_then(Value::as_str),
+            Some("easynet:///r/acme/device/node-1")
+        );
+        assert_eq!(
+            live.metadata.get("availability").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            live.metadata.get("observed_at_ms").and_then(Value::as_u64),
+            Some(123_456)
+        );
+        assert_eq!(
+            live.metadata
+                .get("freshness_ttl_ms")
+                .and_then(Value::as_u64),
+            Some(REMOTE_TARGET_FRESHNESS_TTL_MS)
+        );
+        assert_eq!(
+            live.metadata
+                .pointer("/freshness/source")
+                .and_then(Value::as_str),
+            Some("live_refresh")
+        );
+        assert_eq!(
+            live.metadata
+                .pointer("/freshness/observed_at_ms")
+                .and_then(Value::as_u64),
+            Some(123_456)
+        );
+        assert_eq!(
+            live.metadata
+                .pointer("/freshness/stale_after_ms")
+                .and_then(Value::as_u64),
+            Some(123_456 + REMOTE_TARGET_FRESHNESS_TTL_MS)
+        );
+        assert!(file
+            .resources
+            .iter()
+            .all(|resource| resource.hardware_id != "window:xcap:stale"));
+    }
+
+    #[test]
+    fn unavailable_screen_target_refresh_excludes_stale_rows_without_pruning_cache() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResource {
+                kind: ResourceType::Window,
+                hardware_id: "window:xcap:previous".into(),
+                display_name: "Previous".into(),
+                metadata: json!({"backend": "xcap", "auto_prune": true}),
+            },
+        )
+        .expect("seed previous window");
+
+        let refresh = apply_remote_target_refresh(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResources {
+                resources: Vec::new(),
+                screen_target_discovery: ScreenTargetDiscoveryState::Unavailable,
+            },
+            123_456,
+        )
+        .expect("apply refresh");
+
+        assert_eq!(refresh.resources.len(), 0);
+        assert_eq!(refresh.retired_count, 0);
+        assert_eq!(
+            file.resources[0].hardware_id, "window:xcap:previous",
+            "failed discovery must not delete cached rows; the live projection excludes them"
+        );
+    }
+
+    #[test]
     fn app_aggregate_preserves_primary_window_bounds() {
         let mut aggregate = AppAggregate::default();
-        aggregate.record_window(
-            10,
-            Some(100),
-            Some("Small"),
-            10_000,
-            false,
-            ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
-        );
-        aggregate.record_window(
-            11,
-            Some(100),
-            Some("Focused"),
-            9_000,
-            true,
-            ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
-        );
+        aggregate.record_window(AppWindowObservation {
+            window_id: 10,
+            pid: Some(100),
+            title: Some("Small"),
+            area: 10_000,
+            focused: false,
+            bounds: ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
+            display_id: Some(42),
+            bundle_id: Some("com.example.app"),
+        });
+        aggregate.record_window(AppWindowObservation {
+            window_id: 11,
+            pid: Some(100),
+            title: Some("Focused"),
+            area: 9_000,
+            focused: true,
+            bounds: ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
+            display_id: Some(42),
+            bundle_id: Some("com.example.app"),
+        });
 
         assert_eq!(aggregate.primary_window_id, Some(11));
+        assert_eq!(aggregate.display_id, Some(42));
+        assert_eq!(aggregate.bundle_id.as_deref(), Some("com.example.app"));
+        assert_eq!(aggregate.app_identity.as_deref(), Some("com.example.app"));
+        assert_eq!(aggregate.window_ids, vec![10, 11]);
+        assert_ne!(aggregate.window_set_epoch(), 0);
         assert_eq!(
             aggregate.primary_bounds,
             Some(ScreenTargetBounds::new(

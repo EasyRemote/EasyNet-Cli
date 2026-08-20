@@ -54,10 +54,11 @@ invoke_pb2: Any = _invoke_pb2
 invoke_pb2_grpc: Any = _invoke_pb2_grpc
 types_pb2: Any = _types_pb2
 
-DESCRIPTOR_REF = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
-ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
+DESCRIPTOR_REF = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+ABILITY_URA = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
 ABILITY_PUBLIC_NAME = "observe.health"
-CALLEE_URA = "easynet:///r/example/device/dev-a"
+DEVICE_SUBJECT_URA = "easynet:///r/example/device/dev-a"
+CALLEE_URA = "easynet:///r/example/agent/device.dev-a.runtime-health"
 USER_SUBJECT_URA = "easynet:///r/example/user/alice"
 RESOURCE_SUBJECT_URA = "easynet:///r/example/resource/job-42"
 
@@ -122,7 +123,7 @@ def _canonical_receipt(
             profile="axon-strict-v2",
         ),
         subject_binding=types_pb2.SubjectIdentity(
-            ura=CALLEE_URA,
+            ura=DEVICE_SUBJECT_URA,
             profile="axon-strict-v2",
         ),
         invocation_nonce=bytes(range(1, 17)),
@@ -142,7 +143,7 @@ def _canonical_receipt(
         ),
         subject_ref=types_pb2.EntityRef(
             kind=types_pb2.ENTITY_REF_KIND_DEVICE,
-            ura=CALLEE_URA,
+            ura=DEVICE_SUBJECT_URA,
             profile="axon-strict-v2",
         ),
         descriptor_version="1.0.0",
@@ -342,7 +343,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 error = _grpc_error(
                     _FakeRpcError(
                         status_code,
-                        "ROUTE_NEGATIVE: namespace.resolve negative for `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+                        "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
                     ),
                     endpoint="unix:///tmp/easynet-daemon.sock",
                 )
@@ -355,6 +356,25 @@ class DirectRuntimeTests(unittest.TestCase):
                 self.assertEqual(error.error_class, ErrorClass.ROUTING)
                 self.assertEqual(error.retry, RetryHint.SAFE)
                 self.assertTrue(error.retryable)
+
+    def test_direct_runtime_grpc_does_not_infer_owner_offline_from_route_text(
+        self,
+    ) -> None:
+        error = _grpc_error(
+            _FakeRpcError(
+                grpc.StatusCode.NOT_FOUND,
+                "ROUTE_NEGATIVE: namespace.resolve negative for `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+            ),
+            endpoint="unix:///tmp/easynet-daemon.sock",
+        )
+
+        self.assertEqual(error.code, ErrorCode.DESCRIPTOR_NOT_FOUND)
+        self.assertIn("ROUTE_NEGATIVE", error.message)
+        self.assertNotEqual(
+            error.message,
+            "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
+        )
+        self.assertEqual(error.error_class, ErrorClass.ROUTING)
 
     def test_direct_connector_resolves_invocation_endpoint_from_discovery(self) -> None:
         connector = DirectRuntimeConnector(
@@ -599,7 +619,7 @@ class DirectRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             request.envelope.callee.ura,
-            "easynet:///r/example/device/dev-a",
+            CALLEE_URA,
         )
         self.assertEqual(
             request.envelope.subject.ura,
@@ -1186,7 +1206,7 @@ class DirectRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             envelope_open.envelope.callee.ura,
-            "easynet:///r/example/device/dev-a",
+            CALLEE_URA,
         )
         self.assertEqual(
             envelope_open.envelope.subject.ura,
@@ -1230,7 +1250,10 @@ class DirectRuntimeTests(unittest.TestCase):
 
         result = json.loads(raw.decode("utf-8"))
         self.assertNotIn("receipt", result)
+        admission = cast(dict[str, object], result["admission_receipt"])
         receipt = cast(dict[str, object], result["terminal_receipt"])
+        self.assertEqual(admission["receipt_id"], "inv-direct:0")
+        self.assertEqual(receipt["receipt_id"], "inv-direct:1")
         self.assertEqual(receipt["invocation_id"], "inv-direct")
         _assert_complete_receipt_projection(self, receipt)
 
@@ -1399,8 +1422,8 @@ class DirectRuntimeTests(unittest.TestCase):
                 "session",
                 types_pb2.AuthorityBinding(
                     session_authority=types_pb2.SessionAuthority(
-                        backend_ura="easynet:///r/example/agent/backend",
-                        user_ura="easynet:///r/example/agent/alice",
+                        issuer_ura="easynet:///r/example/agent/backend",
+                        subject_ura="easynet:///r/example/agent/alice",
                         session_id="session-1",
                         scopes=("invoke",),
                         audiences=(DESCRIPTOR_REF,),
@@ -1456,6 +1479,18 @@ class DirectRuntimeTests(unittest.TestCase):
                     self.assertNotIn("user_ura", binding_projection)
                 proof = cast(dict[str, object], projection["authority_proof"])
                 self.assertEqual(proof["binding_kind"], kind)
+                if kind == "session":
+                    proof_binding = cast(dict[str, object], proof["binding"])
+                    self.assertEqual(
+                        proof_binding["issuer_ura"],
+                        "easynet:///r/example/agent/backend",
+                    )
+                    self.assertEqual(
+                        proof_binding["subject_ura"],
+                        "easynet:///r/example/agent/alice",
+                    )
+                    self.assertNotIn("backend_ura", proof_binding)
+                    self.assertNotIn("user_ura", proof_binding)
 
                 getattr(receipt.authority_binding, arm).ClearField(required_field)
                 with self.assertRaises(SDKError) as raised:
@@ -2350,7 +2385,7 @@ class _RecordingIdentity:
             ability_ura=ability_ura,
             components={
                 "owner_ura": self.owner_ura,
-                "owner_kind": "device",
+                "owner_kind": "system-agent",
                 "public_name": ABILITY_PUBLIC_NAME,
                 "local_registry_ability": ABILITY_PUBLIC_NAME,
                 "namespace": "observe",
@@ -2381,7 +2416,7 @@ class _DirectAbilityRuntimeTransport:
             "callee_ura": CALLEE_URA,
             "call_mode": "rpc",
             "caller_ura": "easynet:///r/example/agent/alice.sdk",
-            "subject_ura": CALLEE_URA,
+            "subject_ura": DEVICE_SUBJECT_URA,
         }:
             raise AssertionError(f"unexpected ability descriptor request: {request}")
         return json.dumps(
@@ -2395,20 +2430,20 @@ def _ability_addressing_transport() -> MemoryAddressingTransport:
     transport = MemoryAddressingTransport()
     transport.identity_json = (
         b'{"kind":"ability","valid":true,'
-        b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+        b'"ura":"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",'
         b'"profile":"axon-strict-v2",'
-        b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
-        b'"owner_kind":"device","public_name":"observe.health",'
+        b'"components":{"owner_ura":"easynet:///r/example/agent/device.dev-a.runtime-health",'
+        b'"owner_kind":"system-agent","public_name":"observe.health",'
         b'"local_registry_ability":"observe.health",'
         b'"namespace":"observe","local_name":"health"},'
         b'"metadata":{"grammar_owner":"axon"}}'
     )
     transport.descriptor_json = (
         b'{"kind":"descriptor_ref","valid":true,'
-        b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
-        b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+        b'"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",'
+        b'"ability_ura":"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",'
         b'"descriptor_version":"1.0.0","profile":"axon-strict-v2",'
-        b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+        b'"components":{"owner_ura":"easynet:///r/example/agent/device.dev-a.runtime-health"},'
         b'"metadata":{"grammar_owner":"axon"}}'
     )
     return transport
@@ -2418,7 +2453,7 @@ def _ability_request() -> AbilityCallRequest:
     return AbilityCallRequest(
         caller_ura="easynet:///r/example/agent/alice.sdk",
         callee_ura=CALLEE_URA,
-        subject_ura=CALLEE_URA,
+        subject_ura=DEVICE_SUBJECT_URA,
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
         causal_context={"form": "none"},
         ability_ura=ABILITY_URA,

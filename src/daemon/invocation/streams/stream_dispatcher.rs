@@ -44,12 +44,13 @@ use crate::daemon::invocation::admission::target_gate::{
     TargetGate,
 };
 use crate::daemon::invocation::bidi::session_wire::{
-    build_carrier_v1_dispatch_frame, require_canonical_dispatch_session,
+    build_canonical_dispatch_frame, build_canonical_stream_cancel_frame,
+    require_canonical_dispatch_session,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingStreamHandle,
 };
-use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use crate::daemon::invocation::bidi::state::presence::{DispatchSender, PresenceRegistry};
 use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonStreamRoute;
 use crate::daemon::invocation::dispatch::deps::{DirectoryPlane, RuntimePlane, SessionPlane};
@@ -141,24 +142,23 @@ impl StreamDispatcher {
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         let selection = match self.resolve_stream_route(request).await {
             Ok(selection) => selection,
-            Err(status) => {
-                if let Some(handle) = self.sessions.escalation.as_ref() {
-                    return self
-                        .escalate_canonical_stream(handle, request, status)
-                        .await;
-                }
-                return Err(status);
-            }
+            Err(status) => return Err(status),
         };
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
             CanonicalRouteDispatch::Local(route) => route,
-            CanonicalRouteDispatch::Peer(route) => {
+            CanonicalRouteDispatch::Peer(route) | CanonicalRouteDispatch::UpstreamHub(route) => {
                 return Err(Status::unimplemented(format!(
                     "InvokeStream selected canonical peer route to hub `{}` for `{}`, but the \
-                     generic cross-realm server-stream carrier is unsupported",
+                     generic cross-realm server-stream carrier is unsupported; Device mode does \
+                     not own a peer dialer",
                     route.hub_ura, route.query_name,
                 )));
+            }
+            CanonicalRouteDispatch::HubSession(route) => {
+                return self
+                    .dispatch_hub_session_stream_selected_route(request, route)
+                    .await;
             }
         };
         let execution_host_is_self = self
@@ -177,32 +177,39 @@ impl StreamDispatcher {
         }
     }
 
-    async fn escalate_canonical_stream(
+    async fn dispatch_hub_session_stream_selected_route(
         &self,
-        handle: &Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
         request: &InvokeServerStreamRequest,
-        local_route_failure: Status,
+        selected_route: SelectedInvokeRoute,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        if matches!(
-            local_route_failure.code(),
-            tonic::Code::InvalidArgument | tonic::Code::PermissionDenied
-        ) {
-            return Err(local_route_failure);
-        }
+        let Some(handle) = self.sessions.escalation.as_ref() else {
+            return Err(Status::failed_precondition(
+                "InvokeStream selected HubSession route but session escalation is not configured",
+            ));
+        };
         let forwarded_request = stream_request_as_invoke_request(request);
         require_complete_signed_remote_request(&forwarded_request)?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_stream_hub_session_selected_route,
+            callee_ura = selected_route.callee_ura.as_str(),
+            execution_host_ura = selected_route.execution_host_ura.as_str(),
+            route_ura = selected_route.route_ura.as_str(),
+        );
         match handle.escalate_stream(request.clone()).await {
-            Ok(stream) => project_forwarded_remote_stream(
-                RemoteStreamEventSource::Session(stream),
-                forwarded_binding,
-                receipt_resolver,
-                request_timeout(request),
-            )
-            .await,
+            Ok(stream) => {
+                project_forwarded_remote_stream(
+                    RemoteStreamEventSource::Session(stream),
+                    forwarded_binding,
+                    receipt_resolver,
+                    request_timeout(request),
+                )
+                .await
+            }
             Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::TargetOffline) => {
-                Err(Status::failed_precondition("remote InvokeStream target is offline"))
+                Err(Status::unavailable("remote InvokeStream target is offline"))
             }
             Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::PermissionDenied {
                 reason,
@@ -210,11 +217,11 @@ impl StreamDispatcher {
             Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamFailure {
                 reason,
             }) => Err(Status::unavailable(format!(
-                "remote InvokeStream session escalation failed: {reason}"
+                "remote InvokeStream HubSession dispatch failed: {reason}"
             ))),
             Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamTimeout) => {
                 Err(Status::deadline_exceeded(
-                    "remote InvokeStream session escalation timed out",
+                    "remote InvokeStream HubSession dispatch timed out",
                 ))
             }
         }
@@ -265,6 +272,7 @@ impl StreamDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::TrustedLocalSystem,
+                    &selected_route.execution_host_ura,
                     ability,
                 )?;
                 crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -279,6 +287,7 @@ impl StreamDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::ExternalSigned,
+                    &selected_route.execution_host_ura,
                     ability,
                 )?;
                 let signed_descriptor_ref = bound_ability
@@ -389,18 +398,15 @@ impl StreamDispatcher {
             ..axon_sdk::pb::axon::v1::InvokeRequest::default()
         };
         let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
             self.sessions.device_trust_sync.as_ref(),
             &selected_route.execution_host_ura,
             "InvokeStream",
         )
         .await?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
-        let dispatch_frame = build_carrier_v1_dispatch_frame(
-            call_id,
-            forwarded_request,
-            matches!(call_mode, CallMode::Bidi),
-        );
+        let dispatch_frame = build_canonical_dispatch_frame(call_id, forwarded_request, call_mode);
         match sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -433,7 +439,10 @@ impl StreamDispatcher {
         );
 
         project_forwarded_remote_stream(
-            RemoteStreamEventSource::Presence(handle),
+            RemoteStreamEventSource::Presence {
+                handle,
+                cancel: Some(PresenceStreamCancellation { sender, call_id }),
+            },
             forwarded_binding,
             receipt_resolver,
             request_timeout(request),
@@ -443,15 +452,56 @@ impl StreamDispatcher {
 }
 
 enum RemoteStreamEventSource {
-    Presence(PendingStreamHandle),
+    Presence {
+        handle: PendingStreamHandle,
+        cancel: Option<PresenceStreamCancellation>,
+    },
     Session(crate::daemon::invocation::bidi::session_escalation::EscalatedStreamHandle),
+}
+
+struct PresenceStreamCancellation {
+    sender: DispatchSender,
+    call_id: u64,
+}
+
+impl PresenceStreamCancellation {
+    async fn request(self, reason: &str) -> Result<(), Status> {
+        self.sender
+            .send(Ok(build_canonical_stream_cancel_frame(
+                self.call_id,
+                reason,
+            )))
+            .await
+            .map_err(|_| {
+                Status::unavailable(format!(
+                    "REMOTE_STREAM_CANCEL_UNAVAILABLE: carrier closed before call_id={} cancellation",
+                    self.call_id
+                ))
+            })
+    }
 }
 
 impl RemoteStreamEventSource {
     async fn recv(&mut self) -> Option<DispatchStreamEvent> {
         match self {
-            Self::Presence(handle) => handle.recv().await,
+            Self::Presence { handle, .. } => handle.recv().await,
             Self::Session(handle) => handle.recv().await,
+        }
+    }
+
+    async fn request_cancel(&mut self, reason: &str) -> Result<(), Status> {
+        match self {
+            Self::Presence { cancel, .. } => {
+                let Some(cancel) = cancel.take() else {
+                    return Ok(());
+                };
+                cancel.request(reason).await
+            }
+            Self::Session(handle) => handle.request_cancel(reason).await.map_err(|error| {
+                Status::unavailable(format!(
+                    "REMOTE_STREAM_CANCEL_UNAVAILABLE: HubSession cancellation failed: {error:?}"
+                ))
+            }),
         }
     }
 }
@@ -463,33 +513,108 @@ async fn project_forwarded_remote_stream(
     timeout: Option<Duration>,
 ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
     let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
+    let (consumer_closed_tx, mut consumer_closed_rx) = watch::channel(false);
     tokio::spawn(async move {
         let mut sequence = 0_u64;
         let mut canonical_invocation_id = None::<String>;
         let mut finalization =
             ForwardedFinalizationVerifier::new(forwarded_binding, receipt_resolver);
-        let deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);
+        let invocation_deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);
+        let mut active_deadline = invocation_deadline;
+        let mut client_connected = true;
+        let mut cancel_requested = false;
         loop {
-            let event = match deadline {
-                Some(deadline) => match tokio::time::timeout_at(deadline, source.recv()).await {
-                    Ok(event) => event,
-                    Err(_) => {
-                        let _ = tx
-                            .send(Err(Status::deadline_exceeded(
-                                "REMOTE_STREAM_TERMINAL_TIMEOUT: remote stream did not produce a terminal event before the invocation deadline",
-                            )))
-                            .await;
+            enum RemoteStreamWait {
+                ConsumerClosed,
+                Event(Option<DispatchStreamEvent>),
+                Deadline,
+            }
+            let wait = match active_deadline {
+                Some(deadline) => tokio::select! {
+                    changed = consumer_closed_rx.changed(), if client_connected => {
+                        if changed.is_ok() && *consumer_closed_rx.borrow() {
+                            RemoteStreamWait::ConsumerClosed
+                        } else {
+                            continue;
+                        }
+                    }
+                    event = source.recv() => RemoteStreamWait::Event(event),
+                    _ = tokio::time::sleep_until(deadline) => RemoteStreamWait::Deadline,
+                },
+                None => tokio::select! {
+                    changed = consumer_closed_rx.changed(), if client_connected => {
+                        if changed.is_ok() && *consumer_closed_rx.borrow() {
+                            RemoteStreamWait::ConsumerClosed
+                        } else {
+                            continue;
+                        }
+                    }
+                    event = source.recv() => RemoteStreamWait::Event(event),
+                },
+            };
+
+            if matches!(wait, RemoteStreamWait::ConsumerClosed) {
+                client_connected = false;
+                if !cancel_requested {
+                    if request_remote_stream_cancellation(
+                        &mut source,
+                        "stream consumer disconnected",
+                    )
+                    .await
+                    .is_err()
+                    {
                         break;
                     }
-                },
-                None => source.recv().await,
+                    cancel_requested = true;
+                    active_deadline =
+                        Some(tokio::time::Instant::now() + REMOTE_STREAM_CANCEL_DRAIN_TIMEOUT);
+                }
+                continue;
+            }
+
+            if matches!(wait, RemoteStreamWait::Deadline) {
+                if cancel_requested {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = remote_stream_cancel_drain_timeout,
+                        invocation_id = canonical_invocation_id.as_deref().unwrap_or(""),
+                    );
+                    break;
+                }
+                if client_connected {
+                    let _ = tx
+                        .send(Err(Status::deadline_exceeded(
+                            "REMOTE_STREAM_TERMINAL_TIMEOUT: remote stream did not produce a terminal event before the invocation deadline",
+                        )))
+                        .await;
+                    client_connected = false;
+                }
+                if request_remote_stream_cancellation(
+                    &mut source,
+                    "remote stream invocation deadline elapsed",
+                )
+                .await
+                .is_err()
+                {
+                    break;
+                }
+                cancel_requested = true;
+                active_deadline =
+                    Some(tokio::time::Instant::now() + REMOTE_STREAM_CANCEL_DRAIN_TIMEOUT);
+                continue;
+            }
+
+            let RemoteStreamWait::Event(event) = wait else {
+                unreachable!("consumer and deadline waits handled above")
             };
             let Some(event) = event else {
-                let _ = tx
-                    .send(Err(Status::failed_precondition(
-                        "CANONICAL_TERMINAL_REQUIRED: remote stream source closed without a terminal event",
-                    )))
-                    .await;
+                if client_connected {
+                    let _ = tx
+                        .send(Err(Status::failed_precondition(
+                            "CANONICAL_TERMINAL_REQUIRED: remote stream source closed without a terminal event",
+                        )))
+                        .await;
+                }
                 break;
             };
             match event {
@@ -511,8 +636,23 @@ async fn project_forwarded_remote_stream(
                         error: None,
                     });
                     sequence = sequence.saturating_add(1);
-                    if tx.send(Ok(chunk)).await.is_err() {
-                        break;
+                    if client_connected && tx.send(Ok(chunk)).await.is_err() {
+                        client_connected = false;
+                        if !cancel_requested {
+                            if request_remote_stream_cancellation(
+                                &mut source,
+                                "stream consumer disconnected",
+                            )
+                            .await
+                            .is_err()
+                            {
+                                break;
+                            }
+                            cancel_requested = true;
+                            active_deadline = Some(
+                                tokio::time::Instant::now() + REMOTE_STREAM_CANCEL_DRAIN_TIMEOUT,
+                            );
+                        }
                     }
                 }
                 DispatchStreamEvent::Chunk(payload) => {
@@ -539,8 +679,23 @@ async fn project_forwarded_remote_stream(
                         error: None,
                     });
                     sequence = sequence.saturating_add(1);
-                    if tx.send(Ok(chunk)).await.is_err() {
-                        break;
+                    if client_connected && tx.send(Ok(chunk)).await.is_err() {
+                        client_connected = false;
+                        if !cancel_requested {
+                            if request_remote_stream_cancellation(
+                                &mut source,
+                                "stream consumer disconnected",
+                            )
+                            .await
+                            .is_err()
+                            {
+                                break;
+                            }
+                            cancel_requested = true;
+                            active_deadline = Some(
+                                tokio::time::Instant::now() + REMOTE_STREAM_CANCEL_DRAIN_TIMEOUT,
+                            );
+                        }
                     }
                 }
                 DispatchStreamEvent::Terminal(result) => {
@@ -589,7 +744,9 @@ async fn project_forwarded_remote_stream(
                         terminal_receipt: Some(finalized.terminal_receipt),
                         error: finalized.failure,
                     });
-                    let _ = tx.send(Ok(chunk)).await;
+                    if client_connected {
+                        let _ = tx.send(Ok(chunk)).await;
+                    }
                     break;
                 }
             }
@@ -597,8 +754,36 @@ async fn project_forwarded_remote_stream(
     });
 
     Ok(Response::new(
-        Box::pin(ReceiverStream::new(rx)) as BoxedDownStream<InvokeStreamChunk>
+        Box::pin(DropNotifyingReceiverStream::new(rx, consumer_closed_tx))
+            as BoxedDownStream<InvokeStreamChunk>,
     ))
+}
+
+const REMOTE_STREAM_CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn request_remote_stream_cancellation(
+    source: &mut RemoteStreamEventSource,
+    reason: &str,
+) -> Result<(), Status> {
+    match source.request_cancel(reason).await {
+        Ok(()) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = remote_stream_cancel_requested,
+                reason = reason,
+            );
+            Ok(())
+        }
+        Err(error) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = remote_stream_cancel_request_failed,
+                reason = reason,
+                error = error.message(),
+            );
+            Err(error)
+        }
+    }
 }
 
 async fn project_local_runtime_stream(
@@ -769,23 +954,27 @@ async fn project_local_runtime_stream(
 }
 
 enum LocalRuntimeStreamChunkProjection {
-    Progress {
-        invocation_id: String,
-        sequence: u64,
-        payload: Vec<u8>,
-        content_type: String,
-        admission_receipt: Option<WireInvocationReceipt>,
-    },
-    Terminal {
-        invocation_id: String,
-        sequence: u64,
-        state: InvocationState,
-        payload: Vec<u8>,
-        content_type: String,
-        admission_receipt: Option<WireInvocationReceipt>,
-        terminal_receipt: WireInvocationReceipt,
-        error: Option<Error>,
-    },
+    Progress(Box<ProgressStreamChunkProjection>),
+    Terminal(Box<TerminalStreamChunkProjection>),
+}
+
+struct ProgressStreamChunkProjection {
+    invocation_id: String,
+    sequence: u64,
+    payload: Vec<u8>,
+    content_type: String,
+    admission_receipt: Option<WireInvocationReceipt>,
+}
+
+struct TerminalStreamChunkProjection {
+    invocation_id: String,
+    sequence: u64,
+    state: InvocationState,
+    payload: Vec<u8>,
+    content_type: String,
+    admission_receipt: Option<WireInvocationReceipt>,
+    terminal_receipt: WireInvocationReceipt,
+    error: Option<Error>,
 }
 
 impl LocalRuntimeStreamChunkProjection {
@@ -796,13 +985,13 @@ impl LocalRuntimeStreamChunkProjection {
         content_type: String,
         admission_receipt: Option<WireInvocationReceipt>,
     ) -> Self {
-        Self::Progress {
+        Self::Progress(Box::new(ProgressStreamChunkProjection {
             invocation_id,
             sequence,
             payload,
             content_type: default_stream_content_type(content_type),
             admission_receipt,
-        }
+        }))
     }
 
     fn successful_terminal(
@@ -829,7 +1018,7 @@ impl LocalRuntimeStreamChunkProjection {
         } else {
             frame_content_type
         };
-        Ok(Self::Terminal {
+        Ok(Self::Terminal(Box::new(TerminalStreamChunkProjection {
             invocation_id,
             sequence,
             state: finalized.terminal_state,
@@ -838,7 +1027,7 @@ impl LocalRuntimeStreamChunkProjection {
             admission_receipt,
             terminal_receipt,
             error: None,
-        })
+        })))
     }
 
     fn failed_terminal(
@@ -850,7 +1039,7 @@ impl LocalRuntimeStreamChunkProjection {
     ) -> Result<Self, Status> {
         let terminal_receipt = terminal_receipt_to_wire(&finalized)?;
         let terminal_error = finalized.failure.as_ref().unwrap_or(frame_error);
-        Ok(Self::Terminal {
+        Ok(Self::Terminal(Box::new(TerminalStreamChunkProjection {
             invocation_id,
             sequence,
             state: finalized.terminal_state,
@@ -859,48 +1048,54 @@ impl LocalRuntimeStreamChunkProjection {
             admission_receipt,
             terminal_receipt,
             error: Some(axon_sdk::invocation::wire::error_to_wire(terminal_error)),
-        })
+        })))
     }
 
     fn into_chunk(self) -> InvokeStreamChunk {
         match self {
-            Self::Progress {
-                invocation_id,
-                sequence,
-                payload,
-                content_type,
-                admission_receipt,
-            } => local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
-                invocation_id,
-                state: InvocationState::Running,
-                payload,
-                content_type,
-                sequence,
-                terminal: false,
-                admission_receipt,
-                terminal_receipt: None,
-                error: None,
-            }),
-            Self::Terminal {
-                invocation_id,
-                sequence,
-                state,
-                payload,
-                content_type,
-                admission_receipt,
-                terminal_receipt,
-                error,
-            } => local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
-                invocation_id,
-                state,
-                payload,
-                content_type,
-                sequence,
-                terminal: true,
-                admission_receipt,
-                terminal_receipt: Some(terminal_receipt),
-                error,
-            }),
+            Self::Progress(progress) => {
+                let ProgressStreamChunkProjection {
+                    invocation_id,
+                    sequence,
+                    payload,
+                    content_type,
+                    admission_receipt,
+                } = *progress;
+                local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
+                    invocation_id,
+                    state: InvocationState::Running,
+                    payload,
+                    content_type,
+                    sequence,
+                    terminal: false,
+                    admission_receipt,
+                    terminal_receipt: None,
+                    error: None,
+                })
+            }
+            Self::Terminal(terminal) => {
+                let TerminalStreamChunkProjection {
+                    invocation_id,
+                    sequence,
+                    state,
+                    payload,
+                    content_type,
+                    admission_receipt,
+                    terminal_receipt,
+                    error,
+                } = *terminal;
+                local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
+                    invocation_id,
+                    state,
+                    payload,
+                    content_type,
+                    sequence,
+                    terminal: true,
+                    admission_receipt,
+                    terminal_receipt: Some(terminal_receipt),
+                    error,
+                })
+            }
         }
     }
 }
@@ -1029,11 +1224,12 @@ impl StreamDispatcher {
 
         let selection = self
             .gate
-            .route_resolver()
-            .await
             .resolve_canonical_route(&target_ura, ability, CallMode::Stream)
+            .await
             .map_err(route_negative_status)?;
-        if let CanonicalRouteDispatch::Local(selected_route) = selection.dispatch() {
+        if let CanonicalRouteDispatch::Local(selected_route)
+        | CanonicalRouteDispatch::HubSession(selected_route) = selection.dispatch()
+        {
             if !selected_route.is_authoritative_local_or_better() {
                 return Err(route_profile_blocked_status(selected_route));
             }
@@ -1397,7 +1593,10 @@ mod tests {
                 .expect("forwarded binding");
 
         let response = project_forwarded_remote_stream(
-            RemoteStreamEventSource::Presence(handle),
+            RemoteStreamEventSource::Presence {
+                handle,
+                cancel: None,
+            },
             binding,
             Arc::new(RejectingKeyResolver),
             Some(Duration::from_millis(10)),
@@ -1416,6 +1615,56 @@ mod tests {
             error.message().contains("REMOTE_STREAM_TERMINAL_TIMEOUT"),
             "unexpected timeout error: {}",
             error.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_remote_stream_consumer_drop_sends_scoped_carrier_cancel() {
+        use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+
+        let pending = PendingStreamDispatchMap::new();
+        let handle = pending.register_pending_for("easynet:///r/test/device/target");
+        let call_id = handle.call_id();
+        let (carrier_tx, mut carrier_rx) = mpsc::channel(2);
+        let binding =
+            ForwardedInvocationBinding::from_request(&forwarded_request_for_timeout_test())
+                .expect("forwarded binding");
+
+        let response = project_forwarded_remote_stream(
+            RemoteStreamEventSource::Presence {
+                handle,
+                cancel: Some(PresenceStreamCancellation {
+                    sender: carrier_tx,
+                    call_id,
+                }),
+            },
+            binding,
+            Arc::new(RejectingKeyResolver),
+            None,
+        )
+        .await
+        .expect("stream response");
+
+        drop(response.into_inner());
+
+        let frame = tokio::time::timeout(Duration::from_secs(1), carrier_rx.recv())
+            .await
+            .expect("cancel reaches carrier promptly")
+            .expect("cancel frame exists")
+            .expect("cancel frame is not a transport error");
+        let Some(DownPayload::BinaryChunk(chunk)) = frame.frame.payload else {
+            panic!("stream cancel must use the daemon carrier control codec");
+        };
+        let control = crate::daemon::invocation::bidi::session_wire::SessionDispatch::decode_frame(
+            &chunk.data,
+        )
+        .expect("stream cancel frame decodes");
+        assert_eq!(
+            control,
+            crate::daemon::invocation::bidi::session_wire::SessionDispatch::StreamCancel {
+                call_id,
+                reason: "stream consumer disconnected".to_string(),
+            }
         );
     }
 }

@@ -41,6 +41,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::daemon::federation::hosted_agent_publication::{
+    HostedAgentGenerationAssignment, HostedAgentIncarnationId,
+};
+
 pub use crate::daemon::federation::receipt_contract::{
     AdvertiseContract, AuthorityAbilitiesDiff, AuthorityAbilityEntry, JoinReceipt,
 };
@@ -53,6 +57,8 @@ pub struct ResolveKeyReceipt {
     pub public_keys_b64: Vec<String>,
     #[serde(default)]
     pub principal_owner_ura: Option<String>,
+    /// Public wire scalar user-id segment paired with `principal_owner_ura`.
+    /// This is not a runtime User URA.
     #[serde(default)]
     pub principal_owner_user_id: Option<String>,
 }
@@ -110,39 +116,19 @@ pub struct HeartbeatArgs {
 /// Arguments for `federation.advertise_agent`. The hosting
 /// device-profile uses this to register hosted Agents (consent,
 /// policy, mcp, llm-per-sub-agent) with the realm directory.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentArgs {
     pub agent_ura: String,
-    /// Durable owner-cursor generation for this Agent incarnation.
-    pub generation: u64,
-    /// Empty when the hosted Agent has no key of its own (the
-    /// common case for §1.3 Model B; receipts are signed by the
-    /// host's key, attested via host_attestation in the
-    /// DirectoryEntry).
-    #[serde(default)]
-    pub public_key_hex: String,
-    pub signing_authority: AdvertisedSigningAuthority,
-    /// Runtime node hosting the agent's canonical invocation endpoint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_node_id: Option<String>,
-}
-
-/// Wire shape for the `signing_authority` field. Mirrors the
-/// hub-profile's `AdvertisedSigningAuthority` enum exactly.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AdvertisedSigningAuthority {
-    /// Agent owns its own keypair (Model A — hubs, backends).
-    SelfSigned,
-    /// Agent is hosted by another Agent that signs its receipts
-    /// (Model B — every CLI-spawned hosted Agent).
-    HostedBy { host_ura: String },
+    /// Device-persisted idempotency key; the Hub owns generation assignment.
+    pub incarnation_id: HostedAgentIncarnationId,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentReceipt {
     pub ack: bool,
+    pub assignment: HostedAgentGenerationAssignment,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -421,38 +407,36 @@ mod tests {
     }
 
     #[test]
-    fn advertise_args_serializes_self_signed_kind() {
+    fn advertise_args_are_the_closed_incarnation_request() {
         let args = AdvertiseAgentArgs {
-            agent_ura: "easynet:///r/acme/device/01DEV".into(),
-            generation: 1,
-            public_key_hex: "aa".into(),
-            signing_authority: AdvertisedSigningAuthority::SelfSigned,
-            host_node_id: None,
+            agent_ura: "easynet:///r/acme/agent/u1.01LLM".into(),
+            incarnation_id: HostedAgentIncarnationId::parse("a".repeat(32)).unwrap(),
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
-        assert_eq!(v["signing_authority"]["kind"], "self_signed");
-        assert_eq!(v["agent_ura"], "easynet:///r/acme/device/01DEV");
-        assert_eq!(v["generation"], 1);
+        assert_eq!(v["agent_ura"], "easynet:///r/acme/agent/u1.01LLM");
+        assert_eq!(v["incarnation_id"], "a".repeat(32));
+        assert_eq!(v.as_object().unwrap().len(), 2);
     }
 
     #[test]
-    fn advertise_args_serializes_hosted_kind_with_host_ura() {
-        let args = AdvertiseAgentArgs {
-            agent_ura: "easynet:///r/acme/agent/u1.01LLM".into(),
-            generation: 7,
-            public_key_hex: "".into(),
-            signing_authority: AdvertisedSigningAuthority::HostedBy {
-                host_ura: "easynet:///r/acme/device/01DEV".into(),
-            },
-            host_node_id: None,
-        };
-        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
-        assert_eq!(v["signing_authority"]["kind"], "hosted_by");
-        assert_eq!(
-            v["signing_authority"]["host_ura"],
-            "easynet:///r/acme/device/01DEV"
-        );
-        assert_eq!(v["generation"], 7);
+    fn advertise_args_reject_retired_sender_assigned_facts() {
+        for retired in [
+            "generation",
+            "public_key_hex",
+            "signing_authority",
+            "host_node_id",
+        ] {
+            let mut body = serde_json::json!({
+                "agent_ura": "easynet:///r/acme/agent/u1.01LLM",
+                "incarnation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            });
+            body.as_object_mut()
+                .unwrap()
+                .insert(retired.to_string(), serde_json::json!(1));
+            let error = serde_json::from_value::<AdvertiseAgentArgs>(body)
+                .expect_err("retired sender-assigned facts must fail closed");
+            assert!(error.to_string().contains(retired));
+        }
     }
 
     #[test]
@@ -460,6 +444,15 @@ mod tests {
         for field in ["status", "agent_ura", "replaced_prior"] {
             let mut body = serde_json::Map::new();
             body.insert("ack".to_string(), json!(true));
+            body.insert(
+                "assignment".to_string(),
+                serde_json::json!({
+                    "agent_ura": "easynet:///r/acme/agent/u1.01LLM",
+                    "host_device_ura": "easynet:///r/acme/device/01DEV",
+                    "incarnation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "generation": 1
+                }),
+            );
             body.insert(field.to_string(), json!("retired"));
 
             let err = parse_receipt_value::<AdvertiseAgentReceipt>(&Value::Object(body))

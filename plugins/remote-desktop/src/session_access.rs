@@ -17,11 +17,9 @@ use crate::daemon::plugins::remote_desktop::session_consent::causal_context_cont
 /// Verify that a remote desktop session control-plane ability targets exactly
 /// one session and carries the session bearer token.
 ///
-/// Signaling and lifecycle calls are session-scoped, not media-resource
-/// operations. Their envelope subject may be the caller/user subject supplied
-/// by the Axon sidecar, so they must not require it to equal the captured
-/// resource URA. The resource binding remains inside the session row created
-/// by `create_session`.
+/// Every session operation remains bound to the resource EntityRef captured at
+/// creation. Adapters must preserve that subject instead of substituting the
+/// caller identity.
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_identity(
     ability: &'static str,
     env: &EnvelopeContext,
@@ -42,6 +40,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_identit
         });
     }
     ensure_session_caller_consistent(ability, env, session)?;
+    ensure_session_subject_consistent(ability, env.subject(), session)?;
     ensure_session_consent_receipt_consistent(ability, env, session)?;
     Ok(())
 }
@@ -78,9 +77,7 @@ fn ensure_session_caller_consistent(
     env: &EnvelopeContext,
     session: &RemoteDesktopSession,
 ) -> RemoteDesktopResult<()> {
-    let Some(expected) = session.creator_caller_ura() else {
-        return Ok(());
-    };
+    let expected = session.creator_caller_ura();
     let actual = env.caller();
     if expected != actual {
         return Err(RemoteDesktopError::SessionCallerMismatch {
@@ -97,9 +94,7 @@ fn ensure_session_consent_receipt_consistent(
     env: &EnvelopeContext,
     session: &RemoteDesktopSession,
 ) -> RemoteDesktopResult<()> {
-    let Some(expected) = session.consent().approval_receipt() else {
-        return Ok(());
-    };
+    let expected = session.consent().approval_receipt();
     if !causal_context_contains_receipt(ability, Some(env.causal_context()), expected)? {
         return Err(RemoteDesktopError::ConsentReceiptMismatch {
             ability,
@@ -134,4 +129,78 @@ fn ensure_session_subject_consistent(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{ensure_session_control_identity, ensure_session_resource_identity};
+    use crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION;
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::test_support::{env_for, test_session_init};
+
+    #[test]
+    fn session_control_subject_contract_is_original_resource_ura_not_session_ura() {
+        let resource_ura = "easynet:///r/acme/resource/device.01DEV/streams/display.contract";
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-subject-contract",
+            resource_ura,
+            vec!["webrtc".to_string()],
+        ));
+        let args = json!({
+            "session_id": "rd-subject-contract",
+            "session_token": "token",
+        });
+
+        ensure_session_control_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(resource_ura),
+            &args,
+            &session,
+        )
+        .expect("resource subject is the remote desktop session control contract");
+        ensure_session_resource_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(resource_ura),
+            &args,
+            &session,
+        )
+        .expect("resource data-plane access uses the same selected resource subject");
+
+        let session_ura = "easynet:///r/acme/resource/remote-desktop-session/rd-subject-contract";
+        let err = ensure_session_control_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(session_ura),
+            &args,
+            &session,
+        )
+        .expect_err("session URA must not replace the selected resource subject");
+        assert!(err.to_string().contains("does not match session subject"));
+    }
+
+    #[test]
+    fn session_control_rejects_subject_in_args_even_when_token_matches() {
+        let resource_ura = "easynet:///r/acme/resource/device.01DEV/streams/display.args-subject";
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-args-subject",
+            resource_ura,
+            vec!["webrtc".to_string()],
+        ));
+        let args = json!({
+            "session_id": "rd-args-subject",
+            "session_token": "token",
+            "subject": resource_ura,
+        });
+
+        let err = ensure_session_control_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(resource_ura),
+            &args,
+            &session,
+        )
+        .expect_err("Invocation.subject must not be duplicated in ability args");
+
+        assert!(err.to_string().contains("subject_in_args"));
+    }
 }

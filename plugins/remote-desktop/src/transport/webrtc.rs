@@ -16,10 +16,11 @@ use webrtc::runtime::Sender;
 
 use crate::daemon::plugins::remote_desktop::input::{
     input_injection_available, record_input_channel_event, run_remote_desktop_input_channel,
-    INPUT_DATA_CHANNEL_LABEL,
+    EffectiveRemoteDesktopInputPolicy, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::sdp::remote_ice_candidate_inits;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;
 
 /// Direct WebRTC PeerConnection callback adapter.
@@ -31,25 +32,45 @@ use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportMan
 #[derive(Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandler {
     sessions: Arc<RemoteDesktopSessionStore>,
+    transports: Arc<RemoteDesktopTransportManager>,
     session_id: String,
-    input_policy: Value,
+    epoch: TransportEpoch,
+    input_policy: EffectiveRemoteDesktopInputPolicy,
     gather_complete_tx: Sender<()>,
     connected_tx: Sender<()>,
     done_tx: Sender<()>,
 }
 
+pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandlerConfig {
+    pub(in crate::daemon::plugins::remote_desktop) sessions: Arc<RemoteDesktopSessionStore>,
+    pub(in crate::daemon::plugins::remote_desktop) transports: Arc<RemoteDesktopTransportManager>,
+    pub(in crate::daemon::plugins::remote_desktop) session_id: String,
+    pub(in crate::daemon::plugins::remote_desktop) epoch: TransportEpoch,
+    pub(in crate::daemon::plugins::remote_desktop) input_policy: EffectiveRemoteDesktopInputPolicy,
+    pub(in crate::daemon::plugins::remote_desktop) gather_complete_tx: Sender<()>,
+    pub(in crate::daemon::plugins::remote_desktop) connected_tx: Sender<()>,
+    pub(in crate::daemon::plugins::remote_desktop) done_tx: Sender<()>,
+}
+
 impl DirectWebRtcHandler {
     pub(in crate::daemon::plugins::remote_desktop) fn new(
-        sessions: Arc<RemoteDesktopSessionStore>,
-        session_id: String,
-        input_policy: Value,
-        gather_complete_tx: Sender<()>,
-        connected_tx: Sender<()>,
-        done_tx: Sender<()>,
+        config: DirectWebRtcHandlerConfig,
     ) -> Self {
+        let DirectWebRtcHandlerConfig {
+            sessions,
+            transports,
+            session_id,
+            epoch,
+            input_policy,
+            gather_complete_tx,
+            connected_tx,
+            done_tx,
+        } = config;
         Self {
             sessions,
+            transports,
             session_id,
+            epoch,
             input_policy,
             gather_complete_tx,
             connected_tx,
@@ -68,12 +89,14 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
             );
             match serde_json::to_value(candidate) {
                 Ok(candidate) => {
-                    if let Err(err) = self
-                        .sessions
-                        .record_local_webrtc_candidate(&self.session_id, candidate)
-                    {
+                    if let Err(err) = self.sessions.record_local_webrtc_candidate(
+                        &self.session_id,
+                        self.epoch,
+                        candidate,
+                    ) {
                         self.sessions.record_webrtc_diagnostic(
                             &self.session_id,
+                            self.epoch,
                             "ICE_CANDIDATE_SCHEMA_INVALID",
                             Some(err.to_string()),
                             json!({ "stage": "local_candidate_projection" }),
@@ -83,6 +106,7 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
                 Err(err) => {
                     self.sessions.record_webrtc_diagnostic(
                         &self.session_id,
+                        self.epoch,
                         "ICE_CANDIDATE_SCHEMA_INVALID",
                         Some(err.to_string()),
                         json!({ "stage": "local_candidate_serialization" }),
@@ -100,6 +124,7 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
         eprintln!("[remote-desktop-webrtc] ice_candidate_error={message}");
         self.sessions.record_webrtc_diagnostic(
             &self.session_id,
+            self.epoch,
             "ICE_CANDIDATE_ERROR",
             Some(message),
             json!({
@@ -117,6 +142,7 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
         eprintln!("[remote-desktop-webrtc] ice_connection_state={state}");
         self.sessions.record_webrtc_diagnostic(
             &self.session_id,
+            self.epoch,
             "ICE_CONNECTION_STATE_CHANGED",
             None,
             json!({ "ice_connection_state": state }),
@@ -132,21 +158,38 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
 
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
         eprintln!("[remote-desktop-webrtc] peer_connection_state={state}");
+        self.sessions.record_webrtc_diagnostic(
+            &self.session_id,
+            self.epoch,
+            "PEER_CONNECTION_STATE_CHANGED",
+            None,
+            json!({ "peer_connection_state": state.to_string() }),
+        );
         match state {
             RTCPeerConnectionState::Connected => {
-                self.sessions.mark_direct_webrtc_connected(&self.session_id);
                 let _ = self.connected_tx.try_send(());
             }
             RTCPeerConnectionState::Failed => {
                 self.sessions.mark_direct_webrtc_failed(
                     &self.session_id,
+                    self.epoch,
                     "webrtc_peer_connection_failed",
                     "device-side peer connection entered failed".to_string(),
                 );
                 let _ = self.done_tx.try_send(());
+                self.transports
+                    .stop_endpoint_if_epoch(&self.session_id, self.epoch);
             }
             RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
+                self.sessions.mark_direct_webrtc_failed(
+                    &self.session_id,
+                    self.epoch,
+                    "webrtc_peer_connection_closed",
+                    format!("device-side peer connection entered {state}"),
+                );
                 let _ = self.done_tx.try_send(());
+                self.transports
+                    .stop_endpoint_if_epoch(&self.session_id, self.epoch);
             }
             _ => {}
         }
@@ -161,6 +204,7 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
             record_input_channel_event(
                 &self.sessions,
                 &self.session_id,
+                self.epoch,
                 "INPUT_CHANNEL_REJECTED",
                 json!({
                     "label": label,
@@ -173,19 +217,27 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
         record_input_channel_event(
             &self.sessions,
             &self.session_id,
+            self.epoch,
             "INPUT_CHANNEL_OPENING",
             json!({
                 "label": label,
-                "input_policy": self.input_policy.clone(),
+                "input_policy": self.input_policy.to_value(),
                 "input_injection_available": input_injection_available(),
             }),
         );
         let session_id = self.session_id.clone();
         let input_policy = self.input_policy.clone();
         let sessions = Arc::clone(&self.sessions);
+        let epoch = self.epoch;
         tokio::spawn(async move {
-            run_remote_desktop_input_channel(sessions, session_id, input_policy, data_channel)
-                .await;
+            run_remote_desktop_input_channel(
+                sessions,
+                session_id,
+                epoch,
+                input_policy,
+                data_channel,
+            )
+            .await;
         });
     }
 }
@@ -209,7 +261,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_remote_ice_candidate_val
                 candidate_init.candidate.as_str()
             };
             eprintln!("[remote-desktop-webrtc] apply_remote_candidate={candidate_label}");
-            transports.block_on(peer_connection.add_ice_candidate(candidate_init))?;
+            transports.block_on(peer_connection.add_ice_candidate(candidate_init))??;
         }
     }
     Ok(())
@@ -225,11 +277,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_pending_remote_ice_candi
     sessions: &RemoteDesktopSessionStore,
     transports: &RemoteDesktopTransportManager,
     session_id: &str,
+    epoch: TransportEpoch,
 ) -> anyhow::Result<()> {
     let endpoint = transports.endpoint(session_id);
     let Some(endpoint) = endpoint else {
         return Ok(());
     };
+    if endpoint.epoch != epoch {
+        return Ok(());
+    }
     let candidates = {
         let sessions = sessions.lock();
         sessions

@@ -126,6 +126,5 @@ fn run_logs(args: LogsArgs) -> anyhow::Result<()> {
 }
 
 fn resolve_runtime_log_path() -> std::path::PathBuf {
-    let daemon_log = config::state_dir().join("logs").join("easynet-daemon.log");
-    daemon_log
+    config::state_dir().join("logs").join("easynet-daemon.log")
 }

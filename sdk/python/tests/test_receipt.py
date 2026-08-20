@@ -27,6 +27,7 @@ from easynet_sdk.receipt import (
     ReceiptReference,
     ReceiptTraceRequest,
     RuntimeReceiptProvider,
+    receipt_read_call_context,
 )
 from easynet_sdk.runtime import RuntimeClient
 from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
@@ -285,7 +286,8 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     assert page.records[0].receipt_chain.anchors == ()
     assert transport.descriptor_requests[-1]["provider"] == "receipt_history"
     assert transport.descriptor_requests[-1]["subject_ura"] == call.subject_ura
-    assert transport.seen["args"] == {
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {
         "key": {"trace_id": "trace-1"},
         "filter": {
             "caller_ura": "easynet:///r/example/user/alice",
@@ -305,9 +307,46 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     }
 
 
+def test_receipt_read_call_context_requires_complete_tuple_fields() -> None:
+    authority = DelegationProof.from_metadata(
+        _authority_metadata_value(
+            {
+                "issuer_ura": "easynet:///r/example/user/backend",
+                "subject_ura": "easynet:///r/example/device/dev-a",
+                "caller_ura": "easynet:///r/example/user/backend",
+                "audience": "easynet:///r/example/device/dev-a",
+                "scopes": ["invocation.history.*"],
+                "issued_at_ms": 1000,
+                "expires_at_ms": 2000,
+            },
+            b"delegation-signature",
+        )
+    )
+    required = {
+        "caller_ura": "easynet:///r/example/user/backend",
+        "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+        "authority": authority,
+        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+        "causal_context": {"form": "none"},
+    }
+    for omitted in ("nonce_base64", "causal_context"):
+        fields = dict(required)
+        del fields[omitted]
+        with pytest.raises(TypeError, match=omitted):
+            receipt_read_call_context(**fields)  # type: ignore[arg-type]
+    with pytest.raises(SDKError, match="causal_context is required"):
+        receipt_read_call_context(
+            caller_ura=str(required["caller_ura"]),
+            callee_ura=str(required["callee_ura"]),
+            authority=authority,
+            nonce_base64=str(required["nonce_base64"]),
+            causal_context=None,  # type: ignore[arg-type]
+        )
+
+
 def test_runtime_receipt_provider_rejects_wrong_device_owner_subject_before_descriptor_resolution() -> None:
     provider, transport = _provider()
-    call = _history_call(callee_ura="easynet:///r/example/device/dev-a")
+    call = _history_call(callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health")
     bad_call = RuntimeCallContext(
         caller_ura=call.caller_ura,
         callee_ura=call.callee_ura,
@@ -396,7 +435,8 @@ def test_runtime_receipt_list_accepts_maximum_bound() -> None:
         ReceiptListRequest(call=_history_call(), limit=MAX_RECEIPT_PAGE_LIMIT)
     )
     assert page.limit == 500
-    assert transport.seen["args"] == {"limit": 500}
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {"limit": 500}
 
 
 def test_runtime_receipt_list_projects_multiple_ability_uras_as_one_set() -> None:
@@ -413,7 +453,8 @@ def test_runtime_receipt_list_projects_multiple_ability_uras_as_one_set() -> Non
             ),
         )
     )
-    assert transport.seen["args"]["filter"]["ability_uras"] == [
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"]["filter"]["ability_uras"] == [
         "easynet:///r/example/ability/alice.worker.docs.read",
         "easynet:///r/example/ability/alice.worker.docs.write",
     ]
@@ -436,7 +477,8 @@ def test_runtime_receipt_list_forwards_and_validates_cursor() -> None:
             limit=2,
         )
     )
-    assert transport.seen["args"] == {
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {
         "limit": 2,
         "cursor": "receipt-history:v1:cursor-1",
     }
@@ -518,7 +560,8 @@ def test_runtime_receipt_get_preserves_explicit_not_found_result() -> None:
     )
     assert result.record is None
     assert result.source.ledger_ura == LEDGER_URA
-    assert transport.seen["args"] == {"key": {"request_id": "request-1"}}
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {"key": {"request_id": "request-1"}}
 
 
 def test_runtime_receipt_get_rejects_missing_record_projection() -> None:
@@ -556,8 +599,12 @@ def test_runtime_receipt_trace_normalizes_daemon_nodes_through_axon_parser() -> 
     assert result.graph.trace_id == "trace-1"
     assert len(result.graph.records) == 1
     assert result.graph.records[0].request_id == "request-1"
+    assert transport.seen == {}
+    assert transport.seen_governance_read["descriptor_ref"].endswith("!read")
     assert result.graph.edges == ()
-    assert transport.seen["args"] == {"key": {"ura": _record()["invocation_ura"]}}
+    assert transport.seen_governance_read["args"] == {
+        "key": {"ura": _record()["invocation_ura"]}
+    }
 
 
 def test_runtime_receipt_rejects_malformed_axon_record() -> None:

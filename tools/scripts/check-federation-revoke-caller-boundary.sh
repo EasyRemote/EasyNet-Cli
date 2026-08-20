@@ -15,6 +15,7 @@ STOP="src/cli/commands/stop.rs"
 RESET="src/cli/commands/reset.rs"
 JOIN="src/cli/commands/join.rs"
 SELFCMD="src/cli/commands/groups/selfcmd.rs"
+BOOT="src/daemon/boot/invocation/mod.rs"
 
 [[ -f "$REMOTE" ]] || fail "missing remote invoke module"
 
@@ -79,6 +80,31 @@ for needle in [
 ]:
     if needle not in validator:
         raise SystemExit(f"canonical_federation_revoke_caller missing invariant: {needle}")
+PY
+
+python3 - "$BOOT" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+start = text.find("    fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest)")
+end = text.find("\n    }\n}\n\nfn render_session_request_error", start)
+if start == -1 or end == -1:
+    raise SystemExit(f"{path}: cannot extract SessionHotAgentAdvertiser::revoke_hosted_agent")
+body = text[start:end]
+required = (
+    "invoke_federation_revoke_with_arguments(",
+    "&agent_ura,",
+    "&self.caller_ura,",
+)
+for token in required:
+    if token not in body:
+        raise SystemExit(f"{path}: hot agent revoke missing canonical local invoke boundary: {token}")
+if "escalate_with_timeout(" in body:
+    raise SystemExit(
+        f"{path}: federation.revoke is a product invocation and must not use JSON session-control escalation"
+    )
 PY
 
 if rg -n '_ = caller_ura' "$DEVICE" "$STOP" "$RESET" "$JOIN" "$SELFCMD" >/dev/null; then

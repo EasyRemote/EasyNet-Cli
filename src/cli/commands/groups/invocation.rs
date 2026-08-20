@@ -11,7 +11,7 @@
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::cli::commands::receipt_verification::CliReceiptChainVerification;
@@ -119,16 +119,19 @@ pub fn run(args: InvocationArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {
-    let response = if args.limit == 0 {
-        HistoryListResponse {
-            ledger_path: None,
-            records: Vec::new(),
-        }
+    let (ledger_source, records) = if args.limit == 0 {
+        (
+            "daemon ledger query skipped because --limit 0".to_string(),
+            Vec::new(),
+        )
     } else {
-        fetch_history_list(&args)?
+        let response = fetch_history_list(&args)?;
+        let _next_cursor = response.next_cursor;
+        (
+            ledger_source_label(&response.ledger_ura, response.ledger_path.as_deref()),
+            response.records,
+        )
     };
-    let ledger_path = ledger_path_label(response.ledger_path);
-    let records = response.records;
 
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&records)?);
@@ -138,7 +141,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
     if records.is_empty() {
         output::info(&format!(
             "No invocation records at {}. Run an ability through the daemon first.",
-            ledger_path
+            ledger_source
         ));
         return Ok(());
     }
@@ -157,7 +160,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
         table.add_row(vec![
             record.request_id.clone(),
             record.state.clone(),
-            public_ability_label(record),
+            public_ability_label(&record.callee_ura, &record.ability_ura),
             caller,
             callee,
             age,
@@ -170,12 +173,12 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let response = fetch_history_record(&args.id)?;
-    let ledger_path = ledger_path_label(response.ledger_path);
+    let ledger_source = ledger_source_label(&response.ledger_ura, response.ledger_path.as_deref());
     let record = response.record.ok_or_else(|| {
         anyhow::anyhow!(
             "invocation record not found for `{}` in {}",
             args.id,
-            ledger_path
+            ledger_source
         )
     })?;
 
@@ -203,7 +206,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let ledger_reported_receipt_chain_verified =
         ledger_reported_receipt_chain_verified(&record).to_string();
     let cli_receipt_chain_verification = cli_receipt_chain_verification().to_string();
-    let ability = public_ability_label(&record);
+    let ability = public_ability_label(&record.callee_ura, &record.ability_ura);
     output::kv_section_stdout(&[
         ("invocation_ura", record.invocation_ura.as_str()),
         ("request_id", record.request_id.as_str()),
@@ -286,7 +289,7 @@ fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
     };
 
     let response = fetch_trace_graph_by_trace_id(&trace_id)?;
-    let ledger_path = ledger_path_label(response.ledger_path.clone());
+    let ledger_source = ledger_source_label(&response.ledger_ura, response.ledger_path.as_deref());
     let graph = response.into_graph();
 
     if args.format == OutputFormat::Json {
@@ -297,7 +300,7 @@ fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
     if graph.records.is_empty() {
         output::info(&format!(
             "No invocation records with trace_id `{trace_id}` in {}.",
-            ledger_path
+            ledger_source
         ));
         return Ok(());
     }
@@ -321,7 +324,7 @@ fn print_trace_table(records: &[InvocationRecord]) {
             record.request_id.clone(),
             record.span_id.clone(),
             record.state.clone(),
-            public_ability_label(record),
+            public_ability_label(&record.callee_ura, &record.ability_ura),
             started,
             elapsed,
         ]);
@@ -342,20 +345,64 @@ fn print_trace_edges(edges: &[TraceEdge]) {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HistoryListResponse {
+    ledger_ura: String,
     ledger_path: Option<String>,
+    next_cursor: Option<String>,
     #[serde(default)]
-    records: Vec<InvocationRecord>,
+    records: Vec<InvocationHistorySummary>,
+}
+
+/// Bounded navigation DTO returned by `invocation.history.list`.
+///
+/// The list surface intentionally excludes ledger payloads, diagnostics,
+/// causal links, visibility, and receipt chains. Those proof-bearing fields
+/// belong to `invocation.history.get`; decoding a list row as the complete
+/// ledger record couples the CLI to data the provider is forbidden to expose
+/// on this bounded read model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvocationHistorySummary {
+    invocation_ura: String,
+    request_id: String,
+    trace_id: String,
+    span_id: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    ability_ura: String,
+    ability_name: String,
+    state: String,
+    started_unix_ms: i64,
+    completed_unix_ms: Option<i64>,
+    elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<InvocationHistoryErrorSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvocationHistoryErrorSummary {
+    source: String,
+    code: String,
+    message: String,
+    retryable: bool,
+    truncated: bool,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HistoryGetResponse {
+    ledger_ura: String,
     ledger_path: Option<String>,
     record: Option<InvocationRecord>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TraceGetResponse {
+    ledger_ura: String,
     ledger_path: Option<String>,
     trace_id: String,
     #[serde(default)]
@@ -375,12 +422,63 @@ impl TraceGetResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HistoryPathResponse {
+    ledger_ura: String,
     ledger_path: String,
 }
 
-fn ledger_path_label(path: Option<String>) -> String {
-    path.unwrap_or_else(|| "daemon ledger path unavailable".to_string())
+trait InvocationHistoryResponse {
+    fn validate_response(&self, operation: &str) -> anyhow::Result<()>;
+}
+
+impl InvocationHistoryResponse for HistoryListResponse {
+    fn validate_response(&self, operation: &str) -> anyhow::Result<()> {
+        validate_history_ledger_ura(&self.ledger_ura, operation)
+    }
+}
+
+impl InvocationHistoryResponse for HistoryGetResponse {
+    fn validate_response(&self, operation: &str) -> anyhow::Result<()> {
+        validate_history_ledger_ura(&self.ledger_ura, operation)
+    }
+}
+
+impl InvocationHistoryResponse for TraceGetResponse {
+    fn validate_response(&self, operation: &str) -> anyhow::Result<()> {
+        validate_history_ledger_ura(&self.ledger_ura, operation)
+    }
+}
+
+impl InvocationHistoryResponse for HistoryPathResponse {
+    fn validate_response(&self, operation: &str) -> anyhow::Result<()> {
+        validate_history_ledger_ura(&self.ledger_ura, operation)
+    }
+}
+
+fn validate_history_ledger_ura(ledger_ura: &str, operation: &str) -> anyhow::Result<()> {
+    let trimmed = ledger_ura.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("{operation} response ledger_ura must not be empty");
+    }
+    let parsed = crate::core::ura::parse_ura(trimmed)
+        .with_context(|| format!("{operation} response ledger_ura must be a canonical URA"))?;
+    if parsed.kind != crate::core::ura::URAKind::Resource {
+        anyhow::bail!(
+            "{operation} response ledger_ura must be a Resource URA, got kind={:?}",
+            parsed.kind
+        );
+    }
+    Ok(())
+}
+
+fn ledger_source_label(ledger_ura: &str, ledger_path: Option<&str>) -> String {
+    match ledger_path {
+        Some(path) if !path.trim().is_empty() => {
+            format!("{} ({})", path.trim(), ledger_ura.trim())
+        }
+        _ => ledger_ura.trim().to_string(),
+    }
 }
 
 /// `easynet invocation stats` — the D7 operator view: one screen that
@@ -460,7 +558,7 @@ struct AbilityStat {
     failed: usize,
 }
 
-fn summarize(records: &[InvocationRecord]) -> StatsSummary {
+fn summarize(records: &[InvocationHistorySummary]) -> StatsSummary {
     use std::collections::BTreeMap;
 
     let mut states: BTreeMap<String, usize> = BTreeMap::new();
@@ -548,7 +646,7 @@ fn fetch_trace_graph_by_trace_id(trace_id: &str) -> anyhow::Result<TraceGetRespo
 
 fn invoke_invocation_history_read<T>(read: InvocationHistoryRead) -> anyhow::Result<T>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + InvocationHistoryResponse,
 {
     let operation = read.operation_label();
     // Route through the named runtime-state read issuer so the
@@ -557,7 +655,10 @@ where
     let value = read
         .invoke()
         .with_context(|| format!("invoke {operation} through local Axon daemon"))?;
-    serde_json::from_value(value).with_context(|| format!("decode {operation} response"))
+    let response: T =
+        serde_json::from_value(value).with_context(|| format!("decode {operation} response"))?;
+    response.validate_response(operation)?;
+    Ok(response)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -656,7 +757,7 @@ impl InvocationHistoryFilter {
         Self::insert_arg_value(&mut filter, "caller_ura", self.caller_ura);
         Self::insert_arg_value(&mut filter, "callee_ura", self.callee_ura);
         Self::insert_arg_value(&mut filter, "subject_ura", self.subject_ura);
-        (!filter.is_empty()).then(|| Value::Object(filter))
+        (!filter.is_empty()).then_some(Value::Object(filter))
     }
 
     fn insert_arg_value(filter: &mut Map<String, Value>, key: &str, value: Option<String>) {
@@ -686,7 +787,7 @@ fn canonical_history_ability_filter(value: Option<&str>) -> anyhow::Result<Optio
         return Ok(None);
     };
     let selector = crate::core::ura::AbilitySelector::parse(value)
-        .with_context(|| format!("`--ability-ura` must be a canonical Ability URA"))?;
+        .with_context(|| "`--ability-ura` must be a canonical Ability URA".to_string())?;
     Ok(Some(selector.ability_ura().to_string()))
 }
 
@@ -724,9 +825,9 @@ impl InvocationHistoryKey {
     }
 }
 
-fn public_ability_label(record: &InvocationRecord) -> String {
-    crate::core::ura::public_ability_name_from_ability_ura(&record.callee_ura, &record.ability_ura)
-        .unwrap_or_else(|| record.ability_ura.clone())
+fn public_ability_label(callee_ura: &str, ability_ura: &str) -> String {
+    crate::core::ura::public_ability_name_from_ability_ura(callee_ura, ability_ura)
+        .unwrap_or_else(|| ability_ura.to_string())
 }
 
 fn short_ura(ura: &str) -> String {
@@ -768,10 +869,12 @@ mod tests {
             InvocationHistoryListQuery::from_list_args(&ListArgs {
                 limit: 25,
                 state: Some("completed".into()),
-                ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
+                ability_ura: Some(
+                    "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read".into(),
+                ),
                 caller: Some("easynet:///r/test/device/caller".into()),
                 callee: None,
-                agent_ura: Some("easynet:///r/test/device/callee".into()),
+                agent_ura: Some("easynet:///r/test/agent/device.callee.locomotion".into()),
                 subject: Some("easynet:///r/test/user/alice".into()),
                 format: OutputFormat::Json,
             })
@@ -781,7 +884,7 @@ mod tests {
         assert_eq!(body["limit"], 25);
         assert_eq!(
             body["filter"]["ability_ura"],
-            "easynet:///r/test/ability/device.callee.fs.read"
+            "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read"
         );
         assert_eq!(
             body["filter"]["caller_ura"],
@@ -789,7 +892,7 @@ mod tests {
         );
         assert_eq!(
             body["filter"]["callee_ura"],
-            "easynet:///r/test/device/callee"
+            "easynet:///r/test/agent/device.callee.locomotion"
         );
         assert_eq!(
             body["filter"]["subject_ura"],
@@ -817,6 +920,151 @@ mod tests {
 
         assert_eq!(body["limit"], 25);
         assert!(body.get("filter").is_none());
+    }
+
+    #[test]
+    fn invocation_history_responses_reject_unknown_envelope_fields() {
+        let paged_list = serde_json::from_value::<HistoryListResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "ledger_path": "/tmp/ledger",
+            "next_cursor": "receipt-history:v1:abc",
+            "records": []
+        }))
+        .expect("history list response must admit canonical pagination cursor");
+        assert_eq!(
+            paged_list.next_cursor.as_deref(),
+            Some("receipt-history:v1:abc")
+        );
+
+        let list = serde_json::from_value::<HistoryListResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "ledger_path": "/tmp/ledger",
+            "records": [],
+            "state_code": "J200"
+        }))
+        .expect_err("history list response must reject read-model drift");
+        assert!(
+            list.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {list}"
+        );
+
+        let get = serde_json::from_value::<HistoryGetResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "ledger_path": "/tmp/ledger",
+            "record": null,
+            "legacy_subject": "subject"
+        }))
+        .expect_err("history get response must reject retired aliases");
+        assert!(
+            get.to_string().contains("legacy_subject"),
+            "schema error should name the noncanonical field: {get}"
+        );
+
+        let trace = serde_json::from_value::<TraceGetResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "ledger_path": "/tmp/ledger",
+            "trace_id": "trace-1",
+            "nodes": [],
+            "edges": [],
+            "cursor": "legacy"
+        }))
+        .expect_err("trace response must reject uncontracted fields");
+        assert!(
+            trace.to_string().contains("cursor"),
+            "schema error should name the noncanonical field: {trace}"
+        );
+
+        let path = serde_json::from_value::<HistoryPathResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "ledger_path": "/tmp/ledger",
+            "state_code": "J200"
+        }))
+        .expect_err("history path response must reject read-model drift");
+        assert!(
+            path.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {path}"
+        );
+    }
+
+    #[test]
+    fn invocation_history_list_decodes_bounded_summary_without_full_ledger_payloads() {
+        let response = serde_json::from_value::<HistoryListResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "records": [{
+                "invocation_ura": "easynet:///r/test/resource/invocation.i-1",
+                "request_id": "req-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "caller_ura": "easynet:///r/test/device/caller",
+                "callee_ura": "easynet:///r/test/agent/device.callee.locomotion",
+                "subject_ura": "easynet:///r/test/resource/device.callee/item",
+                "ability_ura": "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read",
+                "ability_name": "fs.read",
+                "state": "cancelled",
+                "started_unix_ms": 1_700_000_000_000_i64,
+                "completed_unix_ms": 1_700_000_000_100_i64,
+                "elapsed_ms": 100,
+                "error": {
+                    "source": "runtime",
+                    "code": "CANCELLED",
+                    "message": "consumer disconnected",
+                    "retryable": false,
+                    "truncated": false
+                }
+            }]
+        }))
+        .expect("bounded invocation history summary must not require full record fields");
+
+        assert_eq!(response.records.len(), 1);
+        assert_eq!(response.records[0].state, "cancelled");
+        assert_eq!(
+            response.records[0]
+                .error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("CANCELLED")
+        );
+    }
+
+    #[test]
+    fn invocation_history_responses_require_canonical_ledger_ura() {
+        let missing = serde_json::from_value::<HistoryListResponse>(json!({
+            "ledger_path": "/tmp/ledger",
+            "records": []
+        }))
+        .expect_err("history list response must require canonical ledger_ura");
+        assert!(
+            missing.to_string().contains("ledger_ura"),
+            "missing ledger_ura error should name field: {missing}"
+        );
+
+        let malformed = serde_json::from_value::<HistoryGetResponse>(json!({
+            "ledger_ura": "https://example.invalid/ledger",
+            "ledger_path": "/tmp/ledger",
+            "record": null
+        }))
+        .expect("serde should decode shape before semantic validation");
+        let err = malformed
+            .validate_response("invocation.history.get")
+            .expect_err("history get response must validate ledger_ura semantics");
+        assert!(
+            err.to_string()
+                .contains("ledger_ura must be a canonical URA"),
+            "malformed ledger_ura error should name canonical URA requirement: {err}"
+        );
+
+        let wrong_kind = serde_json::from_value::<HistoryPathResponse>(json!({
+            "ledger_ura": "easynet:///r/test/device/callee",
+            "ledger_path": "/tmp/ledger"
+        }))
+        .expect("serde should decode shape before semantic validation");
+        let err = wrong_kind
+            .validate_response("invocation.history.path")
+            .expect_err("history path response must require Resource ledger_ura");
+        assert!(
+            err.to_string().contains("Resource URA"),
+            "wrong-kind ledger_ura error should name Resource URA requirement: {err}"
+        );
     }
 
     #[test]
@@ -946,10 +1194,12 @@ mod tests {
         let body = InvocationHistoryListQuery::from_list_args(&ListArgs {
             limit: 25,
             state: Some("completed".into()),
-            ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
+            ability_ura: Some(
+                "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read".into(),
+            ),
             caller: Some("easynet:///r/test/device/caller".into()),
             callee: None,
-            agent_ura: Some("easynet:///r/test/device/callee".into()),
+            agent_ura: Some("easynet:///r/test/agent/device.callee.locomotion".into()),
             subject: Some("easynet:///r/test/user/alice".into()),
             format: OutputFormat::Json,
         })
@@ -959,7 +1209,7 @@ mod tests {
         assert_eq!(body["limit"], 25);
         assert_eq!(
             body["filter"]["ability_ura"],
-            "easynet:///r/test/ability/device.callee.fs.read"
+            "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read"
         );
         assert_eq!(
             body["filter"]["caller_ura"],
@@ -967,7 +1217,7 @@ mod tests {
         );
         assert_eq!(
             body["filter"]["callee_ura"],
-            "easynet:///r/test/device/callee"
+            "easynet:///r/test/agent/device.callee.locomotion"
         );
         assert_eq!(
             body["filter"]["subject_ura"],
@@ -1026,13 +1276,13 @@ mod tests {
             .invocation_ura("easynet:///r/test/resource/alice.invocations/i-1")
             .request_id("req-1")
             .caller_ura("easynet:///r/test/device/caller")
-            .callee_ura("easynet:///r/test/device/callee")
-            .subject_ura("easynet:///r/test/device/callee")
-            .ability_ura("easynet:///r/test/ability/device.callee.fs.read")
+            .callee_ura("easynet:///r/test/agent/device.callee.locomotion")
+            .subject_ura("easynet:///r/test/resource/user.alice/document/report")
+            .ability_ura("easynet:///r/test/ability/system-agent.callee.locomotion.fs.read")
             .ability_name(ability)
             .state(state)
             .started_unix_ms(1_700_000_000_000_i64)
-            .authority_form("self")
+            .authority_form("self+identity")
             .args(axon_sdk::invocation::LedgerEventPayload::Digest {
                 content_type: "application/json".to_string(),
                 sha256: "0".repeat(64),
@@ -1045,7 +1295,7 @@ mod tests {
         state: &str,
         error_code: Option<&str>,
         elapsed_ms: Option<u64>,
-    ) -> InvocationRecord {
+    ) -> InvocationHistorySummary {
         let mut b = test_record_builder(ability, state);
         if let Some(code) = error_code {
             b = b.error(axon_sdk::invocation::LedgerErrorRecord {
@@ -1059,12 +1309,39 @@ mod tests {
         if let Some(ms) = elapsed_ms {
             b = b.elapsed_ms(ms);
         }
-        b.build().expect("stats test record")
+        let record = b.build().expect("stats test record");
+        InvocationHistorySummary {
+            invocation_ura: record.invocation_ura,
+            request_id: record.request_id,
+            trace_id: record.trace_id,
+            span_id: record.span_id,
+            caller_ura: record.caller_ura,
+            callee_ura: record.callee_ura,
+            subject_ura: record.subject_ura,
+            ability_ura: record.ability_ura,
+            ability_name: record.ability_name,
+            state: record.state,
+            started_unix_ms: record.started_unix_ms,
+            completed_unix_ms: record.completed_unix_ms,
+            elapsed_ms: record.elapsed_ms,
+            error: record.error.map(|error| InvocationHistoryErrorSummary {
+                source: error.source,
+                code: error.code,
+                message: error.message,
+                retryable: error.retryable,
+                truncated: !error.context.is_empty(),
+            }),
+        }
     }
 
     #[test]
     fn show_record_json_reports_usage_attestation() {
+        let ability_ura = "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read";
+        let descriptor_ref = format!("{ability_ura}@1.0.0#{}!read", "a".repeat(64));
         let record = test_record_builder("fs.read", "completed")
+            .descriptor_ref(descriptor_ref.clone())
+            .admission_action("read")
+            .safe_read(true)
             .usage(axon_sdk::invocation::axiom::InvocationUsage {
                 tokens_in: 11,
                 tokens_out: 7,
@@ -1081,6 +1358,11 @@ mod tests {
         let value = show_record_json(&record).expect("json projection");
         assert_eq!(value["usage"]["tokens_in"], 11);
         assert_eq!(value["usage"]["tokens_out"], 7);
+        assert_eq!(value["ability_name"], "fs.read");
+        assert_eq!(value["ability_ura"], ability_ura);
+        assert_eq!(value["descriptor_ref"], descriptor_ref);
+        assert_eq!(value["admission_action"], "read");
+        assert_eq!(value["safe_read"], true);
         assert_eq!(value["ledger_reported_receipt_chain_verified"], true);
         assert_eq!(value["cli_receipt_chain_verification"], "not_performed");
     }
@@ -1127,7 +1409,7 @@ mod tests {
     fn summarize_latency_excludes_failures_and_uses_nearest_rank() {
         // A failed call's elapsed time is recovery noise, not service
         // latency — it must not pollute the percentiles.
-        let mut records: Vec<InvocationRecord> = (1..=100)
+        let mut records: Vec<InvocationHistorySummary> = (1..=100)
             .map(|i| stats_record("x.call", "completed", None, Some(i)))
             .collect();
         records.push(stats_record(

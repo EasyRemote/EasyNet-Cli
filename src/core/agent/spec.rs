@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Wire / disk encoding uses kebab-case (`claude-code`, not
 /// `claude_code` or `ClaudeCode`) to match the existing
-/// `crate::daemon::persistence::agent_registry::AgentType` display form. That parity
+/// `crate::core::agent::spec::RuntimeKind` display form. That parity
 /// is load-bearing: the registry and the on-disk spec must agree
 /// on the spelling, or a user who reads one file and writes the
 /// other will get a phantom "unknown runtime" at load time.
@@ -87,7 +87,7 @@ pub enum RuntimeKind {
 impl RuntimeKind {
     /// Stable wire form used by both the on-disk TOML and the
     /// `a2a.agents_json[*].type` discovery label. Mirrors
-    /// `AgentType::to_string()` so switching a caller from the
+    /// `RuntimeKind::to_string()` so switching a caller from the
     /// registry's enum to the spec's enum cannot change the
     /// observable string.
     pub fn as_wire_str(self) -> &'static str {
@@ -103,6 +103,22 @@ impl RuntimeKind {
 impl std::fmt::Display for RuntimeKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_wire_str())
+    }
+}
+
+impl std::str::FromStr for RuntimeKind {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "claude-code" | "claude" => Ok(Self::ClaudeCode),
+            "codex" => Ok(Self::Codex),
+            "codex-app-server" | "codex-appserver" => Ok(Self::CodexAppServer),
+            "external" | "custom" => Ok(Self::External),
+            _ => anyhow::bail!(
+                "unknown agent runtime: {value} (expected: claude-code, codex, codex-app-server, external)"
+            ),
+        }
     }
 }
 
@@ -443,13 +459,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_wire_strings_match_registry_agent_type() {
-        // Load-bearing parity: the spec's on-disk runtime string
-        // must equal the registry's AgentType::to_string(). If a
-        // refactor ever changes one without the other, a user's
-        // agent.toml written today would fail to load tomorrow.
-        // We encode the contract as a literal comparison so a
-        // future kebab-vs-snake flip trips the test loudly.
+    fn runtime_wire_strings_are_stable() {
+        // Load-bearing contract: the spec's on-disk runtime string is also the
+        // registry row's runtime enum string. A future kebab-vs-snake flip must
+        // trip this test loudly because existing `agent.toml` and `agents.json`
+        // rows use this exact vocabulary.
         assert_eq!(RuntimeKind::ClaudeCode.as_wire_str(), "claude-code");
         assert_eq!(RuntimeKind::Codex.as_wire_str(), "codex");
         assert_eq!(
@@ -457,6 +471,14 @@ mod tests {
             "codex-app-server"
         );
         assert_eq!(RuntimeKind::External.as_wire_str(), "external");
+        assert_eq!(
+            "claude".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::ClaudeCode
+        );
+        assert_eq!(
+            "custom".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::External
+        );
     }
 
     // ── failure path ────────────────────────────────────────────────────────

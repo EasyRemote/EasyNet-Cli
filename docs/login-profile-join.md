@@ -158,6 +158,10 @@ Profile
   -> Runtime Principal
 ```
 
+An Account is not an Agent. It authenticates and carries accountability for the
+selected Realm/Profile; callable product surfaces must use an explicit hosted
+Agent, SystemAgent, or Authority instead of an account-as-agent fallback.
+
 Profiles must support multiple accounts in the same Realm:
 
 ```text

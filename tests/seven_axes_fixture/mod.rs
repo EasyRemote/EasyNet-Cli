@@ -82,6 +82,8 @@ pub struct SevenAxesHome {
     pub trust_path: PathBuf,
     /// The CLI's unpaired loopback caller (`device_ura("cli","local")`).
     pub loopback_caller: String,
+    /// Accountable User Principal paired with the fixture Device.
+    pub accountable_user: String,
     /// Realm hub URA used for federation publication authority in this fixture.
     pub hub_ura: String,
     /// Canonical URA minted for the seeded agent (RFC-005 §1.4).
@@ -168,7 +170,10 @@ impl Drop for TestKeyring {
     }
 }
 
-fn start_test_keyring(primary_self: String) -> (TestKeyring, String) {
+fn start_test_keyring(
+    primary_self: String,
+    accountable_user: String,
+) -> (TestKeyring, String, String) {
     let socket_path = easynet_cli::daemon::keyring::default_socket_path();
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).expect("keyring socket parent");
@@ -194,11 +199,22 @@ fn start_test_keyring(primary_self: String) -> (TestKeyring, String) {
     let public_key = client
         .ensure(&primary_self)
         .expect("ensure test runtime identity");
+    let user_signer =
+        easynet_cli::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
+            &client,
+            &accountable_user,
+        )
+        .expect("ensure accountable test User signing identity");
     let trusted_public_key_b64 = {
         use base64::Engine as _;
         base64::engine::general_purpose::STANDARD.encode(public_key.to_bytes())
     };
-    (TestKeyring { child }, trusted_public_key_b64)
+    let trusted_user_public_key_b64 = user_signer.projection.public_key_b64;
+    (
+        TestKeyring { child },
+        trusted_public_key_b64,
+        trusted_user_public_key_b64,
+    )
 }
 
 impl SevenAxesHome {
@@ -288,15 +304,17 @@ impl SevenAxesHome {
         .expect("write agents.json");
 
         let loopback_caller = easynet_cli::core::ura::device_ura("cli", "local");
+        let accountable_user = easynet_cli::core::ura::user_ura("cli", "user-local");
         let hub_ura = easynet_cli::core::ura::hub_ura("cli");
-        let testbot_ura = easynet_cli::core::ura::agent_ura("cli", "local", "testbot");
-        let zlearner_ura = easynet_cli::core::ura::agent_ura("cli", "local", "zlearner");
+        let testbot_ura = easynet_cli::core::ura::agent_ura("cli", "user-local", "testbot");
+        let zlearner_ura = easynet_cli::core::ura::agent_ura("cli", "user-local", "zlearner");
         let descriptor_refs = Arc::new(RwLock::new(BTreeMap::new()));
-        let (keyring, trusted_public_key_b64) = start_test_keyring(loopback_caller.clone());
+        let (keyring, trusted_public_key_b64, trusted_user_public_key_b64) =
+            start_test_keyring(loopback_caller.clone(), accountable_user.clone());
         std::fs::write(
             state_dir.join("local-agents.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
-                "host_device_agent_ura": loopback_caller,
+                "host_device_ura": loopback_caller,
                 "hosted_agents": [{
                     "profile": "llm",
                     "name": "testbot",
@@ -324,6 +342,12 @@ impl SevenAxesHome {
 agent_ura = "{loopback_caller}"
 public_key_b64 = "{trusted_public_key_b64}"
 role = "device"
+added_at_unix_ms = 0
+
+[[trusted_agent]]
+agent_ura = "{accountable_user}"
+public_key_b64 = "{trusted_user_public_key_b64}"
+role = "user"
 added_at_unix_ms = 0
 
 [[trusted_principal_owner]]
@@ -408,6 +432,7 @@ added_at_unix_ms = 0
             socket_path,
             trust_path,
             loopback_caller,
+            accountable_user,
             hub_ura,
             testbot_ura,
             zlearner_ura,
@@ -442,9 +467,9 @@ added_at_unix_ms = 0
             require_descriptor_ref(&self.descriptor_refs, &self.testbot_ura, "echo");
         let (_value, request_id, terminal_receipt) = invoke_daemon_ability(
             &self.socket_path,
-            &self.loopback_caller,
+            &self.accountable_user,
             &callee,
-            &self.loopback_caller,
+            "easynet:///r/cli/resource/user.user-local/invoke/echo",
             "echo",
             descriptor_ref.as_str(),
             json!({ "message": message }),
@@ -455,22 +480,13 @@ added_at_unix_ms = 0
         );
 
         let mut record = Value::Null;
-        let history_descriptor_ref = require_descriptor_ref(
-            &self.descriptor_refs,
-            &self.loopback_caller,
-            "invocation.record.get",
-        );
         for _ in 0..10 {
-            let (history, _, _) = invoke_daemon_ability(
-                &self.socket_path,
-                &self.loopback_caller,
-                &self.loopback_caller,
-                &self.loopback_caller,
-                "invocation.record.get",
-                history_descriptor_ref.as_str(),
-                json!({ "request_id": request_id }),
-            );
-            record = history.get("record").cloned().unwrap_or(Value::Null);
+            record = self
+                .ledger
+                .get_by_request(&request_id)
+                .expect("read canonical invocation ledger")
+                .map(|record| serde_json::to_value(record).expect("serialize invocation record"))
+                .unwrap_or(Value::Null);
             if !record.is_null() {
                 break;
             }
@@ -497,22 +513,45 @@ added_at_unix_ms = 0
         })
     }
 
-    /// Invoke one Device-owned system ability through the same descriptor-ref
-    /// gRPC surface as production callers.
+    /// Invoke one Device-hosted system ability through the same descriptor-ref
+    /// gRPC surface as production callers. The descriptor owner/callee is the
+    /// responsible SystemAgent or Authority; the Device remains the execution
+    /// host for this fixture.
     #[allow(dead_code)]
-    pub fn invoke_device_system_ability(&self, function_name: &str, args: Value) -> Value {
-        let descriptor_ref =
-            require_descriptor_ref(&self.descriptor_refs, &self.loopback_caller, function_name);
+    pub fn invoke_device_hosted_system_ability(&self, function_name: &str, args: Value) -> Value {
+        let (callee_ura, descriptor_ref) = require_local_system_descriptor_ref(
+            &self.descriptor_refs,
+            &self.loopback_caller,
+            &self.hub_ura,
+            function_name,
+        );
         let (value, _, _) = invoke_daemon_ability(
             &self.socket_path,
-            &self.loopback_caller,
-            &self.loopback_caller,
-            &self.loopback_caller,
+            &self.accountable_user,
+            &callee_ura,
+            &self.testbot_ura,
             function_name,
             descriptor_ref.as_str(),
             args,
         );
         value
+    }
+
+    /// Invoke an Authority-owned daemon ability from the authenticated local
+    /// IPC system boundary. The Authority remains the callable owner; the
+    /// fixture Device is neither the principal nor the callee.
+    #[allow(dead_code)]
+    pub fn invoke_local_authority_ability(&self, function_name: &str, args: Value) -> Value {
+        require_descriptor_ref(&self.descriptor_refs, &self.hub_ura, function_name);
+        let ability_ura = easynet_cli::core::ura::owner_ability_ura(&self.hub_ura, function_name)
+            .expect("Authority ability URA");
+        invoke_local_system_daemon_ability(
+            &self.socket_path,
+            &self.hub_ura,
+            &ability_ura,
+            function_name,
+            args,
+        )
     }
 
     /// Publish one hosted Agent identity and its complete ability projection
@@ -528,7 +567,6 @@ added_at_unix_ms = 0
     ) {
         advertise_hosted_agent_projection(
             &self.socket_path,
-            &self.loopback_caller,
             &self.hub_ura,
             host_device_ura,
             owner_ura,
@@ -574,6 +612,7 @@ added_at_unix_ms = 0
             &self.socket_path,
             &self.trust_path,
             self.loopback_caller.clone(),
+            self.accountable_user.clone(),
             self.hub_ura.clone(),
             vec![self.testbot_ura.clone(), self.zlearner_ura.clone()],
             Arc::clone(&self.descriptor_refs),
@@ -593,6 +632,7 @@ added_at_unix_ms = 0
             &self.socket_path,
             &self.trust_path,
             self.loopback_caller.clone(),
+            self.accountable_user.clone(),
             self.hub_ura.clone(),
             vec![self.testbot_ura.clone(), self.zlearner_ura.clone()],
             Arc::clone(&self.descriptor_refs),
@@ -638,7 +678,10 @@ fn invoke_daemon_ability(
     rt.block_on(async {
         let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
         let arguments = serde_json::to_vec(&args).expect("encode daemon invoke args");
-        let signer = KeyringClient::default_path();
+        let signer = easynet_cli::daemon::identity::self_identity::load_runtime_caller_signer(
+            caller_ura,
+        )
+        .expect("load seven-axes caller signing capability");
         let envelope = ProtoEnvelope::from_target(
             caller_ura,
             callee_ura,
@@ -646,14 +689,41 @@ fn invoke_daemon_ability(
             InvocationDerivationPolicy::FreshRoot,
         )
             .expect("valid seven-axes invoke envelope");
-        let request = envelope
-            .signed_descriptor_ref_invoke_request(
+        let mut request = envelope
+            .signed_descriptor_ref_invoke_request_with_signer(
                 function_name,
                 descriptor_ability_ref,
                 arguments,
-                &signer,
+                signer.as_ref(),
             )
+            .await
             .expect("valid seven-axes descriptor-ref signed invoke request");
+        if easynet_cli::core::ura::parse_ura(caller_ura)
+            .is_ok_and(|caller| caller.kind == easynet_cli::core::ura::URAKind::User)
+            && caller_ura != subject_ura
+        {
+            let issued_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture clock after Unix epoch")
+                .as_millis() as i64;
+            let delegation = easynet_cli::daemon::ability::DelegationAuthorityClaims::new(
+                caller_ura,
+                subject_ura,
+                caller_ura,
+                callee_ura,
+                [function_name],
+                issued_at_ms,
+                issued_at_ms + 60_000,
+            )
+            .expect("valid fixture User invocation delegation");
+            request.metadata.insert(
+                easynet_cli::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
+                delegation
+                    .signed_metadata_value(signer.as_ref())
+                    .await
+                    .expect("sign fixture User invocation delegation"),
+            );
+        }
         let response = tokio::time::timeout(
             Duration::from_secs(10),
             client.invoke(tonic::Request::new(request)),
@@ -672,12 +742,152 @@ fn invoke_daemon_ability(
             .map(|header| header.request_id.clone())
             .unwrap_or_default();
         let terminal_receipt = response.terminal_receipt.clone();
+        if let Some(error) = response.error.as_ref() {
+            eprintln!(
+                "seven-axes invocation terminal error: function={function_name} code={} message={}",
+                error.code, error.message
+            );
+        }
         let value = if response.result.is_empty() {
             Value::Null
         } else {
             serde_json::from_slice(&response.result).expect("daemon result must be JSON")
         };
         (value, request_id, terminal_receipt)
+    })
+}
+
+fn invoke_device_with_user_delegation(
+    socket_path: &Path,
+    delegating_user_ura: &str,
+    caller_device_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    function_name: &str,
+    descriptor_ability_ref: &str,
+    args: Value,
+) -> Value {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    rt.block_on(async {
+        let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
+        let arguments = serde_json::to_vec(&args).expect("encode User-delegated invoke args");
+        let signer = KeyringClient::default_path();
+        let mut request = ProtoEnvelope::from_target(
+            caller_device_ura,
+            callee_ura,
+            subject_ura,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .expect("valid User-delegated invoke envelope")
+        .signed_descriptor_ref_invoke_request(
+            function_name,
+            descriptor_ability_ref,
+            arguments,
+            &signer,
+        )
+        .expect("valid User-delegated signed invoke request");
+        let issued_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("fixture clock after Unix epoch")
+            .as_millis() as i64;
+        let authority_signer =
+            easynet_cli::daemon::identity::self_identity::load_runtime_caller_signer(
+                delegating_user_ura,
+            )
+            .expect("load fixture accountable User signing capability");
+        let delegation = easynet_cli::daemon::ability::DelegationAuthorityClaims::new(
+            delegating_user_ura,
+            subject_ura,
+            caller_device_ura,
+            callee_ura,
+            [function_name],
+            issued_at_ms,
+            issued_at_ms + 60_000,
+        )
+        .expect("valid fixture User delegation claims");
+        request.metadata.insert(
+            easynet_cli::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
+            delegation
+                .signed_metadata_value(authority_signer.as_ref())
+                .await
+                .expect("sign fixture User delegation authority"),
+        );
+        let response = tokio::time::timeout(
+            Duration::from_secs(10),
+            client.invoke(tonic::Request::new(request)),
+        )
+        .await
+        .expect("User-delegated daemon invoke must not hang")
+        .unwrap_or_else(|status| {
+            panic!(
+                "User-delegated daemon invoke must succeed: function_name={function_name} callee={callee_ura} subject={subject_ura}: {status:?}"
+            )
+        })
+        .into_inner();
+        if let Some(error) = response.error.as_ref() {
+            panic!(
+                "User-delegated daemon invoke failed: function_name={function_name} code={} message={}",
+                error.code, error.message
+            );
+        }
+        if response.result.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&response.result).expect("daemon result must be JSON")
+        }
+    })
+}
+
+fn invoke_local_system_daemon_ability(
+    socket_path: &Path,
+    callee_ura: &str,
+    subject_ura: &str,
+    function_name: &str,
+    args: Value,
+) -> Value {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    rt.block_on(async {
+        let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
+        let arguments = serde_json::to_vec(&args).expect("encode local system invoke args");
+        let local_system_ura = easynet_cli::core::ura::agent_ura("_system", "_system", "local");
+        let request = ProtoEnvelope::from_target(
+            local_system_ura,
+            callee_ura,
+            subject_ura,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .expect("valid local system invoke envelope")
+        .invoke_request(function_name, arguments)
+        .expect("valid local system invoke request");
+        let response = tokio::time::timeout(
+            Duration::from_secs(10),
+            client.invoke(tonic::Request::new(request)),
+        )
+        .await
+        .expect("local system daemon invoke must not hang")
+        .unwrap_or_else(|status| {
+            panic!(
+                "local system daemon invoke must succeed: function_name={function_name} callee={callee_ura} subject={subject_ura}: {status:?}"
+            )
+        })
+        .into_inner();
+        if let Some(error) = response.error.as_ref() {
+            panic!(
+                "local system daemon invoke returned terminal error: function_name={function_name} code={} message={}",
+                error.code, error.message
+            );
+        }
+        if response.result.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&response.result).expect("local system daemon result must be JSON")
+        }
     })
 }
 
@@ -806,6 +1016,46 @@ fn live_rpc_descriptor_refs(
     refs
 }
 
+fn require_local_system_descriptor_ref(
+    descriptor_refs: &DescriptorRefIndex,
+    host_device_ura: &str,
+    authority_ura: &str,
+    function_name: &str,
+) -> (String, String) {
+    let host = easynet_cli::core::ura::parse_ura(host_device_ura)
+        .expect("fixture execution host must be a Device URA");
+    let host_device_id = host.device_id().expect("fixture execution host device id");
+    let matches = descriptor_refs
+        .read()
+        .expect("seven-axes descriptor-ref index lock")
+        .iter()
+        .filter_map(|((owner_ura, indexed_name), entry)| {
+            if indexed_name != function_name {
+                return None;
+            }
+            if owner_ura == authority_ura {
+                return Some((owner_ura.clone(), entry.descriptor_ref.clone()));
+            }
+            let owner = easynet_cli::core::ura::parse_ura(owner_ura).ok()?;
+            owner
+                .device_agent_ids()
+                .is_some_and(|(device_id, _)| {
+                    owner.realm == host.realm && device_id == host_device_id
+                })
+                .then(|| (owner_ura.clone(), entry.descriptor_ref.clone()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected one local Authority or device-sponsored SystemAgent descriptor for {function_name}, got {matches:?}"
+    );
+    matches
+        .into_iter()
+        .next()
+        .expect("one SystemAgent descriptor")
+}
+
 fn require_descriptor_ref(
     descriptor_refs: &DescriptorRefIndex,
     callee_ura: &str,
@@ -850,7 +1100,6 @@ fn require_projection_summary(
 
 fn seed_hosted_agent_projection(
     socket_path: &Path,
-    caller_ura: &str,
     hub_ura: &str,
     host_device_ura: &str,
     agent_ura: &str,
@@ -859,7 +1108,6 @@ fn seed_hosted_agent_projection(
     let ability_summary = require_projection_summary(descriptor_refs, agent_ura, "echo");
     advertise_hosted_agent_projection(
         socket_path,
-        caller_ura,
         hub_ura,
         host_device_ura,
         agent_ura,
@@ -873,7 +1121,6 @@ fn seed_hosted_agent_projection(
 #[allow(clippy::too_many_arguments)]
 fn advertise_hosted_agent_projection(
     socket_path: &Path,
-    caller_ura: &str,
     hub_ura: &str,
     host_device_ura: &str,
     agent_ura: &str,
@@ -886,7 +1133,7 @@ fn advertise_hosted_agent_projection(
         require_descriptor_ref(descriptor_refs, hub_ura, "federation.advertise_agent");
     let (agent_resp, _, _) = invoke_daemon_ability(
         socket_path,
-        caller_ura,
+        host_device_ura,
         hub_ura,
         agent_ura,
         "federation.advertise_agent",
@@ -920,15 +1167,16 @@ fn advertise_hosted_agent_projection(
             .expect("fixture projection summaries must be canonical");
     let advertise_abilities_descriptor_ref =
         require_descriptor_ref(descriptor_refs, hub_ura, "federation.advertise_abilities");
-    let (abilities_resp, _, _) = invoke_daemon_ability(
+    let accountable_user_ura = easynet_cli::core::ura::user_ura("cli", "user-local");
+    let abilities_resp = invoke_device_with_user_delegation(
         socket_path,
-        caller_ura,
+        &accountable_user_ura,
+        host_device_ura,
         hub_ura,
         agent_ura,
         "federation.advertise_abilities",
-        advertise_abilities_descriptor_ref.as_str(),
+        &advertise_abilities_descriptor_ref,
         json!({
-            "agent_ura": agent_ura,
             "owner_ura": agent_ura,
             "host_device_ura": host_device_ura,
             "generation": generation,
@@ -948,10 +1196,15 @@ fn advertise_hosted_agent_projection(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the multi-node daemon fixture exposes each topology and trust input explicitly"
+)]
 fn start_daemon_at(
     socket_path: &Path,
     trust_path: &Path,
     daemon_ura: String,
+    accountable_user_ura: String,
     hub_ura: String,
     hosted_agent_uras: Vec<String>,
     descriptor_refs: DescriptorRefIndex,
@@ -965,6 +1218,10 @@ fn start_daemon_at(
         agents.agents.contains_key("default/testbot"),
         "fixture must load the seeded agent through the production path"
     );
+    let hosted_projection_agent_ura = hosted_agent_uras
+        .first()
+        .cloned()
+        .expect("seven-axes fixture requires the canonical testbot Agent URA");
 
     let trust_anchor =
         Arc::new(RealmTrustAnchor::try_load_strict(trust_path).expect("load test trust anchor"));
@@ -1005,6 +1262,9 @@ fn start_daemon_at(
             Arc::new(RealmTrustAnchorKeyResolver::new(
                 shared_trust_anchor.clone(),
             )),
+            easynet_cli::daemon::axon_bridge::runtime_factory::RuntimePersistenceConfig::persistent(
+                easynet_cli::daemon::persistence::config::state_dir().join("axon-invocations"),
+            ),
         )
         .expect("build seven-axes owner-bound daemon runtime");
     let runtime = daemon_runtime.runtime();
@@ -1053,27 +1313,81 @@ fn start_daemon_at(
         .expect("catalog assembly wires hot-Agent registrar")
         .require_ready()
         .expect("hot-Agent registrar ready after catalog assembly");
-    if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
-        device_registrar
+    if let Some(ability_deployment_registrar) =
+        built_registry.ability_deployment_registrar_cell.get()
+    {
+        ability_deployment_registrar
             .set_control_plane_catalog(Arc::downgrade(&catalog))
             .expect("wire device registrar control-plane catalog");
-        device_registrar
+        ability_deployment_registrar
             .set_runtime(Arc::clone(&runtime))
             .expect("wire device registrar runtime");
-        let replay = futures::executor::block_on(device_registrar.replay_from_store());
+        let replay = futures::executor::block_on(ability_deployment_registrar.replay_from_store());
         assert!(
             !replay.runtime_not_ready && !replay.store_unreadable,
-            "device ability replay must be readable in fixture: {replay:?}"
+            "ability deployment replay must be readable in fixture: {replay:?}"
         );
     }
 
+    let access_control_stores = Arc::new(
+        easynet_cli::daemon::persistence::access_control::AccessControlStoreRegistry::new(
+            easynet_cli::daemon::persistence::config::state_dir().join("seven-axes-access-control"),
+        ),
+    );
+    access_control_stores
+        .with_store(&accountable_user_ura, |store| {
+            use easynet_cli::daemon::invocation::admission::decision::{
+                AccessAction, PrincipalKind, TokenClass,
+            };
+            use easynet_cli::daemon::invocation::admission::grant_matcher::{
+                PermissionEffect, PermissionGrant, PermissionGrantLifetime, PermissionGrantState,
+            };
+            store.create_grant(
+                PermissionGrant {
+                    grant_id: "seven-axes-device-publication".to_string(),
+                    owner_user_ura: accountable_user_ura.clone(),
+                    principal_kind: PrincipalKind::DeviceCustody,
+                    principal_id: daemon_ura.clone(),
+                    token_id: Some(daemon_ura.clone()),
+                    token_class: Some(TokenClass::DevicePairing),
+                    session_id: None,
+                    session_expires_at: None,
+                    callee_ura: Some(hub_ura.clone()),
+                    subject_ura_pattern: None,
+                    ability_ura_pattern: None,
+                    actions: vec![AccessAction::Manage],
+                    constraints: None,
+                    effect: PermissionEffect::Allow,
+                    lifetime: PermissionGrantLifetime::Permanent,
+                    state: PermissionGrantState::Active,
+                    expires_at: None,
+                    review_required_after: None,
+                    last_reviewed_at: None,
+                    last_used_at: None,
+                    created_by: accountable_user_ura.clone(),
+                    created_at: "2026-08-09T00:00:00Z".to_string(),
+                    updated_at: None,
+                    revoked_at: None,
+                    reason: Some(
+                        "paired Device may publish its hosted Agent projection".to_string(),
+                    ),
+                },
+                &accountable_user_ura,
+            )
+        })
+        .expect("open seven-axes accountable User grant store")
+        .expect("create seven-axes Device publication grant");
     let admission =
         AdmissionFacade::with_trust_anchor_cell(shared_trust_anchor.clone(), Some(hub_ura.clone()))
+            .with_access_control_stores(access_control_stores)
             .with_ability_catalog(Arc::clone(&catalog));
     daemon_runtime
         .bind_derived_invocation_admission(catalog.as_ref(), admission.clone())
         .expect("bind seven-axes derived Invocation product admission");
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
+        .with_transport_boundary(
+            easynet_cli::daemon::invocation::admission::admission_facade::AdmissionTransportBoundary::LocalOnlyIpc,
+        )
         .with_directory_read_models(advertised_agents, ability_catalog)
         .with_local_ability_catalog(Arc::clone(&catalog))
         .with_daemon_runtime(daemon_runtime)
@@ -1081,10 +1395,8 @@ fn start_daemon_at(
         .with_invocation_attempt_ledger_path(attempt_ledger_path)
         .expect("wire seven-axes invocation attempt audit ledger")
         .with_register_pubkey("cli", trust_path, shared_trust_anchor);
-    futures::executor::block_on(
-        service.register_daemon_unary_routes_for_owners(&[daemon_ura.clone(), hub_ura.clone()]),
-    )
-    .expect("register seven-axes daemon exact unary routes for both authority roots");
+    futures::executor::block_on(service.register_daemon_unary_routes(&hub_ura))
+        .expect("register seven-axes daemon exact unary routes for the Hub authority root");
     futures::executor::block_on(service.register_daemon_stream_routes(&hub_ura))
         .expect("register seven-axes daemon exact stream routes");
 
@@ -1145,10 +1457,9 @@ fn start_daemon_at(
     if publish_hosted_projection {
         seed_hosted_agent_projection(
             socket_path,
-            &daemon_ura,
             &hub_ura,
             &daemon_ura,
-            &easynet_cli::core::ura::agent_ura("cli", "local", "testbot"),
+            &hosted_projection_agent_ura,
             &descriptor_refs,
         );
     }

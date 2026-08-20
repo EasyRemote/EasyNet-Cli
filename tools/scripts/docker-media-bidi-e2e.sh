@@ -30,6 +30,9 @@ ADMIN_URA="easynet:///r/${REALM}/user/admin"
 USER_URA="easynet:///r/${REALM}/user/alice"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${EASYNET_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/docker-media-bidi/$TIMESTAMP}"
+CLI_TIMEOUT_SECONDS="${EASYNET_E2E_CLI_TIMEOUT_SECONDS:-60}"
+ABILITY_WAIT_ATTEMPTS="${EASYNET_E2E_ABILITY_WAIT_ATTEMPTS:-30}"
+ABILITY_LIST_TIMEOUT_SECONDS="${EASYNET_E2E_ABILITY_LIST_TIMEOUT_SECONDS:-8}"
 KEEP=0
 SKIP_BUILD=0
 SELF_TEST=0
@@ -55,6 +58,14 @@ Environment:
                              unset, this E2E builds one with cargo zigbuild
                              before Docker image assembly.
   EASYNET_BACKEND_ROOT       Sibling EasyNet repo used to build images.
+  EASYNET_E2E_CLI_TIMEOUT_SECONDS
+                             Hard timeout for ordinary in-container CLI calls.
+                             Defaults to 60.
+  EASYNET_E2E_ABILITY_WAIT_ATTEMPTS
+                             Maximum catalog polling attempts. Defaults to 30.
+  EASYNET_E2E_ABILITY_LIST_TIMEOUT_SECONDS
+                             Per-attempt timeout for ability catalog polling.
+                             Defaults to 8.
 USAGE
 }
 
@@ -77,6 +88,12 @@ die() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$name must be a positive integer, got: $value"
 }
 
 resolve_docker() {
@@ -126,9 +143,23 @@ require_paths() {
   [[ -x "$EASYNET_ROOT/scripts/docker-build-images.sh" ]] || die "missing EasyNet image build script"
 }
 
+ensure_runtime_dirs() {
+  mkdir -p "$SHARED_DIR" "$CERT_DIR"
+}
+
 if [[ "$SELF_TEST" == "1" ]]; then
   bash -n "$0"
-  require_paths
+  python3 - "$0" <<'PY'
+import ast
+import pathlib
+import re
+import sys
+
+script = pathlib.Path(sys.argv[1])
+text = script.read_text()
+for index, match in enumerate(re.finditer(r"<<'PY'\n(.*?)\nPY", text, re.S), 1):
+    ast.parse(match.group(1), filename=f"{script}#python-heredoc-{index}")
+PY
   grep -q "synthetic media stream and bidirectional multimodal transfer" "$0"
   grep -q "kind = \"sidecar\"" "$0"
   grep -q "media.synthetic_stream" "$0"
@@ -138,7 +169,12 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "ability stream" "$0"
   grep -q "ability bidi" "$0"
   grep -q "caller_remote_media_stream_succeeded" "$0"
+  grep -q "caller_remote_media_stream_cancel_released_provider" "$0"
+  grep -q "canonical_carrier_reverse_stream_cancel_requested" "$0"
+  grep -q "canonical_carrier_stream_cancel_requested" "$0"
   grep -q "caller_remote_media_bidi_succeeded" "$0"
+  grep -q "canonical_carrier_reverse_bidi_opened" "$0"
+  grep -q "canonical_carrier_reverse_bidi_input" "$0"
   grep -q "caller_media_bidi_descriptor_ref" "$0"
   grep -q "media_stream_unique_invocation_records" "$0"
   grep -q "media_bidi_unique_invocation_records" "$0"
@@ -148,11 +184,18 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_cli_must_fail" "$0"
   grep -q "provider_media_plugin_removed" "$0"
   grep -q "provider_removed_media_routes_reject_invocation" "$0"
+  grep -q "serve_plugin(" "$0"
+  grep -q "sdk-python/easynet_sdk" "$0"
   grep -q "def candidates(row):" "$0"
   grep -q "ability_ura.endswith(f\".{ability_name}\")" "$0"
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
+  grep -q "ensure_runtime_dirs" "$0"
+  grep -q "run_cli_for_wait" "$0"
+  grep -q "ABILITY_LIST_TIMEOUT_SECONDS" "$0"
+  grep -q "ABILITY_WAIT_ATTEMPTS" "$0"
   grep -q "random_nonce_hex" "$0"
+  grep -q "collect_provider_invocation_records" "$0"
   grep -q "headless-media" "$SELF_DIR/build-linux-cli-artifact-bundle.sh"
   grep -q "wait_device_online provider /home/provider" "$0"
   grep -q "docker compose" "$0"
@@ -165,6 +208,9 @@ extend_tool_path
 need_cmd jq
 need_cmd openssl
 need_cmd python3
+require_positive_integer EASYNET_E2E_CLI_TIMEOUT_SECONDS "$CLI_TIMEOUT_SECONDS"
+require_positive_integer EASYNET_E2E_ABILITY_WAIT_ATTEMPTS "$ABILITY_WAIT_ATTEMPTS"
+require_positive_integer EASYNET_E2E_ABILITY_LIST_TIMEOUT_SECONDS "$ABILITY_LIST_TIMEOUT_SECONDS"
 require_paths
 "$DOCKER_BIN" info >/dev/null 2>&1 || die "Docker engine is not available"
 
@@ -172,7 +218,7 @@ mkdir -p "$OUT_DIR"
 WORK_ROOT="$(mktemp -d "/tmp/easynet-media-bidi.XXXXXX")"
 SHARED_DIR="$WORK_ROOT/shared"
 CERT_DIR="$WORK_ROOT/certs"
-mkdir -p "$SHARED_DIR" "$CERT_DIR"
+ensure_runtime_dirs
 COMPOSE_FILE="$OUT_DIR/docker-compose.yml"
 printf '%s\n' "$WORK_ROOT" >"$OUT_DIR/work-root.txt"
 
@@ -184,7 +230,9 @@ cleanup() {
     fi
   fi
   if [[ "$KEEP" != "1" ]]; then
-    "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
+    if [[ -f "$COMPOSE_FILE" ]]; then
+      "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
+    fi
     rm -rf "$WORK_ROOT"
   else
     echo "kept work root: $WORK_ROOT" >&2
@@ -208,6 +256,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
     EASYNET_HUB_IMAGE="$RUNTIME_IMAGE" \
     "$EASYNET_ROOT/scripts/docker-build-images.sh"
 fi
+ensure_runtime_dirs
 
 compose() {
   "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
@@ -222,19 +271,49 @@ service_exec() {
   compose exec -T "$service" sh -lc "$command"
 }
 
+runtime_cli_command() {
+  local home="$1"
+  local timeout_seconds="$2"
+  shift 2
+  [[ $# -gt 0 ]] || die "runtime_cli_command requires a command"
+  printf "HOME='%s' EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout '%ss' easynet %s" \
+    "$home" "$timeout_seconds" "${*:-}"
+}
+
 hub_cli() {
   [[ $# -gt 0 ]] || die "hub_cli requires a command"
-  service_exec hub "HOME=/srv/easynet EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet ${*:-}"
+  service_exec hub "$(runtime_cli_command /srv/easynet "$CLI_TIMEOUT_SECONDS" "${*:-}")"
 }
 
 provider_cli() {
   [[ $# -gt 0 ]] || die "provider_cli requires a command"
-  service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet ${*:-}"
+  service_exec provider "$(runtime_cli_command /home/provider "$CLI_TIMEOUT_SECONDS" "${*:-}")"
 }
 
 caller_cli() {
   [[ $# -gt 0 ]] || die "caller_cli requires a command"
-  service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet ${*:-}"
+  service_exec caller "$(runtime_cli_command /home/caller "$CLI_TIMEOUT_SECONDS" "${*:-}")"
+}
+
+collect_provider_invocation_records() {
+  [[ $# -eq 3 ]] || die "collect_provider_invocation_records requires <summary-json> <records-json> <stderr>"
+  local summary_json="$1"
+  local records_json="$2"
+  local stderr_file="$3"
+  local records_jsonl="${records_json}.jsonl"
+  : >"$records_jsonl"
+  : >"$stderr_file"
+  local -a request_ids=()
+  local request_id
+  while IFS= read -r request_id; do
+    [[ -n "$request_id" ]] || continue
+    request_ids+=("$request_id")
+  done < <(jq -r '.[] | .request_id // empty' "$summary_json")
+  for request_id in "${request_ids[@]}"; do
+    provider_cli "invocation show '$request_id' --format json" \
+      </dev/null >>"$records_jsonl" 2>>"$stderr_file"
+  done
+  jq -s '.' "$records_jsonl" >"$records_json"
 }
 
 caller_cli_must_fail() {
@@ -255,9 +334,41 @@ caller_cli_must_fail() {
   fi
 }
 
+run_cli_for_wait() {
+  [[ $# -eq 5 ]] || die "run_cli_for_wait requires <cli-func> <command> <stdout> <stderr> <label>"
+  local cli_func="$1"
+  local command="$2"
+  local stdout="$3"
+  local stderr="$4"
+  local label="$5"
+  local service=""
+  local home=""
+  case "$cli_func" in
+    hub_cli) service="hub"; home="/srv/easynet" ;;
+    provider_cli) service="provider"; home="/home/provider" ;;
+    caller_cli) service="caller"; home="/home/caller" ;;
+    *) die "unsupported CLI function for wait: $cli_func" ;;
+  esac
+  set +e
+  service_exec "$service" "$(runtime_cli_command "$home" "$ABILITY_LIST_TIMEOUT_SECONDS" "$command")" \
+    >"$stdout" 2>"$stderr"
+  local status=$?
+  set -e
+  printf '%s\n' "$status" >"${stderr}.exit_code"
+  if [[ "$status" -eq 124 ]]; then
+    printf '[WARN] timed out waiting for %s via %s after %ss: easynet %s\n' \
+      "$label" "$cli_func" "$ABILITY_LIST_TIMEOUT_SECONDS" "$command" >&2
+  fi
+  return "$status"
+}
+
 dump_logs() {
   echo "==> docker compose logs" >&2
-  compose logs --no-color hub provider caller >&2 || true
+  if [[ -f "$COMPOSE_FILE" ]]; then
+    compose logs --no-color hub provider caller >&2 || true
+  else
+    echo "compose file has not been generated: $COMPOSE_FILE" >&2
+  fi
   echo "==> daemon logs" >&2
   service_exec hub "find /srv/easynet/.easynet -maxdepth 4 -type f -name '*.log' -print -exec tail -120 {} \\;" >&2 || true
   service_exec provider "find /home/provider/.easynet -maxdepth 4 -type f -name '*.log' -print -exec tail -180 {} \\;" >&2 || true
@@ -432,12 +543,15 @@ wait_ability_name() {
   local out="$OUT_DIR/${stem}.json"
   local err="$OUT_DIR/${stem}.err"
   local ability_ura=""
-  for _ in $(seq 1 120); do
+  local command=""
+  local attempt
+  for attempt in $(seq 1 "$ABILITY_WAIT_ATTEMPTS"); do
     if [[ -n "$node_arg" ]]; then
-      "$cli_func" "ability list --node '$node_arg' --format json" >"$out" 2>"$err" || true
+      command="ability list --node '$node_arg' --format json"
     else
-      "$cli_func" "ability list --format json" >"$out" 2>"$err" || true
+      command="ability list --format json"
     fi
+    run_cli_for_wait "$cli_func" "$command" "$out" "$err" "$ability_name" || true
     if [[ -s "$out" ]]; then
       ability_ura="$(extract_ability_ura_by_name "$out" "$ability_name")"
       if [[ -n "$ability_ura" ]]; then
@@ -447,6 +561,8 @@ wait_ability_name() {
     fi
     sleep 0.5
   done
+  printf '[FAIL] ability %s was not visible after %s attempts via %s\n' \
+    "$ability_name" "$ABILITY_WAIT_ATTEMPTS" "$cli_func" >&2
   cat "$out" >&2 2>/dev/null || true
   cat "$err" >&2 2>/dev/null || true
   return 1
@@ -461,12 +577,15 @@ wait_ability_descriptor_ref() {
   local out="$OUT_DIR/${stem}.json"
   local err="$OUT_DIR/${stem}.err"
   local descriptor_ref=""
-  for _ in $(seq 1 120); do
+  local command=""
+  local attempt
+  for attempt in $(seq 1 "$ABILITY_WAIT_ATTEMPTS"); do
     if [[ -n "$node_arg" ]]; then
-      "$cli_func" "ability list --node '$node_arg' --format json" >"$out" 2>"$err" || true
+      command="ability list --node '$node_arg' --format json"
     else
-      "$cli_func" "ability list --format json" >"$out" 2>"$err" || true
+      command="ability list --format json"
     fi
+    run_cli_for_wait "$cli_func" "$command" "$out" "$err" "$ability_name descriptor_ref" || true
     if [[ -s "$out" ]]; then
       descriptor_ref="$(extract_ability_descriptor_ref_by_name "$out" "$ability_name" "$action")"
       if [[ -n "$descriptor_ref" ]]; then
@@ -476,6 +595,8 @@ wait_ability_descriptor_ref() {
     fi
     sleep 0.5
   done
+  printf '[FAIL] descriptor_ref for ability %s was not visible after %s attempts via %s\n' \
+    "$ability_name" "$ABILITY_WAIT_ATTEMPTS" "$cli_func" >&2
   cat "$out" >&2 2>/dev/null || true
   cat "$err" >&2 2>/dev/null || true
   return 1
@@ -665,6 +786,8 @@ MEDIA_STREAM_ABILITY="media.synthetic_stream"
 MEDIA_BIDI_ABILITY="media.synthetic_bidi"
 MEDIA_PLUGIN_ROOT="/shared/synthetic-media-bidi-plugin"
 service_exec provider "rm -rf '$MEDIA_PLUGIN_ROOT' && mkdir -p '$MEDIA_PLUGIN_ROOT/abilities' '$MEDIA_PLUGIN_ROOT/bin'"
+mkdir -p "$SHARED_DIR/synthetic-media-bidi-plugin/sdk-python"
+cp -R "$REPO_ROOT/sdk/python/easynet_sdk" "$SHARED_DIR/synthetic-media-bidi-plugin/sdk-python/easynet_sdk"
 cat >"$SHARED_DIR/synthetic-media-bidi-plugin/plugin.toml" <<'EOF'
 schema_version = "1"
 id = "e2e.synthetic_media_bidi"
@@ -761,12 +884,13 @@ cat >"$SHARED_DIR/synthetic-media-bidi-plugin/bin/synthetic-media-sidecar" <<'PY
 #!/usr/bin/env python3
 import base64
 import hashlib
-import json
 import sys
+import time
+from pathlib import Path
 
-def emit(frame):
-    sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk-python"))
+
+from easynet_sdk.providers.runtime.plugin_exec import SidecarInvocation, serve_plugin
 
 def payload(kind, index, session_id):
     body = f"{kind}:{session_id}:{index}".encode("utf-8")
@@ -791,73 +915,75 @@ def ack(frame):
         "echo_body": frame.get("body"),
     }
 
-session = None
-acks = []
-for raw in sys.stdin:
-    if not raw.strip():
-        continue
-    message = json.loads(raw)
-    kind = message.get("type")
-    call_id = message.get("call_id")
-    if kind == "invoke":
-        emit({"type": "result", "call_id": call_id, "value": {"ok": True}})
-        break
-    if kind == "stream_open":
-        invocation = message["invocation"]
-        args = invocation.get("args") or {}
-        session_id = args.get("session_id") or "stream"
-        emit({"type": "stream_item", "call_id": call_id, "value": {
+def handle_invoke(_invocation: SidecarInvocation):
+    return {"ok": True}
+
+def handle_stream(invocation: SidecarInvocation):
+    session_id = invocation.args.get("session_id") or "stream"
+    yield {
             "kind": "stream_opened",
             "session_id": session_id,
-            "caller_ura": invocation.get("caller_ura"),
-            "callee_ura": invocation.get("callee_ura"),
-            "subject_ura": invocation.get("subject_ura"),
-            "ability_ura": invocation.get("ability_ura"),
-            "nonce_bytes": len(invocation.get("invocation_nonce") or []),
-        }})
-        for frame_kind, count in (("audio", 2), ("video", 2), ("screen", 1)):
-            for index in range(1, count + 1):
-                emit({"type": "stream_item", "call_id": call_id, "value": payload(frame_kind, index, session_id)})
-        emit({"type": "terminal", "call_id": call_id, "reason": "stream_complete"})
-        break
-    if kind == "bidi_open":
-        invocation = message["invocation"]
-        args = invocation.get("args") or {}
-        session = {
-            "call_id": call_id,
-            "session_id": args.get("session_id") or "bidi",
-            "caller_ura": invocation.get("caller_ura"),
-            "callee_ura": invocation.get("callee_ura"),
-            "subject_ura": invocation.get("subject_ura"),
-            "ability_ura": invocation.get("ability_ura"),
-            "nonce_bytes": len(invocation.get("invocation_nonce") or []),
-        }
-        emit({"type": "bidi_output", "call_id": call_id, "frame": {"kind": "session_established", **session}})
-        continue
-    if kind == "bidi_input":
-        frame = message.get("frame") or {}
+            "caller_ura": invocation.caller_ura,
+            "callee_ura": invocation.callee_ura,
+            "subject_ura": invocation.subject_ura,
+            "ability_ura": invocation.ability_ura,
+            "nonce_bytes": len(invocation.invocation_nonce),
+    }
+    frame_count = invocation.args.get("frame_count")
+    if frame_count is not None:
+        if not isinstance(frame_count, int) or isinstance(frame_count, bool) or frame_count < 1:
+            raise ValueError("frame_count must be a positive integer")
+        frame_delay_ms = invocation.args.get("frame_delay_ms", 0)
+        if (
+            not isinstance(frame_delay_ms, int)
+            or isinstance(frame_delay_ms, bool)
+            or frame_delay_ms < 0
+            or frame_delay_ms > 1000
+        ):
+            raise ValueError("frame_delay_ms must be an integer between 0 and 1000")
+        for index in range(1, frame_count + 1):
+            if frame_delay_ms:
+                time.sleep(frame_delay_ms / 1000)
+            yield payload("video", index, session_id)
+        return
+    for frame_kind, count in (("audio", 2), ("video", 2), ("screen", 1)):
+        for index in range(1, count + 1):
+            yield payload(frame_kind, index, session_id)
+
+def handle_bidi(invocation: SidecarInvocation, input_frames):
+    session = {
+        "session_id": invocation.args.get("session_id") or "bidi",
+        "caller_ura": invocation.caller_ura,
+        "callee_ura": invocation.callee_ura,
+        "subject_ura": invocation.subject_ura,
+        "ability_ura": invocation.ability_ura,
+        "nonce_bytes": len(invocation.invocation_nonce),
+    }
+    yield {"kind": "session_established", **session}
+    acks = []
+    for frame in input_frames:
         if frame.get("kind") in {"audio", "video", "control"}:
             item = ack(frame)
             acks.append(item)
-            emit({"type": "bidi_output", "call_id": call_id, "frame": item})
+            yield item
             if frame.get("kind") == "control" and frame.get("body") == "close":
-                emit({"type": "bidi_output", "call_id": call_id, "frame": {
+                yield {
                     "kind": "summary",
-                    "session_id": (session or {}).get("session_id"),
+                    "session_id": session.get("session_id"),
                     "ack_count": len(acks),
                     "media_kinds": sorted({item.get("media_kind") for item in acks}),
-                }})
-                emit({"type": "terminal", "call_id": call_id, "reason": "client_control_close"})
-                break
+                }
+                return
         else:
-            emit({"type": "error", "call_id": call_id, "message": f"unsupported input frame {frame!r}"})
-            break
-        continue
-    if kind == "close":
-        emit({"type": "terminal", "call_id": call_id, "reason": message.get("reason") or "client_closed"})
-        break
-    emit({"type": "error", "call_id": call_id, "message": f"unsupported request type {kind!r}"})
-    break
+            raise ValueError(f"unsupported input frame {frame!r}")
+
+serve_plugin(
+    invoke_handler=handle_invoke,
+    stream_handler=handle_stream,
+    bidi_handler=handle_bidi,
+    stream_terminal_reason="stream_complete",
+    bidi_terminal_reason="client_control_close",
+)
 PY
 chmod +x "$SHARED_DIR/synthetic-media-bidi-plugin/bin/synthetic-media-sidecar"
 
@@ -895,6 +1021,27 @@ CALLER_REMOTE_STREAM_NONCE_HEX="$(random_nonce_hex)"
 caller_cli "ability stream '$CALLER_MEDIA_STREAM_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject '$MEDIA_SUBJECT' --nonce-hex '$CALLER_REMOTE_STREAM_NONCE_HEX' --causal-root --args '$(json_args stream "caller-remote-stream-$TIMESTAMP")' --format json --raw" \
   >"$OUT_DIR/caller-remote-media-stream.json" 2>"$OUT_DIR/caller-remote-media-stream.err"
 
+echo "==> cancelling a long provider media stream by dropping the remote consumer"
+CALLER_CANCEL_STREAM_NONCE_HEX="$(random_nonce_hex)"
+caller_cli "ability stream '$CALLER_MEDIA_STREAM_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject '$MEDIA_SUBJECT' --nonce-hex '$CALLER_CANCEL_STREAM_NONCE_HEX' --causal-root --args '{\"session_id\":\"caller-cancel-stream-$TIMESTAMP\",\"frame_count\":500,\"frame_delay_ms\":25}' --max-frames 3 --format json --raw" \
+  >"$OUT_DIR/caller-cancel-media-stream.json" 2>"$OUT_DIR/caller-cancel-media-stream.err"
+
+MEDIA_SIDECAR_RELEASED=0
+for _ in $(seq 1 80); do
+  if ! service_exec provider "pgrep -f '[s]ynthetic-media-sidecar'" >/dev/null 2>&1; then
+    MEDIA_SIDECAR_RELEASED=1
+    break
+  fi
+  sleep 0.1
+done
+printf '%s\n' "$MEDIA_SIDECAR_RELEASED" >"$OUT_DIR/provider-media-sidecar-released.txt"
+[[ "$MEDIA_SIDECAR_RELEASED" == "1" ]] || die "remote media stream consumer drop did not release provider sidecar"
+
+echo "==> reacquiring provider media stream after remote consumer cancellation"
+CALLER_REACQUIRE_STREAM_NONCE_HEX="$(random_nonce_hex)"
+caller_cli "ability stream '$CALLER_MEDIA_STREAM_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject '$MEDIA_SUBJECT' --nonce-hex '$CALLER_REACQUIRE_STREAM_NONCE_HEX' --causal-root --args '{\"session_id\":\"caller-reacquire-stream-$TIMESTAMP\",\"frame_count\":3,\"frame_delay_ms\":5}' --format json --raw" \
+  >"$OUT_DIR/caller-reacquire-media-stream.json" 2>"$OUT_DIR/caller-reacquire-media-stream.err"
+
 echo "==> invoking provider synthetic media bidi from caller through remote CLI"
 CALLER_REMOTE_BIDI_NONCE_HEX="$(random_nonce_hex)"
 caller_cli "ability bidi '$CALLER_MEDIA_BIDI_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject '$MEDIA_SUBJECT' --nonce-hex '$CALLER_REMOTE_BIDI_NONCE_HEX' --causal-root --args '$(json_args bidi "caller-remote-bidi-$TIMESTAMP")' --input '$(json_frame audio 1 remote-audio-frame-1)' --input '$(json_frame video 2 remote-video-frame-2)' --input '$(json_frame control 3 close)' --until-terminal --format json --raw" \
@@ -909,6 +1056,14 @@ provider_cli "invocation list --ability-ura '$MEDIA_STREAM_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-media-stream.json" 2>"$OUT_DIR/provider-invocation-list-media-stream.err"
 provider_cli "invocation list --ability-ura '$MEDIA_BIDI_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-media-bidi.json" 2>"$OUT_DIR/provider-invocation-list-media-bidi.err"
+collect_provider_invocation_records \
+  "$OUT_DIR/provider-invocation-list-media-stream.json" \
+  "$OUT_DIR/provider-invocation-records-media-stream.json" \
+  "$OUT_DIR/provider-invocation-records-media-stream.err"
+collect_provider_invocation_records \
+  "$OUT_DIR/provider-invocation-list-media-bidi.json" \
+  "$OUT_DIR/provider-invocation-records-media-bidi.json" \
+  "$OUT_DIR/provider-invocation-records-media-bidi.err"
 
 service_exec hub "cat /srv/easynet/.easynet/logs/easynet-daemon.log" \
   >"$OUT_DIR/hub-daemon.log" 2>"$OUT_DIR/hub-daemon-log.err" || true
@@ -983,14 +1138,11 @@ def receipt_projected(path):
     return any(has_receipt(row) for row in records)
 
 def completed_receipt_records(path):
-    completed = []
-    for row in rows(path):
-        if not isinstance(row, dict):
-            continue
-        blob = json.dumps(row, sort_keys=True).lower()
-        if "receipt" in blob and "completed" in blob:
-            completed.append(row)
-    return completed
+    return [
+        row
+        for row in rows(path)
+        if isinstance(row, dict) and row.get("state") == "completed"
+    ]
 
 def receipt_anchors(record):
     chain = record.get("receipt_chain")
@@ -998,6 +1150,26 @@ def receipt_anchors(record):
         return []
     anchors = chain.get("anchors")
     return anchors if isinstance(anchors, list) else []
+
+def terminal_receipts(record, terminal_state):
+    return [
+        anchor
+        for anchor in receipt_anchors(record)
+        if isinstance(anchor, dict)
+        and anchor.get("state") == terminal_state
+        and anchor.get("receipt_type") == terminal_state
+    ]
+
+def has_verified_terminal_head(record, terminal_state):
+    chain = record.get("receipt_chain")
+    if not isinstance(chain, dict) or chain.get("verified") is not True:
+        return False
+    terminal = terminal_receipts(record, terminal_state)
+    return (
+        len(terminal) == 1
+        and bool(chain.get("head_receipt_hash"))
+        and terminal[0].get("receipt_hash") == chain.get("head_receipt_hash")
+    )
 
 def unique_non_empty(values):
     compact = [value for value in values if value]
@@ -1028,19 +1200,9 @@ def completed_chain_facts(records, expected_ability_ura, expected_callee_ura):
         chain = chain if isinstance(chain, dict) else {}
         head_hash = str(chain.get("head_receipt_hash") or "")
         facts["head_receipt_hashes"].append(head_hash)
-        completed_anchors = [
-            anchor
-            for anchor in receipt_anchors(record)
-            if isinstance(anchor, dict)
-            and anchor.get("state") == "completed"
-            and anchor.get("receipt_type") == "completed"
-        ]
+        completed_anchors = terminal_receipts(record, "completed")
         terminal_counts.append(len(completed_anchors))
-        terminal_heads.append(
-            len(completed_anchors) == 1
-            and head_hash
-            and str(completed_anchors[0].get("receipt_hash") or "") == head_hash
-        )
+        terminal_heads.append(has_verified_terminal_head(record, "completed"))
     facts["terminal_receipt_counts"] = terminal_counts
     facts["all_completed"] = all(record.get("state") == "completed" for record in records)
     facts["all_expected_ability"] = all(record.get("ability_ura") == expected_ability_ura for record in records)
@@ -1059,17 +1221,32 @@ def completed_chain_facts(records, expected_ability_ura, expected_callee_ura):
 plugin_status = load_json(out / "provider-plugin-status-media.json")
 stream_frames = load_json_array_from_cli(out / "provider-media-stream.json")
 caller_remote_stream_frames = load_json_array_from_cli(out / "caller-remote-media-stream.json")
+caller_cancel_stream_frames = load_json_array_from_cli(out / "caller-cancel-media-stream.json")
+caller_reacquire_stream_frames = load_json_array_from_cli(out / "caller-reacquire-media-stream.json")
 bidi_frames = load_json_array_from_cli(out / "provider-media-bidi.json")
 caller_remote_bidi_frames = load_json_array_from_cli(out / "caller-remote-media-bidi.json")
 caller_remote_bidi_stderr = load_text(out / "caller-remote-media-bidi.err")
 hub_daemon_log = load_text(out / "hub-daemon.log")
+provider_daemon_log = load_text(out / "provider-daemon.log")
+caller_daemon_log = load_text(out / "caller-daemon.log")
+provider_media_sidecar_released = load_text(out / "provider-media-sidecar-released.txt").strip() == "1"
 
 stream_payloads = [frame.get("payload") for frame in stream_frames if isinstance(frame, dict)]
 caller_remote_stream_payloads = [frame.get("payload") for frame in caller_remote_stream_frames if isinstance(frame, dict)]
+caller_cancel_stream_payloads = [frame.get("payload") for frame in caller_cancel_stream_frames if isinstance(frame, dict)]
+caller_reacquire_stream_payloads = [frame.get("payload") for frame in caller_reacquire_stream_frames if isinstance(frame, dict)]
 bidi_payloads = [frame.get("payload") for frame in bidi_frames if isinstance(frame, dict)]
 caller_remote_bidi_payloads = [frame.get("payload") for frame in caller_remote_bidi_frames if isinstance(frame, dict)]
-stream_records = completed_receipt_records(out / "provider-invocation-list-media-stream.json")
-bidi_records = completed_receipt_records(out / "provider-invocation-list-media-bidi.json")
+stream_record_path = out / "provider-invocation-records-media-stream.json"
+bidi_record_path = out / "provider-invocation-records-media-bidi.json"
+stream_records = completed_receipt_records(stream_record_path)
+bidi_records = completed_receipt_records(bidi_record_path)
+all_stream_records = [
+    record
+    for record in rows(stream_record_path)
+    if isinstance(record, dict)
+]
+cancelled_stream_records = [record for record in all_stream_records if record.get("state") == "cancelled"]
 stream_chain_facts = completed_chain_facts(stream_records, stream_ura, provider_ura)
 bidi_chain_facts = completed_chain_facts(bidi_records, bidi_ura, provider_ura)
 
@@ -1102,8 +1279,33 @@ removed_stream_error = load_text(out / "caller-removed-media-stream.stderr") + l
 removed_bidi_error = load_text(out / "caller-removed-media-bidi.stderr") + load_text(out / "caller-removed-media-bidi.stdout")
 plugin_after_remove_blob = json.dumps(plugin_list_after_remove, sort_keys=True)
 
-def rejected_without_harness_timeout(exit_code, text):
-    return exit_code not in (None, 0, 124) and bool(text.strip()) and "success" not in text.lower()
+def rejected_with_semantic_route_failure(exit_code, text):
+    if exit_code in (None, 0, 124):
+        return False
+    if not text.strip() or "success" in text.lower():
+        return False
+    lower = text.lower()
+    timeout_markers = (
+        "remote_stream_terminal_timeout",
+        "deadlineexceeded",
+        "deadline exceeded",
+        "timeout expired",
+        "cancelled",
+        "canceled",
+    )
+    if any(marker in lower for marker in timeout_markers):
+        return False
+    semantic_markers = (
+        "ability_resolution_failed",
+        "ability_bidi_not_supported",
+        "ability_not_found",
+        "descriptor_not_found",
+        "route_negative",
+        "no route",
+        "not published",
+        "not registered in axon localruntime",
+    )
+    return any(marker in lower for marker in semantic_markers)
 
 status_blob = json.dumps(plugin_status, sort_keys=True)
 assertions = {
@@ -1128,8 +1330,8 @@ assertions = {
     },
     "provider_media_bidi_summary": any(isinstance(p, dict) and p.get("kind") == "summary" and p.get("ack_count") == 3 for p in bidi_payloads),
     "provider_media_bidi_single_terminal": terminal_count(bidi_frames) == 1,
-    "provider_media_stream_receipt_chain_projected": receipt_projected(out / "provider-invocation-list-media-stream.json"),
-    "provider_media_bidi_receipt_chain_projected": receipt_projected(out / "provider-invocation-list-media-bidi.json"),
+    "provider_media_stream_receipt_chain_projected": receipt_projected(stream_record_path),
+    "provider_media_bidi_receipt_chain_projected": receipt_projected(bidi_record_path),
     "caller_discovered_provider_media_stream": caller_stream_ura.startswith("easynet://"),
     "caller_discovered_provider_media_bidi": caller_bidi_ura.startswith("easynet://"),
     "caller_media_stream_descriptor_ref": caller_stream_descriptor_ref.startswith("easynet://")
@@ -1153,6 +1355,21 @@ assertions = {
         and p.get("nonce_bytes") == 16
         for p in caller_remote_stream_payloads
     ),
+    "caller_remote_media_stream_cancel_stopped_at_requested_frame_count": len(caller_cancel_stream_frames) == 3
+        and terminal_count(caller_cancel_stream_frames) == 0
+        and {"stream_opened", "video"}.issubset(payload_kinds(caller_cancel_stream_payloads)),
+    "caller_remote_media_stream_cancel_released_provider": provider_media_sidecar_released,
+    "caller_remote_media_stream_reacquired_provider": terminal_count(caller_reacquire_stream_frames) == 1
+        and sum(
+            1
+            for payload in caller_reacquire_stream_payloads
+            if isinstance(payload, dict) and payload.get("kind") == "video"
+        ) == 3,
+    "caller_projected_remote_stream_cancel": "remote_stream_cancel_requested" in caller_daemon_log,
+    "hub_projected_reverse_stream_cancel": "canonical_carrier_reverse_stream_cancel_requested" in hub_daemon_log,
+    "provider_received_scoped_stream_cancel": "canonical_carrier_stream_cancel_requested" in provider_daemon_log,
+    "cancelled_media_stream_has_one_verified_terminal_receipt": len(cancelled_stream_records) == 1
+        and has_verified_terminal_head(cancelled_stream_records[0], "cancelled"),
     "caller_remote_media_bidi_succeeded": bool(caller_remote_bidi_frames)
         and "session_established" in payload_kinds(caller_remote_bidi_payloads),
     "caller_remote_media_bidi_audio_video_control_acks": {"audio", "video", "control"} == {
@@ -1166,11 +1383,11 @@ assertions = {
     ),
     "caller_remote_media_bidi_single_terminal": terminal_count(caller_remote_bidi_frames) == 1,
     "caller_remote_media_bidi_used_invoke_bidi_cli": "canonical InvokeBidi" in caller_remote_bidi_stderr,
-    "hub_observed_reverse_bidi_open": "carrier_v1_reverse_bidi_opened" in hub_daemon_log,
-    "hub_observed_reverse_bidi_input": "carrier_v1_reverse_bidi_input" in hub_daemon_log,
-    "media_stream_two_operations_two_receipt_chains": len(stream_records) == 2,
+    "hub_observed_reverse_bidi_open": "canonical_carrier_reverse_bidi_opened" in hub_daemon_log,
+    "hub_observed_reverse_bidi_input": "canonical_carrier_reverse_bidi_input" in hub_daemon_log,
+    "media_stream_three_completed_operations_three_receipt_chains": len(stream_records) == 3,
     "media_bidi_two_operations_two_receipt_chains": len(bidi_records) == 2,
-    "media_stream_unique_invocation_records": stream_chain_facts["record_count"] == 2
+    "media_stream_unique_invocation_records": stream_chain_facts["record_count"] == 3
         and stream_chain_facts["unique_request_ids"]
         and stream_chain_facts["unique_invocation_uras"],
     "media_bidi_unique_invocation_records": bidi_chain_facts["record_count"] == 2
@@ -1199,11 +1416,11 @@ assertions = {
             bidi_ura,
             "media.synthetic_bidi",
         ),
-    "provider_removed_media_routes_reject_invocation": rejected_without_harness_timeout(
+    "provider_removed_media_routes_reject_invocation": rejected_with_semantic_route_failure(
         removed_stream_exit,
         removed_stream_error,
     )
-        and rejected_without_harness_timeout(removed_bidi_exit, removed_bidi_error),
+        and rejected_with_semantic_route_failure(removed_bidi_exit, removed_bidi_error),
 }
 assertions["media_product_operations_have_verified_single_terminal_receipt_chains"] = (
     assertions["media_stream_unique_invocation_records"]
@@ -1212,6 +1429,15 @@ assertions["media_product_operations_have_verified_single_terminal_receipt_chain
     and assertions["media_bidi_preserved_provider_tuple"]
     and assertions["media_stream_verified_single_terminal_receipt_chains"]
     and assertions["media_bidi_verified_single_terminal_receipt_chains"]
+)
+assertions["media_remote_consumer_drop_has_one_cancel_authority"] = (
+    assertions["caller_remote_media_stream_cancel_stopped_at_requested_frame_count"]
+    and assertions["caller_remote_media_stream_cancel_released_provider"]
+    and assertions["caller_remote_media_stream_reacquired_provider"]
+    and assertions["caller_projected_remote_stream_cancel"]
+    and assertions["hub_projected_reverse_stream_cancel"]
+    and assertions["provider_received_scoped_stream_cancel"]
+    and assertions["cancelled_media_stream_has_one_verified_terminal_receipt"]
 )
 
 report = {
@@ -1231,6 +1457,8 @@ report = {
     },
     "stream_frames": stream_frames,
     "caller_remote_stream_frames": caller_remote_stream_frames,
+    "caller_cancel_stream_frames": caller_cancel_stream_frames,
+    "caller_reacquire_stream_frames": caller_reacquire_stream_frames,
     "bidi_frames": bidi_frames,
     "caller_remote_bidi_frames": caller_remote_bidi_frames,
     "provider_media_stream_invocation_records": stream_records,
@@ -1242,6 +1470,14 @@ report = {
     "plugin_removal_facts": {
         "stream_route_exit_code": removed_stream_exit,
         "bidi_route_exit_code": removed_bidi_exit,
+        "stream_route_rejected_semantically": rejected_with_semantic_route_failure(
+            removed_stream_exit,
+            removed_stream_error,
+        ),
+        "bidi_route_rejected_semantically": rejected_with_semantic_route_failure(
+            removed_bidi_exit,
+            removed_bidi_error,
+        ),
         "stream_error_excerpt": removed_stream_error.strip()[:800],
         "bidi_error_excerpt": removed_bidi_error.strip()[:800],
         "provider_catalog_exposes_stream_after_remove": catalog_exposes_ability(
@@ -1302,6 +1538,8 @@ print()
 removal = report["plugin_removal_facts"]
 print(f"- stream_route_exit_code: `{removal['stream_route_exit_code']}`")
 print(f"- bidi_route_exit_code: `{removal['bidi_route_exit_code']}`")
+print(f"- stream_route_rejected_semantically: `{str(removal['stream_route_rejected_semantically']).lower()}`")
+print(f"- bidi_route_rejected_semantically: `{str(removal['bidi_route_rejected_semantically']).lower()}`")
 print(f"- provider_catalog_exposes_stream_after_remove: `{str(removal['provider_catalog_exposes_stream_after_remove']).lower()}`")
 print(f"- provider_catalog_exposes_bidi_after_remove: `{str(removal['provider_catalog_exposes_bidi_after_remove']).lower()}`")
 PY

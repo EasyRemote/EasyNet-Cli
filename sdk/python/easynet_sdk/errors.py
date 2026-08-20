@@ -167,9 +167,7 @@ class SDKError(Exception):
         if not isinstance(details, dict):
             raise _invalid_runtime_error("details must be an object")
 
-        normalized_code = _canonical_runtime_error_code(
-            normalize_error_code(code), message, details
-        )
+        normalized_code = normalize_error_code(code)
         message = _canonical_runtime_error_message(normalized_code, message, details)
         return cls(
             code=normalized_code,
@@ -315,16 +313,6 @@ def _canonical_runtime_error_message(
     )
 
 
-def _canonical_runtime_error_code(
-    code: ErrorCode, message: str, details: Mapping[str, object]
-) -> ErrorCode:
-    if _is_descriptor_owner_offline_message(message) or _is_descriptor_owner_offline_message(
-        _detail_string(details, "detail")
-    ):
-        return ErrorCode.DESCRIPTOR_OWNER_OFFLINE
-    return code
-
-
 def _caller_ura_from_signer_error_message(message: str) -> str:
     marker = "for `"
     marker_index = message.find(marker)
@@ -335,19 +323,6 @@ def _caller_ura_from_signer_error_message(message: str) -> str:
     if end_index < 0:
         return ""
     return tail[:end_index].strip()
-
-
-def is_descriptor_owner_offline_message(message: str) -> bool:
-    return _is_descriptor_owner_offline_message(message)
-
-
-def _is_descriptor_owner_offline_message(message: str) -> bool:
-    upper = message.upper()
-    return "OWNER IS NOT ONLINE" in upper and (
-        "ROUTE_NEGATIVE" in upper
-        or "NEGATIVE_REASON_NXDOMAIN" in upper
-        or "NEGATIVE_REASON_NOROUTE" in upper
-    )
 
 
 def canonical_terminal_state_code(state: str) -> ErrorCode:

@@ -197,12 +197,7 @@ impl DesktopCompanionManager {
             .as_ref()
             .map(|record| record.desired_state)
             .unwrap_or_default();
-        let session = self.supervisor.probe_session();
-        let supervisor = if !session.is_available() {
-            CompanionSupervisorState::UnsupportedSession
-        } else {
-            self.supervisor.supervisor_state(plan)
-        };
+        let supervisor = self.supervisor_state_for_plan(plan);
         let observation = self.supervisor.observe(plan);
         Ok(status_from_parts(
             plan,
@@ -249,6 +244,9 @@ impl DesktopCompanionManager {
                 }
             };
             if desired != CompanionDesiredState::Enabled {
+                continue;
+            }
+            if !supervisor_state_allows_start(self.supervisor_state_for_plan(&plan)) {
                 continue;
             }
             match self.supervisor.start(&plan) {
@@ -467,6 +465,7 @@ impl DesktopCompanionManager {
         let mut changed = false;
         if desired == CompanionDesiredState::Enabled
             && plan.boot_policy == PluginCompanionBootPolicy::EnsureRunningAfterDaemonReady
+            && supervisor_state_allows_start(self.supervisor_state_for_plan(&plan))
         {
             self.supervisor.start(&plan)?;
             changed = true;
@@ -559,6 +558,15 @@ impl DesktopCompanionManager {
             .parent()
             .map(|parent| parent.join(package_id))
             .unwrap_or_else(|| std::path::PathBuf::from(package_id))
+    }
+
+    fn supervisor_state_for_plan(&self, plan: &DesktopCompanionPlan) -> CompanionSupervisorState {
+        let session = self.supervisor.probe_session();
+        if !session.is_available() {
+            CompanionSupervisorState::UnsupportedSession
+        } else {
+            self.supervisor.supervisor_state(plan)
+        }
     }
 
     pub fn stop_for_runtime_stop(&self, packages: &[SharedPluginPackage]) -> Vec<String> {
@@ -714,6 +722,15 @@ fn companion_status_is_running(status: &DesktopCompanionStatus) -> bool {
     matches!(
         status.observed_state.as_str(),
         "running" | "starting" | "stale"
+    )
+}
+
+fn supervisor_state_allows_start(supervisor: CompanionSupervisorState) -> bool {
+    matches!(
+        supervisor,
+        CompanionSupervisorState::InstalledEnabled
+            | CompanionSupervisorState::InstalledDisabled
+            | CompanionSupervisorState::NotInstalled
     )
 }
 
@@ -907,6 +924,84 @@ legacy_state = "running"
         assert!(
             calls.lock().expect("calls").is_empty(),
             "unplanned companion packages must not reach supervisor actions"
+        );
+    }
+
+    #[test]
+    fn post_ready_reconcile_skips_unsupported_platform_before_start() {
+        let root = tempfile::tempdir().expect("package root");
+        write_linux_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let state_path = state_root.path().join("state.toml");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("linux"),
+            Box::new(UnsupportedRecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(&state_path),
+        );
+        manager
+            .state_store
+            .set_desired_state(
+                "test.desktop.menubar",
+                "0.1.0",
+                CompanionDesiredState::Enabled,
+                "enable",
+                None,
+            )
+            .expect("desired state");
+
+        let failures = manager.ensure_running_after_daemon_ready(std::slice::from_ref(&package));
+
+        assert!(failures.is_empty());
+        assert!(
+            calls.lock().expect("calls").is_empty(),
+            "unsupported platform must not reach supervisor start"
+        );
+        let status = manager.status_for_package(&package).expect("status");
+        assert_eq!(status.supervisor_state, "unsupported_platform");
+        assert_eq!(status.projected_state, "unsupported_platform");
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn manual_reconcile_skips_unsupported_platform_before_start() {
+        let root = tempfile::tempdir().expect("package root");
+        write_linux_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let state_path = state_root.path().join("state.toml");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("linux"),
+            Box::new(UnsupportedRecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(&state_path),
+        );
+        manager
+            .state_store
+            .set_desired_state(
+                "test.desktop.menubar",
+                "0.1.0",
+                CompanionDesiredState::Enabled,
+                "enable",
+                None,
+            )
+            .expect("desired state");
+
+        let result = manager.reconcile(&package).expect("reconcile");
+
+        assert_eq!(result["changed"], false);
+        assert!(
+            calls.lock().expect("calls").is_empty(),
+            "unsupported platform must not reach supervisor start"
+        );
+        assert_eq!(
+            result["status_after"]["projected_state"],
+            "unsupported_platform"
         );
     }
 
@@ -1168,6 +1263,10 @@ legacy_state = "running"
         calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
     }
 
+    struct UnsupportedRecordingSupervisor {
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
     impl RecordingSupervisor {
         fn record(&self, action: &'static str) {
             self.calls.lock().expect("calls").push(action);
@@ -1222,6 +1321,54 @@ legacy_state = "running"
                 observed_state: CompanionObservedState::NotRunning,
                 ..CompanionObservation::default()
             }
+        }
+    }
+
+    impl DesktopCompanionSupervisor for UnsupportedRecordingSupervisor {
+        fn platform(&self) -> &'static str {
+            "linux"
+        }
+
+        fn probe_session(&self) -> CompanionSessionStatus {
+            CompanionSessionStatus::Available
+        }
+
+        fn install(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.calls.lock().expect("calls").push("install");
+            Ok(CompanionActionReport::unchanged("unsupported platform"))
+        }
+
+        fn enable(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.calls.lock().expect("calls").push("enable");
+            Ok(CompanionActionReport::unchanged("unsupported platform"))
+        }
+
+        fn disable(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.calls.lock().expect("calls").push("disable");
+            Ok(CompanionActionReport::unchanged("unsupported platform"))
+        }
+
+        fn remove(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.calls.lock().expect("calls").push("remove");
+            Ok(CompanionActionReport::unchanged("unsupported platform"))
+        }
+
+        fn start(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.calls.lock().expect("calls").push("start");
+            Ok(CompanionActionReport::unchanged("unsupported platform"))
+        }
+
+        fn stop(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.calls.lock().expect("calls").push("stop");
+            Ok(CompanionActionReport::unchanged("unsupported platform"))
+        }
+
+        fn supervisor_state(&self, _plan: &DesktopCompanionPlan) -> CompanionSupervisorState {
+            CompanionSupervisorState::UnsupportedPlatform
+        }
+
+        fn observe(&self, _plan: &DesktopCompanionPlan) -> CompanionObservation {
+            CompanionObservation::default()
         }
     }
 
@@ -1290,6 +1437,46 @@ legacy_state = "running"
 
     fn write_companion_test_package_with_stop_policy(root: &Path, stop_policy: &str) {
         write_companion_test_package_with_executable_and_stop_policy(root, "test", stop_policy);
+    }
+
+    fn write_linux_companion_test_package(root: &Path) {
+        let executable = root.join("dist/linux/easynet-menubar");
+        std::fs::create_dir_all(executable.parent().expect("executable parent"))
+            .expect("linux executable dir");
+        std::fs::write(&executable, "test").expect("linux executable");
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "test.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/linux/easynet-menubar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["linux"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/test.desktop.menubar/status.json"
+
+[companion.linux]
+exe = "dist/linux/easynet-menubar"
+supervisor = "systemd_user"
+unit_name = "easynet-menubar.service"
+session = "graphical"
+"#,
+        )
+        .expect("manifest");
     }
 
     fn write_companion_test_package_with_executable_and_stop_policy(

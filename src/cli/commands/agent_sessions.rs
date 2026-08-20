@@ -53,6 +53,7 @@ pub fn session_path(id: &str) -> anyhow::Result<PathBuf> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Session {
     pub id: String,
     pub agent: String,
@@ -63,6 +64,7 @@ pub struct Session {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Turn {
     pub role: String, // "user" | "assistant"
     pub content: String,
@@ -227,6 +229,58 @@ mod tests {
         // refuse to construct the path at all.
         let err = Session::load("../escape").unwrap_err();
         assert!(err.to_string().contains("illegal characters"));
+    }
+
+    #[test]
+    fn load_rejects_unknown_session_fields() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(root_dir()).expect("session root");
+        fs::write(
+            session_path("strict").expect("path"),
+            r#"{
+  "id": "strict",
+  "agent": "claude",
+  "created_at": "2026-07-30T00:00:00+00:00",
+  "updated_at": "2026-07-30T00:00:00+00:00",
+  "turns": [],
+  "state_code": "J200"
+}"#,
+        )
+        .expect("write session");
+
+        let err = Session::load("strict").expect_err("session file must reject drift");
+        assert!(
+            err.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {err}"
+        );
+    }
+
+    #[test]
+    fn load_rejects_unknown_turn_fields() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(root_dir()).expect("session root");
+        fs::write(
+            session_path("strict-turn").expect("path"),
+            r#"{
+  "id": "strict-turn",
+  "agent": "claude",
+  "created_at": "2026-07-30T00:00:00+00:00",
+  "updated_at": "2026-07-30T00:00:00+00:00",
+  "turns": [{
+    "role": "user",
+    "content": "hello",
+    "at": "2026-07-30T00:00:00+00:00",
+    "legacy_subject": "user"
+  }]
+}"#,
+        )
+        .expect("write session");
+
+        let err = Session::load("strict-turn").expect_err("turn file must reject drift");
+        assert!(
+            err.to_string().contains("legacy_subject"),
+            "schema error should name the noncanonical field: {err}"
+        );
     }
 
     #[test]

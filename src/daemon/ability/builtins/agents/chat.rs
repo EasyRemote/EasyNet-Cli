@@ -83,13 +83,17 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::path::{Component, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::daemon::execution::mission::dispatch::{AgentResponse, DriverOverrides, ToolCall};
+use crate::daemon::execution::mission::adapter::DriverIsolation;
+use crate::daemon::execution::mission::dispatch::{
+    AgentExecution, AgentResponse, DriverOverrides, ToolCall, MAX_INVOCATION_TIMEOUT_MS,
+};
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
@@ -158,11 +162,10 @@ pub fn register(
     for (agent_name, entry) in &agents.agents {
         register_for_agent(reg, agent_name.clone(), entry.clone(), Arc::clone(&loaders));
     }
-    // The owner-namespaced `<agent>.discover` and `<agent>.invoke`
-    // self-bundle abilities live in their own modules — see
+    // The owner-namespaced `<agent>.discover` self-bundle ability lives in
+    // its own module — see
     // `daemon::ability::catalog::build_registry_with_services` (called after
-    // the dispatch handle is in scope, since `<agent>.invoke` needs
-    // to resolve through the live registry).
+    // the dispatch handle is in scope).
     //
     // No lookup-miss fallback is installed here. Post-boot agent
     // additions flow through HotAgentRegistrar, which materialises
@@ -246,19 +249,35 @@ pub fn register_for_agent(
         };
         match exec {
             crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
-                let h = build_host_stream_handler(stream_spec.clone());
-                let manifest = manifest
-                    .clone()
-                    .with_admission_action(
-                        crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
-                    )
-                    .expect("agent host_stream manifest accepts stream admission_action");
-                reg.register_stream_with_envelope_and_spec(
-                    &ability_name,
-                    owner.clone(),
-                    manifest,
-                    h,
-                );
+                if manifest.admission_action() == Some("invoke") {
+                    let h = build_host_rpc_handler(stream_spec.clone());
+                    let manifest = manifest
+                        .clone()
+                        .with_admission_action(
+                            crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
+                        )
+                        .expect("agent host_stream manifest accepts invoke admission_action");
+                    reg.register_rpc_with_envelope_and_spec(
+                        &ability_name,
+                        owner.clone(),
+                        manifest,
+                        h,
+                    );
+                } else {
+                    let h = build_host_stream_handler(stream_spec.clone());
+                    let manifest = manifest
+                        .clone()
+                        .with_admission_action(
+                            crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+                        )
+                        .expect("agent host_stream manifest accepts stream admission_action");
+                    reg.register_stream_with_envelope_and_spec(
+                        &ability_name,
+                        owner.clone(),
+                        manifest,
+                        h,
+                    );
+                }
             }
             _ => {
                 let h = build_agent_ability_handler(
@@ -313,6 +332,23 @@ pub(crate) fn build_host_stream_handler(
             let call_id = env.invocation_id().to_string();
             let caller = env.caller().to_string();
             crate::daemon::execution::mission::executors::host_stream::run_host_stream(
+                &spec, &args, &call_id, &caller,
+            )
+        },
+    )
+}
+
+/// Build the unary adapter for a `host_stream` transport whose manifest
+/// declares `admission_action=invoke`. The external host still uses framed
+/// transport, while the canonical runtime exposes one RPC result.
+pub(crate) fn build_host_rpc_handler(
+    spec: crate::daemon::ability::manifest::HostStreamExec,
+) -> crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope {
+    Arc::new(
+        move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
+            let call_id = env.invocation_id().to_string();
+            let caller = env.caller().to_string();
+            crate::daemon::execution::mission::executors::host_stream::run_host_stream_unary(
                 &spec, &args, &call_id, &caller,
             )
         },
@@ -386,15 +422,14 @@ pub(crate) fn build_agent_ability_handler(
                         )
                     }
                     crate::daemon::ability::manifest::AbilityExec::HostStream(_) => {
-                        // host_stream registers as a stream-mode ability
-                        // (see register_for_agent): it is dispatched
-                        // through the stream handler, never this unary RPC
-                        // adapter. Reaching here means the ability was
-                        // mis-registered as RPC — fail loudly rather than
-                        // silently collapsing the stream to one value.
+                        // host_stream is registered through either the RPC
+                        // or stream adapter according to admission_action.
+                        // This executor is only for non-host manifests, so
+                        // reaching here means the catalogue and handler
+                        // registration disagree.
                         Err(anyhow::anyhow!(
-                            "host_stream ability '{bare_ability}' reached the unary \
-                             RPC path; it must be invoked as a server-stream"
+                            "host_stream ability '{bare_ability}' reached the generic agent \
+                             executor; host transport registration is inconsistent"
                         ))
                     }
                 };
@@ -502,10 +537,9 @@ pub(crate) fn build_discover_handler_for(
     // AxonAbilityCatalog`, which we don't have here). The handler
     // re-loads agents on every call so a brand-new peer is visible
     // immediately — same hot-add story as the chat handler.
-    let provider: crate::daemon::ability::builtins::agents::discover::AgentRegistryProvider =
+    let provider: crate::daemon::ability::builtins::agents::discover::AgentDirectoryProvider =
         Arc::new(|| {
             AgentAggregateRepository::load_snapshot()
-                .map(|snapshot| snapshot.registered_agent_registry_projection())
                 .map_err(|error| anyhow::anyhow!("load discover Agent aggregate: {error:#}"))
         });
     Arc::new(move |args: Value| {
@@ -516,29 +550,6 @@ pub(crate) fn build_discover_handler_for(
             &provider,
             &dispatch_handle,
             federation_resolver.as_ref(),
-            args,
-        )
-    })
-}
-
-/// Synthesise an `<agent>.invoke` handler for a hot-added agent.
-/// Routes through the same builtin invoke entry the boot-time
-/// registration uses.
-pub(crate) fn build_invoke_handler_for(
-    agent_name: String,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) -> crate::daemon::ability::dispatch::LocalRpcHandler {
-    Arc::new(move |args: Value| {
-        let registry = AgentAggregateRepository::load_snapshot()
-            .map(|snapshot| snapshot.registered_agent_registry_projection())
-            .map_err(|error| anyhow::anyhow!("load invoke Agent aggregate: {error:#}"))?;
-        let provider: Arc<
-            dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
-        > = Arc::new(move || registry.clone());
-        crate::daemon::ability::builtins::agents::invoke::dispatch(
-            &agent_name,
-            &provider,
-            &dispatch_handle,
             args,
         )
     })
@@ -680,7 +691,11 @@ pub(crate) fn invoke_direct_with_progress(
     // has the skill for. Surfaces as a separate context section
     // so the LLM treats own-agent vs other-agent abilities with
     // appropriate precedence.
-    let other_specs = enumerate_other_agent_specs(agent_name)?;
+    let other_specs = if parsed.execution.isolation == DriverIsolation::Strict {
+        Vec::new()
+    } else {
+        enumerate_other_agent_specs(agent_name)?
+    };
     let cross_agent_hint = format_cross_agent_hint(&other_specs);
 
     // Materialise attachments to a delimited block. Failures bail
@@ -742,7 +757,17 @@ pub(crate) fn invoke_direct_with_progress(
     }
     let driver_overrides = Some(&driver_with_resume);
     let dispatch_call = || {
-        if let Some(progress_tx) = progress_tx.clone() {
+        if parsed.structured {
+            crate::daemon::execution::mission::dispatch::send_external_structured(
+                agent_name,
+                entry,
+                &parsed.prompt,
+                parsed.system_prompt.as_deref(),
+                driver_overrides,
+                &parsed.execution,
+                progress_tx.clone(),
+            )
+        } else if let Some(progress_tx) = progress_tx.clone() {
             crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
                 agent_name,
                 entry,
@@ -807,6 +832,7 @@ pub(crate) fn invoke_direct_with_progress(
         "reply": resp.content,
         "skills_loaded": skills_loaded,
         "tool_calls": tool_calls_json,
+        "timeline": resp.timeline,
         "context_used": Value::Array(context_used),
         "usage": usage_value,
         "elapsed_ms": elapsed_ms,
@@ -830,7 +856,7 @@ pub(crate) fn invoke_direct_with_progress(
 ///       both lists would be empty) but always present when
 ///       either has content.
 ///
-///   `{"type": "done", "reply": "...", "tool_calls": [...], "context_used": [...], "usage": {...}, "elapsed_ms": N, "session_id": "..."}`
+///   `{"type": "done", "reply": "...", "tool_calls": [...], "timeline": [...], "context_used": [...], "usage": {...}, "elapsed_ms": N, "session_id": "..."}`
 ///       Terminal happy-path frame. Carries the same payload the
 ///       RPC handler returns, so a subscriber that only reads the
 ///       last frame is equivalent to an RPC caller.
@@ -939,7 +965,11 @@ fn stream_handler(
     let skill_specs = enumerate_skill_specs(agent_name, entry, &parsed.skills);
     let skills_loaded: Vec<String> = skill_specs.iter().map(|s| s.name().to_string()).collect();
     let skills_hint = format_skills_hint(&skill_specs);
-    let other_specs = enumerate_other_agent_specs(agent_name)?;
+    let other_specs = if parsed.execution.isolation == DriverIsolation::Strict {
+        Vec::new()
+    } else {
+        enumerate_other_agent_specs(agent_name)?
+    };
     let cross_agent_hint = format_cross_agent_hint(&other_specs);
     // Files-store root resolved only when a URA attachment is present:
     // root_from_env creates the store directory as a side effect, which
@@ -985,6 +1015,9 @@ fn stream_handler(
     let agent_name_owned = agent_name.to_string();
     let entry_owned = entry.clone();
     let prompt_owned = parsed.prompt.clone();
+    let system_prompt_owned = parsed.system_prompt.clone();
+    let execution_owned = parsed.execution.clone();
+    let structured = parsed.structured;
     // Conversation resume on the stream path mirrors handle_invoke:
     // when the caller's session_id parses as a driver-issued thread
     // id we thread it through `DriverOverrides::resume_thread_id`,
@@ -1026,14 +1059,26 @@ fn stream_handler(
     std::thread::Builder::new()
         .name(format!("chat-stream-{agent_name}"))
         .spawn(move || {
-            let result = crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
-                &agent_name_owned,
-                &entry_owned,
-                &prompt_owned,
-                composed_context_owned.as_deref(),
-                Some(&driver_owned),
-                Some(progress_callback),
-            );
+            let result = if structured {
+                crate::daemon::execution::mission::dispatch::send_external_structured(
+                    &agent_name_owned,
+                    &entry_owned,
+                    &prompt_owned,
+                    system_prompt_owned.as_deref(),
+                    Some(&driver_owned),
+                    &execution_owned,
+                    Some(progress_callback),
+                )
+            } else {
+                crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
+                    &agent_name_owned,
+                    &entry_owned,
+                    &prompt_owned,
+                    composed_context_owned.as_deref(),
+                    Some(&driver_owned),
+                    Some(progress_callback),
+                )
+            };
             let elapsed_ms = started.elapsed().as_millis() as u64;
             let frame = match result {
                 Ok(resp) => {
@@ -1068,6 +1113,7 @@ fn stream_handler(
                         "reply": resp.content,
                         "skills_loaded": skills_loaded_for_thread,
                         "tool_calls": tool_calls_json,
+                        "timeline": resp.timeline,
                         "context_used": context_used_for_thread,
                         "usage": usage_value,
                         "elapsed_ms": elapsed_ms,
@@ -1504,12 +1550,15 @@ fn format_cross_agent_hint(
 struct ChatArgs {
     prompt: String,
     context: Option<String>,
+    system_prompt: Option<String>,
+    structured: bool,
     session_id: Option<String>,
     skills: Selection,
     context_loaders: Selection,
     driver: DriverOverrides,
     stream: bool,
     attachments: Vec<AttachmentSpec>,
+    execution: AgentExecution,
 }
 
 #[derive(Debug, Clone)]
@@ -1555,6 +1604,7 @@ impl ChatArgs {
             "chat",
             &[
                 "prompt",
+                "messages",
                 "context",
                 "session_id",
                 "skills",
@@ -1562,28 +1612,49 @@ impl ChatArgs {
                 "driver",
                 "stream",
                 "attachments",
+                "execution",
             ],
         )?;
-        let prompt = obj
-            .get("prompt")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("chat: `prompt` (string) required"))?
-            .to_string();
-        if prompt.is_empty() {
-            anyhow::bail!("chat: `prompt` must not be empty");
-        }
         let context = optional_string_field(obj, "context")?;
         let session_id = optional_string_field(obj, "session_id")?;
+        let (prompt, system_prompt, structured) = match (obj.get("prompt"), obj.get("messages")) {
+            (Some(_), Some(_)) => {
+                anyhow::bail!("chat: exactly one of `prompt` or `messages` is required")
+            }
+            (Some(value), None) => {
+                let prompt = value
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("chat: `prompt` must be a string"))?;
+                if prompt.is_empty() {
+                    anyhow::bail!("chat: `prompt` must not be empty");
+                }
+                (prompt.to_string(), None, false)
+            }
+            (None, Some(value)) => {
+                let (system, user) = parse_structured_messages(value)?;
+                (user, system, true)
+            }
+            (None, None) => {
+                anyhow::bail!("chat: exactly one of `prompt` or `messages` is required")
+            }
+        };
+        let selection_default = || {
+            if structured {
+                Selection::none()
+            } else {
+                Selection::default()
+            }
+        };
         let skills = obj
             .get("skills")
             .map(|value| Selection::parse(value, "skills"))
             .transpose()?
-            .unwrap_or_default();
+            .unwrap_or_else(selection_default);
         let context_loaders = obj
             .get("context_loaders")
             .map(|value| Selection::parse(value, "context_loaders"))
             .transpose()?
-            .unwrap_or_default();
+            .unwrap_or_else(selection_default);
         let driver = obj
             .get("driver")
             .map(parse_driver_overrides)
@@ -1591,17 +1662,150 @@ impl ChatArgs {
             .unwrap_or_default();
         let stream = optional_bool_field(obj, "stream")?.unwrap_or(false);
         let attachments = parse_attachments(obj.get("attachments"))?;
+        let execution = parse_execution(obj.get("execution"), structured)?;
+        if structured {
+            if context.is_some() {
+                anyhow::bail!("chat: `context` cannot be combined with `messages`");
+            }
+            if session_id.is_some() {
+                anyhow::bail!("chat: structured single-turn messages cannot resume `session_id`");
+            }
+            if !skills.is_none() || !context_loaders.is_none() {
+                anyhow::bail!(
+                    "chat: structured benchmark messages require skills.mode and context_loaders.mode to be `none`"
+                );
+            }
+            if !attachments.is_empty() {
+                anyhow::bail!("chat: strict structured messages do not accept attachments");
+            }
+            if execution.isolation != DriverIsolation::Strict {
+                anyhow::bail!("chat: structured messages require execution.isolation `strict`");
+            }
+            if execution.cwd.is_none() {
+                anyhow::bail!("chat: structured messages require execution.cwd");
+            }
+        }
         Ok(Self {
             prompt,
             context,
+            system_prompt,
+            structured,
             session_id,
             skills,
             context_loaders,
             driver,
             stream,
             attachments,
+            execution,
         })
     }
+}
+
+fn parse_structured_messages(value: &Value) -> anyhow::Result<(Option<String>, String)> {
+    let messages = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("chat: `messages` must be an array"))?;
+    if !(1..=2).contains(&messages.len()) {
+        anyhow::bail!(
+            "chat: `messages` supports exactly one user message with one optional preceding system message"
+        );
+    }
+    let mut parsed = Vec::with_capacity(messages.len());
+    for (index, message) in messages.iter().enumerate() {
+        let object = message
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("chat: messages[{index}] must be an object"))?;
+        reject_unknown_fields(
+            object,
+            &format!("chat: messages[{index}]"),
+            &["role", "content"],
+        )?;
+        let role = object
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("chat: messages[{index}].role must be a string"))?;
+        let content = object
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("chat: messages[{index}].content must be a string"))?;
+        if content.is_empty() {
+            anyhow::bail!("chat: messages[{index}].content must not be empty");
+        }
+        parsed.push((role, content));
+    }
+    match parsed.as_slice() {
+        [("user", user)] => Ok((None, (*user).to_string())),
+        [("system", system), ("user", user)] => {
+            Ok((Some((*system).to_string()), (*user).to_string()))
+        }
+        _ => anyhow::bail!(
+            "chat: `messages` must be `[user]` or `[system, user]`; assistant history and multi-turn input are not supported"
+        ),
+    }
+}
+
+fn parse_execution(value: Option<&Value>, structured: bool) -> anyhow::Result<AgentExecution> {
+    let Some(value) = value else {
+        return Ok(AgentExecution {
+            isolation: if structured {
+                DriverIsolation::Strict
+            } else {
+                DriverIsolation::Agent
+            },
+            ..AgentExecution::default()
+        });
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("chat: `execution` must be an object"))?;
+    reject_unknown_fields(
+        object,
+        "chat: execution",
+        &["cwd", "timeout_ms", "isolation"],
+    )?;
+    let cwd = optional_string_field(object, "cwd")?.map(PathBuf::from);
+    if let Some(path) = cwd.as_deref() {
+        if path.as_os_str().is_empty()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            anyhow::bail!(
+                "chat: execution.cwd must be a non-empty agent-root-relative descendant path"
+            );
+        }
+    }
+    let timeout = match object.get("timeout_ms") {
+        None => None,
+        Some(Value::Number(number)) => {
+            let value = number.as_u64().ok_or_else(|| {
+                anyhow::anyhow!("chat: execution.timeout_ms must be a positive integer")
+            })?;
+            if value == 0 || value > MAX_INVOCATION_TIMEOUT_MS {
+                anyhow::bail!(
+                    "chat: execution.timeout_ms must be between 1 and {MAX_INVOCATION_TIMEOUT_MS}"
+                );
+            }
+            Some(Duration::from_millis(value))
+        }
+        Some(_) => {
+            anyhow::bail!("chat: execution.timeout_ms must be a positive integer")
+        }
+    };
+    let isolation = match object.get("isolation").and_then(Value::as_str) {
+        None if structured => DriverIsolation::Strict,
+        None => DriverIsolation::Agent,
+        Some("agent") => DriverIsolation::Agent,
+        Some("strict") => DriverIsolation::Strict,
+        Some(other) => anyhow::bail!(
+            "chat: invalid execution.isolation {other:?}; expected `agent` or `strict`"
+        ),
+    };
+    Ok(AgentExecution {
+        cwd,
+        timeout,
+        isolation,
+    })
 }
 
 fn reject_unknown_fields(
@@ -1770,6 +1974,18 @@ struct Selection {
 }
 
 impl Selection {
+    fn none() -> Self {
+        Self {
+            mode: SelectionMode::None,
+            include: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+
+    fn is_none(&self) -> bool {
+        self.mode == SelectionMode::None && self.include.is_empty() && self.exclude.is_empty()
+    }
+
     fn parse(value: &Value, field: &'static str) -> anyhow::Result<Self> {
         let obj = value
             .as_object()
@@ -2038,16 +2254,37 @@ mod tests {
     //! agent directories and would otherwise spawn subprocesses.
 
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentRegistry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::AgentRegistry;
 
     fn entry() -> AgentEntry {
-        AgentEntry::new(AgentType::ClaudeCode, None)
+        AgentEntry::new(RuntimeKind::ClaudeCode, None)
+    }
+
+    fn materialized_entry(name: &str) -> AgentEntry {
+        let root = crate::daemon::persistence::config::agents_root().join(name);
+        std::fs::create_dir_all(root.join("abilities")).expect("agent fixture root");
+        let spec = crate::core::agent::spec::AgentSpec::new(name, RuntimeKind::ClaudeCode);
+        std::fs::write(
+            root.join("agent.toml"),
+            spec.to_toml_string().expect("canonical agent fixture spec"),
+        )
+        .expect("write canonical agent fixture spec");
+        let mut entry = entry();
+        entry.root_path = Some(root);
+        entry
     }
 
     fn agent_chat_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_test_metadata_for_device_authority(
+        let authority = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             "easynet:///r/test/device/agent-chat",
+            [
+                crate::core::ura::agent_ura("test", "local", "alice"),
+                crate::core::ura::agent_ura("test", "local", "bob"),
+            ],
         )
+        .expect("chat fixture hosted Agent authority");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority)
     }
 
     #[test]
@@ -2057,8 +2294,12 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = agent_chat_test_catalog();
         let mut agents = AgentRegistry::default();
-        agents.agents.insert("alice".into(), entry());
-        agents.agents.insert("bob".into(), entry());
+        agents
+            .agents
+            .insert("alice".into(), materialized_entry("alice"));
+        agents
+            .agents
+            .insert("bob".into(), materialized_entry("bob"));
         register(
             &mut reg,
             &agents,
@@ -2067,6 +2308,11 @@ mod tests {
         );
         assert!(reg.get_rpc("alice.chat").is_some());
         assert!(reg.get_rpc("bob.chat").is_some());
+        let alice_chat = reg
+            .control_plane_record_for_mode("alice.chat", crate::daemon::ability::CallMode::Rpc)
+            .expect("chat descriptor lookup is unambiguous")
+            .expect("chat registration publishes a descriptor");
+        assert_eq!(alice_chat.descriptor().metadata["exposure"], "task");
         // Stream handler registered too — same name, different mode.
         assert!(reg.get_stream("alice.chat").is_some());
         assert!(reg.get_stream("bob.chat").is_some());
@@ -2087,7 +2333,7 @@ mod tests {
         std::fs::create_dir_all(&abilities_dir).expect("abilities dir");
         std::fs::write(
             root.join("agent.toml"),
-            "name = \"alice\"\nruntime = \"claude-code\"\n",
+            "schema_version = \"1\"\nname = \"alice\"\nruntime = \"claude-code\"\n",
         )
         .expect("agent.toml");
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
@@ -2234,7 +2480,7 @@ mod tests {
         // `alice/abilities/*.toml` into the real `~/.easynet` between
         // thread switches would inject extra skills and bump the
         // snapshot length to 2. Scoping HOME to a private tmpdir
-        // makes this test see the empty fallback every time, which
+        // makes this test see the empty baseline every time, which
         // is what the assertion expects.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = entry();
@@ -2261,6 +2507,119 @@ mod tests {
         // Defaults: skills auto, context_loaders auto.
         assert_eq!(args.skills.mode, SelectionMode::Auto);
         assert_eq!(args.context_loaders.mode, SelectionMode::Auto);
+        assert!(!args.structured);
+        assert_eq!(args.execution.isolation, DriverIsolation::Agent);
+    }
+
+    #[test]
+    fn parse_accepts_strict_structured_system_and_user_messages() {
+        let args = ChatArgs::parse(&json!({
+            "messages": [
+                {"role": "system", "content": "translate SIGNAL"},
+                {"role": "user", "content": "count cases"}
+            ],
+            "execution": {
+                "cwd": "benchmark/run-1",
+                "timeout_ms": 300000
+            }
+        }))
+        .unwrap();
+        assert!(args.structured);
+        assert_eq!(args.system_prompt.as_deref(), Some("translate SIGNAL"));
+        assert_eq!(args.prompt, "count cases");
+        assert_eq!(args.execution.isolation, DriverIsolation::Strict);
+        assert_eq!(
+            args.execution.cwd.as_deref(),
+            Some(std::path::Path::new("benchmark/run-1"))
+        );
+        assert_eq!(args.execution.timeout, Some(Duration::from_secs(300)));
+        assert!(args.skills.is_none());
+        assert!(args.context_loaders.is_none());
+    }
+
+    #[test]
+    fn parse_accepts_strict_structured_user_only_message() {
+        let args = ChatArgs::parse(&json!({
+            "messages": [{"role": "user", "content": "count cases"}],
+            "execution": {"cwd": "benchmark/run-2"}
+        }))
+        .unwrap();
+        assert!(args.system_prompt.is_none());
+        assert_eq!(args.prompt, "count cases");
+    }
+
+    #[test]
+    fn parse_rejects_prompt_and_messages_together() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "prompt-shape",
+            "messages": [{"role": "user", "content": "structured"}],
+            "execution": {"cwd": "benchmark/run"}
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("exactly one"));
+    }
+
+    #[test]
+    fn parse_rejects_structured_assistant_or_multiturn_history() {
+        for messages in [
+            json!([
+                {"role": "assistant", "content": "prior"},
+                {"role": "user", "content": "next"}
+            ]),
+            json!([
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "first"},
+                {"role": "user", "content": "second"}
+            ]),
+        ] {
+            let err = ChatArgs::parse(&json!({
+                "messages": messages,
+                "execution": {"cwd": "benchmark/run"}
+            }))
+            .unwrap_err();
+            let message = format!("{err}");
+            assert!(message.contains("messages"));
+        }
+    }
+
+    #[test]
+    fn parse_rejects_structured_ambient_context_surfaces() {
+        for extra in [
+            json!({"context": "ambient"}),
+            json!({"session_id": "chat-existing"}),
+            json!({"attachments": [{"path": "secret"}]}),
+            json!({"skills": {"mode": "auto"}}),
+            json!({"context_loaders": {"mode": "explicit", "include": ["memory"]}}),
+            json!({"execution": {"cwd": "benchmark/run", "isolation": "agent"}}),
+        ] {
+            let mut request = json!({
+                "messages": [{"role": "user", "content": "case"}],
+                "execution": {"cwd": "benchmark/run"}
+            });
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(ChatArgs::parse(&request).is_err(), "request={request}");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unconfined_or_unbounded_execution() {
+        for execution in [
+            json!({"cwd": "/tmp/escape"}),
+            json!({"cwd": "../escape"}),
+            json!({"cwd": "benchmark/run", "timeout_ms": 0}),
+            json!({"cwd": "benchmark/run", "timeout_ms": MAX_INVOCATION_TIMEOUT_MS + 1}),
+        ] {
+            let err = ChatArgs::parse(&json!({
+                "messages": [{"role": "user", "content": "case"}],
+                "execution": execution
+            }))
+            .unwrap_err();
+            let message = format!("{err}");
+            assert!(message.contains("execution"), "{message}");
+        }
     }
 
     #[test]
@@ -3340,10 +3699,7 @@ mod tests {
         // Build the handler the same way the registration paths do:
         // boot-time pre-registration and HotAgentRegistrar both call
         // build_agent_ability_handler.
-        let mut entry = AgentEntry::new(
-            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
-            None,
-        );
+        let mut entry = AgentEntry::new(crate::core::agent::spec::RuntimeKind::ClaudeCode, None);
         // `root_path` is the field that `manifests_for` (and
         // `abilities_for`) read to find the on-disk abilities/
         // directory. Without it the helpers fall back to the

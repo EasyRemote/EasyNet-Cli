@@ -86,7 +86,30 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.invocation_id, "inv-1")
         self.assertEqual(error.details["abi_symbol"], "ERR_PERMISSION_DENIED")
 
-    def test_from_json_canonicalizes_route_owner_offline(self) -> None:
+    def test_from_json_canonicalizes_typed_owner_offline(self) -> None:
+        error = SDKError.from_json(
+            b"""{
+                "code": "DESCRIPTOR_OWNER_OFFLINE",
+                "stage": "runtime",
+                "message": "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
+                "retry": "safe",
+                "source": "c_abi",
+                "invocation_id": null,
+                "receipt_ura": null,
+                "details": {}
+            }"""
+        )
+
+        self.assertIsNotNone(error)
+        assert error is not None
+        self.assertEqual(error.code, ErrorCode.DESCRIPTOR_OWNER_OFFLINE)
+        self.assertEqual(
+            error.message,
+            "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
+        )
+        self.assertEqual(error.error_class, ErrorClass.ROUTING)
+
+    def test_from_json_does_not_infer_owner_offline_from_route_text(self) -> None:
         error = SDKError.from_json(
             b"""{
                 "code": "ABILITY_NOT_FOUND",
@@ -102,11 +125,9 @@ class ErrorTests(unittest.TestCase):
 
         self.assertIsNotNone(error)
         assert error is not None
-        self.assertEqual(error.code, ErrorCode.DESCRIPTOR_OWNER_OFFLINE)
-        self.assertEqual(
-            error.message,
-            "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
-        )
+        self.assertEqual(error.code, ErrorCode.ABILITY_NOT_FOUND)
+        self.assertIn("ROUTE_NEGATIVE", error.message)
+        self.assertIn("owner is not online", error.message)
         self.assertEqual(error.error_class, ErrorClass.ROUTING)
 
     def test_normalize_error_code_accepts_only_canonical_schema_values(self) -> None:

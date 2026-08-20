@@ -111,7 +111,7 @@ fn required_user_ura(raw: &str) -> Result<String, Status> {
 mod tests {
     use super::*;
     use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustReader;
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use base64::prelude::*;
     use serde_json::json;
@@ -130,7 +130,7 @@ mod tests {
                 .append_agent(TrustedAgent {
                     agent_ura: "easynet:///r/realm/user/alice".to_string(),
                     public_key_b64: b64_pubkey(seed),
-                    role: TrustedAgentRole::User,
+                    role: TrustAnchorRole::User,
                     added_at_unix_ms: 1_700_000_000_000 + u64::from(seed),
                     origin_realm: None,
                     hub_endpoint: None,
@@ -172,7 +172,7 @@ mod tests {
                 .append_agent(TrustedAgent {
                     agent_ura: user_ura.to_string(),
                     public_key_b64: key.to_string(),
-                    role: TrustedAgentRole::User,
+                    role: TrustAnchorRole::User,
                     added_at_unix_ms: 1_700_000_000_000,
                     origin_realm: None,
                     hub_endpoint: None,

@@ -17,9 +17,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::core::agent::id::{AgentId, DEFAULT_TENANT};
+use crate::core::agent::spec::RuntimeKind;
 
 use super::agent_registry::{self, AgentEntry, AgentRegistry};
-use super::local_agents::{self, HostedAgentEntry, LocalAgentsFile};
+use super::local_agents::{
+    self, HostedAgentEntry, LocalAgentsFile, LocalHostedAgentIdentityAggregate,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AgentAggregateSnapshotLoadError {
@@ -151,8 +154,8 @@ impl AgentAggregateSnapshot {
         Ok(registered)
     }
 
-    pub(crate) fn host_device_agent_ura(&self) -> &str {
-        &self.local_agents.host_device_agent_ura
+    pub(crate) fn host_device_ura(&self) -> &str {
+        &self.local_agents.host_device_ura
     }
 
     #[cfg(test)]
@@ -243,7 +246,7 @@ impl AgentAggregateSnapshot {
     pub(crate) fn hosted_agent_placements(
         &self,
     ) -> Result<AgentHostedPlacementProjection, HostedAgentIdentityProjectionError> {
-        let host_device_ura = self.local_agents.host_device_agent_ura.trim();
+        let host_device_ura = self.local_agents.host_device_ura.trim();
         if host_device_ura.is_empty() {
             return Ok(AgentHostedPlacementProjection::default());
         }
@@ -395,13 +398,11 @@ pub(crate) enum AgentSkillLayout {
 }
 
 impl AgentSkillLayout {
-    fn from_agent_type(agent_type: agent_registry::AgentType) -> Self {
+    fn from_agent_type(agent_type: RuntimeKind) -> Self {
         match agent_type {
-            agent_registry::AgentType::ClaudeCode => Self::ClaudeCode,
-            agent_registry::AgentType::Codex | agent_registry::AgentType::CodexAppServer => {
-                Self::Codex
-            }
-            agent_registry::AgentType::External => Self::External,
+            RuntimeKind::ClaudeCode => Self::ClaudeCode,
+            RuntimeKind::Codex | RuntimeKind::CodexAppServer => Self::Codex,
+            RuntimeKind::External => Self::External,
         }
     }
 }
@@ -481,12 +482,13 @@ impl AgentHostedIdentitySnapshot {
         }
     }
 
-    pub(crate) fn hosted_agent_authority_roots(&self) -> Vec<String> {
-        self.local_agents
-            .hosted_agents
+    pub(crate) fn hosted_agent_authority_roots(&self) -> anyhow::Result<Vec<String>> {
+        let aggregate = LocalHostedAgentIdentityAggregate::validate(&self.local_agents)?;
+        Ok(aggregate
+            .hosted_agents()
             .iter()
             .map(|entry| entry.agent_ura.clone())
-            .collect()
+            .collect())
     }
 
     pub(crate) fn hosted_advertise_entries(
@@ -502,20 +504,11 @@ impl AgentHostedIdentitySnapshot {
             if agent_ura.is_empty() || agent_ura.contains("<unjoined>") {
                 continue;
             }
-            if seen.insert(agent_ura.to_string()) {
-                entries.push(AgentHostedAdvertiseEntry::new(agent_ura));
+            if !hosted_agent_belongs_to_runtime_user(agent_ura, realm, user_segment) {
+                continue;
             }
-        }
-
-        if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
-            for synthetic in ["pages", "files"] {
-                let agent_ura = crate::core::ura::agent_ura(realm, user_segment, synthetic);
-                if seen.insert(agent_ura.clone()) {
-                    entries.push(AgentHostedAdvertiseEntry {
-                        agent_ura,
-                        short_label: format!("{user_segment}.{synthetic}"),
-                    });
-                }
+            if seen.insert(agent_ura.to_string()) {
+                entries.push(AgentHostedAdvertiseEntry::configured(agent_ura));
             }
         }
 
@@ -530,7 +523,7 @@ pub(crate) struct AgentHostedAdvertiseEntry {
 }
 
 impl AgentHostedAdvertiseEntry {
-    fn new(agent_ura: &str) -> Self {
+    fn configured(agent_ura: &str) -> Self {
         Self {
             agent_ura: agent_ura.to_string(),
             short_label: hosted_agent_short_label(agent_ura),
@@ -579,21 +572,14 @@ impl AgentHostedSkillOwnerProjection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentHostDescriptorIdentityProjection {
-    host_device_agent_ura: Option<String>,
-    consent_agent_ura: Option<String>,
-    mcp_agent_ura: Option<String>,
+    host_device_ura: Option<String>,
     llm_agent_uras: Vec<(String, String)>,
 }
 
 impl AgentHostDescriptorIdentityProjection {
     fn from_local_agents(local_agents: &LocalAgentsFile) -> Self {
         Self {
-            host_device_agent_ura: trimmed_nonempty(&local_agents.host_device_agent_ura)
-                .map(str::to_string),
-            consent_agent_ura: hosted_profile_agent_ura(local_agents, "consent", "default")
-                .map(str::to_string),
-            mcp_agent_ura: hosted_profile_agent_ura(local_agents, "mcp", "default")
-                .map(str::to_string),
+            host_device_ura: trimmed_nonempty(&local_agents.host_device_ura).map(str::to_string),
             llm_agent_uras: local_agents
                 .hosted_agents
                 .iter()
@@ -603,16 +589,8 @@ impl AgentHostDescriptorIdentityProjection {
         }
     }
 
-    pub(crate) fn host_device_agent_ura(&self) -> Option<&str> {
-        self.host_device_agent_ura.as_deref()
-    }
-
-    pub(crate) fn consent_agent_ura(&self) -> Option<&str> {
-        self.consent_agent_ura.as_deref()
-    }
-
-    pub(crate) fn mcp_agent_ura(&self) -> Option<&str> {
-        self.mcp_agent_ura.as_deref()
+    pub(crate) fn host_device_ura(&self) -> Option<&str> {
+        self.host_device_ura.as_deref()
     }
 
     pub(crate) fn llm_agent_uras(&self) -> &[(String, String)] {
@@ -622,26 +600,25 @@ impl AgentHostDescriptorIdentityProjection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentHostedIdentityStatus {
-    host_device_agent_ura: Option<String>,
+    host_device_ura: Option<String>,
     hosted_agent_count: usize,
 }
 
 impl AgentHostedIdentityStatus {
     fn from_local_agents(local_agents: &LocalAgentsFile) -> Self {
-        let host_device_agent_ura = local_agents.host_device_agent_ura.trim();
+        let host_device_ura = local_agents.host_device_ura.trim();
         Self {
-            host_device_agent_ura: (!host_device_agent_ura.is_empty())
-                .then(|| host_device_agent_ura.to_string()),
+            host_device_ura: (!host_device_ura.is_empty()).then(|| host_device_ura.to_string()),
             hosted_agent_count: local_agents.hosted_agents.len(),
         }
     }
 
     pub(crate) fn is_joined(&self) -> bool {
-        self.host_device_agent_ura.is_some()
+        self.host_device_ura.is_some()
     }
 
-    pub(crate) fn host_device_agent_ura(&self) -> Option<&str> {
-        self.host_device_agent_ura.as_deref()
+    pub(crate) fn host_device_ura(&self) -> Option<&str> {
+        self.host_device_ura.as_deref()
     }
 
     pub(crate) fn hosted_agent_count(&self) -> usize {
@@ -673,22 +650,6 @@ fn hosted_llm_agent_identity<'a>(
     HostedLlmAgentIdentity::Present(identity)
 }
 
-fn hosted_profile_agent_ura<'a>(
-    local_agents: &'a LocalAgentsFile,
-    profile: &str,
-    name: &str,
-) -> Option<&'a str> {
-    let mut matches = local_agents
-        .hosted_agents
-        .iter()
-        .filter(|entry| entry.profile == profile && entry.name == name);
-    let identity = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
-    Some(identity.agent_ura.as_str())
-}
-
 fn hosted_agent_short_label(agent_ura: &str) -> String {
     crate::core::ura::parse_ura(agent_ura)
         .ok()
@@ -699,6 +660,24 @@ fn hosted_agent_short_label(agent_ura: &str) -> String {
                 .map(|(user_id, agent_id)| format!("{user_id}.{agent_id}"))
         })
         .unwrap_or_else(|| agent_ura.to_string())
+}
+
+fn hosted_agent_belongs_to_runtime_user(agent_ura: &str, realm: &str, user_segment: &str) -> bool {
+    if realm.is_empty() || user_segment.is_empty() {
+        return false;
+    }
+    let Ok(parsed) = crate::core::ura::parse_ura(agent_ura) else {
+        return false;
+    };
+    if parsed.kind != crate::core::ura::URAKind::Agent || parsed.realm != realm {
+        return false;
+    }
+    if parsed.device_agent_ids().is_some() {
+        return false;
+    }
+    parsed
+        .agent_ids()
+        .is_some_and(|(owner_user_segment, _)| owner_user_segment == user_segment)
 }
 
 fn trimmed_nonempty(value: &str) -> Option<&str> {
@@ -936,15 +915,16 @@ impl AgentAggregateRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_registry::{self, AgentEntry, AgentType};
+    use super::agent_registry::{self, AgentEntry};
     use super::*;
+    use crate::core::agent::spec::RuntimeKind;
 
     fn hosted_agent(profile: &str, name: &str, agent_ura: &str) -> HostedAgentEntry {
         HostedAgentEntry {
             profile: profile.to_string(),
             name: name.to_string(),
             agent_ura: agent_ura.to_string(),
-            signing_authority: "hosted_by:easynet:///r/acme/agent/device".to_string(),
+            signing_authority: "hosted_by:easynet:///r/acme/device/dev-1".to_string(),
             first_seen_at: "2026-07-16T00:00:00Z".to_string(),
         }
     }
@@ -953,7 +933,7 @@ mod tests {
         AgentAggregateSnapshot::new(
             AgentRegistry::default(),
             LocalAgentsFile {
-                host_device_agent_ura: "easynet:///r/acme/agent/device".to_string(),
+                host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
                 hosted_agents: entries,
             },
         )
@@ -964,7 +944,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/claude".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
@@ -1050,11 +1030,11 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/claude".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         registry.agents.insert(
             "research/codex".to_string(),
-            AgentEntry::new(AgentType::Codex, None),
+            AgentEntry::new(RuntimeKind::Codex, None),
         );
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
@@ -1073,7 +1053,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "../alice".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
@@ -1094,7 +1074,7 @@ mod tests {
     #[test]
     fn registered_agent_workspace_projects_root_and_skill_layout() {
         let root = std::env::temp_dir().join("easynet-agent-owner");
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         entry.root_path = Some(root.clone());
         let mut registry = AgentRegistry::default();
         registry.agents.insert("default/claude".to_string(), entry);
@@ -1108,7 +1088,7 @@ mod tests {
         assert_eq!(owner.skill_layout(), AgentSkillLayout::ClaudeCode);
 
         let codex_root = std::env::temp_dir().join("easynet-codex-agent-owner");
-        let mut codex_entry = AgentEntry::new(AgentType::CodexAppServer, None);
+        let mut codex_entry = AgentEntry::new(RuntimeKind::CodexAppServer, None);
         codex_entry.root_path = Some(codex_root);
         let mut registry = AgentRegistry::default();
         registry
@@ -1124,7 +1104,7 @@ mod tests {
     #[test]
     fn registered_agent_runtime_projection_preserves_optional_forget_semantics() {
         let root = std::env::temp_dir().join("easynet-runtime-agent");
-        let mut entry = AgentEntry::new(AgentType::Codex, None);
+        let mut entry = AgentEntry::new(RuntimeKind::Codex, None);
         entry.root_path = Some(root.clone());
         let mut registry = AgentRegistry::default();
         registry
@@ -1151,7 +1131,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/codex".to_string(),
-            AgentEntry::new(AgentType::Codex, None),
+            AgentEntry::new(RuntimeKind::Codex, None),
         );
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
@@ -1173,7 +1153,7 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let root = crate::daemon::persistence::config::agents_root().join("claude");
         std::fs::create_dir_all(&root).expect("create registered workspace");
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         entry.root_path = Some(root.clone());
         let mut registry = AgentRegistry::default();
         registry.agents.insert("default/claude".to_string(), entry);
@@ -1227,7 +1207,7 @@ mod tests {
         assert_eq!(identity.agent_ura, "easynet:///r/acme/agent/u1.claude");
         assert_eq!(
             identity.signing_authority,
-            "hosted_by:easynet:///r/acme/agent/device"
+            "hosted_by:easynet:///r/acme/device/dev-1"
         );
     }
 
@@ -1256,7 +1236,7 @@ mod tests {
         let snapshot = AgentAggregateSnapshot::new(
             AgentRegistry::default(),
             LocalAgentsFile {
-                host_device_agent_ura: "  easynet:///r/acme/device/dev-1  ".to_string(),
+                host_device_ura: "  easynet:///r/acme/device/dev-1  ".to_string(),
                 hosted_agents: vec![
                     hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
                     hosted_agent("mcp", "server", "easynet:///r/acme/agent/u1.server"),
@@ -1268,7 +1248,7 @@ mod tests {
 
         assert!(status.is_joined());
         assert_eq!(
-            status.host_device_agent_ura(),
+            status.host_device_ura(),
             Some("easynet:///r/acme/device/dev-1")
         );
         assert_eq!(status.hosted_agent_count(), 2);
@@ -1279,7 +1259,7 @@ mod tests {
         let snapshot = AgentAggregateSnapshot::new(
             AgentRegistry::default(),
             LocalAgentsFile {
-                host_device_agent_ura: "   ".to_string(),
+                host_device_ura: "   ".to_string(),
                 hosted_agents: vec![hosted_agent(
                     "llm",
                     "claude",
@@ -1291,14 +1271,14 @@ mod tests {
         let status = snapshot.hosted_identity_status();
 
         assert!(!status.is_joined());
-        assert_eq!(status.host_device_agent_ura(), None);
+        assert_eq!(status.host_device_ura(), None);
         assert_eq!(status.hosted_agent_count(), 1);
     }
 
     #[test]
     fn hosted_identity_snapshot_resolves_llm_owner_ura_without_registry() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![
                 hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
                 hosted_agent("mcp", "claude", "easynet:///r/acme/agent/u1.mcp"),
@@ -1343,7 +1323,7 @@ mod tests {
     #[test]
     fn hosted_identity_snapshot_rejects_ambiguous_llm_owner_ura() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![
                 hosted_agent("llm", "same", "easynet:///r/acme/agent/u1.same"),
                 hosted_agent("llm", "same", "easynet:///r/acme/agent/u1.same2"),
@@ -1356,7 +1336,7 @@ mod tests {
     #[test]
     fn hosted_agent_authority_roots_preserve_hosted_identity_order() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![
                 hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
                 hosted_agent("mcp", "default", "easynet:///r/acme/agent/u1.mcp"),
@@ -1364,7 +1344,7 @@ mod tests {
         });
 
         assert_eq!(
-            snapshot.hosted_agent_authority_roots(),
+            snapshot.hosted_agent_authority_roots().unwrap(),
             vec![
                 "easynet:///r/acme/agent/u1.claude".to_string(),
                 "easynet:///r/acme/agent/u1.mcp".to_string(),
@@ -1373,12 +1353,43 @@ mod tests {
     }
 
     #[test]
-    fn hosted_advertise_entries_project_persisted_and_synthetic_agents() {
+    fn hosted_agent_authority_roots_reject_raw_polluted_identity_rows() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            hosted_agents: vec![HostedAgentEntry {
+                profile: "llm".to_string(),
+                name: "claude".to_string(),
+                agent_ura: "easynet:///r/other/agent/u1.claude".to_string(),
+                signing_authority: "hosted_by:easynet:///r/acme/device/dev-1".to_string(),
+                first_seen_at: "2026-07-16T00:00:00Z".to_string(),
+            }],
+        });
+
+        let error = snapshot
+            .hosted_agent_authority_roots()
+            .expect_err("authority roots must consume validated aggregate rows");
+
+        assert!(
+            error.to_string().contains("does not match host realm"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn hosted_advertise_entries_project_only_persisted_configured_agents() {
+        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
+            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![
                 hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
                 hosted_agent("llm", "duplicate", "easynet:///r/acme/agent/u1.claude"),
+                hosted_agent("llm", "other-user", "easynet:///r/acme/agent/u2.other"),
+                hosted_agent("llm", "other-realm", "easynet:///r/other/agent/u1.other"),
+                hosted_agent(
+                    "mcp",
+                    "device-sponsored",
+                    "easynet:///r/acme/agent/device.dev-1.mcp-default",
+                ),
+                hosted_agent("llm", "device", "easynet:///r/acme/device/dev-2"),
                 hosted_agent("llm", "pending", "<unjoined>"),
                 hosted_agent("mcp", "blank", "   "),
             ],
@@ -1392,18 +1403,14 @@ mod tests {
 
         assert_eq!(
             rows,
-            vec![
-                ("easynet:///r/acme/agent/u1.claude", "u1.claude"),
-                ("easynet:///r/acme/agent/u1.pages", "u1.pages"),
-                ("easynet:///r/acme/agent/u1.files", "u1.files"),
-            ]
+            vec![("easynet:///r/acme/agent/u1.claude", "u1.claude")]
         );
     }
 
     #[test]
-    fn hosted_advertise_entries_skip_synthetic_self_and_blank_context() {
+    fn hosted_advertise_entries_require_exact_runtime_user_context() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![hosted_agent(
                 "llm",
                 "claude",
@@ -1411,17 +1418,16 @@ mod tests {
             )],
         });
 
-        assert_eq!(snapshot.hosted_advertise_entries("acme", "self").len(), 1);
-        assert_eq!(snapshot.hosted_advertise_entries("", "u1").len(), 1);
-        assert_eq!(snapshot.hosted_advertise_entries("acme", "").len(), 1);
+        assert!(snapshot.hosted_advertise_entries("acme", "self").is_empty());
+        assert!(snapshot.hosted_advertise_entries("", "u1").is_empty());
+        assert!(snapshot.hosted_advertise_entries("acme", "").is_empty());
     }
 
     #[test]
     fn hosted_identity_snapshot_projects_host_descriptor_owners() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_agent_ura: "  easynet:///r/acme/device/dev-1  ".to_string(),
+            host_device_ura: "  easynet:///r/acme/device/dev-1  ".to_string(),
             hosted_agents: vec![
-                hosted_agent("consent", "default", "easynet:///r/acme/agent/u1.consent"),
                 hosted_agent("mcp", "default", "easynet:///r/acme/agent/u1.mcp"),
                 hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
                 hosted_agent("llm", "codex", "easynet:///r/acme/agent/u1.codex"),
@@ -1431,16 +1437,8 @@ mod tests {
         let projection = snapshot.host_descriptor_identity_projection();
 
         assert_eq!(
-            projection.host_device_agent_ura(),
+            projection.host_device_ura(),
             Some("easynet:///r/acme/device/dev-1")
-        );
-        assert_eq!(
-            projection.consent_agent_ura(),
-            Some("easynet:///r/acme/agent/u1.consent")
-        );
-        assert_eq!(
-            projection.mcp_agent_ura(),
-            Some("easynet:///r/acme/agent/u1.mcp")
         );
         assert_eq!(
             projection.llm_agent_uras(),
@@ -1455,23 +1453,6 @@ mod tests {
                 ),
             ]
         );
-    }
-
-    #[test]
-    fn host_descriptor_profile_owner_requires_unambiguous_default_identity() {
-        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
-            hosted_agents: vec![
-                hosted_agent("consent", "default", "easynet:///r/acme/agent/u1.consent"),
-                hosted_agent("consent", "default", "easynet:///r/acme/agent/u1.consent2"),
-                hosted_agent("mcp", "other", "easynet:///r/acme/agent/u1.mcp"),
-            ],
-        });
-
-        let projection = snapshot.host_descriptor_identity_projection();
-
-        assert_eq!(projection.consent_agent_ura(), None);
-        assert_eq!(projection.mcp_agent_ura(), None);
     }
 
     #[test]
@@ -1519,16 +1500,16 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/claude".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         registry.agents.insert(
             "default/codex".to_string(),
-            AgentEntry::new(AgentType::Codex, None),
+            AgentEntry::new(RuntimeKind::Codex, None),
         );
         let snapshot = AgentAggregateSnapshot::new(
             registry,
             LocalAgentsFile {
-                host_device_agent_ura: "easynet:///r/acme/agent/device".to_string(),
+                host_device_ura: "easynet:///r/acme/agent/device".to_string(),
                 hosted_agents: vec![hosted_agent(
                     "llm",
                     "claude",
@@ -1563,14 +1544,14 @@ mod tests {
             ),
             (
                 "non-Agent hosted identity",
-                hosted_agent("consent", "default", "easynet:///r/acme/device/dev-1"),
+                hosted_agent("llm", "bad", "easynet:///r/acme/device/dev-1"),
                 "non-Agent URA",
             ),
         ] {
             let snapshot = AgentAggregateSnapshot::new(
                 AgentRegistry::default(),
                 LocalAgentsFile {
-                    host_device_agent_ura: "easynet:///r/acme/agent/device".to_string(),
+                    host_device_ura: "easynet:///r/acme/agent/device".to_string(),
                     hosted_agents: vec![entry],
                 },
             );
@@ -1589,12 +1570,12 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "../alice".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
         let snapshot = AgentAggregateSnapshot::new(
             registry,
             LocalAgentsFile {
-                host_device_agent_ura: "easynet:///r/acme/agent/device".to_string(),
+                host_device_ura: "easynet:///r/acme/agent/device".to_string(),
                 hosted_agents: vec![hosted_agent(
                     "llm",
                     "claude",
@@ -1622,7 +1603,7 @@ mod tests {
         let snapshot = AgentAggregateSnapshot::new(
             AgentRegistry::default(),
             LocalAgentsFile {
-                host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+                host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
                 hosted_agents: vec![hosted_agent(
                     "llm",
                     "claude",
@@ -1650,7 +1631,7 @@ mod tests {
         let projection = AgentAggregateSnapshot::new(
             AgentRegistry::default(),
             LocalAgentsFile {
-                host_device_agent_ura: String::new(),
+                host_device_ura: String::new(),
                 hosted_agents: vec![hosted_agent(
                     "llm",
                     "claude",
@@ -1674,14 +1655,14 @@ mod tests {
             ),
             (
                 "non-Agent hosted identity",
-                hosted_agent("consent", "default", "easynet:///r/acme/device/dev-1"),
+                hosted_agent("mcp", "default", "easynet:///r/acme/device/dev-1"),
                 "non-Agent URA",
             ),
         ] {
             let error = AgentAggregateSnapshot::new(
                 AgentRegistry::default(),
                 LocalAgentsFile {
-                    host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+                    host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
                     hosted_agents: vec![entry],
                 },
             )

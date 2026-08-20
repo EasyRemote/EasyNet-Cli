@@ -3,6 +3,7 @@ import json
 import pytest
 
 import easynet_sdk
+import easynet_sdk.environment as environment_module
 
 
 def test_runtime_identity_projection_reads_credentials(tmp_path):
@@ -24,6 +25,28 @@ def test_runtime_identity_projection_reads_credentials(tmp_path):
     assert projection.runtime_instance_id == "runtime-a"
     assert projection.principal == "alice"
     assert projection.control_plane_endpoint == "runtime:443"
+
+
+def test_sdk_environment_reads_runtime_identity_from_control_discovery(monkeypatch):
+    monkeypatch.setattr(
+        environment_module,
+        "read_runtime_control_discovery",
+        lambda control_path: easynet_sdk.RuntimeControlDiscovery(
+            runtime_host_identity=easynet_sdk.RuntimeControlIdentityProjection(
+                mode="device",
+                realm="acme",
+                runtime_instance_id="device-a",
+            )
+        ),
+    )
+
+    projection = easynet_sdk.SdkEnvironment(
+        control_path="/tmp/control.json"
+    ).runtime_identity_projection()
+
+    assert projection.realm == "acme"
+    assert projection.runtime_instance_id == "device-a"
+    assert projection.principal == ""
 
 
 def test_runtime_identity_projection_rejects_daemon_node_id_alias():

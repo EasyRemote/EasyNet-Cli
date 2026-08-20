@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 
 export const TEST_CALLER = "easynet:///r/example/agent/alice.sdk";
-export const TEST_CALLEE = "easynet:///r/example/device/dev-a";
-export const TEST_DESCRIPTOR = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0";
+export const TEST_DEVICE_SUBJECT = "easynet:///r/example/device/dev-a";
+export const TEST_CALLEE = "easynet:///r/example/agent/device.dev-a.runtime-health";
+export const TEST_DESCRIPTOR = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0";
 export const TEST_NONCE = "AQIDBAUGBwgJCgsMDQ4PEA==";
 
 export const agentBinding = (ura) => ({ ura, profile: "axon-strict-v2" });
@@ -23,7 +24,7 @@ export const canonicalRuntimeReceipt = (invocationId, receiptType, state, index)
     cleanup_complete: !["admitted", "Admitted", "ADMITTED"].includes(state),
     caller_binding: agentBinding(TEST_CALLER),
     callee_binding: agentBinding(TEST_CALLEE),
-    subject_binding: agentBinding(TEST_CALLEE),
+    subject_binding: agentBinding(TEST_DEVICE_SUBJECT),
     invocation_nonce_base64: TEST_NONCE,
     causal_binding_kind: "none",
     causal_binding: { form: "none" },
@@ -43,7 +44,7 @@ export const canonicalRuntimeReceipt = (invocationId, receiptType, state, index)
       duration_ms: 0,
       external_calls: 0,
     },
-    subject_ref: { kind: 1, ura: TEST_CALLEE, profile: "axon-strict-v2" },
+    subject_ref: { kind: 1, ura: TEST_DEVICE_SUBJECT, profile: "axon-strict-v2" },
     descriptor_version: "1.0.0",
     schema_hash_hex: "11".repeat(32),
     impl_hash_hex: "22".repeat(32),

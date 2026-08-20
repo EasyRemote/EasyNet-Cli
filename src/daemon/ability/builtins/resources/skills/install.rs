@@ -3,8 +3,8 @@
 //
 // File: src/daemon/ability/builtins/resources/skills/install.rs
 //
-// device-profile abilities the daemon executes locally to manage
-// the on-disk skill set for one of its agents. Pre-RFC-001 the
+// device-sponsored skill-management SystemAgent abilities the daemon executes
+// locally to manage the on-disk skill set for one of its agents. Pre-RFC-001 the
 // EasyNet backend reached these operations via a generic
 // `ExecCommand("easynet skill install --json")` shell-out — that
 // path is forbidden by AXIOM §A3 (no generic shell-out as a
@@ -13,13 +13,13 @@
 // operation gets its own ability with a typed input + typed
 // receipt, all unary signed Invoke (no streaming dependency).
 //
-// Why these belong on device-profile, not hub or llm-profile
-// ----------------------------------------------------------
+// Why these belong on skill-management SystemAgent, not hub or llm-profile
+// -----------------------------------------------------------------------
 // Skills live on the device's filesystem under
-// `<agent-root>/skills/<dir>/`. The device-profile is the only
-// Agent that owns the on-disk layout for its host's agents; any
+// `<agent-root>/skills/<dir>/`. The device-sponsored skill-management
+// SystemAgent owns the governed management surface for that on-disk layout; any
 // other Agent that wanted to install a skill would have to either
-// (a) call back to a device-profile (defeats the layering), or
+// (a) call back to the skill-management SystemAgent, or
 // (b) own its own copy of the on-disk semantics (duplicates the
 // install/upgrade/rollback logic the CLI already has).
 //
@@ -73,17 +73,10 @@ pub const ABILITY_UPGRADE: &str = crate::daemon::ability::names::resources::SKIL
 /// behaviour — newly-registered agents are picked up without a
 /// daemon restart).
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
-        "skill.install",
-        OwnerKind::Device,
-        Arc::new(install_handler),
-    );
-    reg.register_rpc_with_owner("skill.remove", OwnerKind::Device, Arc::new(remove_handler));
-    reg.register_rpc_with_owner(
-        "skill.upgrade",
-        OwnerKind::Device,
-        Arc::new(upgrade_handler),
-    );
+    let owner = OwnerKind::skill_management_system();
+    reg.register_rpc_with_owner("skill.install", owner.clone(), Arc::new(install_handler));
+    reg.register_rpc_with_owner("skill.remove", owner.clone(), Arc::new(remove_handler));
+    reg.register_rpc_with_owner("skill.upgrade", owner, Arc::new(upgrade_handler));
 }
 
 /// `skill.install` handler.
@@ -325,11 +318,13 @@ mod tests {
 
         let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         let mut agent = crate::daemon::persistence::agent_registry::AgentEntry::new(
-            crate::daemon::persistence::agent_registry::AgentType::Codex,
+            crate::core::agent::spec::RuntimeKind::Codex,
             None,
         );
         agent.root_path = Some(agent_root);
-        registry.agents.insert(agent_name.to_string(), agent);
+        registry
+            .agents
+            .insert(format!("default/{agent_name}"), agent);
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
 
         let response = remove_handler(json!({

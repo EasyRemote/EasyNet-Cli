@@ -513,6 +513,9 @@ final class RuntimeReceiptProofFacts {
     } catch (IllegalArgumentException error) {
       throw SDKError.validation("runtime_receipt", field + " must be valid base64");
     }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+      throw SDKError.validation("runtime_receipt", field + " must be canonical base64");
+    }
     if (decoded.length == 0 && !allowEmpty) {
       throw SDKError.validation("runtime_receipt", field + " must decode to non-empty bytes");
     }

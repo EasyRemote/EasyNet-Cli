@@ -1,9 +1,10 @@
-// EasyNet CLI — DeviceAbilityStore
+// EasyNet CLI — AbilityDeploymentStore
 // =================================================================
 //
 // File: src/daemon/ability/builtins/device_control/ability_management/store.rs
 //
-// Durable catalog of device-owned abilities installed through the
+// Durable catalog of ability-management SystemAgent descriptors whose
+// implementations are hosted by this Device through the
 // `ability.deploy` transaction. This is the "durable catalog commit"
 // leg of the deploy invariant:
 //
@@ -11,10 +12,11 @@
 //                    + runtime binding
 //                    + durable catalog commit
 //
-// Without it, a hot-registered device ability is "live but not
+// Without it, a hot-registered ability deployment is "live but not
 // durable" — it vanishes on the next daemon restart, leaving catalog /
-// route / runtime inconsistent. At boot the registrar replays this
-// store back into the live runtime.
+// route / runtime inconsistent. At boot the registrar replays durable
+// implementations; process-owned bindings remain inactive until their host
+// renews the recorded lease.
 //
 // Invariants this file owns:
 //   * install_id is STABLE — derived from
@@ -34,6 +36,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use anyhow::Context as _;
 use base64::Engine as _;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -42,17 +45,45 @@ use sha2::{Digest, Sha256};
 use crate::daemon::persistence::config::sync_directory;
 use crate::daemon::persistence::file_lock::{ExclusiveFileLock, SharedFileLock};
 
-const STORE_SCHEMA_VERSION: &str = "1";
-const STORE_FILE: &str = "device-abilities.json";
+const STORE_SCHEMA_VERSION: &str = "2";
+const STORE_FILE: &str = "ability-deployments.json";
 static STORE_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static STORE_LOCK: Lazy<RwLock<()>> = Lazy::new(|| RwLock::new(()));
 
-/// One durably-recorded device ability install.
+pub(crate) fn validate_ability_deployment_mutation_authority(
+    mutated_by: &str,
+    creator_invocation_id: &str,
+) -> anyhow::Result<()> {
+    if creator_invocation_id.trim().is_empty() {
+        anyhow::bail!("ability deployment mutation is missing its creator invocation id");
+    }
+    validate_ability_deployment_actor(mutated_by)
+}
+
+pub(crate) fn validate_ability_deployment_actor(mutated_by: &str) -> anyhow::Result<()> {
+    let actor = crate::core::ura::parse_ura(mutated_by).map_err(|error| {
+        anyhow::anyhow!("ability deployment mutation actor is invalid: {error}")
+    })?;
+    if mutated_by == crate::core::ura::LOCAL_SYSTEM_AGENT_URA
+        || actor.realm == "_system"
+        || !matches!(
+            actor.kind,
+            crate::core::ura::URAKind::User
+                | crate::core::ura::URAKind::Agent
+                | crate::core::ura::URAKind::Authority
+        )
+    {
+        anyhow::bail!("ability deployment mutation actor must be User, Agent, or Authority");
+    }
+    Ok(())
+}
+
+/// One durably-recorded ability deployment hosted by this Device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DeviceAbilityRecord {
+pub struct AbilityDeploymentRecord {
     /// Lifecycle state for crash-recoverable install/uninstall.
-    state: DeviceAbilityRecordState,
+    state: AbilityDeploymentRecordState,
     /// Stable id: `hash(ability_ura + manifest_hash)`.
     /// Re-deploy of the same manifest yields the same id (upsert).
     install_id: String,
@@ -60,7 +91,7 @@ pub struct DeviceAbilityRecord {
     public_name: String,
     /// Namespace segment (`er`); kept for re-derivation / display.
     namespace: String,
-    /// Canonical device-ability URA.
+    /// Canonical Ability URA owned by the ability-management SystemAgent.
     ability_ura: String,
     /// Absolute path to the deployed bundle's `ability.json`.
     /// Kept for operator display only. Replay must use the embedded
@@ -71,12 +102,21 @@ pub struct DeviceAbilityRecord {
     manifest_hash: String,
     /// Base64 copy of the exact manifest bytes committed by deploy.
     manifest_snapshot_b64: String,
+    /// Admitted logical actor that authorized this durable mutation.
+    mutated_by: String,
+    /// Canonical creating Invocation id for audit/receipt lookup.
+    creator_invocation_id: String,
     /// Unix epoch ms when this row was written. Caller-supplied (the
     /// runtime forbids ambient clock reads); 0 if unknown.
     installed_at_unix_ms: u64,
+    /// A host-owned implementation is callable only while this lease is
+    /// renewed. The descriptor/install remains durable after expiry, but
+    /// boot replay must not recreate the process-local binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binding_lease_ms: Option<u64>,
 }
 
-/// Durable lifecycle for a device ability row.
+/// Durable lifecycle for a ability deployment row.
 ///
 /// `Installing` is an uncommitted intent. Boot recovery deletes it because
 /// LocalRuntime/control-plane state is process-local and cannot survive a crash;
@@ -93,7 +133,7 @@ pub struct DeviceAbilityRecord {
 /// kept for audit but hidden from replay.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DeviceAbilityRecordState {
+pub enum AbilityDeploymentRecordState {
     Installing,
     #[default]
     Installed,
@@ -101,7 +141,7 @@ pub enum DeviceAbilityRecordState {
     Quarantined,
 }
 
-impl DeviceAbilityRecord {
+impl AbilityDeploymentRecord {
     /// Build a durable record with an embedded manifest snapshot.
     #[must_use]
     pub fn new_with_manifest_bytes(
@@ -111,11 +151,13 @@ impl DeviceAbilityRecord {
         manifest_path: impl Into<String>,
         manifest_bytes: &[u8],
         installed_at_unix_ms: u64,
+        mutated_by: impl Into<String>,
+        creator_invocation_id: impl Into<String>,
     ) -> Self {
         let ability_ura = ability_ura.into();
         let manifest_hash = manifest_digest(manifest_bytes);
         Self {
-            state: DeviceAbilityRecordState::Installed,
+            state: AbilityDeploymentRecordState::Installed,
             install_id: Self::derive_install_id(&ability_ura, &manifest_hash),
             public_name: public_name.into(),
             namespace: namespace.into(),
@@ -123,7 +165,10 @@ impl DeviceAbilityRecord {
             manifest_path: manifest_path.into(),
             manifest_hash,
             manifest_snapshot_b64: base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
+            mutated_by: mutated_by.into(),
+            creator_invocation_id: creator_invocation_id.into(),
             installed_at_unix_ms,
+            binding_lease_ms: None,
         }
     }
 
@@ -137,6 +182,8 @@ impl DeviceAbilityRecord {
         manifest_path: impl Into<String>,
         manifest_bytes: &[u8],
         installed_at_unix_ms: u64,
+        mutated_by: impl Into<String>,
+        creator_invocation_id: impl Into<String>,
     ) -> Self {
         let mut record = Self::new_with_manifest_bytes(
             public_name,
@@ -145,6 +192,8 @@ impl DeviceAbilityRecord {
             manifest_path,
             manifest_bytes,
             installed_at_unix_ms,
+            mutated_by,
+            creator_invocation_id,
         );
         record.mark_installing();
         record
@@ -193,13 +242,15 @@ impl DeviceAbilityRecord {
     pub fn manifest_bytes(&self) -> anyhow::Result<Vec<u8>> {
         if self.manifest_snapshot_b64.trim().is_empty() {
             anyhow::bail!(
-                "device ability record {} has no embedded manifest snapshot; redeploy required",
+                "ability deployment record {} has no embedded manifest snapshot; redeploy required",
                 self.install_id
             );
         }
         base64::engine::general_purpose::STANDARD
             .decode(self.manifest_snapshot_b64.trim())
-            .map_err(|e| anyhow::anyhow!("decode embedded device ability manifest snapshot: {e}"))
+            .map_err(|e| {
+                anyhow::anyhow!("decode embedded ability deployment manifest snapshot: {e}")
+            })
     }
 
     #[must_use]
@@ -207,25 +258,52 @@ impl DeviceAbilityRecord {
         self.installed_at_unix_ms
     }
 
+    pub fn mutated_by(&self) -> &str {
+        &self.mutated_by
+    }
+
+    pub fn creator_invocation_id(&self) -> &str {
+        &self.creator_invocation_id
+    }
+
+    fn validate_mutation_authority(&self) -> anyhow::Result<()> {
+        validate_ability_deployment_mutation_authority(
+            &self.mutated_by,
+            &self.creator_invocation_id,
+        )
+        .with_context(|| format!("ability deployment record {}", self.install_id))
+    }
+
     #[must_use]
-    pub fn state(&self) -> DeviceAbilityRecordState {
+    pub fn binding_lease_ms(&self) -> Option<u64> {
+        self.binding_lease_ms
+    }
+
+    #[must_use]
+    pub fn with_binding_lease_ms(mut self, binding_lease_ms: Option<u64>) -> Self {
+        self.binding_lease_ms = binding_lease_ms;
+        self
+    }
+
+    #[must_use]
+    pub fn state(&self) -> AbilityDeploymentRecordState {
         self.state
     }
 
     fn mark_removing(&mut self) {
-        self.state = DeviceAbilityRecordState::Removing;
+        self.state = AbilityDeploymentRecordState::Removing;
     }
 
     fn mark_quarantined(&mut self) {
-        self.state = DeviceAbilityRecordState::Quarantined;
+        self.state = AbilityDeploymentRecordState::Quarantined;
     }
 
     fn mark_installing(&mut self) {
-        self.state = DeviceAbilityRecordState::Installing;
+        self.state = AbilityDeploymentRecordState::Installing;
     }
 
     fn mark_installed(&mut self) {
-        self.state = DeviceAbilityRecordState::Installed;
+        self.state = AbilityDeploymentRecordState::Installed;
     }
 }
 
@@ -236,18 +314,18 @@ impl DeviceAbilityRecord {
 /// same plan again, so a failed final commit is recoverable without replaying
 /// stale abilities at boot.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeviceAbilityRemovalPlan {
-    records: Vec<DeviceAbilityRecord>,
+pub struct AbilityDeploymentRemovalPlan {
+    records: Vec<AbilityDeploymentRecord>,
     resumed: bool,
 }
 
-impl DeviceAbilityRemovalPlan {
-    fn new(records: Vec<DeviceAbilityRecord>, resumed: bool) -> Self {
+impl AbilityDeploymentRemovalPlan {
+    fn new(records: Vec<AbilityDeploymentRecord>, resumed: bool) -> Self {
         Self { records, resumed }
     }
 
     #[must_use]
-    pub fn records(&self) -> &[DeviceAbilityRecord] {
+    pub fn records(&self) -> &[AbilityDeploymentRecord] {
         &self.records
     }
 
@@ -269,7 +347,7 @@ impl DeviceAbilityRemovalPlan {
             .collect()
     }
 
-    pub fn into_records(self) -> Vec<DeviceAbilityRecord> {
+    pub fn into_records(self) -> Vec<AbilityDeploymentRecord> {
         self.records
     }
 }
@@ -284,25 +362,28 @@ pub fn manifest_digest(bytes: &[u8]) -> String {
 #[serde(deny_unknown_fields)]
 struct StoreFile {
     schema_version: String,
-    installed: Vec<DeviceAbilityRecord>,
+    installed: Vec<AbilityDeploymentRecord>,
 }
 
-/// On-disk store at `~/.easynet/device-abilities.json`.
-pub struct DeviceAbilityStore {
+/// On-disk store at `~/.easynet/ability-deployments.json`.
+///
+/// The filename is an ability-management deployment record, not a Device-owned
+/// ability namespace.
+pub struct AbilityDeploymentStore {
     path: PathBuf,
 }
 
-struct DeviceAbilityStoreReadLock {
+struct AbilityDeploymentStoreReadLock {
     _process: RwLockReadGuard<'static, ()>,
     _file: SharedFileLock,
 }
 
-struct DeviceAbilityStoreWriteLock {
+struct AbilityDeploymentStoreWriteLock {
     _process: RwLockWriteGuard<'static, ()>,
     _file: ExclusiveFileLock,
 }
 
-impl DeviceAbilityStore {
+impl AbilityDeploymentStore {
     /// Open the store at the canonical daemon state root.
     pub fn try_open_default() -> anyhow::Result<Self> {
         Ok(Self {
@@ -318,20 +399,20 @@ impl DeviceAbilityStore {
 
     /// Read every recorded install. A missing file is the valid
     /// "nothing installed yet" state and yields an empty list.
-    pub fn load(&self) -> anyhow::Result<Vec<DeviceAbilityRecord>> {
+    pub fn load(&self) -> anyhow::Result<Vec<AbilityDeploymentRecord>> {
         let _guard = self.lock_for_read()?;
         self.load_unlocked()
     }
 
-    fn load_unlocked(&self) -> anyhow::Result<Vec<DeviceAbilityRecord>> {
+    fn load_unlocked(&self) -> anyhow::Result<Vec<AbilityDeploymentRecord>> {
         Ok(self
             .load_all_unlocked()?
             .into_iter()
-            .filter(|record| record.state == DeviceAbilityRecordState::Installed)
+            .filter(|record| record.state == AbilityDeploymentRecordState::Installed)
             .collect())
     }
 
-    fn load_all_unlocked(&self) -> anyhow::Result<Vec<DeviceAbilityRecord>> {
+    fn load_all_unlocked(&self) -> anyhow::Result<Vec<AbilityDeploymentRecord>> {
         let body = match fs::read_to_string(&self.path) {
             Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -339,17 +420,20 @@ impl DeviceAbilityStore {
         };
         let parsed: StoreFile = serde_json::from_str(&body).map_err(|e| {
             anyhow::anyhow!(
-                "device-abilities.json at {} is corrupt: {e}",
+                "ability-deployments.json at {} is corrupt: {e}",
                 self.path.display()
             )
         })?;
         if parsed.schema_version != STORE_SCHEMA_VERSION {
             anyhow::bail!(
-                "device-abilities.json at {} has unsupported schema_version {:?}; expected {:?}",
+                "ability-deployments.json at {} has unsupported schema_version {:?}; expected {:?}",
                 self.path.display(),
                 parsed.schema_version,
                 STORE_SCHEMA_VERSION
             );
+        }
+        for record in &parsed.installed {
+            record.validate_mutation_authority()?;
         }
         Ok(parsed.installed)
     }
@@ -362,8 +446,8 @@ impl DeviceAbilityStore {
     #[cfg(test)]
     pub(crate) fn upsert(
         &self,
-        record: DeviceAbilityRecord,
-    ) -> anyhow::Result<Option<DeviceAbilityRecord>> {
+        record: AbilityDeploymentRecord,
+    ) -> anyhow::Result<Option<AbilityDeploymentRecord>> {
         let _guard = self.lock_for_write()?;
         let mut rows = self.load_all_unlocked()?;
         let previous = match rows.iter_mut().find(|r| r.install_id == record.install_id) {
@@ -377,7 +461,7 @@ impl DeviceAbilityStore {
         Ok(previous)
     }
 
-    /// Stage the one durable row that may become the next live device ability.
+    /// Stage the one durable row that may become the next live ability deployment.
     ///
     /// Staging never deletes the current `Installed` row. That is the crash
     /// boundary: if the daemon dies before `commit_installed`, boot replay sees
@@ -385,15 +469,15 @@ impl DeviceAbilityStore {
     /// only transition allowed to remove displaced active rows.
     pub fn stage_install_record(
         &self,
-        mut record: DeviceAbilityRecord,
-    ) -> anyhow::Result<Vec<DeviceAbilityRecord>> {
+        mut record: AbilityDeploymentRecord,
+    ) -> anyhow::Result<Vec<AbilityDeploymentRecord>> {
         record.mark_installing();
         let _guard = self.lock_for_write()?;
         let mut rows = self.load_all_unlocked()?;
         let replaced = rows
             .iter()
             .filter(|existing| {
-                existing.state == DeviceAbilityRecordState::Installed
+                existing.state == AbilityDeploymentRecordState::Installed
                     && (existing.install_id == record.install_id
                         || existing.ability_ura == record.ability_ura
                         || existing.public_name == record.public_name)
@@ -401,7 +485,7 @@ impl DeviceAbilityStore {
             .cloned()
             .collect::<Vec<_>>();
         rows.retain(|existing| {
-            existing.state != DeviceAbilityRecordState::Installing
+            existing.state != AbilityDeploymentRecordState::Installing
                 || (existing.install_id != record.install_id
                     && existing.ability_ura != record.ability_ura
                     && existing.public_name != record.public_name)
@@ -417,9 +501,9 @@ impl DeviceAbilityStore {
         let _guard = self.lock_for_write()?;
         let mut rows = self.load_all_unlocked()?;
         let Some(staged_idx) = rows.iter().position(|r| {
-            r.install_id == install_id && r.state == DeviceAbilityRecordState::Installing
+            r.install_id == install_id && r.state == AbilityDeploymentRecordState::Installing
         }) else {
-            anyhow::bail!("commit staged device ability install {install_id}: row missing");
+            anyhow::bail!("commit staged ability deployment install {install_id}: row missing");
         };
         let mut committed = rows[staged_idx].clone();
         committed.mark_installed();
@@ -446,7 +530,7 @@ impl DeviceAbilityStore {
     pub fn rollback_install(
         &self,
         failed_install_id: &str,
-        replaced: Vec<DeviceAbilityRecord>,
+        replaced: Vec<AbilityDeploymentRecord>,
     ) -> anyhow::Result<()> {
         let _guard = self.lock_for_write()?;
         let mut rows = self.load_all_unlocked()?;
@@ -465,7 +549,7 @@ impl DeviceAbilityStore {
         let _guard = self.lock_for_write()?;
         let mut rows = self.load_all_unlocked()?;
         let before = rows.len();
-        rows.retain(|record| record.state != DeviceAbilityRecordState::Installing);
+        rows.retain(|record| record.state != AbilityDeploymentRecordState::Installing);
         let recovered = before - rows.len();
         if recovered > 0 {
             self.write_all(&rows)?;
@@ -473,17 +557,18 @@ impl DeviceAbilityStore {
         Ok(recovered)
     }
 
-    /// Hide installed rows owned by a previous device authority before boot
-    /// replay binds live runtime state.
+    /// Hide installed rows owned by an ability authority this daemon no longer
+    /// hosts before boot replay binds live runtime state.
     ///
     /// This is the rejoin recovery boundary: a new `credentials.json` means the
-    /// daemon no longer hosts the old device URA, so replay must not try to
-    /// register those abilities. The rows stay on disk as `Quarantined` for
-    /// audit instead of being silently deleted.
+    /// daemon no longer hosts the old Device or its device-sponsored
+    /// SystemAgents, so replay must not try to register those abilities. The
+    /// rows stay on disk as `Quarantined` for audit instead of being silently
+    /// deleted.
     pub fn quarantine_unhosted_device_authority(
         &self,
         hosted_device_authority_root: &str,
-    ) -> anyhow::Result<Vec<DeviceAbilityRecord>> {
+    ) -> anyhow::Result<Vec<AbilityDeploymentRecord>> {
         let hosted_device_authority_root = hosted_device_authority_root.trim();
         if hosted_device_authority_root.is_empty() {
             anyhow::bail!("hosted device authority root must not be empty");
@@ -493,16 +578,16 @@ impl DeviceAbilityStore {
         let mut quarantined = Vec::new();
         let mut changed = false;
         for row in &mut rows {
-            if row.state != DeviceAbilityRecordState::Installed {
+            if row.state != AbilityDeploymentRecordState::Installed {
                 continue;
             }
             let Ok(selector) = crate::core::ura::AbilitySelector::parse(row.ability_ura()) else {
                 continue;
             };
-            if selector.owner_kind() != "device" {
-                continue;
-            }
-            if selector.owner_ura() == hosted_device_authority_root {
+            if ability_management_system_agent_owner_is_hosted_by_device(
+                selector.owner_ura(),
+                hosted_device_authority_root,
+            ) {
                 continue;
             }
             quarantined.push(row.clone());
@@ -518,7 +603,7 @@ impl DeviceAbilityStore {
     /// Restore rows previously removed by a higher-level transaction.
     /// Existing rows with the same install id are left untouched so retrying
     /// a rollback is idempotent.
-    pub fn restore_records(&self, records: Vec<DeviceAbilityRecord>) -> anyhow::Result<()> {
+    pub fn restore_records(&self, records: Vec<AbilityDeploymentRecord>) -> anyhow::Result<()> {
         if records.is_empty() {
             return Ok(());
         }
@@ -537,7 +622,7 @@ impl DeviceAbilityStore {
         &self,
         ability_ura: &str,
         install_id: Option<&str>,
-    ) -> anyhow::Result<DeviceAbilityRemovalPlan> {
+    ) -> anyhow::Result<AbilityDeploymentRemovalPlan> {
         let _guard = self.lock_for_write()?;
         let mut rows = self.load_all_unlocked()?;
         let mut records = Vec::new();
@@ -550,14 +635,14 @@ impl DeviceAbilityStore {
                 continue;
             }
             match record.state {
-                DeviceAbilityRecordState::Installed => {
+                AbilityDeploymentRecordState::Installed => {
                     records.push(record.clone());
                     record.mark_removing();
                     changed = true;
                 }
-                DeviceAbilityRecordState::Installing => {}
-                DeviceAbilityRecordState::Quarantined => {}
-                DeviceAbilityRecordState::Removing => {
+                AbilityDeploymentRecordState::Installing => {}
+                AbilityDeploymentRecordState::Quarantined => {}
+                AbilityDeploymentRecordState::Removing => {
                     records.push(record.clone());
                     resumed = true;
                 }
@@ -566,7 +651,7 @@ impl DeviceAbilityStore {
         if changed {
             self.write_all(&rows)?;
         }
-        Ok(DeviceAbilityRemovalPlan::new(records, resumed))
+        Ok(AbilityDeploymentRemovalPlan::new(records, resumed))
     }
 
     /// Commit staged removals by physically deleting their tombstone rows.
@@ -577,7 +662,7 @@ impl DeviceAbilityStore {
         let _guard = self.lock_for_write()?;
         let mut rows = self.load_all_unlocked()?;
         rows.retain(|record| {
-            !(record.state == DeviceAbilityRecordState::Removing
+            !(record.state == AbilityDeploymentRecordState::Removing
                 && install_ids.iter().any(|id| id == record.install_id()))
         });
         self.write_all(&rows)
@@ -602,7 +687,10 @@ impl DeviceAbilityStore {
     /// it, rename over the target, then fsync the parent dir so the
     /// rename itself is durable. A crash at any point leaves either the
     /// old complete file or the new complete file, never a torn one.
-    fn write_all(&self, rows: &[DeviceAbilityRecord]) -> anyhow::Result<()> {
+    fn write_all(&self, rows: &[AbilityDeploymentRecord]) -> anyhow::Result<()> {
+        for record in rows {
+            record.validate_mutation_authority()?;
+        }
         let file = StoreFile {
             schema_version: STORE_SCHEMA_VERSION.to_string(),
             installed: rows.to_vec(),
@@ -612,7 +700,7 @@ impl DeviceAbilityStore {
         let dir = self
             .path
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("device ability store path has no parent"))?;
+            .ok_or_else(|| anyhow::anyhow!("ability deployment store path has no parent"))?;
         fs::create_dir_all(dir)?;
 
         let tmp = self.unique_tmp_path();
@@ -627,23 +715,23 @@ impl DeviceAbilityStore {
         Ok(())
     }
 
-    fn lock_for_read(&self) -> anyhow::Result<DeviceAbilityStoreReadLock> {
+    fn lock_for_read(&self) -> anyhow::Result<AbilityDeploymentStoreReadLock> {
         let process = STORE_LOCK
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let file = SharedFileLock::acquire_for_data_path(&self.path)?;
-        Ok(DeviceAbilityStoreReadLock {
+        Ok(AbilityDeploymentStoreReadLock {
             _process: process,
             _file: file,
         })
     }
 
-    fn lock_for_write(&self) -> anyhow::Result<DeviceAbilityStoreWriteLock> {
+    fn lock_for_write(&self) -> anyhow::Result<AbilityDeploymentStoreWriteLock> {
         let process = STORE_LOCK
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let file = ExclusiveFileLock::acquire_for_data_path(&self.path)?;
-        Ok(DeviceAbilityStoreWriteLock {
+        Ok(AbilityDeploymentStoreWriteLock {
             _process: process,
             _file: file,
         })
@@ -655,7 +743,10 @@ impl DeviceAbilityStore {
             .with_extension(format!("json.tmp.{}.{}", std::process::id(), seq))
     }
 
-    fn merge_records(rows: &mut Vec<DeviceAbilityRecord>, records: Vec<DeviceAbilityRecord>) {
+    fn merge_records(
+        rows: &mut Vec<AbilityDeploymentRecord>,
+        records: Vec<AbilityDeploymentRecord>,
+    ) {
         for mut row in records {
             row.mark_installed();
             rows.retain(|existing| {
@@ -668,17 +759,42 @@ impl DeviceAbilityStore {
     }
 }
 
+fn ability_management_system_agent_owner_is_hosted_by_device(
+    owner_ura: &str,
+    hosted_device_ura: &str,
+) -> bool {
+    let Ok(hosted_device) = crate::core::ura::parse_ura(hosted_device_ura) else {
+        return false;
+    };
+    if hosted_device.kind != crate::core::ura::URAKind::Device {
+        return false;
+    }
+    let Some(hosted_device_id) = hosted_device.device_id() else {
+        return false;
+    };
+    let Ok(owner) = crate::core::ura::parse_ura(owner_ura) else {
+        return false;
+    };
+    owner
+        .device_agent_ids()
+        .is_some_and(|(device_id, system_agent_id)| {
+            device_id == hosted_device_id
+                && system_agent_id
+                    == crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn tmp_store() -> (DeviceAbilityStore, tempfile::TempDir) {
+    fn tmp_store() -> (AbilityDeploymentStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let store = DeviceAbilityStore::open_at(dir.path().join("device-abilities.json"));
+        let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
         (store, dir)
     }
 
-    fn record(name: &str) -> DeviceAbilityRecord {
+    fn record(name: &str) -> AbilityDeploymentRecord {
         record_with(name, "sha256:abc", 0)
     }
 
@@ -686,7 +802,7 @@ mod tests {
         name: &str,
         manifest_marker: &str,
         installed_at_unix_ms: u64,
-    ) -> DeviceAbilityRecord {
+    ) -> AbilityDeploymentRecord {
         record_with_owner(name, "x", manifest_marker, installed_at_unix_ms)
     }
 
@@ -695,16 +811,54 @@ mod tests {
         device_id: &str,
         manifest_marker: &str,
         installed_at_unix_ms: u64,
-    ) -> DeviceAbilityRecord {
+    ) -> AbilityDeploymentRecord {
         let owner_ura = crate::core::ura::device_ura("localhost", device_id);
         let manifest_bytes = format!(r#"{{"name":"{name}","marker":"{manifest_marker}"}}"#);
-        DeviceAbilityRecord::new_with_manifest_bytes(
+        AbilityDeploymentRecord::new_with_manifest_bytes(
             name.to_string(),
             "er".to_string(),
             crate::core::ura::owner_ability_ura(&owner_ura, name).expect("ability ura"),
             format!("/bundles/{name}/ability.json"),
             manifest_bytes.as_bytes(),
             installed_at_unix_ms,
+            "easynet:///r/localhost/user/test-user",
+            "test-deploy-invocation",
+        )
+    }
+
+    fn record_with_system_agent_owner(
+        name: &str,
+        device_id: &str,
+        manifest_marker: &str,
+        installed_at_unix_ms: u64,
+    ) -> AbilityDeploymentRecord {
+        record_with_specific_system_agent_owner(
+            name,
+            device_id,
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+            manifest_marker,
+            installed_at_unix_ms,
+        )
+    }
+
+    fn record_with_specific_system_agent_owner(
+        name: &str,
+        device_id: &str,
+        system_agent_id: &str,
+        manifest_marker: &str,
+        installed_at_unix_ms: u64,
+    ) -> AbilityDeploymentRecord {
+        let owner_ura = crate::core::ura::device_agent_ura("localhost", device_id, system_agent_id);
+        let manifest_bytes = format!(r#"{{"name":"{name}","marker":"{manifest_marker}"}}"#);
+        AbilityDeploymentRecord::new_with_manifest_bytes(
+            name.to_string(),
+            "er".to_string(),
+            crate::core::ura::owner_ability_ura(&owner_ura, name).expect("ability ura"),
+            format!("/bundles/{name}/ability.json"),
+            manifest_bytes.as_bytes(),
+            installed_at_unix_ms,
+            "easynet:///r/localhost/user/test-user",
+            "test-deploy-invocation",
         )
     }
 
@@ -721,7 +875,7 @@ mod tests {
 
         let err = store
             .load()
-            .expect_err("device ability store schema version is mandatory");
+            .expect_err("ability deployment store schema version is mandatory");
         assert!(format!("{err}").contains("schema_version"), "{err}");
     }
 
@@ -752,6 +906,25 @@ mod tests {
         let rows = store.load().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].public_name(), "generate");
+        assert_eq!(
+            rows[0].mutated_by(),
+            "easynet:///r/localhost/user/test-user"
+        );
+        assert_eq!(rows[0].creator_invocation_id(), "test-deploy-invocation");
+    }
+
+    #[test]
+    fn write_rejects_ambient_system_mutation_actor() {
+        let (store, _d) = tmp_store();
+        let mut row = record("generate");
+        row.mutated_by = crate::core::ura::LOCAL_SYSTEM_AGENT_URA.to_string();
+        let error = store
+            .upsert(row)
+            .expect_err("ambient system identity is not a durable deployment actor");
+        assert!(
+            format!("{error:#}").contains("User, Agent, or Authority"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -831,10 +1004,52 @@ mod tests {
     }
 
     #[test]
-    fn quarantine_unhosted_device_authority_hides_old_device_rows_from_replay() {
+    fn quarantine_unhosted_device_authority_hides_direct_device_rows_from_replay() {
         let (store, _d) = tmp_store();
         let current = record_with_owner("current", "current-device", "sha256:a", 0);
         let previous = record_with_owner("previous", "old-device", "sha256:b", 0);
+        let current_id = current.install_id().to_string();
+        let previous_id = previous.install_id().to_string();
+        store.upsert(current.clone()).unwrap();
+        store.upsert(previous).unwrap();
+
+        let quarantined = store
+            .quarantine_unhosted_device_authority(&crate::core::ura::device_ura(
+                "localhost",
+                "current-device",
+            ))
+            .unwrap();
+
+        let quarantined_ids = quarantined
+            .iter()
+            .map(|row| row.install_id().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            quarantined_ids,
+            vec![current_id.clone(), previous_id.clone()],
+            "direct Device-owned deployment rows are legacy-invalid and must not replay"
+        );
+        let replayable = store.load().unwrap();
+        assert!(
+            replayable.is_empty(),
+            "direct Device-owned deployment rows must quarantine even when the Device id matches"
+        );
+        let all_rows = store.load_all_unlocked().unwrap();
+        assert!(all_rows.iter().any(|row| {
+            row.install_id() == previous_id
+                && row.state() == AbilityDeploymentRecordState::Quarantined
+        }));
+        assert!(all_rows.iter().any(|row| {
+            row.install_id() == current_id
+                && row.state() == AbilityDeploymentRecordState::Quarantined
+        }));
+    }
+
+    #[test]
+    fn quarantine_unhosted_device_authority_hides_old_system_agent_rows_from_replay() {
+        let (store, _d) = tmp_store();
+        let current = record_with_system_agent_owner("current", "current-device", "sha256:a", 0);
+        let previous = record_with_system_agent_owner("previous", "old-device", "sha256:b", 0);
         let previous_id = previous.install_id().to_string();
         store.upsert(current.clone()).unwrap();
         store.upsert(previous).unwrap();
@@ -851,10 +1066,35 @@ mod tests {
         let replayable = store.load().unwrap();
         assert_eq!(replayable.len(), 1);
         assert_eq!(replayable[0].install_id(), current.install_id());
-        let all_rows = store.load_all_unlocked().unwrap();
-        assert!(all_rows.iter().any(|row| {
-            row.install_id() == previous_id && row.state() == DeviceAbilityRecordState::Quarantined
-        }));
+    }
+
+    #[test]
+    fn quarantine_unhosted_device_authority_hides_same_device_non_ability_management_rows() {
+        let (store, _d) = tmp_store();
+        let valid = record_with_system_agent_owner("valid", "current-device", "sha256:a", 0);
+        let wrong_system_agent = record_with_specific_system_agent_owner(
+            "wrong-system-agent",
+            "current-device",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+            "sha256:b",
+            0,
+        );
+        let wrong_id = wrong_system_agent.install_id().to_string();
+        store.upsert(valid.clone()).unwrap();
+        store.upsert(wrong_system_agent).unwrap();
+
+        let quarantined = store
+            .quarantine_unhosted_device_authority(&crate::core::ura::device_ura(
+                "localhost",
+                "current-device",
+            ))
+            .unwrap();
+
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(quarantined[0].install_id(), wrong_id);
+        let replayable = store.load().unwrap();
+        assert_eq!(replayable.len(), 1);
+        assert_eq!(replayable[0].install_id(), valid.install_id());
     }
 
     #[test]
@@ -902,7 +1142,7 @@ mod tests {
         let all_rows = store.load_all_unlocked().unwrap();
         assert!(
             all_rows.iter().any(|row| row.install_id() == target_id
-                && row.state() == DeviceAbilityRecordState::Removing),
+                && row.state() == AbilityDeploymentRecordState::Removing),
             "stage_remove_by_ability must stage a durable tombstone"
         );
     }
@@ -993,7 +1233,7 @@ mod tests {
     #[test]
     fn concurrent_upserts_across_store_instances_do_not_lose_rows() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("device-abilities.json");
+        let path = dir.path().join("ability-deployments.json");
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
         let left_path = path.clone();
         let right_path = path.clone();
@@ -1001,7 +1241,7 @@ mod tests {
         let left = {
             let barrier = std::sync::Arc::clone(&barrier);
             std::thread::spawn(move || {
-                let store = DeviceAbilityStore::open_at(left_path);
+                let store = AbilityDeploymentStore::open_at(left_path);
                 barrier.wait();
                 for i in 0..40 {
                     store.upsert(record(&format!("left.{i}"))).unwrap();
@@ -1011,7 +1251,7 @@ mod tests {
         let right = {
             let barrier = std::sync::Arc::clone(&barrier);
             std::thread::spawn(move || {
-                let store = DeviceAbilityStore::open_at(right_path);
+                let store = AbilityDeploymentStore::open_at(right_path);
                 barrier.wait();
                 for i in 0..40 {
                     store.upsert(record(&format!("right.{i}"))).unwrap();
@@ -1022,16 +1262,16 @@ mod tests {
         left.join().unwrap();
         right.join().unwrap();
 
-        let rows = DeviceAbilityStore::open_at(path).load().unwrap();
+        let rows = AbilityDeploymentStore::open_at(path).load().unwrap();
         assert_eq!(rows.len(), 80);
     }
 
     #[test]
     fn install_id_is_stable_and_input_sensitive() {
-        let a = DeviceAbilityRecord::derive_install_id("ura", "h");
-        let b = DeviceAbilityRecord::derive_install_id("ura", "h");
+        let a = AbilityDeploymentRecord::derive_install_id("ura", "h");
+        let b = AbilityDeploymentRecord::derive_install_id("ura", "h");
         assert_eq!(a, b, "same inputs -> same id");
-        let c = DeviceAbilityRecord::derive_install_id("ura", "h2");
+        let c = AbilityDeploymentRecord::derive_install_id("ura", "h2");
         assert_ne!(a, c, "different manifest_hash -> different id");
     }
 }

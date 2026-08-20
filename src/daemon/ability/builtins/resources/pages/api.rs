@@ -52,8 +52,7 @@ use serde_json::{json, Value};
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
 use crate::core::ura::AbilitySelector;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::daemon::ability::AuthorityScope;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::invocation::routing::target::CallMode;
 use crate::daemon::resources::projection::PagesApiResponse;
 
@@ -62,11 +61,37 @@ use crate::daemon::resources::projection::PagesApiResponse;
 /// to dispatch requests directly through the in-process registry
 /// instead of round-tripping through the daemon's own IPC socket
 /// (which would self-deadlock).
+#[cfg(not(test))]
 static DISPATCH_HANDLE: Lazy<std::sync::OnceLock<Arc<OnceLock<Arc<AxonAbilityCatalog>>>>> =
     Lazy::new(std::sync::OnceLock::new);
 
+#[cfg(test)]
+static DISPATCH_HANDLE: Lazy<std::sync::RwLock<Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>>>> =
+    Lazy::new(|| std::sync::RwLock::new(None));
+
+#[cfg(not(test))]
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
     let _ = DISPATCH_HANDLE.set(handle);
+}
+
+#[cfg(test)]
+pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
+    *DISPATCH_HANDLE
+        .write()
+        .expect("pages dispatch handle test lock poisoned") = Some(handle);
+}
+
+#[cfg(not(test))]
+fn dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
+    DISPATCH_HANDLE.get().cloned()
+}
+
+#[cfg(test)]
+fn dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
+    DISPATCH_HANDLE
+        .read()
+        .expect("pages dispatch handle test lock poisoned")
+        .clone()
 }
 
 /// One TOML manifest under `<project>/api/<verb>.toml`.
@@ -226,7 +251,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
             // Use the daemon's shared Axon LocalRuntime. We are
             // already inside the daemon process, so an IPC round trip
             // would self-deadlock the original request.
-            let handle = DISPATCH_HANDLE.get().ok_or_else(|| {
+            let handle = dispatch_handle().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle not set; pages::register must run at boot")
             })?;
             let registry = handle.get().ok_or_else(|| {
@@ -351,12 +376,12 @@ pub(crate) fn api_ability_names_for_project(
 
 pub(crate) fn register_api_abilities_for_project(
     registry: &AxonAbilityCatalog,
+    owner_user_id: &str,
     user: &str,
     project_id: &str,
-    authority_scope: AuthorityScope,
 ) -> anyhow::Result<usize> {
     let names = api_ability_names_for_project(user, project_id)?;
-    let owner = OwnerKind::User(user.to_string());
+    let owner = super::pages_service_owner(owner_user_id);
     for name in &names {
         let Some(verb) = name.rsplit_once(".api.").map(|(_prefix, verb)| verb) else {
             continue;
@@ -364,10 +389,9 @@ pub(crate) fn register_api_abilities_for_project(
         let user = user.to_string();
         let project_id = project_id.to_string();
         let verb = verb.to_string();
-        registry.hot_register_rpc_with_spec_and_authority_scope(
+        registry.hot_register_rpc_with_spec(
             name.clone(),
             owner.clone(),
-            authority_scope.clone(),
             api_ability_manifest(&verb),
             Arc::new(move |args| handle_api(&user, &project_id, &verb, args)),
         )?;

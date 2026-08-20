@@ -12,13 +12,17 @@ use axon_sdk::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAgentRequest;
+use crate::daemon::persistence::federation_revoke::{
+    DurableSigningAuthority, HostedAgentRegistrationCommand,
+};
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedPrincipalOwner};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HostedAgentPublication {
     caller_device_ura: String,
+    caller_device_id: String,
     agent_ura: String,
-    owner_user_id: String,
+    owner_user_segment: String,
     owner_ura: String,
 }
 
@@ -85,6 +89,11 @@ impl HostedAgentPublication {
         }
 
         let agent_ura = request.agent_ura.trim();
+        if agent_ura != request.agent_ura {
+            return Err(HostedAgentPublicationError::InvalidIdentity(
+                "agent_ura must be canonical without surrounding whitespace",
+            ));
+        }
         if subject_ura != agent_ura {
             return Err(HostedAgentPublicationError::SubjectMismatch);
         }
@@ -98,28 +107,17 @@ impl HostedAgentPublication {
                 "agent_ura must identify a user-owned Agent in the caller realm",
             ));
         }
-        let (agent_owner_user_id, _) =
+        let (agent_owner_user_segment, _) =
             agent
                 .agent_ids()
                 .ok_or(HostedAgentPublicationError::InvalidIdentity(
                     "device-sponsored Agent URAs cannot enter the user-hosted publication path",
                 ))?;
 
-        if request.signing_host_ura() != Some(caller_device_ura) {
-            return Err(HostedAgentPublicationError::HostMismatch);
-        }
-        if request
-            .host_node_id
-            .as_deref()
-            .is_some_and(|node_id| node_id.trim() != caller_device_id)
-        {
-            return Err(HostedAgentPublicationError::HostNodeMismatch);
-        }
-
         let owner = trust_anchor
             .lookup_principal_owner(caller_device_ura)
             .ok_or(HostedAgentPublicationError::OwnerBindingMissing)?;
-        if owner.owner_user_id != agent_owner_user_id {
+        if owner.owner_user_id != agent_owner_user_segment {
             return Err(HostedAgentPublicationError::OwnerUserMismatch);
         }
         let owner_ura = parse_ura(&owner.owner_ura).map_err(|_| {
@@ -138,8 +136,9 @@ impl HostedAgentPublication {
 
         Ok(Self {
             caller_device_ura: caller_device_ura.to_string(),
+            caller_device_id: caller_device_id.to_string(),
             agent_ura: agent_ura.to_string(),
-            owner_user_id: owner.owner_user_id.clone(),
+            owner_user_segment: owner.owner_user_id.clone(),
             owner_ura: owner.owner_ura.clone(),
         })
     }
@@ -164,8 +163,8 @@ impl HostedAgentPublication {
         )
     }
 
-    pub(crate) fn owner_user_id(&self) -> &str {
-        &self.owner_user_id
+    pub(crate) fn owner_user_segment(&self) -> &str {
+        &self.owner_user_segment
     }
 
     pub(crate) fn caller_device_ura(&self) -> &str {
@@ -179,10 +178,26 @@ impl HostedAgentPublication {
         )
     }
 
+    pub(crate) fn registration_command(
+        &self,
+        request: &AdvertiseAgentRequest,
+    ) -> HostedAgentRegistrationCommand {
+        debug_assert_eq!(self.agent_ura, request.agent_ura);
+        HostedAgentRegistrationCommand {
+            agent_ura: self.agent_ura.clone(),
+            incarnation_id: request.incarnation_id.clone(),
+            public_key_hex: String::new(),
+            host_node_id: Some(self.caller_device_id.clone()),
+            signing_authority: DurableSigningAuthority::HostedBy {
+                host_ura: self.caller_device_ura.clone(),
+            },
+        }
+    }
+
     pub(crate) fn into_owner_binding(self, added_at_unix_ms: u64) -> TrustedPrincipalOwner {
         TrustedPrincipalOwner {
             principal_ura: self.agent_ura,
-            owner_user_id: self.owner_user_id,
+            owner_user_id: self.owner_user_segment,
             owner_ura: self.owner_ura,
             added_at_unix_ms,
         }
@@ -207,10 +222,6 @@ pub(crate) enum HostedAgentPublicationError {
     InvalidIdentity(&'static str),
     #[error("envelope subject must equal request agent_ura")]
     SubjectMismatch,
-    #[error("hosted signing authority must name the signed caller device")]
-    HostMismatch,
-    #[error("host_node_id must equal the caller device id")]
-    HostNodeMismatch,
     #[error("caller device has no authoritative owner binding")]
     OwnerBindingMissing,
     #[error("Agent URA owner user id does not match the caller device owner")]
@@ -220,9 +231,8 @@ pub(crate) enum HostedAgentPublicationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::dispatch::federation_wrappers::{
-        AdvertiseAgentRequest, AdvertiseSigningAuthorityRequest,
-    };
+    use crate::daemon::federation::hosted_agent_publication::HostedAgentIncarnationId;
+    use crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAgentRequest;
     use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
     fn envelope(subject: &str) -> Envelope {
@@ -246,12 +256,7 @@ mod tests {
     fn request(agent_ura: &str) -> AdvertiseAgentRequest {
         AdvertiseAgentRequest {
             agent_ura: agent_ura.to_string(),
-            generation: 1,
-            signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
-                host_ura: "easynet:///r/test/device/dev-1".to_string(),
-            },
-            public_key_hex: String::new(),
-            host_node_id: Some("dev-1".to_string()),
+            incarnation_id: HostedAgentIncarnationId::parse("a".repeat(32)).unwrap(),
         }
     }
 

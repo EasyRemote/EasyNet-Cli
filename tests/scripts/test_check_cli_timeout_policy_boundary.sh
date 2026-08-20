@@ -37,11 +37,25 @@ pub fn runtime_request_timeout_ms(_secs: u64) -> Result<Option<u64>, &'static st
     Ok(None)
 }
 
+pub fn catalogue_read_transport_guard(_secs: u64) -> Result<std::time::Duration, &'static str> {
+    Ok(std::time::Duration::from_secs(30))
+}
+
+pub fn remote_system_transport_guard(_secs: u64) -> Result<std::time::Duration, &'static str> {
+    Ok(std::time::Duration::from_secs(30))
+}
+
 #[test]
 fn invocation_transport_guard_uses_default_guard_for_zero() {}
 
 #[test]
 fn runtime_request_timeout_preserves_zero_as_runtime_default() {}
+
+#[test]
+fn catalogue_read_transport_guard_uses_short_default_for_zero() {}
+
+#[test]
+fn remote_system_transport_guard_uses_short_default_for_zero() {}
 RS
 
 for file in invoke ability_stream ability_bidi ability_record; do
@@ -56,6 +70,34 @@ done
 cat >"$SB/src/cli/commands/exec.rs" <<'RS'
 fn run(args: Args) -> anyhow::Result<()> {
     let timeout_ms = timeouts::runtime_request_timeout_ms(args.timeout)?;
+    Ok(())
+}
+RS
+
+mkdir -p "$SB/src/cli/daemon_client" "$SB/src/daemon/invocation/routing"
+
+cat >"$SB/src/support/platform/local_invoke.rs" <<'RS'
+fn list_abilities(args: Args) -> anyhow::Result<()> {
+    let timeout = crate::support::platform::timeouts::catalogue_read_transport_guard(0)?;
+    Ok(())
+}
+RS
+
+cat >"$SB/src/cli/daemon_client/remote_system_ability.rs" <<'RS'
+fn invoke_remote_device_catalogue_read(args: Args) -> anyhow::Result<()> {
+    let timeout = crate::support::platform::timeouts::catalogue_read_transport_guard(0)?;
+    Ok(())
+}
+
+fn invoke_target_owned_system_ability(args: Args) -> anyhow::Result<()> {
+    let timeout = crate::support::platform::timeouts::remote_system_transport_guard(0)?;
+    Ok(())
+}
+RS
+
+cat >"$SB/src/daemon/invocation/routing/remote_invoke.rs" <<'RS'
+async fn invoke(client: &mut Client, request: Request, timeout: std::time::Duration) -> anyhow::Result<()> {
+    let response = tokio::time::timeout(timeout, client.invoke(request)).await?;
     Ok(())
 }
 RS

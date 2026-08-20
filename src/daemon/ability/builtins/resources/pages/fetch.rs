@@ -23,8 +23,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::daemon::ability::AuthorityScope;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::resources::projection::PagesFetchResponse;
 
 use super::mime::mime_from_path;
@@ -114,18 +113,17 @@ fn fetch_ability_manifest() -> crate::daemon::ability::manifest::AbilityManifest
 /// `pages::register` after restart restore.
 pub fn register_fetch_ability(
     registry: &AxonAbilityCatalog,
+    owner_user_id: &str,
     user: &str,
     project_id: &str,
-    authority_scope: AuthorityScope,
 ) -> anyhow::Result<()> {
     let ability = fetch_ability_name(user, project_id);
-    let owner = OwnerKind::User(user.to_string());
+    let owner = super::pages_service_owner(owner_user_id);
     let user = user.to_string();
     let project_id = project_id.to_string();
-    registry.hot_register_rpc_with_spec_and_authority_scope(
+    registry.hot_register_rpc_with_spec(
         ability,
         owner,
-        authority_scope,
         fetch_ability_manifest(),
         Arc::new(move |args| handle_fetch(&user, &project_id, args)),
     )

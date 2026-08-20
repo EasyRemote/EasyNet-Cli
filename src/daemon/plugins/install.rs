@@ -1303,10 +1303,13 @@ call_mode = "rpc"
 
     fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "2"
+            r#"schema_version = "3"
 name = "{ability}"
 descriptor_version = "1.2.3"
 description = "test descriptor for {ability}"
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
 admission_action = "invoke"
 
 [input_schema]

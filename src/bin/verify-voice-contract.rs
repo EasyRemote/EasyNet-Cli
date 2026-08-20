@@ -4,6 +4,8 @@ use easynet_cli::daemon::ability::catalog::{
     ability_toml, voice_ability_contract_inventory, SystemAbilityContract,
 };
 
+type VoiceContractMutation = (&'static str, Box<dyn Fn(&mut SystemAbilityContract)>);
+
 fn main() -> anyhow::Result<()> {
     let mut root = PathBuf::from(".");
     let mut self_test = false;
@@ -105,7 +107,7 @@ fn run_self_tests() -> anyhow::Result<()> {
         &ability_toml::render_ability_contract_toml(&baseline),
     )?;
 
-    let mut counterexamples: Vec<(&str, Box<dyn Fn(&mut SystemAbilityContract)>)> = vec![
+    let mut counterexamples: Vec<VoiceContractMutation> = vec![
         (
             "schema",
             Box::new(|c| c.input_schema = serde_json::json!({"type":"array"})),

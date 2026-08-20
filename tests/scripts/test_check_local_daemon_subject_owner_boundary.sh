@@ -40,7 +40,7 @@ rc=0
 run_check "$SB" >/tmp/check-local-daemon-subject-owner-boundary.out 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "transport-sourced issuer should exit 1 (got $rc)"
-grep -Fq "must source subject identity from daemon::identity::local_invocation" \
+grep -Fq "callers must not source authority subjects from the gRPC transport module" \
     /tmp/check-local-daemon-subject-owner-boundary.out \
     || fail "transport-sourced issuer failure should name identity owner"
 

@@ -1,0 +1,41 @@
+{
+  "profile": "runtime-catalogue-read-target.v1",
+  "cases": [
+    {
+      "name": "device target projects catalogue read to runtime introspection",
+      "callee_ura": "easynet:///r/example/device/dev-a",
+      "subject_ura": "easynet:///r/example/user/alice",
+      "ability": "meta.list_resources",
+      "provider": "ability_descriptor",
+      "expected_callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+      "expected_subject_ura": "easynet:///r/example/resource/user.alice/runtime-state/read"
+    },
+    {
+      "name": "media system agent target projects catalogue read to runtime introspection",
+      "callee_ura": "easynet:///r/example/agent/device.dev-a.media",
+      "subject_ura": "easynet:///r/example/resource/device.dev-a/streams/display.default",
+      "ability": "meta.list_resources",
+      "provider": "ability_descriptor",
+      "expected_callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+      "expected_subject_ura": "easynet:///r/example/device/dev-a"
+    },
+    {
+      "name": "runtime introspection target uses sponsoring device subject",
+      "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+      "subject_ura": "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+      "ability": "meta.list_abilities",
+      "provider": "ability_descriptor",
+      "expected_callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+      "expected_subject_ura": "easynet:///r/example/device/dev-a"
+    },
+    {
+      "name": "receipt history provider does not inherit catalogue callee projection",
+      "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-governance",
+      "subject_ura": "easynet:///r/example/resource/user.alice/runtime-state/read",
+      "ability": "invocation.history.list",
+      "provider": "receipt_history",
+      "expected_callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-governance",
+      "expected_subject_ura": "easynet:///r/example/resource/user.alice/runtime-state/read"
+    }
+  ]
+}

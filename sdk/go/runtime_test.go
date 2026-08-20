@@ -19,7 +19,7 @@ func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
 	t.Helper()
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithCalleeURA(runtimeTestCalleeURA).
 		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
@@ -33,7 +33,8 @@ func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
 	return draft
 }
 
-const runtimeTestDescriptorRef = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+const runtimeTestCalleeURA = "easynet:///r/example/agent/device.dev-a.runtime-health"
+const runtimeTestDescriptorRef = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 
 func canonicalRuntimeReceiptFixture(
 	invocationID string,
@@ -56,7 +57,7 @@ func canonicalRuntimeReceiptFixture(
 		"payload_content_type":    "application/json",
 		"cleanup_complete":        state != "admitted" && state != "Admitted" && state != "ADMITTED",
 		"caller_binding":          map[string]any{"ura": "easynet:///r/example/agent/alice.sdk", "profile": "axon-strict-v2"},
-		"callee_binding":          map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
+		"callee_binding":          map[string]any{"ura": runtimeTestCalleeURA, "profile": "axon-strict-v2"},
 		"subject_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
 		"invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_binding_kind":     "none",
@@ -65,11 +66,11 @@ func canonicalRuntimeReceiptFixture(
 			"algorithm":        "ed25519",
 			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 64)),
 		},
-		"signer_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
-		"authority_binding_kind": "self",
+		"signer_binding":         map[string]any{"ura": runtimeTestCalleeURA, "profile": "axon-strict-v2"},
+		"authority_binding_kind": "self+identity",
 		"authority_binding": map[string]any{
-			"kind":          "self",
-			"principal_ura": "easynet:///r/example/device/dev-a",
+			"kind":          "self+identity",
+			"authority_ura": runtimeTestCalleeURA,
 		},
 		"ability_binding":         runtimeTestDescriptorRef,
 		"host_attestation_base64": "",
@@ -90,14 +91,14 @@ func canonicalRuntimeReceiptFixture(
 		"runtime_env":        "go-test",
 		"authority_proof": map[string]any{
 			"proof_type":   "self",
-			"binding_kind": "self",
+			"binding_kind": "self+identity",
 			"binding": map[string]any{
-				"kind":          "self",
-				"principal_ura": "easynet:///r/example/device/dev-a",
+				"kind":          "self+identity",
+				"authority_ura": runtimeTestCalleeURA,
 			},
 			"proof_payload_base64": base64.StdEncoding.EncodeToString(proofPayload),
 			"proof_hash_hex":       fmt.Sprintf("%x", proofHash),
-			"issuer":               map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
+			"issuer":               map[string]any{"ura": runtimeTestCalleeURA, "profile": "axon-strict-v2"},
 			"signature": map[string]any{
 				"algorithm":        "ed25519",
 				"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 64)),
@@ -222,6 +223,11 @@ func TestPublicInvocationCancelJSONDoesNotGrantControlAuthority(t *testing.T) {
 	}
 	if cancel.ControlCapability().valid() {
 		t.Fatalf("public cancel snapshot created runtime-bound control")
+	}
+
+	_, err = NewInvocationCancelFromJSON([]byte(`{"handle_id": 7, "request_accepted": false, "deduplicated": true, "cancelled": false, "state": "Completed", "terminal": true, "state_code": "C440"}`))
+	if err == nil || !strings.Contains(err.Error(), "invocation cancel contains noncanonical field state_code") {
+		t.Fatalf("invocation cancel accepted product state_code drift: %v", err)
 	}
 }
 
@@ -440,7 +446,7 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 	if receipt.CausalBindingKind != "scalar" || receipt.CausalBinding["form"] != "scalar" {
 		t.Fatalf("causal binding not decoded: %#v", receipt.CausalBinding)
 	}
-	if receipt.AuthorityBindingKind != "self" || receipt.AuthorityBinding["kind"] != "self" {
+	if receipt.AuthorityBindingKind != "self+identity" || receipt.AuthorityBinding["kind"] != "self+identity" {
 		t.Fatalf("authority binding not decoded: %#v", receipt.AuthorityBinding)
 	}
 
@@ -556,7 +562,7 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 		},
 		"mismatched authority kind": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
-			proof["binding_kind"] = "delegation"
+			proof["binding_kind"] = "bootstrap"
 		},
 		"missing proof binding": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
@@ -565,8 +571,8 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 		"mismatched proof binding": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
 			proof["binding"] = map[string]any{
-				"kind":          "self",
-				"principal_ura": "easynet:///r/example/device/other",
+				"kind":          "self+identity",
+				"authority_ura": "easynet:///r/example/device/other",
 			}
 		},
 		"missing admission hook": func(receipt map[string]any) {
@@ -625,7 +631,7 @@ func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayload(t *testing.T) {
 	proof := fixture["authority_proof"].(map[string]any)
 	proof["proof_payload_base64"] = ""
 	proofHash := axoninv.AuthorityBindingProofHash(
-		axoninv.SelfAuthority("easynet:///r/example/device/dev-a"),
+		axoninv.SelfAuthority(runtimeTestCalleeURA),
 	)
 	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
 
@@ -642,10 +648,14 @@ func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayload(t *testing.T) {
 }
 
 func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
+	// "Generic fields" per the current RFC 001-authority-binding-relation-
+	// evidence.md shape: authority_ura (SessionOf's binding.authority,
+	// the session's accountable owner) + issuer_ura (evidence.issuer,
+	// who presents the session — envelope.caller).
 	sessionBinding := map[string]any{
-		"kind":             "session",
+		"kind":             "session_of+session",
+		"authority_ura":    "easynet:///r/example/agent/alice",
 		"issuer_ura":       "easynet:///r/example/agent/backend",
-		"subject_ura":      "easynet:///r/example/agent/alice",
 		"session_id":       "session-1",
 		"scopes":           []any{"invoke"},
 		"audiences":        []any{runtimeTestDescriptorRef},
@@ -654,50 +664,72 @@ func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
 		"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
 	}
 	fixture := canonicalRuntimeReceiptFixture("inv-session-authority", "completed", "Completed", 1)
-	fixture["authority_binding_kind"] = "session"
+	fixture["authority_binding_kind"] = "session_of+session"
 	fixture["authority_binding"] = sessionBinding
 	proof := fixture["authority_proof"].(map[string]any)
 	proof["proof_type"] = "session"
-	proof["binding_kind"] = "session"
+	proof["binding_kind"] = "session_of+session"
 	proof["binding"] = sessionBinding
 	proof["proof_payload_base64"] = ""
-	proofHash := axoninv.AuthorityBindingProofHash(axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
-		BackendURA:  "easynet:///r/example/agent/backend",
-		UserURA:     "easynet:///r/example/agent/alice",
-		SessionID:   "session-1",
-		Scopes:      []string{"invoke"},
-		Audiences:   []string{runtimeTestDescriptorRef},
-		IssuedAtMs:  1,
-		ExpiresAtMs: 2,
-		Signature:   bytes.Repeat([]byte{0x73}, 64),
-	}))
+	proofHash := axoninv.AuthorityBindingProofHash(axoninv.SessionAuthority(
+		axoninv.NewAgentIdentity("easynet:///r/example/agent/alice", axoninv.ProfileStrictV2),
+		axoninv.SessionEvidence{
+			Issuer:      axoninv.NewAgentIdentity("easynet:///r/example/agent/backend", axoninv.ProfileStrictV2),
+			SessionID:   "session-1",
+			Scopes:      []string{"invoke"},
+			Audiences:   []string{runtimeTestDescriptorRef},
+			IssuedAtMs:  1,
+			ExpiresAtMs: 2,
+			Signature:   bytes.Repeat([]byte{0x73}, 64),
+		},
+	))
 	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
 
 	if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); err != nil {
 		t.Fatalf("NewRuntimeReceiptFromJSON accepted generic session authority fields: %v", err)
 	}
 
-	retiredBinding := map[string]any{
-		"kind":             "session",
-		"backend_ura":      "easynet:///r/example/agent/backend",
-		"user_ura":         "easynet:///r/example/agent/alice",
-		"session_id":       "session-1",
-		"scopes":           []any{"invoke"},
-		"audiences":        []any{runtimeTestDescriptorRef},
-		"issued_at_ms":     int64(1),
-		"expires_at_ms":    int64(2),
-		"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
-	}
-	retired := canonicalRuntimeReceiptFixture("inv-retired-session-authority", "completed", "Completed", 1)
-	retired["authority_binding_kind"] = "session"
-	retired["authority_binding"] = retiredBinding
-	retiredProof := retired["authority_proof"].(map[string]any)
-	retiredProof["proof_type"] = "session"
-	retiredProof["binding_kind"] = "session"
-	retiredProof["binding"] = retiredBinding
-	retiredProof["proof_payload_base64"] = ""
-	if _, err := NewRuntimeReceiptFromJSON(mustJSON(retired)); !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "authority_binding contains noncanonical field") {
-		t.Fatalf("NewRuntimeReceiptFromJSON retired session fields error = %v, want noncanonical authority binding invalid argument", err)
+	// Retired field names from two earlier naming generations
+	// (backend_ura/user_ura pre-dates issuer_ura/subject_ura; subject_ura
+	// itself was retired by this session's relation/evidence redesign in
+	// favor of authority_ura) must still be rejected as noncanonical.
+	for name, retiredBinding := range map[string]map[string]any{
+		"backend_ura/user_ura": {
+			"kind":             "session_of+session",
+			"backend_ura":      "easynet:///r/example/agent/backend",
+			"user_ura":         "easynet:///r/example/agent/alice",
+			"session_id":       "session-1",
+			"scopes":           []any{"invoke"},
+			"audiences":        []any{runtimeTestDescriptorRef},
+			"issued_at_ms":     int64(1),
+			"expires_at_ms":    int64(2),
+			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
+		},
+		"issuer_ura/subject_ura": {
+			"kind":             "session_of+session",
+			"issuer_ura":       "easynet:///r/example/agent/backend",
+			"subject_ura":      "easynet:///r/example/agent/alice",
+			"session_id":       "session-1",
+			"scopes":           []any{"invoke"},
+			"audiences":        []any{runtimeTestDescriptorRef},
+			"issued_at_ms":     int64(1),
+			"expires_at_ms":    int64(2),
+			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			retired := canonicalRuntimeReceiptFixture("inv-retired-session-authority", "completed", "Completed", 1)
+			retired["authority_binding_kind"] = "session_of+session"
+			retired["authority_binding"] = retiredBinding
+			retiredProof := retired["authority_proof"].(map[string]any)
+			retiredProof["proof_type"] = "session"
+			retiredProof["binding_kind"] = "session_of+session"
+			retiredProof["binding"] = retiredBinding
+			retiredProof["proof_payload_base64"] = ""
+			if _, err := NewRuntimeReceiptFromJSON(mustJSON(retired)); !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "authority_binding contains noncanonical field") {
+				t.Fatalf("NewRuntimeReceiptFromJSON retired session fields error = %v, want noncanonical authority binding invalid argument", err)
+			}
+		})
 	}
 }
 
@@ -714,8 +746,8 @@ func TestRuntimeClientPrepareBuilderConsumesOnlyAfterSuccess(t *testing.T) {
 	}
 	builder := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
+		WithCalleeURA(runtimeTestCalleeURA).
+		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -746,8 +778,8 @@ func TestRuntimeClientPrepareBuilderKeepsBuilderOnFailure(t *testing.T) {
 	}
 	builder := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
+		WithCalleeURA(runtimeTestCalleeURA).
+		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -801,18 +833,18 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	prepared := seenSigned["prepared"].(map[string]any)
 	tuple := prepared["tuple"].(map[string]any)
 	if tuple["caller_ura"] != "easynet:///r/example/agent/alice.sdk" ||
-		tuple["callee_ura"] != "easynet:///r/example/device/dev-a" ||
+		tuple["callee_ura"] != runtimeTestCalleeURA ||
 		tuple["descriptor_ref"] != runtimeTestDescriptorRef {
 		t.Fatalf("prepared tuple not preserved: %#v", seenSigned)
 	}
 }
 
-func TestRuntimeClientOpenSignedStreamPreservesSignature(t *testing.T) {
-	var seenSigned map[string]any
+func TestRuntimeClientOpenSignedStreamProjectsCanonicalInvocation(t *testing.T) {
+	var seenDraft map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
-		OpenStreamFunc: func(ctx context.Context, signedJSON []byte) (StreamTransport, []byte, error) {
-			if err := json.Unmarshal(signedJSON, &seenSigned); err != nil {
-				t.Fatalf("signed stream JSON: %v", err)
+		OpenStreamFunc: func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
+				t.Fatalf("signed stream draft JSON: %v", err)
 			}
 			return StreamTransportFunc{
 				RecvFunc: func(context.Context) ([]byte, error) {
@@ -832,19 +864,28 @@ func TestRuntimeClientOpenSignedStreamPreservesSignature(t *testing.T) {
 	if stream.StreamID() != "stream-signed-1" || stream.State() != StreamOpen {
 		t.Fatalf("unexpected stream: id=%q state=%s", stream.StreamID(), stream.State())
 	}
-	signature := seenSigned["signature"].(map[string]any)
+	signature := seenDraft["caller_signature"].(map[string]any)
 	if signature["signature_base64"] != "c2lnbmF0dXJl" {
-		t.Fatalf("signature not preserved: %#v", seenSigned)
+		t.Fatalf("caller signature not preserved: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["policy"]; ok {
+		t.Fatalf("signed workflow policy leaked into stream invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["prepared"]; ok {
+		t.Fatalf("signed workflow prepared state leaked into stream invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["signature"]; ok {
+		t.Fatalf("signed workflow signature leaked as top-level stream field: %#v", seenDraft)
 	}
 }
 
-func TestRuntimeClientOpenSignedBidiPreservesSignatureAndStreams(t *testing.T) {
-	var seenSigned map[string]any
+func TestRuntimeClientOpenSignedBidiProjectsCanonicalInvocationAndStreams(t *testing.T) {
+	var seenDraft map[string]any
 	var seenStreams []map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
-		OpenBidiFunc: func(ctx context.Context, signedJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
-			if err := json.Unmarshal(signedJSON, &seenSigned); err != nil {
-				t.Fatalf("signed bidi JSON: %v", err)
+		OpenBidiFunc: func(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
+				t.Fatalf("signed bidi draft JSON: %v", err)
 			}
 			if err := json.Unmarshal(streamsJSON, &seenStreams); err != nil {
 				t.Fatalf("streams JSON: %v", err)
@@ -865,9 +906,18 @@ func TestRuntimeClientOpenSignedBidiPreservesSignatureAndStreams(t *testing.T) {
 	if session.SessionID() != "bidi-signed-1" || session.State() != BidiOpen {
 		t.Fatalf("unexpected bidi session: id=%q state=%s", session.SessionID(), session.State())
 	}
-	signature := seenSigned["signature"].(map[string]any)
+	signature := seenDraft["caller_signature"].(map[string]any)
 	if signature["signature_base64"] != "c2lnbmF0dXJl" {
-		t.Fatalf("signature not preserved: %#v", seenSigned)
+		t.Fatalf("caller signature not preserved: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["policy"]; ok {
+		t.Fatalf("signed workflow policy leaked into bidi invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["prepared"]; ok {
+		t.Fatalf("signed workflow prepared state leaked into bidi invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["signature"]; ok {
+		t.Fatalf("signed workflow signature leaked as top-level bidi field: %#v", seenDraft)
 	}
 	if len(seenStreams) != 1 || seenStreams[0]["stream_id"] != float64(9) {
 		t.Fatalf("streams not preserved: %#v", seenStreams)
@@ -1037,6 +1087,12 @@ func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
 	}
 	if !strings.Contains(string(result.TerminalReceipt()), `"index":1`) {
 		t.Fatalf("terminal receipt = %s", result.TerminalReceipt())
+	}
+	if !strings.Contains(string(result.AdmissionReceipt()), `"receipt_id":"inv-1:0"`) {
+		t.Fatalf("admission receipt omitted derived receipt_id: %s", result.AdmissionReceipt())
+	}
+	if !strings.Contains(string(result.TerminalReceipt()), `"receipt_id":"inv-1:1"`) {
+		t.Fatalf("terminal receipt omitted derived receipt_id: %s", result.TerminalReceipt())
 	}
 	if summary := result.TerminalReceiptSummary(); summary == nil || summary.Index != 1 || summary.State != "Completed" {
 		t.Fatalf("terminal receipt summary = %#v", summary)

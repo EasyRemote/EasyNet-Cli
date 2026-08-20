@@ -516,12 +516,25 @@ impl FollowEngine {
     }
 }
 
-/// `{trace_id, nodes}` subset of the `invocation.trace.get` response.
+/// Exact `invocation.trace.get` response contract.
+///
+/// Watch currently projects state from the canonical Axon records. It still
+/// decodes the source and edge fields so daemon/CLI schema drift fails closed
+/// instead of being silently ignored.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TraceSnapshot {
+    #[serde(rename = "ledger_ura")]
+    _ledger_ura: String,
+    #[serde(rename = "ledger_path")]
+    _ledger_path: String,
     trace_id: String,
     #[serde(default)]
     nodes: Vec<Record>,
+    #[serde(default, rename = "edges")]
+    _edges: Vec<axon_sdk::invocation::InvocationTraceEdge>,
+    #[serde(rename = "edge_semantics")]
+    _edge_semantics: String,
 }
 
 /// What one watch entry resolves to: a trace id and the records of
@@ -1131,6 +1144,21 @@ mod tests {
     }
 
     #[test]
+    fn trace_snapshot_rejects_unknown_envelope_fields() {
+        let err = serde_json::from_value::<TraceSnapshot>(json!({
+            "trace_id": "trace-1",
+            "nodes": [],
+            "state_code": "J200"
+        }))
+        .expect_err("watch trace snapshot must reject read-model drift");
+
+        assert!(
+            err.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {err}"
+        );
+    }
+
+    #[test]
     fn follow_engine_emits_pending_once_then_stops_empty_running_trace_after_timeout() {
         let mut engine = FollowEngine::with_test_budget("trace-empty".into(), 3);
         let first = engine
@@ -1203,7 +1231,7 @@ mod tests {
             .ability_name("fs.read")
             .state(state)
             .started_unix_ms(0)
-            .authority_form("self")
+            .authority_form("self+identity")
             .args(axon_sdk::invocation::LedgerEventPayload::Digest {
                 content_type: "application/json".to_string(),
                 sha256: "00".to_string(),
@@ -1407,7 +1435,7 @@ mod tests {
                 ability: "testbot.echo".into(),
                 state: "COMPLETED".into(),
                 caller: "easynet:///r/cli/agent/user.owner".into(),
-                callee: "easynet:///r/cli/device/local".into(),
+                callee: "easynet:///r/cli/agent/user.testbot".into(),
                 subject: "easynet:///r/cli/agent/user.target".into(),
                 elapsed_ms: Some(12),
                 usage: InvocationUsage {

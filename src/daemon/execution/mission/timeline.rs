@@ -46,6 +46,7 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use axon_sdk::invocation::persistence::PersistentLog;
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,9 @@ const DEFAULT_BROADCAST_CAPACITY: usize = 2048;
 pub struct TimelineEvent {
     pub sequence: i64,
     pub timestamp_unix_ms: i64,
+    /// Monotonic elapsed time from construction of this invocation's writer.
+    /// Unlike wall-clock timestamps, this remains ordered across clock steps.
+    pub elapsed_ms: u64,
     /// Event kind. One of the strings documented in
     /// `INVOCATION_STATE_MACHINE.md §2` (plus `admitted` emitted at
     /// writer construction). CLI today does not model
@@ -90,14 +94,20 @@ pub struct TimelineEvent {
 }
 
 impl TimelineEvent {
-    /// Construct an event ready for append. The sequence is assigned
-    /// by the caller (writer lock holder); `timestamp_unix_ms` is
-    /// stamped here as wall-clock to keep the writer path simple.
-    fn new(sequence: i64, event_type: impl Into<String>, payload: Option<Value>) -> Self {
+    /// Construct an event ready for append. The sequence and monotonic elapsed
+    /// time are assigned by the writer; `timestamp_unix_ms` is stamped here as
+    /// the operator-facing wall clock.
+    fn new(
+        sequence: i64,
+        event_type: impl Into<String>,
+        payload: Option<Value>,
+        elapsed_ms: u64,
+    ) -> Self {
         let timestamp_unix_ms = chrono::Utc::now().timestamp_millis();
         Self {
             sequence,
             timestamp_unix_ms,
+            elapsed_ms,
             event_type: event_type.into(),
             payload,
         }
@@ -119,6 +129,7 @@ impl TimelineEvent {
 pub struct TimelineWriter {
     invocation_id: String,
     log: PersistentLog,
+    started_at: Instant,
     next_sequence: Mutex<i64>,
     broadcast_tx: broadcast::Sender<TimelineEvent>,
 }
@@ -135,6 +146,7 @@ impl TimelineWriter {
         Self {
             invocation_id: invocation_id.into(),
             log: PersistentLog::new(log_dir),
+            started_at: Instant::now(),
             next_sequence: Mutex::new(0),
             broadcast_tx: tx,
         }
@@ -205,7 +217,12 @@ impl TimelineWriter {
             .lock()
             .map_err(|_| anyhow::anyhow!("timeline writer lock poisoned"))?;
         let sequence = *guard;
-        let event = TimelineEvent::new(sequence, event_type, payload);
+        let event = TimelineEvent::new(
+            sequence,
+            event_type,
+            payload,
+            self.started_at.elapsed().as_millis() as u64,
+        );
         // Serialize to the shape PersistentLog expects. The
         // serializer cannot fail for our `TimelineEvent` (all
         // fields are String / i64 / Option<Value>) but we propagate
@@ -232,6 +249,35 @@ impl TimelineWriter {
         // common case for one-shot `agent send` invocations.
         let _ = self.broadcast_tx.send(event);
         Ok(sequence)
+    }
+
+    /// Project the durable progress prefix into the compact public response
+    /// shape used by agent RPC and stream terminal frames.
+    ///
+    /// The persistent timeline is the only event authority. Response callers
+    /// must not shadow it in a second in-memory buffer because that creates a
+    /// split-brain result whenever a callback is dropped or reordered.
+    pub fn progress_projection(&self) -> anyhow::Result<Vec<Value>> {
+        let events = self
+            .log
+            .read_events(&self.invocation_id, 0)
+            .into_iter()
+            .map(|value| {
+                serde_json::from_value::<TimelineEvent>(value)
+                    .map_err(|error| anyhow::anyhow!("decode durable timeline event: {error}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(events
+            .into_iter()
+            .filter(|event| event.event_type == "progress")
+            .map(|event| {
+                serde_json::json!({
+                    "elapsed_ms": event.elapsed_ms,
+                    "type": event.event_type,
+                    "payload": event.payload.unwrap_or(Value::Null),
+                })
+            })
+            .collect())
     }
 
     /// Number of currently-active broadcast subscribers. Diagnostic;
@@ -304,6 +350,23 @@ mod tests {
         assert_eq!(events[0]["type"], "admitted");
         assert_eq!(events[2]["type"], "completed");
         assert_eq!(events[2]["payload"]["reply"], "hi");
+    }
+
+    #[test]
+    fn progress_projection_reads_the_single_durable_timeline_authority() {
+        let (writer, _dir) = new_writer("progress-projection");
+        writer.emit("admitted", None).unwrap();
+        writer
+            .emit("progress", Some(serde_json::json!({"chunk": 1})))
+            .unwrap();
+        writer.emit("completed", None).unwrap();
+
+        let projection = writer.progress_projection().unwrap();
+
+        assert_eq!(projection.len(), 1);
+        assert_eq!(projection[0]["type"], "progress");
+        assert_eq!(projection[0]["payload"]["chunk"], 1);
+        assert!(projection[0]["elapsed_ms"].is_u64());
     }
 
     #[test]

@@ -33,13 +33,28 @@
       "components": {"realm": "example"}
     },
     {
-      "name": "device_ability",
+      "name": "device_ability_grammar_migration_only",
       "request": {"kind": "ability", "owner_ura": "easynet:///r/example/device/dev-a", "ability_name": "observe.health"},
       "ura": "easynet:///r/example/ability/device.dev-a.observe.health",
       "components": {
         "realm": "example",
         "owner_ura": "easynet:///r/example/device/dev-a",
         "owner_kind": "device",
+        "ability_name": "observe.health",
+        "public_name": "observe.health",
+        "local_registry_ability": "observe.health",
+        "namespace": "observe",
+        "local_name": "health"
+      }
+    },
+    {
+      "name": "system_agent_ability",
+      "request": {"kind": "ability", "owner_ura": "easynet:///r/example/agent/device.dev-a.runtime-health", "ability_name": "observe.health"},
+      "ura": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
+      "components": {
+        "realm": "example",
+        "owner_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+        "owner_kind": "system-agent",
         "ability_name": "observe.health",
         "public_name": "observe.health",
         "local_registry_ability": "observe.health",
@@ -70,10 +85,12 @@
     }
   ],
   "descriptor": {
-    "raw": "easynet:///r/example/ability/authority.federation.resolve@1.0.0",
+    "raw": "easynet:///r/example/ability/authority.federation.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
     "components": {
       "ability_ura": "easynet:///r/example/ability/authority.federation.resolve",
       "descriptor_version": "1.0.0",
+      "descriptor_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "action": "read",
       "owner_ura": "easynet:///r/example/authority",
       "owner_kind": "authority",
       "public_name": "federation.resolve",

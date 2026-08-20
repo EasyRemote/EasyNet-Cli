@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 )
 
 type memoryBidiTransport struct {
@@ -35,6 +37,21 @@ type concurrentCancelBidiTransport struct {
 	memoryBidiTransport
 	recvStarted chan struct{}
 	releaseRecv chan struct{}
+	recvFrame   string
+}
+
+type failedSendConcurrentBidiTransport struct {
+	*concurrentCancelBidiTransport
+}
+
+func (*failedSendConcurrentBidiTransport) Send(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{
+		Code:      ErrTransport,
+		Stage:     "test",
+		Retry:     RetrySafe,
+		Retryable: true,
+		Message:   "carrier send failed",
+	}
 }
 
 func (*unsupportedCancelBidiTransport) Cancel(context.Context, string) ([]byte, error) {
@@ -75,13 +92,14 @@ func newConcurrentCancelBidiTransport() *concurrentCancelBidiTransport {
 	return &concurrentCancelBidiTransport{
 		recvStarted: make(chan struct{}),
 		releaseRecv: make(chan struct{}),
+		recvFrame:   `{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,
 	}
 }
 
 func (t *concurrentCancelBidiTransport) Recv(context.Context) ([]byte, error) {
 	close(t.recvStarted)
 	<-t.releaseRecv
-	return []byte(`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`), nil
+	return []byte(t.recvFrame), nil
 }
 
 func (m *memoryBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
@@ -238,6 +256,21 @@ func TestBidiFrameRejectsLegacyEventAlias(t *testing.T) {
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestBidiProjectionsRejectProductStateCode(t *testing.T) {
+	if _, err := NewBidiSessionFromJSON(&memoryBidiTransport{}, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4,"state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi open contains noncanonical field state_code") {
+		t.Fatalf("NewBidiSessionFromJSON accepted product state_code: %v", err)
+	}
+	if _, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"kind":"data","stream_id":1,"terminal":false,"state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi frame contains noncanonical field state_code") {
+		t.Fatalf("NewBidiFrameFromJSON accepted product state_code: %v", err)
+	}
+	if _, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"kind":"data","stream_id":1,"terminal":false,"mac_base64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`)); err == nil || !strings.Contains(err.Error(), "bidi frame contains noncanonical field mac_base64") {
+		t.Fatalf("NewBidiFrameFromJSON accepted transport mac_base64: %v", err)
+	}
+	if _, err := NewBidiOutcomeFromJSON([]byte(`{"session_id":"bidi-1","state":"CancelRequested","terminal":false,"reason":"stop","state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi outcome contains noncanonical field state_code") {
+		t.Fatalf("NewBidiOutcomeFromJSON accepted product state_code: %v", err)
 	}
 }
 
@@ -483,6 +516,116 @@ func TestBidiCancelWhileReceivingWaitsForCanonicalTerminal(t *testing.T) {
 	}
 }
 
+func TestBidiReceiveReturnsTerminalFrameWhenSessionAlreadyTerminalInFlight(t *testing.T) {
+	transport := newConcurrentCancelBidiTransport()
+	session := newTestBidiSession(t, transport)
+
+	received := make(chan BidiFrame, 1)
+	receiveErrors := make(chan error, 1)
+	go func() {
+		frame, receiveErr := session.Receive(context.Background())
+		if receiveErr != nil {
+			receiveErrors <- receiveErr
+			return
+		}
+		received <- frame
+	}()
+	<-transport.recvStarted
+
+	session.mu.Lock()
+	session.runtimeState = BidiTerminal
+	session.mu.Unlock()
+	close(transport.releaseRecv)
+
+	select {
+	case receiveErr := <-receiveErrors:
+		t.Fatalf("Receive rejected in-flight terminal frame: %v", receiveErr)
+	case frame := <-received:
+		if !frame.Terminal() {
+			t.Fatalf("received frame is not terminal: %#v", frame)
+		}
+	}
+	if session.State() != BidiTerminal {
+		t.Fatalf("state = %s, want Terminal", session.State())
+	}
+}
+
+func TestBidiReceiveRejectsNonTerminalFrameWhenSessionAlreadyTerminalInFlight(t *testing.T) {
+	transport := newConcurrentCancelBidiTransport()
+	transport.recvFrame = `{"sequence":1,"kind":"data","stream_id":1,"payload_json":{"late":true}}`
+	session := newTestBidiSession(t, transport)
+
+	receiveErrors := make(chan error, 1)
+	go func() {
+		_, receiveErr := session.Receive(context.Background())
+		receiveErrors <- receiveErr
+	}()
+	<-transport.recvStarted
+
+	session.mu.Lock()
+	session.runtimeState = BidiTerminal
+	session.mu.Unlock()
+	close(transport.releaseRecv)
+
+	select {
+	case receiveErr := <-receiveErrors:
+		if receiveErr == nil || !strings.Contains(receiveErr.Error(), "became terminal") {
+			t.Fatalf("Receive error = %v, want terminal race rejection", receiveErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Receive did not complete")
+	}
+}
+
+func TestBidiInFlightReceiveDrainsAfterCarrierSendFailure(t *testing.T) {
+	base := newConcurrentCancelBidiTransport()
+	base.recvFrame = `{"sequence":1,"kind":"data","stream_id":1,"payload_json":{"ready":true}}`
+	transport := &failedSendConcurrentBidiTransport{concurrentCancelBidiTransport: base}
+	session := newTestBidiSession(t, transport)
+
+	received := make(chan BidiFrame, 1)
+	receiveErrors := make(chan error, 1)
+	go func() {
+		frame, receiveErr := session.Receive(context.Background())
+		if receiveErr != nil {
+			receiveErrors <- receiveErr
+			return
+		}
+		received <- frame
+	}()
+	<-base.recvStarted
+
+	frame, err := NewBidiBinaryFrame(1, 1, []byte("whoami\n"), "application/octet-stream")
+	if err != nil {
+		t.Fatalf("NewBidiBinaryFrame: %v", err)
+	}
+	if _, err := session.Send(context.Background(), frame); !IsCode(err, ErrTransport) {
+		t.Fatalf("Send error = %v, want %s", err, ErrTransport)
+	}
+	if session.State() != BidiFailed || session.RuntimeState() != BidiOpen {
+		t.Fatalf(
+			"carrier failure rewrote provider state: state=%s runtime_state=%s",
+			session.State(),
+			session.RuntimeState(),
+		)
+	}
+	close(base.releaseRecv)
+
+	select {
+	case receiveErr := <-receiveErrors:
+		t.Fatalf("in-flight Receive rejected ordered frame: %v", receiveErr)
+	case receivedFrame := <-received:
+		if receivedFrame.Sequence() != 1 || receivedFrame.Terminal() {
+			t.Fatalf("unexpected drained frame: %#v", receivedFrame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight Receive did not complete")
+	}
+	if _, err := session.Receive(context.Background()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Receive after carrier failure error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestBidiRejectsSecondConcurrentReceiver(t *testing.T) {
 	transport := newConcurrentCancelBidiTransport()
 	session, err := NewBidiSessionFromJSON(transport, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}`))
@@ -506,7 +649,7 @@ func TestBidiRejectsSecondConcurrentReceiver(t *testing.T) {
 	}
 }
 
-func TestBidiReceiveBufferBound(t *testing.T) {
+func TestBidiReceiveHistoryIsBoundedRollingWindow(t *testing.T) {
 	transport := &memoryBidiTransport{recvFrames: []string{
 		`{"sequence":1,"kind":"data","stream_id":1}`,
 		`{"sequence":2,"kind":"data","stream_id":1}`,
@@ -518,10 +661,38 @@ func TestBidiReceiveBufferBound(t *testing.T) {
 	if _, err := session.Receive(context.Background()); err != nil {
 		t.Fatalf("Receive first: %v", err)
 	}
-	if _, err := session.Receive(context.Background()); err == nil {
-		t.Fatalf("Receive succeeded after buffer limit")
+	if _, err := session.Receive(context.Background()); err != nil {
+		t.Fatalf("Receive second: %v", err)
 	}
-	if session.State() != BidiFailed {
-		t.Fatalf("state = %s, want Failed", session.State())
+	history := session.ReceivedFrames()
+	if len(history) != 1 || history[0].Sequence() != 2 {
+		t.Fatalf("received history = %#v, want only sequence 2", history)
+	}
+	if session.State() != BidiOpen || session.RuntimeState() != BidiOpen {
+		t.Fatalf("rolling history changed lifecycle: state=%s runtime=%s", session.State(), session.RuntimeState())
+	}
+}
+
+func TestBidiSendHistoryIsBoundedRollingWindow(t *testing.T) {
+	transport := &memoryBidiTransport{}
+	session, err := NewBidiSessionFromJSON(transport, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":1}`))
+	if err != nil {
+		t.Fatalf("NewBidiSessionFromJSON: %v", err)
+	}
+	for sequence := uint64(1); sequence <= 2; sequence++ {
+		frame, frameErr := NewBidiBinaryFrame(sequence, 1, []byte("x"), "application/octet-stream")
+		if frameErr != nil {
+			t.Fatalf("NewBidiBinaryFrame(%d): %v", sequence, frameErr)
+		}
+		if _, sendErr := session.Send(context.Background(), frame); sendErr != nil {
+			t.Fatalf("Send(%d): %v", sequence, sendErr)
+		}
+	}
+	history := session.SentFrames()
+	if len(history) != 1 || history[0].Sequence() != 2 {
+		t.Fatalf("sent history = %#v, want only sequence 2", history)
+	}
+	if session.State() != BidiOpen {
+		t.Fatalf("state = %s, want Open", session.State())
 	}
 }

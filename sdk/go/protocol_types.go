@@ -48,8 +48,6 @@ type CausalReceiptRef struct {
 type CausalContext struct {
 	Kind CausalContextKind
 
-	Reason string
-
 	Scalar CausalReceiptRef
 	Vector []CausalReceiptRef
 
@@ -57,8 +55,12 @@ type CausalContext struct {
 	DAGProofURA string
 }
 
-func CausalNullWithReason(reason string) CausalContext {
-	return CausalContext{Kind: CausalContextNull, Reason: reason}
+func CausalRoot() CausalContext {
+	return CausalContext{Kind: CausalContextNull}
+}
+
+func CausalContextFromJSON(value map[string]any) (CausalContext, error) {
+	return causalContextForInvocationDraft(value)
 }
 
 func CausalScalarRef(ref CausalReceiptRef) CausalContext {

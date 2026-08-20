@@ -38,6 +38,8 @@ class AddressingProjection:
     descriptor_ref: str = ""
     ability_ura: str = ""
     descriptor_version: str = ""
+    descriptor_hash: str = ""
+    action: str = ""
 
     @property
     def owner_ura(self) -> str:
@@ -86,6 +88,8 @@ class AddressingProjection:
             descriptor_ref=_string(value.get("descriptor_ref")),
             ability_ura=_string(value.get("ability_ura")),
             descriptor_version=_string(value.get("descriptor_version")),
+            descriptor_hash=_string(value.get("descriptor_hash")),
+            action=_string(value.get("action")),
         )
 
 
@@ -158,6 +162,14 @@ class AddressingClient:
             agent_id=_clean(agent_id, "agent_id"),
         )
 
+    def service_ura(self, realm: str, user_id: str, service_id: str) -> str:
+        return self._build(
+            "service",
+            realm=_clean(realm, "realm"),
+            user_id=_clean(user_id, "user_id"),
+            service_id=_clean(service_id, "service_id"),
+        )
+
     def device_agent_ura(self, realm: str, device_id: str, agent_id: str) -> str:
         return self._build(
             "agent",
@@ -200,6 +212,14 @@ class AddressingClient:
         )
         return self.owner_ability_ura(self.device_ura(realm, device_id), name)
 
+    def service_ability_ura(
+        self, realm: str, user_id: str, service_id: str, ability_name: str
+    ) -> str:
+        return self.owner_ability_ura(
+            self.service_ura(realm, user_id, service_id),
+            _clean(ability_name, "ability_name"),
+        )
+
     def owner_ura_for_ability(self, ability_ura: str) -> str:
         projection = self.parse_ura(ability_ura)
         owner = projection.components.get("owner_ura")
@@ -208,7 +228,12 @@ class AddressingClient:
         return owner
 
     def canonical_ability_descriptor_ref(
-        self, value: str, descriptor_version: str = ""
+        self,
+        value: str,
+        descriptor_version: str = "",
+        *,
+        descriptor_hash: str = "",
+        action: str = "",
     ) -> str:
         if descriptor_version.strip():
             projection = self._request(
@@ -218,6 +243,8 @@ class AddressingClient:
                     "descriptor_version": _clean(
                         descriptor_version, "descriptor_version"
                     ),
+                    "descriptor_hash": _clean(descriptor_hash, "descriptor_hash"),
+                    "action": _clean(action, "action"),
                 },
             )
         else:
@@ -227,10 +254,19 @@ class AddressingClient:
         return projection.descriptor_ref
 
     def owner_ability_descriptor_ref(
-        self, owner_ura: str, ability_name: str, descriptor_version: str = "1.0.0"
+        self,
+        owner_ura: str,
+        ability_name: str,
+        descriptor_version: str = "1.0.0",
+        *,
+        descriptor_hash: str = "",
+        action: str = "",
     ) -> str:
         return self.canonical_ability_descriptor_ref(
-            self.owner_ability_ura(owner_ura, ability_name), descriptor_version
+            self.owner_ability_ura(owner_ura, ability_name),
+            descriptor_version,
+            descriptor_hash=descriptor_hash,
+            action=action,
         )
 
     def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str:
@@ -295,6 +331,10 @@ def agent_ura(realm: str, user_id: str, agent_id: str) -> str:
     return _with_client(lambda client: client.agent_ura(realm, user_id, agent_id))
 
 
+def service_ura(realm: str, user_id: str, service_id: str) -> str:
+    return _with_client(lambda client: client.service_ura(realm, user_id, service_id))
+
+
 def device_agent_ura(realm: str, device_id: str, agent_id: str) -> str:
     return _with_client(
         lambda client: client.device_agent_ura(realm, device_id, agent_id)
@@ -325,14 +365,33 @@ def device_ability_ura(
     )
 
 
+def service_ability_ura(
+    realm: str, user_id: str, service_id: str, ability_name: str
+) -> str:
+    return _with_client(
+        lambda client: client.service_ability_ura(
+            realm, user_id, service_id, ability_name
+        )
+    )
+
+
 def owner_ura_for_ability(ability_ura: str) -> str:
     return _with_client(lambda client: client.owner_ura_for_ability(ability_ura))
 
 
-def canonical_ability_descriptor_ref(value: str, descriptor_version: str = "") -> str:
+def canonical_ability_descriptor_ref(
+    value: str,
+    descriptor_version: str = "",
+    *,
+    descriptor_hash: str = "",
+    action: str = "",
+) -> str:
     return _with_client(
         lambda client: client.canonical_ability_descriptor_ref(
-            value, descriptor_version
+            value,
+            descriptor_version,
+            descriptor_hash=descriptor_hash,
+            action=action,
         )
     )
 
@@ -361,8 +420,12 @@ class AxonAddressingTransport:
         request = _request_object(request_json, "descriptor-ref build")
         ability_ura = _required_string(request, "ability_ura")
         descriptor_version = _required_string(request, "descriptor_version")
+        descriptor_hash = _required_string(request, "descriptor_hash")
+        action = _required_string(request, "action")
         try:
-            ref = self._addressing.build_descriptor_ref(ability_ura, descriptor_version)
+            ref = self._addressing.parse_descriptor_ref(
+                f"{ability_ura}@{descriptor_version}#{descriptor_hash}!{action}"
+            )
             return _descriptor_projection(self._addressing, ref)
         except Exception as exc:
             _invalid_addressing(f"build descriptor_ref: {exc}", exc)
@@ -434,6 +497,15 @@ class AxonAddressingTransport:
                     ),
                 )
             raise ParseError(f"unsupported agent owner_kind {owner_kind!r}")
+        if kind == "service":
+            return cast(
+                str,
+                self._addressing.service_ura(
+                    _required_string(request, "realm"),
+                    _required_string(request, "user_id"),
+                    _required_string(request, "service_id"),
+                ),
+            )
         if kind == "authority":
             return cast(
                 str, self._addressing.authority_ura(_required_string(request, "realm"))
@@ -475,10 +547,14 @@ def _descriptor_projection(
             "descriptor_ref": ref.raw,
             "ability_ura": ref.ability_ura,
             "descriptor_version": ref.version,
+            "descriptor_hash": ref.descriptor_hash,
+            "action": ref.action,
             "profile": _PROFILE,
             "components": {
                 "ability_ura": ref.ability_ura,
                 "descriptor_version": ref.version,
+                "descriptor_hash": ref.descriptor_hash,
+                "action": ref.action,
                 "owner_ura": owner_ura,
                 "owner_kind": _runtime_ability_owner_kind(ability.owner.kind),
                 "public_name": public_name,
@@ -531,6 +607,13 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
             components["device_id"] = parsed.device_id or ""
         else:
             components["user_id"] = parsed.user_id or ""
+    elif parsed.kind == "service":
+        components.update(
+            {
+                "user_id": parsed.user_id or "",
+                "service_id": parsed.service_id or "",
+            }
+        )
     elif parsed.kind == "resource":
         components.update(
             {

@@ -57,6 +57,12 @@ type SigningMaterial struct {
 	signedFields         []string
 	expiresAtUnixMS      int64
 	signerPolicy         *SignerPolicy
+	callerURA            string
+	callerProfile        string
+	calleeURA            string
+	calleeProfile        string
+	subjectURA           string
+	subjectProfile       string
 }
 
 func (m SigningMaterial) Algorithm() string {
@@ -99,6 +105,33 @@ func (m SigningMaterial) SignerPolicy() *SignerPolicy {
 	}
 	value := *m.signerPolicy
 	return &value
+}
+
+// CallerURA and CallerProfile return the SDK-validated identity pair used by
+// Axon canonicalization. Product callers must pass both values to verifiers;
+// the profile is not a Backend policy default.
+func (m SigningMaterial) CallerURA() string {
+	return m.callerURA
+}
+
+func (m SigningMaterial) CallerProfile() string {
+	return m.callerProfile
+}
+
+func (m SigningMaterial) CalleeURA() string {
+	return m.calleeURA
+}
+
+func (m SigningMaterial) CalleeProfile() string {
+	return m.calleeProfile
+}
+
+func (m SigningMaterial) SubjectURA() string {
+	return m.subjectURA
+}
+
+func (m SigningMaterial) SubjectProfile() string {
+	return m.subjectProfile
 }
 
 // PreparedInvocation is immutable canonical signing material, not executable.
@@ -145,6 +178,9 @@ func decodePreparedInvocation(raw []byte, requirePreparedID bool) (PreparedInvoc
 	if err != nil {
 		return PreparedInvocation{}, err
 	}
+	if err := material.bindCanonicalIdentityProfiles(tuple); err != nil {
+		return PreparedInvocation{}, err
+	}
 	if material.DescriptorRef() != tuple.DescriptorRef() {
 		return PreparedInvocation{}, invalidInvocation("signing_material.descriptor_ref must match tuple descriptor_ref", nil)
 	}
@@ -185,6 +221,27 @@ func decodePreparedInvocation(raw []byte, requirePreparedID bool) (PreparedInvoc
 	prepared.canonicalHashHex = canonicalHashHex
 	prepared.signingMaterial.canonicalHashHex = canonicalHashHex
 	return prepared, nil
+}
+
+func (m *SigningMaterial) bindCanonicalIdentityProfiles(tuple InvocationDraft) error {
+	profile, err := canonicalInvocationURAProfile()
+	if err != nil {
+		return invalidInvocation("SDK canonical URA profile is invalid", err)
+	}
+	identities := []struct {
+		rawURA     string
+		assignURA  *string
+		assignProf *string
+	}{
+		{tuple.CallerURA(), &m.callerURA, &m.callerProfile},
+		{tuple.CalleeURA(), &m.calleeURA, &m.calleeProfile},
+		{tuple.SubjectURA(), &m.subjectURA, &m.subjectProfile},
+	}
+	for _, identity := range identities {
+		*identity.assignURA = identity.rawURA
+		*identity.assignProf = profile
+	}
+	return nil
 }
 
 func preparedSubmitReady(fields map[string]json.RawMessage) bool {
@@ -423,6 +480,21 @@ func (s SignedInvocation) SubmitReady() bool {
 		strings.TrimSpace(s.prepared.SigningMaterial().CanonicalBytesBase64()) != ""
 }
 
+// InvocationDraft projects the signed workflow envelope back to the canonical
+// Invocation DTO used by stream and bidi transports. SubmitSigned keeps the
+// full signed envelope for audit/handle admission; streaming ingress accepts
+// only the invocation tuple plus caller_signature and must not receive signer
+// policy or prepared-workflow fields.
+func (s SignedInvocation) InvocationDraft() (InvocationDraft, error) {
+	if !s.SubmitReady() {
+		return InvocationDraft{}, invalidInvocation("signed invocation is not submit-ready", nil)
+	}
+	draft := s.prepared.Tuple()
+	signature := s.signature
+	draft.callerSignature = &signature
+	return draft, nil
+}
+
 // MarshalJSON emits the runtime signed-invocation envelope shape.
 func (s SignedInvocation) MarshalJSON() ([]byte, error) {
 	if !s.SubmitReady() {
@@ -568,7 +640,7 @@ func decodeBase64Field(value string, fieldName string) ([]byte, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, invalidInvocation(fmt.Sprintf("%s is required", fieldName), nil)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(value)
+	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
 	if err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s must be base64", fieldName), err)
 	}

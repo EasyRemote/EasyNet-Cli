@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/generate-runtime-governance-routes.py" --check
+
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
@@ -81,6 +83,81 @@ ignored_parts = {
 }
 source_suffixes = {".rs", ".go", ".py", ".js", ".ts", ".java", ".swift"}
 
+PROFILE_PROJECTION_RULES = {
+    "R106_TERMINAL_SYSTEM_AGENT_OWNER": (
+        "TERMINAL_SYSTEM_AGENT_ID",
+        "OwnerKind::terminal_system",
+    ),
+    "R107_LOCOMOTION_SYSTEM_AGENT_OWNER": (
+        "LOCOMOTION_SYSTEM_AGENT_ID",
+        "OwnerKind::locomotion_system",
+    ),
+    "R108_SKILL_SYSTEM_AGENT_OWNER": (
+        "SKILL_MANAGEMENT_SYSTEM_AGENT_ID",
+        "OwnerKind::skill_management_system",
+    ),
+    "R109_CONTEXT_SYSTEM_AGENT_OWNER": (
+        "CONTEXT_SYSTEM_AGENT_ID",
+        "OwnerKind::context_system",
+    ),
+    "R110_MEDIA_SYSTEM_AGENT_OWNER": (
+        "MEDIA_SYSTEM_AGENT_ID",
+        "OwnerKind::media_system",
+    ),
+    "R111_PLUGIN_SYSTEM_AGENT_OWNER": (
+        "PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID",
+        "OwnerKind::plugin_management_system",
+    ),
+    "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY": (
+        "KEYRING_MANAGEMENT_SYSTEM_AGENT_ID",
+        "OwnerKind::keyring_management_system",
+    ),
+    "R115_AUTOMATION_SYSTEM_AGENT_OWNER": (
+        "AUTOMATION_SYSTEM_AGENT_ID",
+        "OwnerKind::automation_system",
+    ),
+    "R116_SESSION_SYSTEM_AGENT_OWNER": (
+        "SESSION_SYSTEM_AGENT_ID",
+        "OwnerKind::session_system",
+    ),
+    "R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER": (
+        "RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID",
+        "OwnerKind::runtime_governance_system",
+    ),
+    "R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER": (
+        "ABILITY_MANAGEMENT_SYSTEM_AGENT_ID",
+        "OwnerKind::ability_management_system",
+    ),
+    "R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER": (
+        "OPENAI_COMPAT_SYSTEM_AGENT_ID",
+        "OwnerKind::openai_compat_system",
+    ),
+    "R120_API_KEY_SYSTEM_AGENT_OWNER": (
+        "API_KEY_MANAGEMENT_SYSTEM_AGENT_ID",
+        "OwnerKind::api_key_management_system",
+    ),
+    "R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER": (
+        "A2A_INTEGRATION_SYSTEM_AGENT_ID",
+        "OwnerKind::a2a_integration_system",
+    ),
+    "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER": (
+        "RUNTIME_HEALTH_SYSTEM_AGENT_ID",
+        "OwnerKind::runtime_health_system",
+    ),
+    "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER": (
+        "NODE_MANAGEMENT_SYSTEM_AGENT_ID",
+        "OwnerKind::node_management_system",
+    ),
+    "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER": (
+        "RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID",
+        "OwnerKind::runtime_introspection_system",
+    ),
+    "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER": (
+        "DESCRIPTOR_TRANSFER_SYSTEM_AGENT_ID",
+        "OwnerKind::descriptor_transfer_system",
+    ),
+}
+
 
 def display(path: Path) -> str:
     for label, root in (("EasyNet-Cli", cli_root), ("EasyNet-Axon", axon_root)):
@@ -91,7 +168,42 @@ def display(path: Path) -> str:
     return str(path)
 
 
+def profiles_registry_satisfies(rule: str, path: Path) -> bool:
+    if rule not in PROFILE_PROJECTION_RULES:
+        return False
+    if path.as_posix().split("/")[-5:] != [
+        "daemon",
+        "ability",
+        "catalog",
+        "profiles",
+        "mod.rs",
+    ]:
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    system_agent_id, owner_constructor = PROFILE_PROJECTION_RULES[rule]
+    return all(
+        token in text
+        for token in (
+            "SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS",
+            "fn system_agent_descriptor_projections_for_device(",
+            "system_agent_descriptor_projections_for_device(device_ura)",
+            "system_agent_descriptors_for_device(",
+            system_agent_id,
+            owner_constructor,
+        )
+    )
+
+
 def add(rule: str, path: Path, line: int, detail: str) -> None:
+    if (
+        path.name == "mod.rs"
+        and (
+            "host profile aggregation must include" in detail
+            or "SystemAgent descriptor projection must be explicit" in detail
+        )
+        and profiles_registry_satisfies(rule, path)
+    ):
+        return
     violations.add(Violation(rule, display(path), line, detail))
 
 
@@ -254,8 +366,8 @@ if catalog_build.exists():
             "catalog assembly must not open daemon plugin package state from DeviceScoped descriptor inventories",
         ),
         (
-            "if stateful_device_runtime {\n        device_registrar_cell",
-            "Device ability registrar must be initialized only for stateful Device runtime assembly",
+            "if stateful_device_runtime {\n        ability_deployment_registrar_cell",
+            "ability deployment registrar must be initialized only for stateful Device runtime assembly",
         ),
         (
             "let mcp_svc = if stateful_device_runtime",
@@ -304,6 +416,48 @@ def rust_method_body(text: str, name: str) -> tuple[int, str] | None:
     return match.start(), text[match.end():]
 
 
+def rust_struct_body(text: str, name: str) -> tuple[int, str] | None:
+    match = re.search(
+        rf"(?:pub(?:\([^)]*\))?\s+)?struct\s+{re.escape(name)}(?:\s*<[^>]+>)?\s*\{{",
+        text,
+    )
+    if not match:
+        return None
+    index = match.end()
+    depth = 1
+    while index < len(text):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return match.start(), text[match.end():index]
+        index += 1
+    return match.start(), text[match.end():]
+
+
+def rust_enum_body(text: str, name: str) -> tuple[int, str] | None:
+    match = re.search(
+        rf"(?:pub(?:\([^)]*\))?\s+)?enum\s+{re.escape(name)}(?:\s*<[^>]+>)?\s*\{{",
+        text,
+    )
+    if not match:
+        return None
+    index = match.end()
+    depth = 1
+    while index < len(text):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return match.start(), text[match.end():index]
+        index += 1
+    return match.start(), text[match.end():]
+
+
 def brace_function_body(text: str, signature_pattern: str) -> tuple[int, str] | None:
     match = re.search(signature_pattern, text)
     if not match:
@@ -323,6 +477,24 @@ def brace_function_body(text: str, signature_pattern: str) -> tuple[int, str] | 
                 return match.start(), text[brace + 1:index]
         index += 1
     return match.start(), text[brace + 1:]
+
+
+def brace_block_from(text: str, start: int) -> str:
+    brace = text.find("{", start)
+    if brace < 0:
+        return ""
+    index = brace + 1
+    depth = 1
+    while index < len(text):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace + 1:index]
+        index += 1
+    return text[brace + 1:]
 
 
 def python_function_body(text: str, name: str) -> tuple[int, str] | None:
@@ -520,6 +692,26 @@ if runtime_factory.exists():
                 line_number(text, match.start()),
                 "LedgerSink resolver must not synthesize a `_system` receipt owner fallback",
             )
+    if "pub struct RuntimePersistenceConfig" not in text:
+        add(
+            "R103_RUNTIME_PERSISTENCE_EXPLICIT_DEPENDENCY",
+            runtime_factory,
+            1,
+            "daemon runtime factory must expose an explicit runtime persistence dependency",
+        )
+    for token in (
+        "crate::daemon::persistence::config::state_dir",
+        "persistence::config::state_dir",
+        "config::state_dir",
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R103_RUNTIME_PERSISTENCE_EXPLICIT_DEPENDENCY",
+                runtime_factory,
+                line_number(text, offset),
+                "daemon runtime factory must not derive Axon replay persistence from global state_dir",
+            )
 
 # Rule 12: mission run lifecycle owns one aggregate writer. `meta.json` is a
 # projection of MissionRunAggregate, not a mutable DTO that every caller may
@@ -664,8 +856,9 @@ descriptor_catalog_scope_files = {
         '"ability_ura"',
     ),
     cli_root / "src/cli/daemon_client/ability_catalog.rs": (
-        '"owner_ura"',
-        '"ability_ura"',
+        "AbilityCatalogQuery::new(owner_ura, ability_ura)",
+        "self.inner.owner_ura()",
+        "self.inner.ability_ura()",
     ),
     cli_root / "sdk/go/ability_descriptor.go": (
         'args["owner_ura"] = ownerURA',
@@ -1052,6 +1245,7 @@ if ffi_invocation.exists():
         "parse_invocation_json_rejects_all_zero_subject_before_daemon_io",
         "parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io",
         "parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io",
+        "parse_invocation_json_rejects_device_caller_for_ordinary_ability_before_daemon_io",
         "builder_rejects_receipt_history_descriptor_before_daemon_io",
     ):
         if test_name not in raw_text:
@@ -1061,7 +1255,288 @@ if ffi_invocation.exists():
                 1,
                 f"FFI public tuple authority gate must keep failure-path test {test_name}",
             )
+    if "validate_public_invocation_caller_ura(caller_ura, descriptor_ref)?" not in production:
+        add(
+            "R7C_FFI_DEVICE_CALLER_BOUNDARY",
+            ffi_invocation,
+            1,
+            "FFI public invocation caller validation must receive descriptor_ref so Device custody calls cannot become a role-only allow",
+        )
+    device_unconditional_allow = re.search(
+        r"URAKind::Device\s*=>\s*Ok\s*\(\s*\(\s*\)\s*\)", production
+    )
+    if device_unconditional_allow:
+        add(
+            "R7C_FFI_DEVICE_CALLER_BOUNDARY",
+            ffi_invocation,
+            line_number(production, device_unconditional_allow.start()),
+            "FFI public invocation must not unconditionally allow Device caller; Device is substrate/custody, not an ordinary actor",
+        )
 
+device_caller_types = cli_root / "src/daemon/invocation/admission/device_caller_types.rs"
+device_caller_classifier = cli_root / "src/daemon/invocation/admission/device_caller.rs"
+policy_gate = cli_root / "src/daemon/invocation/admission/policy_gate.rs"
+if device_caller_types.exists():
+    types_text = source(device_caller_types)
+    for token, detail in (
+        (
+            "pub(crate) enum DeviceCallerPurpose",
+            "Device caller exceptions must be represented by a typed purpose enum",
+        ),
+        (
+            "pub(crate) struct VerifiedDeviceInvocationPurpose",
+            "Device caller classifier must expose an opaque verified-purpose proof type",
+        ),
+        (
+            "pub(in crate::daemon::invocation::admission) purpose",
+            "verified Device-caller purpose construction must remain scoped to admission",
+        ),
+        (
+            "pub(in crate::daemon::invocation::admission) invocation_binding",
+            "verified Device-caller purpose proof must bind the exact invocation geometry",
+        ),
+        (
+            "Bootstrap",
+            "Device caller classifier must name bootstrap as a Device-caller purpose",
+        ),
+        (
+            "Pairing",
+            "Device caller classifier must name pairing as a Device-caller purpose",
+        ),
+        (
+            "PublicationCustody",
+            "Device caller classifier must name publication custody as a Device-caller purpose",
+        ),
+        (
+            "AbilityCatalogDiff",
+            "Device caller classifier must name heartbeat liveness as a bounded Device-caller purpose",
+        ),
+        (
+            "DeviceSelfSession",
+            "Device caller classifier must name session control as a Device-caller purpose",
+        ),
+    ):
+        if token not in types_text:
+            add("R134_DEVICE_CALLER_CLASSIFIER", device_caller_types, 1, detail)
+else:
+    add(
+        "R134_DEVICE_CALLER_CLASSIFIER",
+        cli_root / "src/daemon/invocation/admission",
+        1,
+        "daemon admission must own an always-on Device-caller purpose vocabulary module",
+    )
+
+if device_caller_classifier.exists():
+    text = source(device_caller_classifier)
+    raw_text = device_caller_classifier.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "classify_public_invocation_caller_kind(",
+            "public invocation caller validation must use the shared Device-caller classifier",
+        ),
+        (
+            "admission::device_caller_types",
+            "Device caller classifier must reuse the always-on policy vocabulary instead of redefining purpose types",
+        ),
+        (
+            "verify_device_invocation_purpose(",
+            "Device-caller ability exceptions must live in the shared classifier, not FFI",
+        ),
+        (
+            "DEVICE_CALLER_RULES",
+            "Device-caller purpose classification and policy admission must share one static rule table",
+        ),
+        (
+            "admitted_device_policy_purpose(",
+            "policy gate Device-caller exceptions must use the shared Device-caller rule table",
+        ),
+        (
+            "AuthorityOwnerProjection",
+            "Device publication custody must model owner-projection geometry separately from Device self geometry",
+        ),
+        (
+            "ABILITY_FEDERATION_RESOLVE_KEY",
+            "Device pairing must retain its bounded Hub key-resolution purpose after federation.join",
+        ),
+    ):
+        if token not in text:
+            add("R134_DEVICE_CALLER_CLASSIFIER", device_caller_classifier, 1, detail)
+    for token, detail in (
+        (
+            '"ability.publish"',
+            "ability-management abilities are owned by a device-sponsored SystemAgent and must not be Device-caller exceptions",
+        ),
+        (
+            '"ability.unpublish"',
+            "ability-management abilities are owned by a device-sponsored SystemAgent and must not be Device-caller exceptions",
+        ),
+        (
+            '"ability.deploy"',
+            "dynamic ability deployment uses target_ura as host selection; Device must not be the public caller exception",
+        ),
+        (
+            '"ability.uninstall"',
+            "dynamic ability uninstall uses target_ura as host selection; Device must not be the public caller exception",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R134_DEVICE_CALLER_CLASSIFIER",
+                device_caller_classifier,
+                line_number(text, offset),
+                detail,
+            )
+    for token, detail in (
+        (
+            "classifies_public_device_caller_ability_surface",
+            "classifier tests must prove all named Device-caller purposes",
+        ),
+        (
+            "rejects_public_device_caller_for_ordinary_ability",
+            "classifier tests must reject ordinary Device-caller abilities",
+        ),
+        (
+            "rejects_device_caller_for_ability_management_system_agent_abilities",
+            "classifier tests must prove ability-management SystemAgent abilities are not Device-caller exceptions",
+        ),
+        (
+            "admits_policy_scope_only_for_exact_publication_geometry",
+            "classifier tests must prove Device policy scope geometry is exact",
+        ),
+        (
+            "Device custody must carry a hosted Agent's owner projection",
+            "classifier tests must prove Device custody can publish a hosted Agent without becoming its owner",
+        ),
+    ):
+        if token not in raw_text:
+            add("R134_DEVICE_CALLER_CLASSIFIER", device_caller_classifier, 1, detail)
+    for token, detail in (
+        (
+            "URAKind::Device | URAKind::Agent | URAKind::Authority",
+            "Device publication custody must not broadly admit Device/Agent/Authority owners; DeviceProfileProjection is same-device only and Authority self-publication uses the Authority path",
+        ),
+        (
+            "URAKind::Authority => true",
+            "Device publication custody must not admit Authority owner projection; Authority self-publication uses the Authority caller path",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R134_DEVICE_CALLER_CLASSIFIER",
+                device_caller_classifier,
+                line_number(text, offset),
+                detail,
+            )
+else:
+    add(
+        "R134_DEVICE_CALLER_CLASSIFIER",
+        cli_root / "src/daemon/invocation/admission",
+        1,
+        "daemon admission must own a shared Device-caller classifier module",
+    )
+
+if ffi_invocation.exists():
+    raw_text = ffi_invocation.read_text(encoding="utf-8", errors="replace")
+    text = source(ffi_invocation)
+    production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]\nmod tests", 1)[0]
+    for token, detail in (
+        (
+            "classify_public_invocation_caller(",
+            "FFI public invocation caller validation must delegate Device caller semantics to admission::device_caller",
+        ),
+        (
+            "DeviceCallerAdmissionError::DeviceCallerNotAllowed",
+            "FFI must surface ordinary Device caller rejection from the shared classifier",
+        ),
+        (
+            "parse_invocation_json_allows_device_caller_for_explicit_session_control",
+            "FFI tests must prove the explicit session-control Device caller exception",
+        ),
+    ):
+        haystack = raw_text if "tests must prove" in detail else production
+        if token not in haystack:
+            add("R134_DEVICE_CALLER_CLASSIFIER", ffi_invocation, 1, detail)
+    for token, detail in (
+        (
+            "fn public_device_caller_ability_allowed(",
+            "FFI must not keep a local Device caller allow-list",
+        ),
+        (
+            "ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY\n            |",
+            "FFI must not enumerate Device caller exception abilities locally",
+        ),
+    ):
+        offset = production.find(token)
+        if offset != -1:
+            add(
+                "R134_DEVICE_CALLER_CLASSIFIER",
+                ffi_invocation,
+                line_number(production, offset),
+                detail,
+            )
+
+if policy_gate.exists():
+    text = source(policy_gate)
+    if "admitted_device_policy_purpose(" not in text or "DeviceCallerPurpose" not in text:
+        add(
+            "R134_DEVICE_CALLER_CLASSIFIER",
+            policy_gate,
+            1,
+            "policy gate Device publication/session exceptions must delegate to admission::device_caller",
+        )
+    for function_name in (
+        "device_publication_custody_manage_scope",
+        "device_self_session_stream_scope",
+    ):
+        body = rust_method_body(text, function_name)
+        if body is None:
+            continue
+        start, function_body = body
+        for token, detail in (
+            (
+                "caller.kind != URAKind::Device",
+                "policy gate must not reimplement Device caller kind checks inside Device exception rules",
+            ),
+            (
+                "owner_ability_ura(",
+                "policy gate must not reimplement Device caller ability matching inside Device exception rules",
+            ),
+        ):
+            offset = function_body.find(token)
+            if offset != -1:
+                add(
+                    "R134_DEVICE_CALLER_CLASSIFIER",
+                    policy_gate,
+                    line_number(text, start + offset),
+                    detail,
+                )
+
+owner_projection_publication = (
+    cli_root / "src/daemon/invocation/admission/owner_projection_publication.rs"
+)
+if owner_projection_publication.exists():
+    text = source(owner_projection_publication)
+    if "admits_owner_projection_publication_host(" not in text:
+        add(
+            "R134_DEVICE_CALLER_CLASSIFIER",
+            owner_projection_publication,
+            1,
+            "owner-projection publication authority must use the shared Device publication-custody classifier",
+        )
+    body = rust_method_body(text, "verify_uras")
+    if body is not None:
+        start, function_body = body
+        marker = "match caller.kind"
+        offset = function_body.find(marker)
+        if offset != -1:
+            add(
+                "R134_DEVICE_CALLER_CLASSIFIER",
+                owner_projection_publication,
+                line_number(text, start + offset),
+                "owner-projection publication must not branch directly on caller.kind without the shared classifier",
+            )
 
 # Rule 11: stream and bidi SDK facades must not revive the retired frame-level
 # receipt alias. Public accessors may project terminal_receipt for compatibility,
@@ -1317,26 +1792,18 @@ if python_cabi.exists():
 
 
 # Rule 31: file-resource ownership has one authority split. Host filesystem
-# abilities are Device-owned `fs.*`; user blob resources are owner-local
-# `files.*` abilities executed by the daemon-native `<user>.files` Agent. The
-# OpenAI facade may project `openai.files.*`, but must invoke the user-owned
-# file surface through that explicit authority root instead of reviving
-# `<user>.files.get`-style dispatch names.
+# abilities keep the legacy local `fs.*` public names but are owned by the
+# device-sponsored locomotion SystemAgent; daemon-local blob resources are
+# owner-local `files.*` abilities owned by the sponsoring Device's Files
+# SystemAgent. User-scoped Resource URAs remain unchanged. The OpenAI facade
+# resolves the committed Files owner instead of rebuilding a hosted Agent URA.
 files_store = cli_root / "src/daemon/ability/builtins/resources/files_store/mod.rs"
 if files_store.exists():
     text = source(files_store)
     for token, detail in (
         (
-            'agent_ura(realm, user, "files")',
-            "Files resource surface must declare an explicit daemon-native files executor root",
-        ),
-        (
-            "OwnerKind::User(config.user.clone())",
-            "files.put/get/list must be user-owned resource abilities, not Device system abilities",
-        ),
-        (
-            "ControlPlaneImplementation::native_daemon()",
-            "files.put/get/list must be bound to the daemon-native implementation root",
+            "OwnerKind::files_system()",
+            "files.put/get/list must be owned by the Device-sponsored Files SystemAgent",
         ),
         (
             '"files.put"',
@@ -1361,19 +1828,36 @@ if files_store.exists():
             line_number(text, match.start()),
             "user blob files must not be registered as Device-owned system abilities",
         )
+    for retired in ('OwnerKind::Agent("files".to_string())', "management_agent_ura"):
+        pos = text.find(retired)
+        if pos >= 0:
+            add(
+                "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+                files_store,
+                line_number(text, pos),
+                "Files must not revive a shared user-hosted Agent executor",
+            )
 
 device_files = cli_root / "src/daemon/ability/builtins/device_control/files.rs"
 if device_files.exists():
     text = source(device_files)
     for token, detail in (
-        ('"fs.read"', "Device filesystem surface must keep fs.read under device control"),
-        ('"fs.write"', "Device filesystem surface must keep fs.write under device control"),
-        ('"fs.stat"', "Device filesystem surface must keep fs.stat under device control"),
-        ('"fs.list"', "Device filesystem surface must keep fs.list under device control"),
-        ("OwnerKind::Device", "Device filesystem surface must remain Device-owned"),
+        ('"fs.read"', "Device-sponsored locomotion SystemAgent must expose fs.read"),
+        ('"fs.write"', "Device-sponsored locomotion SystemAgent must expose fs.write"),
+        ('"fs.stat"', "Device-sponsored locomotion SystemAgent must expose fs.stat"),
+        ('"fs.list"', "Device-sponsored locomotion SystemAgent must expose fs.list"),
+        ("OwnerKind::locomotion_system()", "Filesystem surface must bind through the locomotion SystemAgent owner"),
     ):
         if token not in text:
             add("R31_FILE_RESOURCE_OWNERSHIP_FORK", device_files, 1, detail)
+    match = re.search(r"\bOwnerKind::Device\b", text)
+    if match:
+        add(
+            "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+            device_files,
+            line_number(text, match.start()),
+            "Device filesystem surface must not register public fs.* abilities as direct Device-owned descriptors",
+        )
     for match in re.finditer(r'"files\.(?:put|get|list)"|management_agent_ura', text):
         add(
             "R31_FILE_RESOURCE_OWNERSHIP_FORK",
@@ -1388,15 +1872,15 @@ if openai_compat.exists():
     for method, required_tokens in (
         (
             "handle_file_upload_with_context",
-            ("files_store::management_agent_ura", '"files.put"', "invoke_user_owned_rpc"),
+            ("OwnerKind::files_system()", '"files.put"', "invoke_resource_service_rpc"),
         ),
         (
             "handle_file_retrieve_with_context",
-            ("files_store::management_agent_ura", '"files.get"', "invoke_user_owned_rpc"),
+            ("OwnerKind::files_system()", '"files.get"', "invoke_resource_service_rpc"),
         ),
         (
             "deref_to_data_url",
-            ("files_store::management_agent_ura", '"files.get"', "invoke_user_owned_rpc"),
+            ("OwnerKind::files_system()", '"files.get"', "invoke_resource_service_rpc"),
         ),
     ):
         body = rust_method_body(text, method)
@@ -1458,23 +1942,14 @@ if openai_compat.exists():
 catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
 if catalog_build.exists():
     text = source(catalog_build)
-    body = rust_method_body(text, "declare_daemon_native_agent_authorities")
-    if body is None:
+    retired = text.find("declare_daemon_native_agent_authorities")
+    if retired >= 0:
         add(
             "R31_FILE_RESOURCE_OWNERSHIP_FORK",
             catalog_build,
-            1,
-            "catalog assembly must declare daemon-native resource executor authorities",
+            line_number(text, retired),
+            "daemon-native services must use SystemAgent authority, not declared hosted-Agent roots",
         )
-    else:
-        offset, method_body = body
-        if "files::management_agent_ura(realm, user)" not in method_body:
-            add(
-                "R31_FILE_RESOURCE_OWNERSHIP_FORK",
-                catalog_build,
-                line_number(text, offset),
-                "catalog assembly must declare the Files executor authority before registration",
-            )
 
 
 # Rule 8: public FFI error JSON must not expose migration/legacy state.
@@ -1765,7 +2240,7 @@ if daemon_service.exists():
             "daemon service must expose exact stream route registration",
         ),
         (
-            ".register_streams(owner_ura",
+            ".register_streams(",
             "exact stream route registration must install routes into LocalRuntime",
         ),
         (
@@ -1785,7 +2260,7 @@ if daemon_service.exists():
             "daemon service must expose exact bidi route registration",
         ),
         (
-            ".register_bidis(owner_ura",
+            ".register_bidis(",
             "exact bidi route registration must install provider-bound routes into LocalRuntime",
         ),
         (
@@ -1796,6 +2271,51 @@ if daemon_service.exists():
     for token, detail in service_requirements:
         if token not in service_text:
             add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", daemon_service, 1, detail)
+    for token, detail in (
+        (
+            "fn validate_daemon_route_authority_owner(",
+            "daemon exact route registration must use one Authority-only owner validator",
+        ),
+        (
+            "parsed.kind != crate::core::ura::URAKind::Authority",
+            "daemon exact route owner validator must reject every non-Authority owner kind",
+        ),
+        (
+            "Device is only an execution host/custody root",
+            "daemon exact route owner rejection must document that Device is a host/custody root, not public route owner",
+        ),
+        (
+            "validate_daemon_route_authority_owner(owner_ura.trim(), \"stream\")",
+            "stream exact-route registration must share the Authority-only owner validator",
+        ),
+        (
+            "validate_daemon_route_authority_owner(owner_ura.trim(), \"bidi\")",
+            "bidi exact-route registration must share the Authority-only owner validator",
+        ),
+    ):
+        if token not in service_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", daemon_service, 1, detail)
+    route_owner_validator = rust_method_body(service_text, "validate_daemon_route_authority_owner")
+    if route_owner_validator is not None:
+        offset, body = route_owner_validator
+        for token, detail in (
+            (
+                "URAKind::Device",
+                "daemon exact route owner validation must not allow Device owners",
+            ),
+            (
+                "OwnerKind::Device",
+                "daemon exact route owner validation must not project Device descriptor owners",
+            ),
+        ):
+            local = body.find(token)
+            if local != -1:
+                add(
+                    "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                    daemon_service,
+                    line_number(service_text, offset + local),
+                    detail,
+                )
     if not any(
         token in service_text
         for token in (".register(owner_ura", ".register_for_owners(")
@@ -2048,6 +2568,40 @@ if boot_invocation_routes.exists():
     for token, detail in boot_requirements:
         if token not in boot_text:
             add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", boot_invocation_routes, 1, detail)
+    hub_runtime_offsets = [
+        match.start()
+        for match in re.finditer(r"\bif\s+capabilities\.hub_runtime\s*\{", boot_text)
+    ]
+    if not hub_runtime_offsets:
+        add(
+            "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+            boot_invocation_routes,
+            1,
+            "daemon exact routes must be registered only inside the Hub runtime capability branch",
+        )
+    else:
+        route_blocks = [
+            (offset, brace_block_from(boot_text, offset))
+            for offset in hub_runtime_offsets
+            if any(token in brace_block_from(boot_text, offset) for token, _ in boot_requirements)
+        ]
+        if not route_blocks:
+            add(
+                "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                boot_invocation_routes,
+                1,
+                "daemon exact routes must be registered inside a Hub runtime capability branch",
+            )
+            route_blocks = [(hub_runtime_offsets[0], "")]
+        hub_runtime_offset, hub_runtime_block = route_blocks[0]
+        for token, detail in boot_requirements:
+            if token not in hub_runtime_block:
+                add(
+                    "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                    boot_invocation_routes,
+                    line_number(boot_text, hub_runtime_offset),
+                    f"{detail}; Device-only boot must not install Hub daemon routes",
+                )
     listener_offsets = [
         offset
         for token in ("spawn_uds_listener(", "spawn_tcp_tls_listener(")
@@ -2674,14 +3228,22 @@ if access_control.exists():
             "let actor_ura = require_actor_ura(request.actor_ura.as_str())?",
             "revoke must validate actor_ura through the shared boundary validator",
         ),
-        (
-            ".revoke_grant(&request.grant_id, &owner_user_id, actor_ura",
-            "revoke audit must persist the validated actor_ura, not a scalar fallback",
-        ),
     )
     for token, detail in access_requirements:
         if token not in text:
             add("R18_ACCESS_CONTROL_ACTOR_URA_FORK", access_control, 1, detail)
+
+    if not re.search(
+        r"store\.revoke_grant\(\s*&request\.grant_id,\s*&owner_user_ura,\s*actor_ura",
+        text,
+        re.S,
+    ):
+        add(
+            "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
+            access_control,
+            1,
+            "revoke audit must persist the validated actor_ura against the canonical owner_user_ura",
+        )
 
     revoke_match = re.search(r"struct\s+RevokeRequest\s*\{(?P<body>[^}]*)\}", text)
     if revoke_match is None:
@@ -3014,10 +3576,13 @@ if daemon_config.exists():
             )
 
 
-# Rule 32: Agent destructive lifecycle has one public boundary. `agent.stop`
-# remains a non-destructive row/authority removal; `agent.purge` is the only
-# destructive root-removal entry point and must be projected as such by catalog
-# metadata. Regressing this boundary revives the old stop/purge semantic fork.
+# Rule 32: Agent destructive lifecycle has one public boundary. Agent
+# management is hosted by the device-sponsored SystemAgent, not by the Device
+# owner plane directly. `agent.stop` remains a non-destructive row/authority
+# removal; `agent.purge` is the only destructive root-removal entry point and
+# must be projected as such by catalog metadata. Regressing this boundary
+# revives either the old stop/purge semantic fork or the old Device-as-agent
+# authority seam.
 agent_lifecycle = cli_root / "src/daemon/ability/builtins/agents/lifecycle.rs"
 catalog_metadata = cli_root / "src/daemon/ability/catalog/catalog_metadata.rs"
 agent_purge_descriptor = (
@@ -3035,8 +3600,12 @@ if agent_lifecycle.exists():
             "Agent purge must have a named public ability constant",
         ),
         (
-            "reg.register_rpc_with_owner(\n        ABILITY_PURGE_AGENT,\n        OwnerKind::Device",
-            "Agent purge must register as a Device-owned lifecycle ability",
+            "let owner = OwnerKind::agent_management_system();",
+            "Agent lifecycle must bind to the device-sponsored agent-management SystemAgent owner",
+        ),
+        (
+            "reg.register_rpc_with_owner(\n        ABILITY_PURGE_AGENT,\n        owner.clone()",
+            "Agent purge must register through the agent-management SystemAgent owner variable",
         ),
         (
             "fn purge_agent_handler(",
@@ -3096,8 +3665,16 @@ if catalog_metadata.exists():
     text = source(catalog_metadata)
     metadata_requirements = (
         (
-            "destructive: public_name == agent_names::AGENT_PURGE",
-            "catalog hints must mark only agent.purge as destructive",
+            "destructive: is_destructive_public_ability(&public_name)",
+            "catalog hints must route destructive risk through the central public-ability classifier",
+        ),
+        (
+            "pub(crate) fn is_destructive_public_ability(public_name: &str) -> bool",
+            "catalog destructive risk classifier must be an explicit named boundary",
+        ),
+        (
+            "agent_names::AGENT_PURGE",
+            "catalog destructive risk classifier must include agent.purge",
         ),
         (
             "agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_description()",
@@ -3332,9 +3909,11 @@ if voice_handler.exists():
 # original reader until a canonical terminal receipt is observed. Language SDK
 # adapters may expose the request state, but must not synthesize lifecycle
 # terminality for local stream or bidi cancellation.
-ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v6.md"
+ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v7.md"
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
+go_errors = cli_root / "sdk/go/errors.go"
+python_errors = cli_root / "sdk/python/easynet_sdk/errors.py"
 python_cabi_runtime = cli_root / "sdk/python/easynet_sdk/_cabi.py"
 go_direct_runtime = cli_root / "sdk/go/direct_runtime.go"
 python_direct_runtime = cli_root / "sdk/python/easynet_sdk/providers/runtime/direct.py"
@@ -3345,10 +3924,12 @@ python_bidi_facade = cli_root / "sdk/python/easynet_sdk/bidi.py"
 python_transport_facade = cli_root / "sdk/python/easynet_sdk/transport.py"
 go_stream_tests = cli_root / "sdk/go/stream_test.go"
 go_bidi_tests = cli_root / "sdk/go/bidi_test.go"
+go_errors_tests = cli_root / "sdk/go/errors_test.go"
 go_direct_runtime_tests = cli_root / "sdk/go/direct_runtime_test.go"
 python_stream_tests = cli_root / "sdk/python/tests/test_stream.py"
 python_bidi_tests = cli_root / "sdk/python/tests/test_bidi.py"
 python_direct_runtime_tests = cli_root / "sdk/python/tests/test_direct_runtime.py"
+python_errors_tests = cli_root / "sdk/python/tests/test_errors.py"
 
 if ffi_v5_spec.exists():
     text = ffi_v5_spec.read_text(encoding="utf-8", errors="replace")
@@ -3357,28 +3938,28 @@ if ffi_v5_spec.exists():
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v6 contract must name stream/bidi cancel as request state, not terminal proof",
+            "ABI v7 contract must name stream/bidi cancel as request state, not terminal proof",
         )
     if not re.search(r"must\s+not\s+claim\s+lifecycle\s+terminality", text):
         add(
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v6 contract must forbid local cancel from claiming runtime terminality",
+            "ABI v7 contract must forbid local cancel from claiming runtime terminality",
         )
     if not re.search(r"submits\s+at\s+most\s+one\s+independently\s+signed", text):
         add(
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v6 contract must require one-shot independently signed canonical cancellation",
+            "ABI v7 contract must require one-shot independently signed canonical cancellation",
         )
     if not re.search(r"keeps\s+the\s+callback/reader\s+path\s+draining", text):
         add(
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v6 contract must preserve the original terminal drain path",
+            "ABI v7 contract must preserve the original terminal drain path",
         )
     legacy_terminal_claim = re.search(
         r"stream\s+cancel/close\s+and\s+bidi\s+cancel/close\s+are\s+terminal",
@@ -3390,14 +3971,14 @@ if ffi_v5_spec.exists():
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             line_number(text, legacy_terminal_claim.start()),
-            "ABI v6 must not define local stream/bidi cancel or close as lifecycle terminal",
+            "ABI v7 must not define local stream/bidi cancel or close as lifecycle terminal",
         )
 else:
     add(
         "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
         ffi_v5_spec,
         1,
-        "ABI v6 contract is required for stream/bidi cancellation terminal authority",
+        "ABI v7 contract is required for stream/bidi cancellation terminal authority",
     )
 
 if ffi_invocation.exists():
@@ -3592,9 +4173,98 @@ if go_direct_runtime.exists():
                 1,
                 detail,
             )
+    if "isDescriptorOwnerOfflineMessage" in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            go_direct_runtime,
+            line_number(text, text.find("isDescriptorOwnerOfflineMessage")),
+            "Go direct runtime must not infer descriptor owner-offline from route diagnostic text",
+        )
+    if "canonicalErrorCodeFromMessagePrefix(message)" not in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            go_direct_runtime,
+            1,
+            "Go direct runtime must consume canonical descriptor owner-offline code text",
+        )
+    if go_direct_runtime_tests.exists():
+        tests = source(go_direct_runtime_tests)
+        if "TestDirectRuntimeGRPCErrorDoesNotInferOwnerOfflineFromRouteText" not in tests:
+            add(
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+                go_direct_runtime_tests,
+                1,
+                "Go direct runtime must test that route diagnostic text is not a descriptor owner-offline state",
+            )
+if go_errors.exists():
+    text = source(go_errors)
+    if "isDescriptorOwnerOfflineMessage" in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            go_errors,
+            line_number(text, text.find("isDescriptorOwnerOfflineMessage")),
+            "Go error DTO decoding must not infer descriptor owner-offline from route diagnostic text",
+        )
+    if go_errors_tests.exists():
+        tests = source(go_errors_tests)
+        if "TestDecodeTransportErrorJSONDoesNotInferOwnerOfflineFromRouteText" not in tests:
+            add(
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+                go_errors_tests,
+                1,
+                "Go error DTO decoding must test that route diagnostic text is not a descriptor owner-offline state",
+            )
+
+if python_errors.exists():
+    text = source(python_errors)
+    if "is_descriptor_owner_offline_message" in text or "_is_descriptor_owner_offline_message" in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            python_errors,
+            line_number(
+                text,
+                max(
+                    text.find("is_descriptor_owner_offline_message"),
+                    text.find("_is_descriptor_owner_offline_message"),
+                ),
+            ),
+            "Python error DTO decoding must not infer descriptor owner-offline from route diagnostic text",
+        )
+    if python_errors_tests.exists():
+        tests = source(python_errors_tests)
+        if "test_from_json_does_not_infer_owner_offline_from_route_text" not in tests:
+            add(
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+                python_errors_tests,
+                1,
+                "Python error DTO decoding must test that route diagnostic text is not a descriptor owner-offline state",
+            )
 
 if python_direct_runtime.exists():
     text = source(python_direct_runtime)
+    if "is_descriptor_owner_offline_message" in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            python_direct_runtime,
+            line_number(text, text.find("is_descriptor_owner_offline_message")),
+            "Python direct runtime must not infer descriptor owner-offline from route diagnostic text",
+        )
+    if "_canonical_error_code_from_message_prefix(message)" not in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            python_direct_runtime,
+            1,
+            "Python direct runtime must consume canonical descriptor owner-offline code text",
+        )
+    if python_direct_runtime_tests.exists():
+        tests = source(python_direct_runtime_tests)
+        if "test_direct_runtime_grpc_does_not_infer_owner_offline_from_route_text" not in tests:
+            add(
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+                python_direct_runtime_tests,
+                1,
+                "Python direct runtime must test that route diagnostic text is not a descriptor owner-offline state",
+            )
     python_direct_cancel_contracts = (
         (
             r"class\s+DirectRuntimeStreamTransport\b.*?def\s+cancel\b.*?_unsupported_direct_cancellation\(.*?capability=\"stream_cancel\"",
@@ -4271,7 +4941,7 @@ if ability_dispatch.exists():
             "hot Agent authority enrollment must verify durable registry membership by canonical registry key",
         ),
         (
-            "snapshot.host_device_agent_ura()",
+            "snapshot.host_device_ura()",
             "hot Agent authority enrollment must verify host-device binding from the snapshot",
         ),
         (
@@ -4936,9 +5606,10 @@ if local_agents_identity_file.exists():
         )
 
 # Rule 39: chat hot-added Agent providers consume Agent aggregate projections.
-# Chat is an invocation-facing surface: hot-added discover/invoke handlers and
+# Chat is an invocation-facing surface: hot-added discover handlers and
 # peer-skill hints must not revive registry-only reads after the Agent aggregate
-# became the read owner for registered + hosted Agent state.
+# became the read owner for registered + hosted Agent state. The retired
+# `<agent>.invoke` handler must not be reintroduced merely to satisfy this gate.
 agent_chat = cli_root / "src/daemon/ability/builtins/agents/chat.rs"
 if agent_chat.exists():
     text = source(agent_chat)
@@ -4947,10 +5618,6 @@ if agent_chat.exists():
         (
             "AgentAggregateRepository::load_snapshot()",
             "Agent chat provider reads must load through the Agent aggregate repository",
-        ),
-        (
-            "registered_agent_registry_projection()",
-            "Agent chat hot providers must clone registry state through an aggregate projection",
         ),
         (
             "snapshot.registered_agents()",
@@ -5018,7 +5685,10 @@ for governance_status_surface, surface_label in governance_status_surfaces:
         continue
     text = source(governance_status_surface)
     production_text = text.split("#[cfg(test)]", 1)[0]
-    if "AgentAggregateRepository::load_hosted_identity_status()" not in production_text:
+    if (
+        surface_label != "invocation history"
+        and "AgentAggregateRepository::load_hosted_identity_status()" not in production_text
+    ):
         add(
             "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
             governance_status_surface,
@@ -5035,7 +5705,7 @@ for governance_status_surface, surface_label in governance_status_surfaces:
             f"{surface_label} must not inspect local-agents.json shape",
         ),
         (
-            ".host_device_agent_ura.",
+            ".host_device_ura.",
             f"{surface_label} must not inspect host-device Agent URA storage directly",
         ),
         (
@@ -5046,12 +5716,33 @@ for governance_status_surface, surface_label in governance_status_surfaces:
         if token in production_text:
             add("R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK", governance_status_surface, 1, detail)
     if surface_label == "invocation history":
-        if "ledger_governance_owner()" not in production_text:
+        for retired, detail in (
+            (
+                "AgentAggregateRepository",
+                "invocation history must not infer ledger governance from product Agent state",
+            ),
+            (
+                "load_hosted_identity_status",
+                "invocation history must not read ambient identity state during request handling",
+            ),
+            (
+                "host_device_ura",
+                "invocation history must not bind a generic runtime ledger to a product identity shape",
+            ),
+        ):
+            if retired in production_text:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(production_text, production_text.find(retired)),
+                    detail,
+                )
+        if "ledger_governance_authority()" not in production_text:
             add(
                 "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
                 governance_status_surface,
                 1,
-                "invocation history must register through the single ledger governance owner",
+                "invocation history must register through one catalog-owned ledger governance authority",
             )
         if "local_runtime_owners()" in production_text:
             add(
@@ -5060,51 +5751,50 @@ for governance_status_surface, surface_label in governance_status_surfaces:
                 1,
                 "invocation history must not fan out one daemon ledger across all runtime owners",
             )
-        ledger_body = rust_method_body(production_text, "ledger_resource_ura")
+        ledger_body = rust_method_body(
+            production_text, "ledger_resource_ura_from_runtime_owner_ura"
+        )
         if ledger_body is None:
             add(
                 "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
                 governance_status_surface,
                 1,
-                "invocation history ledger URA projection must remain inspectable",
+                "invocation history ledger URA projection must accept the catalog runtime owner",
             )
         else:
             offset, body = ledger_body
             signature = production_text[offset : production_text.find("{", offset)]
-            if "anyhow::Result<Option<String>>" not in signature:
+            if "anyhow::Result<String>" not in signature:
                 add(
                     "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
                     governance_status_surface,
                     line_number(production_text, offset),
-                    "invocation history ledger URA projection must preserve hosted-identity load failures",
+                    "invocation history ledger URA projection must require a canonical runtime owner",
                 )
-            for token, detail in (
-                (
-                    "load_hosted_identity_status().ok()",
-                    "invocation history ledger URA projection must not collapse aggregate load failure into null",
-                ),
-                (
-                    "parse_ura(",
-                    "invocation history ledger URA parsing must live in the fallible projection helper",
-                ),
-            ):
-                if token in body:
-                    add(
-                        "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
-                        governance_status_surface,
-                        line_number(production_text, offset + body.find(token)),
-                        detail,
-                    )
-        projection_body = rust_method_body(
-            production_text, "ledger_resource_ura_from_host_device_agent_ura"
-        )
-        if projection_body is None:
-            add(
-                "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
-                governance_status_surface,
-                1,
-                "invocation history ledger URA projection must isolate host identity parsing",
-            )
+            if "AgentAggregateRepository" in body:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(
+                        production_text,
+                        offset + body.find("AgentAggregateRepository"),
+                    ),
+                    "invocation history ledger URA projection must not depend on product repositories",
+                )
+            if "parse_ura(" not in body:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(production_text, offset),
+                    "invocation history ledger URA parsing must remain in the fallible projection helper",
+                )
+            if "invocation_ledger_resource_ura(" not in production_text:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(production_text, offset),
+                    "invocation history ledger URA projection must use Axon's canonical owner-kind projection",
+                )
 
 # Rule 41: EAL agent dispatch consumes the Agent repository-owned registered
 # Agent registry projection. EAL member calls are execution paths; constructing
@@ -5139,37 +5829,32 @@ if eal_dispatch.exists():
             )
 
 # Rule 42: hosted owner lookup surfaces consume Agent aggregate projections.
-# CLI ability catalogue filtering and local agent discovery both resolve
-# hosted LLM owner URAs for user-facing discovery. They must not know the
-# local-agents.json file shape or call hosted-URA file helpers directly.
+# CLI selector parsing resolves a user-provided Agent label through the Agent
+# aggregate. Local discovery is different: committed descriptors already carry
+# their canonical owner URA and must not rediscover it from authoring state.
 hosted_owner_lookup_surfaces = (
     (
         cli_root / "src/cli/commands/abilities.rs",
         "CLI abilities --agent resolution",
-    ),
-    (
-        cli_root / "src/daemon/ability/builtins/agents/discover.rs",
-        "agent discover local owner projection",
+        (
+            "AgentAggregateRepository::load_hosted_identity_snapshot()",
+            "hosted_llm_agent_ura(",
+        ),
     ),
 )
-for hosted_owner_surface, surface_label in hosted_owner_lookup_surfaces:
+for hosted_owner_surface, surface_label, required_tokens in hosted_owner_lookup_surfaces:
     if not hosted_owner_surface.exists():
         continue
     text = source(hosted_owner_surface)
     production_text = text.split("#[cfg(test)]", 1)[0]
-    hosted_owner_requirements = (
-        (
-            "AgentAggregateRepository::load_hosted_identity_snapshot()",
-            f"{surface_label} must load hosted owner state through the hosted identity aggregate projection",
-        ),
-        (
-            "hosted_llm_agent_ura(",
-            f"{surface_label} must use the aggregate hosted LLM owner projection",
-        ),
-    )
-    for token, detail in hosted_owner_requirements:
+    for token in required_tokens:
         if token not in production_text:
-            add("R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK", hosted_owner_surface, 1, detail)
+            add(
+                "R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK",
+                hosted_owner_surface,
+                1,
+                f"{surface_label} must consume hosted owner identity from its Agent aggregate boundary ({token})",
+            )
     for token, detail in (
         (
             "local_agents::load",
@@ -5179,18 +5864,34 @@ for hosted_owner_surface, surface_label in hosted_owner_lookup_surfaces:
             "lookup_hosted_ura",
             f"{surface_label} must not bypass aggregate hosted owner lookup",
         ),
-        (
-            "AgentAggregateRepository::load_snapshot()",
-            f"{surface_label} must not require registry readability for hosted owner lookup",
-        ),
     ):
         if token in production_text:
             add("R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK", hosted_owner_surface, 1, detail)
 
+discover_owner_surface = cli_root / "src/daemon/ability/builtins/agents/discover.rs"
+if discover_owner_surface.exists():
+    text = source(discover_owner_surface)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    if "let owner = row.descriptor.owner_ura.clone();" not in production_text:
+        add(
+            "R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK",
+            discover_owner_surface,
+            1,
+            "local discover owner projection must consume the committed descriptor owner_ura",
+        )
+    if "hosted_llm_agent_ura(peer_name)" in production_text:
+        add(
+            "R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK",
+            discover_owner_surface,
+            1,
+            "local discover must not re-resolve committed descriptor owners through authoring state",
+        )
+
 # Rule 43: host descriptor catalog identity consumes the Agent aggregate
 # hosted-identity projection. The descriptor catalog may validate descriptor
 # owners, but it must not own the local-agents.json file layout while deriving
-# device, consent, MCP, or LLM profile owners.
+# device, MCP, or LLM profile owners. Consent is daemon-native governance
+# owned by the consent-management SystemAgent, not a hosted Agent profile.
 host_descriptor_catalog = cli_root / "src/daemon/ability/catalog/profiles/mod.rs"
 if agent_aggregate.exists():
     text = source(agent_aggregate)
@@ -5202,14 +5903,6 @@ if agent_aggregate.exists():
         (
             "fn host_descriptor_identity_projection(",
             "hosted identity snapshot must expose descriptor identity projection",
-        ),
-        (
-            "fn consent_agent_ura(&self) -> Option<&str>",
-            "Agent aggregate projection must own consent profile owner lookup",
-        ),
-        (
-            "fn mcp_agent_ura(&self) -> Option<&str>",
-            "Agent aggregate projection must own MCP profile owner lookup",
         ),
         (
             "fn llm_agent_uras(&self) -> &[(String, String)]",
@@ -5237,16 +5930,8 @@ if host_descriptor_catalog.exists():
             add("R43_HOST_DESCRIPTOR_IDENTITY_AGGREGATE_FORK", host_descriptor_catalog, 1, detail)
     projection_method_requirements = (
         (
-            r"projection\s*\.\s*host_device_agent_ura\s*\(",
+            r"projection\s*\.\s*host_device_ura\s*\(",
             "host descriptor catalog must read host device owner through the aggregate projection",
-        ),
-        (
-            r"projection\s*\.\s*consent_agent_ura\s*\(",
-            "host descriptor catalog must read consent owner through the aggregate projection",
-        ),
-        (
-            r"projection\s*\.\s*mcp_agent_ura\s*\(",
-            "host descriptor catalog must read MCP owner through the aggregate projection",
         ),
         (
             r"projection\s*\.\s*llm_agent_uras\s*\(",
@@ -5274,7 +5959,7 @@ if host_descriptor_catalog.exists():
             "host descriptor catalog must not inspect hosted identity rows directly",
         ),
         (
-            "local.host_device_agent_ura",
+            "local.host_device_ura",
             "host descriptor catalog must not inspect host-device storage directly",
         ),
     ):
@@ -5305,7 +5990,7 @@ for local_device_surface, surface_label in local_device_ura_surfaces:
             f"{surface_label} must load host device URA through the hosted identity aggregate status",
         ),
         (
-            "host_device_agent_ura()",
+            "host_device_ura()",
             f"{surface_label} must consume the aggregate host device URA projection",
         ),
     ):
@@ -5321,11 +6006,11 @@ for local_device_surface, surface_label in local_device_ura_surfaces:
             f"{surface_label} must not inspect hosted identity file shape",
         ),
         (
-            "local.host_device_agent_ura",
+            "local.host_device_ura",
             f"{surface_label} must not inspect host-device storage directly",
         ),
         (
-            "file.host_device_agent_ura",
+            "file.host_device_ura",
             f"{surface_label} must not inspect host-device storage directly",
         ),
     ):
@@ -5339,7 +6024,7 @@ for local_device_surface, surface_label in local_device_ura_surfaces:
 persistence_facade = cli_root / "src/daemon/persistence/mod.rs"
 if agent_aggregate.exists():
     text = source(agent_aggregate)
-    if "fn hosted_agent_authority_roots(&self) -> Vec<String>" not in text:
+    if "fn hosted_agent_authority_roots(&self) -> anyhow::Result<Vec<String>>" not in text:
         add(
             "R45_HOSTED_AUTHORITY_ROOTS_AGENT_AGGREGATE_FORK",
             agent_aggregate,
@@ -5561,11 +6246,11 @@ if skill_list_ability.exists():
         ),
         (
             "agent_registry::AgentType",
-            "skill.list production code must not consume raw registry AgentType",
+            "skill.list production code must not reintroduce retired registry AgentType",
         ),
         (
             "agents::AgentType",
-            "skill.list production code must not consume raw registry AgentType",
+            "skill.list production code must not reintroduce retired registry AgentType",
         ),
         (
             "snapshot.registry",
@@ -5697,11 +6382,11 @@ if skill_publish_ability.exists():
         ),
         (
             "agent_registry::AgentType",
-            "skill package owner resolution must not consume raw registry AgentType",
+            "skill package owner resolution must not reintroduce retired registry AgentType",
         ),
         (
             "agents::AgentType",
-            "skill package owner resolution must not consume raw registry AgentType",
+            "skill package owner resolution must not reintroduce retired registry AgentType",
         ),
     ):
         if token in production_text:
@@ -5745,11 +6430,11 @@ if skill_store.exists():
         ),
         (
             "agent_registry::AgentType",
-            "shared skill mutations must not consume raw registry AgentType",
+            "shared skill mutations must not reintroduce retired registry AgentType",
         ),
         (
             "agents::AgentType",
-            "shared skill mutations must not consume raw registry AgentType",
+            "shared skill mutations must not reintroduce retired registry AgentType",
         ),
     ):
         if token in production_text:
@@ -5782,17 +6467,28 @@ if catalog_build.exists():
                 f"{label} registration block is missing",
             )
             continue
-        block = production_text[start : start + 650]
-        for required, detail in (
+        block_end = start + 650
+        if token == "discover_ability::register_device_aggregate_with_resolver(":
+            next_registration = production_text.find(
+                "a2a_bridge_ability::register(", start + len(token)
+            )
+            if next_registration >= 0:
+                block_end = next_registration
+        block = production_text[start:block_end]
+        required_tokens = [
             (
                 "AgentAggregateRepository::load_snapshot()",
                 f"{label} must load through the Agent aggregate snapshot",
-            ),
-            (
-                ".registered_agent_registry_projection()",
-                f"{label} must project registry rows from the Agent aggregate",
-            ),
-        ):
+            )
+        ]
+        if token == "a2a_bridge_ability::register(":
+            required_tokens.append(
+                (
+                    ".registered_agent_registry_projection()",
+                    f"{label} must project registry rows from the Agent aggregate",
+                )
+            )
+        for required, detail in required_tokens:
             if required not in block:
                 add(
                     "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK",
@@ -5817,6 +6513,16 @@ if catalog_build.exists():
                     line_number(production_text, start),
                     detail,
                 )
+        if (
+            token == "discover_ability::register_device_aggregate_with_resolver("
+            and ".registered_agent_registry_projection()" in block
+        ):
+            add(
+                "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK",
+                catalog_build,
+                line_number(production_text, start),
+                "agent.discover must receive the complete Agent aggregate instead of discarding hosted identity before dispatch",
+            )
 
 # Rule 51: daemon-native Hub URA join credentials must not be forced through
 # backend HTTP token verification. Token-paired credentials still use the
@@ -7264,11 +7970,11 @@ for path, surface in (
             f"{surface} selected-route dispatch must pass live catalog and call mode into RuntimeBoundAbility",
         )
 
-# Rule 62: hosted-agent session prelude has one incarnation generation source.
-# Same-URA Agent recreation is fenced by the durable owner projection cursor.
-# The identity advertisement (`federation.advertise_agent`) and the ability
-# projection (`federation.advertise_abilities`) must consume that cursor-backed
-# generation instead of reviving a local constant in the boot/session path.
+# Rule 62: hosted-Agent session publication has one Hub-owned generation.
+# The Device persists an opaque incarnation before transport, the Hub returns
+# the generation assignment, and only the exact activated assignment may
+# produce an ability projection. Device code must never send or mint a local
+# generation in `federation.advertise_agent`.
 session_prelude = cli_root / "src/daemon/invocation/bidi/session_initiator/prelude.rs"
 if session_prelude.exists():
     text = source(session_prelude)
@@ -7285,16 +7991,20 @@ if session_prelude.exists():
         _, body = advertise_entry
         for token, detail in (
             (
-                "HostedAgentPreludePublicationPlan::prepare",
-                "hosted-agent prelude must prepare the owner cursor before identity advertisement",
+                "HostedAgentPublicationPlan::begin",
+                "hosted-agent prelude must persist an incarnation plan before identity advertisement",
             ),
             (
-                "plan.generation()",
-                "identity advertisement must use the prepared owner cursor generation",
+                "plan.identity_payload_bytes()?",
+                "identity advertisement must carry the persisted incarnation rather than a Device-owned generation",
             ),
             (
-                "advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &plan)",
-                "ability projection must consume the same prepared publication plan",
+                "let active = plan.activate(assignment)?;",
+                "ability projection must activate the exact Hub generation assignment",
+            ),
+            (
+                "advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &active)",
+                "ability projection must consume the activated publication plan",
             ),
         ):
             if token not in body:
@@ -7314,23 +8024,40 @@ if session_prelude.exists():
         )
     else:
         offset, body = advertise_agent
-        if re.search(r'"generation"\s*:\s*1\b', body):
+        if "generation:" in body or re.search(r'"generation"\s*:', body):
             add(
                 "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
                 session_prelude,
                 line_number(production_text, offset),
-                "hosted-agent identity advertisement must not hard-code generation 1",
+                "hosted-agent identity advertisement must not accept or serialize a Device-owned generation",
             )
-    if not re.search(
-        r"fn\s+send_advertise_agent_prelude\s*\([^)]*generation\s*:\s*u64",
-        production_text,
-        re.S,
-    ):
+        for token, detail in (
+            (
+                "signed_prelude_request(signer, agent_ura, \"federation.advertise_agent\", arguments)",
+                "hosted-agent identity transport must consume the plan's incarnation payload",
+            ),
+            (
+                "Ok(receipt.assignment)",
+                "hosted-agent identity transport must return a typed Hub assignment",
+            ),
+            (
+                "receipt.assignment.validate()",
+                "hosted-agent identity transport must validate the Hub assignment",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
+                    session_prelude,
+                    line_number(production_text, offset),
+                    detail,
+                )
+    if "HostedAgentGenerationAssignment" not in production_text:
         add(
             "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
             session_prelude,
             1,
-            "hosted-agent identity serializer must receive generation as an explicit typed parameter",
+            "hosted-agent prelude must consume a typed Hub generation assignment",
         )
 
 # Rule 63: manifest-bound EAL exec has a real run-level timeout. The
@@ -7508,7 +8235,7 @@ if local_session_dispatcher.exists():
         if token not in text:
             add("R64_SESSION_CANONICAL_CARRIER_FORK", local_session_dispatcher, 1, detail)
 
-    control_failure = rust_method_body(text, "carrier_v1_control_failure")
+    control_failure = rust_method_body(text, "canonical_carrier_control_failure")
     if control_failure is None:
         add(
             "R64_SESSION_CANONICAL_CARRIER_FORK",
@@ -7537,6 +8264,13 @@ if local_session_dispatcher.exists():
     else:
         offset, body = terminal_projection
         signature = text[offset : text.find("{", offset)]
+        terminal_projection_body = body
+        if "canonical_terminal_dispatch_result" in body:
+            shared_terminal_projection = rust_method_body(
+                text, "canonical_terminal_dispatch_result"
+            )
+            if shared_terminal_projection is not None:
+                terminal_projection_body += shared_terminal_projection[1]
         for token, detail in (
             (
                 "FinalizedInvocation",
@@ -7551,7 +8285,11 @@ if local_session_dispatcher.exists():
                 "bidi terminal projection must carry the canonical terminal receipt",
             ),
         ):
-            haystack = signature if token == "FinalizedInvocation" else body
+            haystack = (
+                signature
+                if token == "FinalizedInvocation"
+                else terminal_projection_body
+            )
             if token not in haystack:
                 add(
                     "R64_SESSION_CANONICAL_CARRIER_FORK",
@@ -7568,7 +8306,7 @@ if bidi_dispatcher.exists():
             1,
             "hub dispatch must not dual-read the retired JSON invocation result",
         )
-    if "fn classify_carrier_v1_result" not in text:
+    if "fn classify_canonical_carrier_result" not in text:
         add(
             "R64_SESSION_CANONICAL_CARRIER_FORK",
             bidi_dispatcher,
@@ -7604,8 +8342,8 @@ if bidi_dispatcher.exists():
 trust_anchor = cli_root / "src/daemon/trust/anchor.rs"
 if trust_anchor.exists():
     text = trust_anchor.read_text(encoding="utf-8", errors="replace")
-    body = rust_method_body(source(trust_anchor), "lookup")
-    if body is None:
+    lookup_match = re.search(r"\bpub\s+fn\s+lookup\s*\(\s*&self\s*,", text)
+    if lookup_match is None:
         add(
             "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
             trust_anchor,
@@ -7613,7 +8351,8 @@ if trust_anchor.exists():
             "RealmTrustAnchor::lookup must exist as the singleton trust-anchor lookup",
         )
     else:
-        offset, lookup_body = body
+        offset = lookup_match.start()
+        lookup_body = brace_block_from(text, offset)
         for token, detail in (
             (
                 "self.users",
@@ -7632,14 +8371,14 @@ if trust_anchor.exists():
                 add(
                     "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
                     trust_anchor,
-                    line_number(source(trust_anchor), offset),
+                    line_number(text, offset),
                     detail,
                 )
-        if "self.by_ura.get(agent_ura)" not in lookup_body:
+        if "self.by_ura.get(" not in lookup_body:
             add(
                 "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
                 trust_anchor,
-                line_number(source(trust_anchor), offset),
+                line_number(text, offset),
                 "RealmTrustAnchor::lookup must resolve through the singleton by_ura map",
             )
     for pattern, detail in (
@@ -7688,6 +8427,10 @@ if trust_key_resolver.exists():
                 "decode_pubkey(&row.public_key_b64, agent_ura).ok()",
                 "user key bucket resolution must fail closed on corrupt key material",
             ),
+            (
+                "decode_pubkey(&row.public_key_b64, caller_ura).ok()",
+                "user key bucket resolution must fail closed on corrupt key material",
+            ),
         ):
             if token in body:
                 add(
@@ -7696,7 +8439,10 @@ if trust_key_resolver.exists():
                     line_number(text, body_start + body.find(token)),
                     detail,
                 )
-        if "decode_pubkey(&row.public_key_b64, agent_ura)?" not in body:
+        if (
+            "decode_pubkey(&row.public_key_b64, agent_ura)?" not in body
+            and "decode_pubkey(&row.public_key_b64, caller_ura)?" not in body
+        ):
             add(
                 "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
                 trust_key_resolver,
@@ -8487,6 +9233,51 @@ if session_prelude.exists():
         sync_body = rust_method_body(text, "sync_paired_user_trust_prelude")
         if sync_body is not None:
             offset, body = sync_body
+            for pattern, detail in (
+                (
+                    "signer: &dyn CanonicalSigner",
+                    "paired user trust sync must not reuse the session Device signer",
+                ),
+                (
+                    "publish_paired_user_keys_prelude(client, signer",
+                    "paired user key publication must be signed by the paired User signer",
+                ),
+            ):
+                if pattern in body:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, offset + body.find(pattern)),
+                        detail,
+                    )
+            for token, detail in (
+                (
+                    "sync.user_signer",
+                    "paired user trust sync must load an explicit paired User signer source",
+                ),
+                (
+                    "UserTrustBootstrapError::SignerUnavailable",
+                    "missing paired User signer custody must be a typed prelude failure",
+                ),
+                (
+                    "user_signer.as_ref()",
+                    "paired user trust operations must sign with the paired User signer",
+                ),
+            ):
+                if token not in body:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, offset),
+                        detail,
+                    )
+            if "load_runtime_caller_signer(user_ura)" not in text:
+                add(
+                    "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                    session_prelude,
+                    line_number(text, offset),
+                    "paired user signer source must load the runtime caller signer for the paired User URA",
+                )
             if "paired_user_resolve_key_args(&user_ura, presented_pubkey_b64)" not in body:
                 add(
                     "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
@@ -8541,6 +9332,31 @@ if session_prelude.exists():
                         "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
                         session_prelude,
                         line_number(text, offset),
+                        detail,
+                    )
+
+        session_initiator = cli_root / "src/daemon/invocation/bidi/session_initiator.rs"
+        if session_initiator.exists():
+            initiator_text = session_initiator.read_text(encoding="utf-8", errors="replace")
+            for token, detail in (
+                (
+                    "__caller_ura",
+                    "session prelude tests must capture the signed envelope caller",
+                ),
+                (
+                    "prelude must publish the paired user key as the paired User",
+                    "session prelude tests must prove identity.register_pubkey is signed as the paired User",
+                ),
+                (
+                    "paired user resolve_key must pin the presented public key as the paired User",
+                    "session prelude tests must prove federation.resolve_key is signed as the paired User",
+                ),
+            ):
+                if token not in initiator_text:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_initiator,
+                        1,
                         detail,
                     )
 
@@ -8801,6 +9617,14 @@ if authority_metadata.exists():
                 )
         for required in ("x-runtime-delegation", "x-runtime-session-authority"):
             for path, text in zip(authority_key_sources, texts):
+                if (
+                    path == authority_metadata
+                    and required == "x-runtime-delegation"
+                    and "RUNTIME_DELEGATION_METADATA_KEY" in text
+                ):
+                    # Daemon admission deliberately imports the canonical
+                    # runtime constant instead of duplicating its wire value.
+                    continue
                 if required not in text:
                     add(
                         "R93_RUNTIME_AUTHORITY_METADATA_KEY_NEUTRALITY",
@@ -9237,8 +10061,9 @@ for path, missing_token, forbidden_pattern in (
             )
 
 
-# Rule 94: FFI descriptor catalog projection must fail closed for the explicit
-# system catalog and must not keep a hidden meta.list_abilities provider probe.
+# Rule 94: FFI descriptor catalog projection must fail closed. Every provider,
+# including governance providers, resolves through the attached daemon's
+# committed catalog and the shared canonical row validator.
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 runtime_descriptor_provider = cli_root / "src/daemon/axon_bridge/runtime_descriptor_provider.rs"
 if ffi_invocation.exists() or runtime_descriptor_provider.exists():
@@ -9265,65 +10090,130 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
                 line_number(source_text, source_text.find(token)),
                 detail,
             )
-    for fn_name, signature, details in (
+    for token, source_path, source_text, detail in (
         (
-            "descriptor_catalog_entry_from_descriptor",
-            "std::result::Result<serde_json::Value, String>",
-            (
-                "missing canonical ability URA",
-                "descriptor_hash missing sha256 prefix",
-                "descriptor_ref is not canonical",
-            ),
+            "trait RuntimeDescriptorCatalogReader",
+            runtime_descriptor_provider,
+            provider_production,
+            "runtime descriptor provider must expose an explicit committed-catalog reader seam",
+        ),
+        (
+            "runtime_live_descriptor_catalog_entries",
+            runtime_descriptor_provider,
+            provider_production,
+            "generic descriptor resolution must consume the daemon committed catalog",
+        ),
+        (
+            "AbilityCatalogRow::parse",
+            runtime_descriptor_provider,
+            provider_production,
+            "daemon committed catalog rows must be validated before selection",
+        ),
+        (
+            "AttachedDaemonDescriptorCatalogReader",
+            ffi_invocation,
+            production,
+            "FFI descriptor resolution must bind catalog reads to the attached runtime session",
+        ),
+        (
+            "RemoteCatalogueReadIssuer::catalogue_read_plan",
+            ffi_invocation,
+            production,
+            "FFI descriptor catalog reads must use the canonical signed catalogue-read issuer",
+        ),
+        (
+            "invoke_remote_target_with_signer_at_endpoint",
+            ffi_invocation,
+            production,
+            "FFI descriptor catalog reads must preserve the explicitly attached daemon endpoint",
+        ),
+        (
+            "paired_user_ura",
+            ffi_invocation,
+            production,
+            "remote FFI descriptor catalog reads must remain accountable to the paired User",
+        ),
+        (
+            "enum AttachedDescriptorCatalogRoute",
+            ffi_invocation,
+            production,
+            "FFI descriptor catalog transport must model local-internal and remote-User routes explicitly",
+        ),
+        (
+            "AttachedDescriptorCatalogRoute::LocalRuntime",
+            ffi_invocation,
+            production,
+            "local attached runtime catalogue reads must retain their internal daemon route",
+        ),
+        (
+            "AttachedDescriptorCatalogRoute::RemoteRuntime",
+            ffi_invocation,
+            production,
+            "remote attached runtime catalogue reads must use their paired-User route",
+        ),
+        (
+            "execution_host_ura_for_device_sponsored_system_agent",
+            ffi_invocation,
+            production,
+            "FFI descriptor catalog reads must route remote SystemAgent owners through their sponsor Device execution host",
+        ),
+        (
+            "catalog_execution_target_ura",
+            ffi_invocation,
+            production,
+            "FFI descriptor catalog reads must keep catalogue execution target separate from logical descriptor owner",
         ),
     ):
-        body_info = rust_method_body(provider_text, fn_name)
-        if body_info is None:
-            add(
-                "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                runtime_descriptor_provider,
-                1,
-                f"{fn_name} must remain an inspectable fallible descriptor catalog parser",
-            )
-            continue
-        offset, body = body_info
-        if signature not in provider_text[offset : offset + 400] and "std::result::Result<Value, String>" not in provider_text[offset : offset + 400]:
-            add(
-                "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                runtime_descriptor_provider,
-                line_number(provider_text, offset),
-                f"{fn_name} must return Result instead of Option",
-            )
-        for token in details:
-            if token not in body:
+        if token not in source_text:
+            add("R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED", source_path, 1, detail)
+    if "runtime_daemon_native_agent_descriptor_catalog_entries" in provider_production:
+        add(
+            "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+            runtime_descriptor_provider,
+            line_number(provider_text, provider_text.find("runtime_daemon_native_agent_descriptor_catalog_entries")),
+            "descriptor resolution must not retain agent-type or product-specific static catalog branches",
+        )
+    catalog_row_path = cli_root / "src/daemon/ability/catalog_row.rs"
+    if not catalog_row_path.exists():
+        add(
+            "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+            catalog_row_path,
+            1,
+            "AbilityCatalogRow must own committed catalog row validation",
+        )
+    else:
+        catalog_row_text = source(catalog_row_path)
+        catalog_row_raw_text = catalog_row_path.read_text(encoding="utf-8", errors="replace")
+        for token in (
+            '"ability_ura"',
+            '"owner_ura"',
+            '"descriptor_hash"',
+            '"descriptor_ref"',
+            "serde_json::from_value(value.clone())",
+            "insert_catalog_descriptor",
+            "WIRE_DESCRIPTOR_VERSION_ALIAS",
+            "wire-adapter field",
+            "It is never a second catalog identity",
+            "descriptor_version_alias_is_wire_adapter_only",
+        ):
+            haystack = catalog_row_raw_text if token in {
+                "wire-adapter field",
+                "It is never a second catalog identity",
+                "descriptor_version_alias_is_wire_adapter_only",
+            } else catalog_row_text
+            if token not in haystack:
                 add(
                     "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                    runtime_descriptor_provider,
-                    line_number(provider_text, offset),
-                    f"{fn_name} must preserve provider payload error detail `{token}`",
+                    catalog_row_path,
+                    1,
+                    f"shared canonical catalog row contract is missing {token}",
                 )
-    system_body = rust_method_body(provider_text, "runtime_system_descriptor_catalog_entries")
-    if system_body is not None:
-        offset, body = system_body
-        if "filter_map" in body:
-            add(
-                "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                runtime_descriptor_provider,
-                line_number(provider_text, offset + body.find("filter_map")),
-                "runtime system descriptor catalog must not skip malformed system rows",
-            )
-        if "descriptor_catalog_entry_from_descriptor(descriptor)?" not in body:
-            add(
-                "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                runtime_descriptor_provider,
-                line_number(provider_text, offset),
-                "runtime system descriptor catalog must propagate descriptor projection failures",
-            )
 
 
-# Rule 95: Descriptor resolution is bounded catalog lookup. It must not fall
-# through into a hidden remote meta.list_abilities invocation; otherwise a
-# catalog miss is reclassified as signer custody, owner-offline, route, or
-# timeout state.
+# Rule 95: Descriptor resolution is one bounded committed-catalog lookup. The
+# explicit reader selects either a local internal catalogue route or a remote
+# paired-User signed catalogue route before lookup. It must not add probe/fallback
+# execution paths after an exact catalog miss or classify failures by wording.
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 runtime_descriptor_provider = cli_root / "src/daemon/axon_bridge/runtime_descriptor_provider.rs"
 if ffi_invocation.exists() or runtime_descriptor_provider.exists():
@@ -9373,10 +10263,6 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
             "descriptor resolver must not keep probe-specific subject state",
         ),
         (
-            "load_remote_invocation_caller_signer(",
-            "descriptor resolver must not load caller signers",
-        ),
-        (
             "invoke_remote_target_with_caller_signer_typed(",
             "descriptor resolver must not invoke remote targets",
         ),
@@ -9393,12 +10279,12 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
             "descriptor resolver must not classify remote invocation failures",
         ),
         (
-            "Self::CallerSignerUnavailable(",
-            "descriptor resolver must not expose signer failures as catalog lookup state",
+            "error.runtime_failure_kind()",
+            "descriptor resolver ABI projection must be enum-driven, not message-classifier-driven",
         ),
         (
-            "Self::OwnerOffline(",
-            "descriptor resolver must not expose owner-offline failures as catalog lookup state",
+            "Self::CallerSignerUnavailable(",
+            "descriptor resolver must not expose signer failures as catalog lookup state",
         ),
         (
             "Self::RuntimeOffline(",
@@ -9420,6 +10306,10 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
             "descriptor resolver must expose typed failure states",
         ),
         (
+            "OwnerOffline(String)",
+            "descriptor resolver must expose owner offline as a typed provider state",
+        ),
+        (
             "fn descriptor_resolution_abi_projection(",
             "descriptor resolver typed failures must own ABI projection",
         ),
@@ -9428,8 +10318,12 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
             "FFI descriptor resolver must project from typed error variants",
         ),
         (
-            "descriptor_ref not found in remote runtime catalog",
-            "descriptor resolver must fail closed as a remote catalog miss",
+            "descriptor_ref not found in committed runtime catalog",
+            "descriptor resolver must fail closed as a committed catalog miss",
+        ),
+        (
+            "CatalogUnavailable(String)",
+            "descriptor resolver must expose committed catalog unavailability as typed state",
         ),
     ):
         if token not in combined_production:
@@ -10058,12 +10952,16 @@ if owner_projection_store.exists():
             "owner projection cursor validation must bind Agent owners to Device hosts",
         ),
         (
-            "Device owner projections must be hosted by the same Device URA",
-            "owner projection cursor validation must bind Device owners to themselves",
+            "DeviceProfileProjection migration cursors must be hosted by the same Device URA",
+            "owner projection cursor validation must bind same-device DeviceProfileProjection migration cursors to themselves",
         ),
         (
             "Authority owner projections must be hosted by the same Authority URA",
             "owner projection cursor validation must bind Authority owners to themselves",
+        ),
+        (
+            "same-device DeviceProfileProjection URA",
+            "owner projection cursor store must describe Device rows as migration read-model cursors, not public actor ownership",
         ),
         (
             "validate_owner_projection_host_binding(&cursor.owner_ura, &cursor.host_device_ura)",
@@ -10619,7 +11517,7 @@ if daemon_bin.exists():
 
 if automation_schedule.exists():
     text = source(automation_schedule)
-    body = rust_method_body(text, "list_handler")
+    body = rust_method_body(text, "list_handler_with_envelope")
     if body is None:
         add(
             "R84_SCHEDULE_DUE_FAIL_CLOSED",
@@ -10630,12 +11528,12 @@ if automation_schedule.exists():
     else:
         offset, fn_body = body
         body_start = text.find("{", offset) + 1
-        if "svc.list()?" not in fn_body:
+        if "svc.list_for_accountable_user(&owner)?" not in fn_body:
             add(
                 "R84_SCHEDULE_DUE_FAIL_CLOSED",
                 automation_schedule,
                 line_number(text, offset),
-                "schedule.list handler must propagate ScheduleService::list errors",
+                "schedule.list handler must propagate owner-scoped ScheduleService snapshot errors",
             )
         if "unwrap_or(Value::Null)" in fn_body:
             add(
@@ -10687,7 +11585,7 @@ if schedule_loader.exists():
 # Rule 85: live session index is runtime state, not a best-effort
 # discovery cache. A poisoned session index must surface as unavailable
 # session state; it must not become an empty session list, an unknown-session
-# attach snapshot, or null rows in device.session.list.
+# attach snapshot, or null rows in session SystemAgent session.list.
 session_mod = cli_root / "src/daemon/execution/session/mod.rs"
 device_session = cli_root / "src/daemon/ability/builtins/device_control/session.rs"
 kernel_mod = cli_root / "src/daemon/boot/kernel/mod.rs"
@@ -10789,7 +11687,7 @@ if device_session.exists():
             "R85_SESSION_INDEX_FAIL_CLOSED",
             device_session,
             1,
-            "device.session.list must preserve session index failures",
+            "session SystemAgent session.list must preserve session index failures",
         )
     else:
         offset, fn_body = body
@@ -10799,14 +11697,14 @@ if device_session.exists():
                 "R85_SESSION_INDEX_FAIL_CLOSED",
                 device_session,
                 line_number(text, offset),
-                "device.session.list must propagate SessionService::list_active errors",
+                "session SystemAgent session.list must propagate SessionService::list_active errors",
             )
         if "unwrap_or(Value::Null)" in fn_body:
             add(
                 "R85_SESSION_INDEX_FAIL_CLOSED",
                 device_session,
                 line_number(text, body_start + fn_body.find("unwrap_or(Value::Null)")),
-                "device.session.list must not project session serialization failures as null rows",
+                "session SystemAgent session.list must not project session serialization failures as null rows",
             )
 
     body = rust_method_body(text, "attach_handler")
@@ -10815,7 +11713,7 @@ if device_session.exists():
             "R85_SESSION_INDEX_FAIL_CLOSED",
             device_session,
             1,
-            "device.session.attach must preserve session index failures",
+            "session SystemAgent session.attach must preserve session index failures",
         )
     else:
         offset, fn_body = body
@@ -10825,14 +11723,14 @@ if device_session.exists():
                 "R85_SESSION_INDEX_FAIL_CLOSED",
                 device_session,
                 line_number(text, offset),
-                "device.session.attach must propagate SessionService::get errors before deciding unknown-session snapshot",
+                "session SystemAgent session.attach must propagate SessionService::get errors before deciding unknown-session snapshot",
             )
         if "svc.get(&id).is_none()" in fn_body:
             add(
                 "R85_SESSION_INDEX_FAIL_CLOSED",
                 device_session,
                 line_number(text, body_start + fn_body.find("svc.get(&id).is_none()")),
-                "device.session.attach must not collapse unavailable index state into an empty snapshot",
+                "session SystemAgent session.attach must not collapse unavailable index state into an empty snapshot",
             )
 
 if kernel_mod.exists():
@@ -11098,7 +11996,7 @@ if loop_mod.exists():
 
 if loop_ability.exists():
     text = source(loop_ability)
-    body = rust_method_body(text, "status_handler")
+    body = rust_method_body(text, "status_handler_with_envelope")
     if body is None:
         add(
             "R87_LOOP_CACHE_FAIL_CLOSED",
@@ -11108,12 +12006,12 @@ if loop_ability.exists():
         )
     else:
         offset, fn_body = body
-        if "svc.status(&LoopId::new(id))?" not in fn_body:
+        if "svc.status_for_accountable_user(&LoopId::new(id), &owner)?" not in fn_body:
             add(
                 "R87_LOOP_CACHE_FAIL_CLOSED",
                 loop_ability,
                 line_number(text, offset),
-                "loop.status ability must propagate LoopService::status errors before reporting not found",
+                "loop.status ability must propagate owner-scoped LoopService errors before reporting not found",
             )
 
 if kernel_mod.exists():
@@ -12217,9 +13115,14 @@ if ability_manifest.exists():
 
 
 policy_gate = cli_root / "src/daemon/invocation/admission/policy_gate.rs"
+policy_gate_tests = cli_root / "src/daemon/invocation/admission/policy_gate_tests.rs"
+admission_facade = cli_root / "src/daemon/invocation/admission/admission_facade.rs"
 bootstrap_authority = cli_root / "src/daemon/invocation/admission/bootstrap_authority.rs"
 if policy_gate.exists():
     text = policy_gate.read_text(encoding="utf-8", errors="replace")
+    test_text = text
+    if policy_gate_tests.exists():
+        test_text += "\n" + policy_gate_tests.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
             "local_device_owner_fact(",
@@ -12260,7 +13163,7 @@ if policy_gate.exists():
             "policy tests must prove malformed local credentials are outside ordinary principal projection",
         ),
     ):
-        if token not in text:
+        if token not in test_text:
             add(
                 "R100_POLICY_GATE_NO_LOCAL_CREDENTIAL_OWNER_FALLBACK",
                 policy_gate,
@@ -12268,8 +13171,652 @@ if policy_gate.exists():
                 detail,
             )
 
+    for token, detail in (
+        (
+            "pub(crate) struct AdmissionPolicyContext",
+            "policy context must remain crate-private because it carries TrustedCallerPath directly",
+        ),
+        (
+            "trusted_path: TrustedCallerPath",
+            "policy context must receive TrustedCallerPath directly, not persisted TrustAnchorRole",
+        ),
+        (
+            "context.trusted_path",
+            "policy gate must consume trusted_path from AdmissionPolicyContext",
+        ),
+        (
+            "principal_for(",
+            "policy gate must derive logical principal facts from TrustedCallerPath inside policy, not from persisted TrustAnchorRole",
+        ),
+        (
+            "TrustedCallerPath::DeviceCustody(path_purpose)",
+            "Device policy rules must destructure the exact verified DeviceCustody purpose, not a broad Device label",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R114_TRUST_PATH_PRINCIPAL_SPLIT",
+                policy_gate,
+                1,
+                detail,
+            )
+    for token, detail in (
+        (
+            "pub trusted_role: TrustAnchorRole",
+            "policy context must not expose TrustAnchorRole as a generic trusted_role principal input",
+        ),
+        (
+            "pub persisted_trust_anchor_role: TrustAnchorRole",
+            "policy context must not receive persisted TrustAnchorRole when TrustedCallerPath is already known",
+        ),
+        (
+            "VerifiedCallerProjection::from_trust_anchor_role",
+            "policy gate must not retain a caller-projection constructor that round-trips through persisted TrustAnchorRole",
+        ),
+        (
+            "from_persisted_trust_anchor_role",
+            "policy gate caller projection must not keep a persisted-role compatibility constructor",
+        ),
+        (
+            "fn persisted_trust_anchor_role",
+            "TrustedCallerPath must not expose a generic role round-trip after runtime policy receives TrustedCallerPath directly",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R114_TRUST_PATH_PRINCIPAL_SPLIT",
+                policy_gate,
+                line_number(text, offset),
+                detail,
+            )
+    if admission_facade.exists():
+        facade_text = source(admission_facade)
+        for token, detail in (
+            (
+            "TrustedCallerPath::from_role_and_caller",
+            "AdmissionFacade must not lower TrustAnchorRole directly inside runtime policy classification",
+        ),
+            (
+            "TrustedCallerPath::from_local_hosted_agent_custody",
+            "AdmissionFacade must not classify local hosted-Agent key evidence through a compatibility helper",
+        ),
+        (
+            "TrustedCallerPath::from_federated_caller",
+            "AdmissionFacade must not classify federated evidence through an ability-agnostic helper",
+        ),
+        ):
+            offset = facade_text.find(token)
+            if offset != -1:
+                add(
+                    "R114_TRUST_PATH_PRINCIPAL_SPLIT",
+                    admission_facade,
+                    line_number(facade_text, offset),
+                    detail,
+                )
+    for token, detail in (
+        (
+            "verified_caller_projection_separates_custody_path_from_principal_kind",
+            "policy tests must prove device-mediated Agent custody remains PrincipalKind::Agent",
+        ),
+        (
+            "agent_device_custody_never_matches_device_publication_custody_scope",
+            "policy tests must prove AgentDeviceCustody cannot impersonate Device publication custody",
+        ),
+    ):
+        if token not in test_text:
+            add(
+                "R114_TRUST_PATH_PRINCIPAL_SPLIT",
+                policy_gate,
+                1,
+                detail,
+            )
+
+trust_anchor_rs = cli_root / "src/daemon/trust/anchor.rs"
+for path in production_files(cli_root / "src", {".rs"}):
+    text = source(path)
+    offset = text.find("TrustedAgentRole")
+    if offset != -1:
+        add(
+            "R129_TRUST_ANCHOR_ROLE_ONTOLOGY",
+            path,
+            line_number(text, offset),
+            "production code must name persisted trust roles as TrustAnchorRole, not TrustedAgentRole",
+        )
+if trust_anchor_rs.exists():
+    text = source(trust_anchor_rs)
+    raw_text = trust_anchor_rs.read_text(encoding="utf-8", errors="replace")
+    if "pub enum TrustAnchorRole" not in text:
+        add(
+            "R129_TRUST_ANCHOR_ROLE_ONTOLOGY",
+            trust_anchor_rs,
+            1,
+            "trust anchor role enum must be named as persisted trust-anchor evidence",
+        )
+    for token, detail in (
+        ("this enum is not an Agent ontology", "TrustAnchorRole documentation must state that the role is not an Agent ontology"),
+        ("TrustedCallerPath", "TrustAnchorRole documentation must name the lowering boundary into TrustedCallerPath"),
+        (
+            "storage/wire compatibility name",
+            "TrustedAgent.agent_ura documentation must confine agent_ura to storage/wire compatibility",
+        ),
+        (
+            "runtime principal/caller URA",
+            "trust-anchor runtime docs must name trusted values as runtime principal/caller URAs",
+        ),
+    ):
+        if token not in raw_text:
+            add(
+                "R129_TRUST_ANCHOR_ROLE_ONTOLOGY",
+                trust_anchor_rs,
+                1,
+                detail,
+            )
+    for token, detail in (
+        (
+            "fn canonical_ura_for_role(\n    agent_ura: &str",
+            "trust-anchor canonical role validator must not name generic runtime principals as agent_ura",
+        ),
+        (
+            "fn canonical_ura_for_role(\n    principal_ura: &str",
+            "trust-anchor canonical role validator must name runtime_principal_ura explicitly, not a broad principal_ura alias",
+        ),
+        (
+            "fn canonical_ura_for_runtime_principal(agent_ura: &str)",
+            "runtime principal canonicalizer must name its input principal_ura, not agent_ura",
+        ),
+        (
+            "pub fn lookup(&self, agent_ura: &str)",
+            "trust-anchor lookup API must name singleton lookup input as principal/caller URA, not agent_ura",
+        ),
+        (
+            "Role the agent plays in the realm",
+            "TrustAnchorRole field docs must not describe every trusted principal as an Agent",
+        ),
+    ):
+        offset = raw_text.find(token)
+        if offset != -1:
+            add(
+                "R129_TRUST_ANCHOR_ROLE_ONTOLOGY",
+                trust_anchor_rs,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+    key_resolver_rs = cli_root / "src/daemon/trust/key_resolver.rs"
+    if key_resolver_rs.exists():
+        text = key_resolver_rs.read_text(encoding="utf-8", errors="replace")
+        for token, detail in (
+            (
+                "fn resolve(&self, caller_ura: &str)",
+                "TrustAnchorKeyResolver must resolve exact caller URAs at runtime",
+            ),
+            (
+                "fn resolve_all(&self, caller_ura: &str)",
+                "TrustAnchorKeyResolver multi-key path must resolve exact caller URAs at runtime",
+            ),
+        ):
+            if token not in text:
+                add("R129_TRUST_ANCHOR_ROLE_ONTOLOGY", key_resolver_rs, 1, detail)
+        for token, detail in (
+            (
+                "fn resolve(&self, agent_ura: &str)",
+                "TrustAnchorKeyResolver runtime signature must not preserve the historical agent_ura name",
+            ),
+        (
+            "fn resolve_all(&self, agent_ura: &str)",
+            "TrustAnchorKeyResolver multi-key signature must not preserve the historical agent_ura name",
+        ),
+        (
+            "fn decode_pubkey(public_key_b64: &str, agent_ura: &str)",
+            "TrustAnchorKeyResolver pubkey diagnostics must not name the caller slot agent_ura",
+        ),
+        (
+            "caller_key_unavailable(agent_ura",
+            "TrustAnchorKeyResolver caller-key diagnostics must not pass an overloaded agent_ura variable",
+        ),
+        ):
+            offset = text.find(token)
+            if offset != -1:
+                add(
+                    "R129_TRUST_ANCHOR_ROLE_ONTOLOGY",
+                    key_resolver_rs,
+                    line_number(text, offset),
+                    detail,
+                )
+federated_key_resolver_rs = cli_root / "src/daemon/invocation/admission/federated_key_resolver.rs"
+if federated_key_resolver_rs.exists():
+    text = federated_key_resolver_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "Resolves a caller/principal URA",
+            "federated key resolver docs must not describe every resolved URA as an Agent",
+        ),
+        (
+            "fn resolve_federated(&self, caller_ura: &str)",
+            "federated cross-realm resolver must name runtime input as caller_ura",
+        ),
+        (
+            "fn resolve(&self, caller_ura: &str)",
+            "federated KeyResolver implementation must resolve exact caller URAs at runtime",
+        ),
+        (
+            "fn resolve_all(&self, caller_ura: &str)",
+            "federated KeyResolver multi-key implementation must resolve exact caller URAs at runtime",
+        ),
+        (
+            "caller_ura:{caller_ura}",
+            "federated key resolver diagnostics must name caller_ura, not agent_ura",
+        ),
+    ):
+        if token not in text:
+            add("R129_TRUST_ANCHOR_ROLE_ONTOLOGY", federated_key_resolver_rs, 1, detail)
+    for token, detail in (
+        (
+            "Resolves an `agent_ura`",
+            "federated key resolver docs must not call every resolved caller/principal URA an agent_ura",
+        ),
+        (
+            "fn resolve_federated(&self, agent_ura: &str)",
+            "federated cross-realm resolver must not preserve the historical agent_ura name",
+        ),
+        (
+            "fn resolve(&self, agent_ura: &str)",
+            "federated KeyResolver runtime signature must not preserve the historical agent_ura name",
+        ),
+        (
+            "fn resolve_all(&self, agent_ura: &str)",
+            "federated KeyResolver multi-key signature must not preserve the historical agent_ura name",
+        ),
+        (
+            "caller_key_not_found(agent_ura",
+            "federated key resolver call sites must not pass runtime caller IDs as agent_ura",
+        ),
+        (
+            "agent_ura:{agent_ura}",
+            "federated key resolver diagnostics must not report runtime caller IDs as agent_ura",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R129_TRUST_ANCHOR_ROLE_ONTOLOGY",
+                federated_key_resolver_rs,
+                line_number(text, offset),
+                detail,
+            )
+
+if admission_facade.exists():
+    text = admission_facade.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "resolve_invocation_verifying_key(caller_ura)",
+            "local hosted-Agent verification key fallback must verify the caller Agent before classifying AgentDeviceCustody",
+        ),
+        (
+            "self.is_federated_caller(caller_ura)",
+            "federated caller trust-path classification must remain explicit in AdmissionFacade",
+        ),
+        (
+            "trusted_path,",
+            "admission facade must pass TrustedCallerPath directly to AdmissionPolicyGate",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH",
+                admission_facade,
+                1,
+                detail,
+            )
+    if "fn federated_caller_path(" in text:
+        add(
+            "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH",
+            admission_facade,
+            line_number(text, text.find("fn federated_caller_path(")),
+            "admission facade must not keep a second federated caller classifier",
+        )
+    for token, detail in (
+        (
+            "TrustedCallerPath::from_local_hosted_agent_custody(caller_ura)",
+            "admission facade must not use the retired local hosted-Agent compatibility helper",
+        ),
+        (
+            "TrustedCallerPath::from_federated_caller(caller_ura)",
+            "admission facade must not use the retired ability-agnostic federated classifier",
+        ),
+        (
+            "TrustedCallerPath::from_role_and_caller",
+            "admission facade must not lower TrustAnchorRole directly inside runtime policy classification",
+        ),
+        (
+            "TrustedCallerPath::from_verified_caller(",
+            "admission facade must not use the retired ability-agnostic verified-caller classifier",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH",
+                admission_facade,
+                line_number(text, offset),
+                detail,
+            )
+    policy_gate_text = source(policy_gate) if policy_gate.exists() else ""
+    for token, detail in (
+        (
+            "LOCAL_HOSTED_AGENT_CALLER_KIND_MISMATCH",
+            "local hosted-Agent custody classification must reject non-Agent caller URAs",
+        ),
+        (
+            "FEDERATED_CALLER_KIND_MISMATCH",
+            "federated caller classification must reject non-actor URA kinds",
+        ),
+        (
+            "DEVICE_CALLER_PURPOSE_UNVERIFIED",
+            "federated Device caller classification must be guarded by public ability purpose",
+        ),
+    ):
+        if token not in policy_gate_text:
+            add(
+                "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH",
+                policy_gate,
+                1,
+                detail,
+            )
+    search_from = 0
+    while True:
+        offset = text.find("resolve_invocation_verifying_key", search_from)
+        if offset == -1:
+            break
+        window = text[offset : offset + 900]
+        if "TrustAnchorRole::Device" in window and "from_role_and_caller" in window:
+            add(
+                "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH",
+                admission_facade,
+                line_number(text, offset),
+                "hosted-Agent local key fallback must not fabricate TrustAnchorRole::Device before AgentDeviceCustody",
+            )
+        search_from = offset + len("resolve_invocation_verifying_key")
+    for token, detail in (
+        (
+            "local_hosted_agent_key_fallback_projects_direct_agent_custody_path",
+            "admission facade tests must prove local hosted-Agent key fallback projects direct AgentDeviceCustody",
+        ),
+        (
+            "local_hosted_agent_key_fallback_rejects_device_caller_ura",
+            "admission facade tests must prove local hosted-Agent key fallback rejects Device caller URAs",
+        ),
+        (
+            "trusted_device_row_requires_public_invocation_purpose",
+            "admission facade tests must prove trusted Device rows require DeviceCallerPurpose classification",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH",
+                admission_facade,
+                1,
+                detail,
+            )
+
+if admission_facade.exists() and policy_gate.exists():
+    facade_text = admission_facade.read_text(encoding="utf-8", errors="replace")
+    gate_text = policy_gate.read_text(encoding="utf-8", errors="replace")
+    policy_tests_text = (
+        policy_gate_tests.read_text(encoding="utf-8", errors="replace")
+        if policy_gate_tests.exists()
+        else ""
+    )
+    for token, detail in (
+        (
+            "&input.ability,\n                device_purpose,",
+            "runtime admission must pass the selected public ability into trust-path classification",
+        ),
+        (
+            "public_ability: &str",
+            "AdmissionFacade trusted_path_for_caller must require the public ability for Device-caller purpose classification",
+        ),
+    ):
+        if token not in facade_text:
+            add("R151_DEVICE_CALLER_PURPOSE_TRUST_PATH", admission_facade, 1, detail)
+    for token, detail in (
+        (
+            "require_device_caller_purpose(",
+            "TrustedCallerPath must validate DeviceCustody through DeviceCallerPurpose before policy",
+        ),
+        (
+            "DEVICE_CALLER_PURPOSE_UNVERIFIED",
+            "invocation-aware federated Device classification must reject ordinary public abilities",
+        ),
+        (
+            "public_ability: &str",
+            "federated Device caller classification must require selected public ability context",
+        ),
+    ):
+        if token not in gate_text:
+            add("R151_DEVICE_CALLER_PURPOSE_TRUST_PATH", policy_gate, 1, detail)
+    for token, detail in (
+        (
+            "trusted_caller_path_requires_invocation_purpose_for_federated_device",
+            "policy tests must prove federated Device callers require public ability purpose",
+        ),
+        (
+            "DEVICE_CALLER_PURPOSE_UNVERIFIED",
+            "policy tests must prove ordinary public abilities reject Device callers before policy",
+        ),
+    ):
+        if token not in policy_tests_text:
+            add("R151_DEVICE_CALLER_PURPOSE_TRUST_PATH", policy_gate_tests, 1, detail)
+    for token, detail in (
+        (
+            "TrustedCallerPath::from_verified_caller(\n                caller_ura,\n                VerifiedCallerEvidence::TrustAnchorRole",
+            "AdmissionFacade must not classify trust-anchor callers with the ability-agnostic verified-caller API",
+        ),
+        (
+            "TrustedCallerPath::from_verified_caller(\n                caller_ura,\n                VerifiedCallerEvidence::Federated",
+            "AdmissionFacade must not classify federated callers with the ability-agnostic verified-caller API",
+        ),
+        (
+            "trusted_path_for_caller(caller_ura, trust_anchor.as_ref())",
+            "runtime admission must not classify callers without selected public ability context",
+        ),
+    ):
+        offset = facade_text.find(token)
+        if offset != -1:
+            add(
+                "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                admission_facade,
+                line_number(facade_text, offset),
+                detail,
+            )
+    for token, detail in (
+        (
+            "pub(crate) fn from_verified_caller(",
+            "TrustedCallerPath must not expose the retired ability-agnostic verified-caller API",
+        ),
+        (
+            "pub(crate) fn from_federated_caller(",
+            "TrustedCallerPath must not expose ability-agnostic federated Device classification",
+        ),
+    ):
+        offset = gate_text.find(token)
+        if offset != -1:
+            add(
+                "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                policy_gate,
+                line_number(gate_text, offset),
+                detail,
+            )
+    for token, detail in (
+        (
+            "device_owned_ability_matches",
+            "Realm Authority public-read admission must not revive direct Device-owned Ability URAs as policy subjects",
+        ),
+    ):
+        offset = gate_text.find(token)
+        if offset != -1:
+            add(
+                "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                policy_gate,
+                line_number(gate_text, offset),
+                detail,
+            )
+    owner_fact_body = rust_method_body(gate_text, "owner_fact_from_ura")
+    if owner_fact_body is None:
+        add(
+            "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+            policy_gate,
+            1,
+            "policy gate must keep explicit owner_fact_from_ura resolution so direct Device-owned Ability URAs cannot project through Device owners",
+        )
+    else:
+        start, body = owner_fact_body
+        projection = re.search(
+            r"Some\(AbilityOwner::Device\s*\{[^}]*\}\)\s*=>\s*\{[^}]*owner_fact_from_trust_anchor",
+            body,
+            re.DOTALL,
+        )
+        if projection:
+            add(
+                "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                policy_gate,
+                line_number(gate_text, start + projection.start()),
+                "direct Device-owned Ability URAs are migration facts and must not project through Device trust-anchor owners",
+            )
+        if "device_owned_ability_subject_does_not_project_device_owner" not in policy_tests_text:
+            add(
+                "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                policy_gate_tests,
+                1,
+                "policy tests must prove direct Device-owned Ability subjects stay owner-unresolved even when the Device has a trusted owner",
+            )
+    realm_public_read_body = rust_method_body(gate_text, "realm_authority_public_read_scope")
+    if realm_public_read_body is None:
+        add(
+            "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+            policy_gate,
+            1,
+            "policy gate must keep a named Realm Authority public-read scope for local DeviceProfileProjection metadata",
+        )
+    else:
+        start, body = realm_public_read_body
+        if "subject_ura == callee_ura ||" in body:
+            add(
+                "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                policy_gate,
+                line_number(gate_text, start + body.find("subject_ura == callee_ura ||")),
+                "Realm Authority public-read admission must be bounded to the local DeviceProfileProjection subject only",
+            )
+    if "realm_authority_public_read_does_not_admit_device_owned_ability_subject" not in policy_tests_text:
+        add(
+            "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+            policy_gate_tests,
+            1,
+            "policy tests must prove Hub public-read cannot admit direct Device-owned Ability subjects",
+        )
+    owner_fact_body = rust_method_body(gate_text, "owner_fact_from_ura")
+    if owner_fact_body is None:
+        add(
+            "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+            policy_gate,
+            1,
+            "policy gate must keep owner_fact_from_ura as the single ordinary-policy owner projection boundary",
+        )
+    else:
+        start, body = owner_fact_body
+        device_owner_start = body.find("Some(AbilityOwner::Device")
+        device_owner_end = body.find("Some(AbilityOwner::Service", device_owner_start)
+        if device_owner_end == -1:
+            device_owner_end = body.find("Some(AbilityOwner::SystemAgent", device_owner_start)
+        if device_owner_start == -1:
+            add(
+                "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                policy_gate,
+                line_number(gate_text, start),
+                "owner_fact_from_ura must explicitly fail closed for direct Device-owned Ability URAs",
+            )
+        else:
+            device_owner_branch = body[
+                device_owner_start : device_owner_end if device_owner_end != -1 else len(body)
+            ]
+            if (
+                "=> None" not in device_owner_branch
+                or "owner_fact_from_trust_anchor" in device_owner_branch
+                or "device_ura(" in device_owner_branch
+                or "OwnerFact::" in device_owner_branch
+            ):
+                add(
+                    "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+                    policy_gate,
+                    line_number(gate_text, start + device_owner_start),
+                    "direct Device-owned Ability URAs are migration facts and must not project Device owners into ordinary policy",
+                )
+    if "device_owned_ability_subject_does_not_project_device_owner" not in policy_tests_text:
+        add(
+            "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
+            policy_gate_tests,
+            1,
+            "policy tests must prove direct Device-owned Ability subjects do not inherit Device owner anchors",
+        )
+
 if bootstrap_authority.exists():
     text = bootstrap_authority.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "TrustedCallerPath",
+            "bootstrap authority verifier must consume TrustedCallerPath directly",
+        ),
+        (
+            "trusted_path: TrustedCallerPath",
+            "bootstrap authority verifier signature must name caller custody path, not persisted TrustAnchorRole",
+        ),
+        (
+            "trusted_path == TrustedCallerPath::Hub",
+            "hub bootstrap authority must branch on TrustedCallerPath::Hub",
+        ),
+        (
+            "trusted_path == TrustedCallerPath::User",
+            "user bootstrap authority must branch on TrustedCallerPath::User",
+        ),
+        (
+            "let TrustedCallerPath::DeviceCustody(device_purpose) = trusted_path",
+            "device bootstrap authority must require and carry the exact verified DeviceCustody purpose",
+        ),
+        (
+            "hosted_agent_custody_path_does_not_inherit_device_bootstrap_authority",
+            "bootstrap authority tests must prove AgentDeviceCustody cannot inherit Device bootstrap authority",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R131_BOOTSTRAP_AUTHORITY_TRUSTED_PATH",
+                bootstrap_authority,
+                1,
+                detail,
+            )
+    for token, detail in (
+        (
+            "trusted_role: TrustAnchorRole",
+            "bootstrap authority verifier must not accept persisted TrustAnchorRole as runtime trust-path input",
+        ),
+        (
+            "trusted_role == TrustAnchorRole",
+            "bootstrap authority verifier must not branch on persisted TrustAnchorRole",
+        ),
+        (
+            "trusted_role != TrustAnchorRole",
+            "bootstrap authority verifier must not branch on persisted TrustAnchorRole",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R131_BOOTSTRAP_AUTHORITY_TRUSTED_PATH",
+                bootstrap_authority,
+                line_number(text, offset),
+                detail,
+            )
     if "local_device_owner_fact(caller_ura)" not in text:
         add(
             "R100_POLICY_GATE_NO_LOCAL_CREDENTIAL_OWNER_FALLBACK",
@@ -12278,6 +13825,5076 @@ if bootstrap_authority.exists():
             "bootstrap authority must remain the explicit bounded owner of local paired-device projection",
         )
 
+if admission_facade.exists():
+    text = admission_facade.read_text(encoding="utf-8", errors="replace")
+    offset = text.find("persisted_trust_anchor_role()")
+    if offset != -1:
+        add(
+            "R131_BOOTSTRAP_AUTHORITY_TRUSTED_PATH",
+            admission_facade,
+            line_number(text, offset),
+            "admission facade must pass TrustedCallerPath directly to bootstrap authority without role round-tripping",
+        )
+
+ability_deploy_ops = (
+    cli_root / "src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+)
+ability_deploy_registrar = (
+    cli_root / "src/daemon/ability/builtins/device_control/ability_management/registrar.rs"
+)
+ability_deploy_store = (
+    cli_root / "src/daemon/ability/builtins/device_control/ability_management/store.rs"
+)
+ability_deploy_target = cli_root / "src/daemon/invocation/routing/target.rs"
+ability_deploy_descriptor = (
+    cli_root / "ability-descriptors/system/device_control/ability.deploy.ability.toml"
+)
+ability_deploy_cli = cli_root / "src/cli/commands/deploy.rs"
+ability_group_cli = cli_root / "src/cli/commands/groups/ability.rs"
+remote_system_facade = cli_root / "src/cli/daemon_client/remote_system_ability.rs"
+remote_device_support = cli_root / "src/support/platform/remote_device.rs"
+easyremote_e2e = cli_root / "tools/scripts/docker-two-node-easyremote-cli-e2e.sh"
+
+for path in production_files(cli_root / "src/daemon", {".rs"}):
+    text = source(path)
+    for match in re.finditer(
+        r"\.hot_register\w*\s*\([^;{}]*?OwnerKind::(?:DeviceProfileProjection|Device)\b",
+        text,
+        flags=re.S,
+    ):
+        add(
+            "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, match.start()),
+            "production dynamic hot-register paths must not create direct Device-owned dynamic abilities; use a SystemAgent or explicit hosted Agent owner",
+        )
+
+if ability_deploy_ops.exists():
+    text = source(ability_deploy_ops)
+    raw_text = ability_deploy_ops.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "let host_device_ura = crate::core::ura::device_ura",
+            "ability.deploy must name target Device as execution host, not descriptor owner",
+        ),
+        (
+            "let deployed_owner_ura = crate::core::ura::device_agent_ura",
+            "ability.deploy must derive deployed descriptor owner as a device-sponsored SystemAgent",
+        ),
+        (
+            "ABILITY_MANAGEMENT_SYSTEM_AGENT_ID",
+            "ability.deploy dynamic owner must be the ability-management SystemAgent",
+        ),
+        (
+            "owner_ability_ura(&deployed_owner_ura, &key)",
+            "ability.deploy must derive Ability URA from deployed_owner_ura, not host_device_ura",
+        ),
+        (
+            '"owner_ura": deployed_owner_ura',
+            "ability.deploy response must expose descriptor owner separately from target Device host",
+        ),
+        (
+            "AbilityManagementMutationActor::from_envelope",
+            "ability.deploy handler must preserve the already-admitted logical mutation actor",
+        ),
+        (
+            "ability_management_actor_rejects_device_custody_as_mutation_authority",
+            "ability.deploy tests must prove Device custody cannot become mutation authority",
+        ),
+    ):
+        haystack = raw_text if "tests must prove" in detail else text
+        if token not in haystack:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_ops, 1, detail)
+    for token, detail in (
+        (
+            "owner_ability_ura(&host_device_ura, &key)",
+            "ability.deploy must not derive dynamic Ability URA from Device execution host",
+        ),
+        (
+            "owner_ability_ura(&owner_ura, &key)",
+            "ability.deploy must not use a generic owner_ura variable for the Device execution host",
+        ),
+        (
+            "require_local_device_authority(",
+            "ability.deploy handler must not equate local Device custody with mutation authority",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+                ability_deploy_ops,
+                line_number(text, offset),
+                detail,
+            )
+if ability_deploy_registrar.exists():
+    text = source(ability_deploy_registrar)
+    raw_text = ability_deploy_registrar.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "selector.owner_kind() != \"system-agent\"",
+            "dynamic deploy install validation must require SystemAgent-owned Ability URAs",
+        ),
+        (
+            "ABILITY_MANAGEMENT_SYSTEM_AGENT_ID",
+            "dynamic deploy install validation must require the ability-management SystemAgent owner",
+        ),
+        (
+            "struct DeployedAbilityControlPlaneKey",
+            "dynamic deploy control-plane key must be named as deployed ability, not Device owner",
+        ),
+        (
+            "owner_projection: format!(\"system-agent:{}\", selector.dispatch_target())",
+            "dynamic deploy control-plane authority scope must use SystemAgent projection",
+        ),
+        (
+            "install_rejects_direct_device_owned_dynamic_ability_ura",
+            "registrar tests must prove ability.deploy rejects direct Device-owned dynamic URAs",
+        ),
+    ):
+        haystack = raw_text if "tests must prove" in detail else text
+        if token not in haystack:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_registrar, 1, detail)
+    for token, detail in (
+        (
+            "selector.owner_kind() != \"device\"",
+            "dynamic deploy registrar must not require Device-owned Ability URAs",
+        ),
+        (
+            "AuthorityScope::new(\"device\"",
+            "dynamic deploy control-plane authority scope must not be direct Device",
+        ),
+        (
+            "DeviceAbilityControlPlaneKey",
+            "dynamic deploy control-plane key must not preserve Device-owner naming",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+                ability_deploy_registrar,
+                line_number(text, offset),
+                detail,
+            )
+if ability_deploy_store.exists():
+    text = source(ability_deploy_store)
+    raw_text = ability_deploy_store.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "ability_management_system_agent_owner_is_hosted_by_device(",
+            "deploy store replay quarantine must classify ability-management SystemAgent owners explicitly",
+        ),
+        (
+            "device_agent_ids()",
+            "deploy store replay quarantine must inspect SystemAgent sponsoring Device",
+        ),
+        (
+            "ABILITY_MANAGEMENT_SYSTEM_AGENT_ID",
+            "deploy store replay quarantine must restrict replay to ability-management SystemAgent owners",
+        ),
+        (
+            "quarantine_unhosted_device_authority_hides_old_system_agent_rows_from_replay",
+            "store tests must prove old device-sponsored SystemAgent rows are hidden after rejoin",
+        ),
+        (
+            "quarantine_unhosted_device_authority_hides_direct_device_rows_from_replay",
+            "store tests must prove legacy direct Device-owned deployment rows do not replay",
+        ),
+        (
+            "quarantine_unhosted_device_authority_hides_same_device_non_ability_management_rows",
+            "store tests must prove same-device non-ability-management SystemAgent rows do not replay",
+        ),
+    ):
+        haystack = raw_text if "tests must prove" in detail else text
+        if token not in haystack:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_store, 1, detail)
+    for token, detail in (
+        (
+            "owner_ura == hosted_device_ura",
+            "deploy store replay must not treat direct Device-owned Ability URAs as hosted deployments",
+        ),
+        (
+            "fn ability_owner_is_hosted_by_device",
+            "deploy store replay predicate name must not preserve direct Device owner semantics",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+                ability_deploy_store,
+                line_number(text, offset),
+                detail,
+            )
+if ability_deploy_descriptor.exists():
+    raw_text = ability_deploy_descriptor.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "ability-management SystemAgent",
+            "ability.deploy public descriptor must say deployed descriptors are owned by ability-management SystemAgent",
+        ),
+        (
+            "execution host/custody only",
+            "ability.deploy public descriptor must say target Device is host/custody only",
+        ),
+        (
+            "not descriptor owner or public callee",
+            "ability.deploy public descriptor must reject Device-as-owner/callee wording",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_descriptor, 1, detail)
+    for token, detail in (
+        (
+            "Publish a host_stream device ability bundle ResourceRef to a canonical Device URA",
+            "ability.deploy public descriptor must not describe deploy as publishing a device-owned ability to Device",
+        ),
+    ):
+        offset = raw_text.find(token)
+        if offset != -1:
+            add(
+                "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+                ability_deploy_descriptor,
+                line_number(raw_text, offset),
+                detail,
+            )
+if ability_deploy_cli.exists():
+    raw_text = ability_deploy_cli.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "ability-management SystemAgent",
+            "ability deploy CLI docs must name the SystemAgent descriptor owner",
+        ),
+        (
+            "execution host/custody",
+            "ability deploy CLI docs must keep target Device as host/custody, not descriptor owner",
+        ),
+        (
+            "PairedInvocationIdentity::load(\"ability deploy\")",
+            "ability deploy CLI must keep accountable caller and local execution host as distinct typed facts",
+        ),
+        (
+            "invocation.caller_user_ura()",
+            "ability deploy CLI must consume the paired User caller instead of Device custody",
+        ),
+        (
+            "deploy_invocation_separates_user_caller_from_device_execution_host",
+            "ability deploy tests must prove User caller and Device execution host remain distinct",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_cli, 1, detail)
+    for token, detail in (
+        (
+            "invoke_remote_ability_deploy(",
+            "ability deploy CLI must route peer Device targets through an explicit remote deploy path",
+        ),
+        (
+            "resource_ref_for_target_tmp_relative_path",
+            "remote ability deploy must stage a target-local ResourceRef instead of passing a caller-local ResourceRef",
+        ),
+        (
+            "upload_target_resource_via_file_transfer",
+            "ability deploy CLI must delegate remote ResourceRef upload to the remote system ability facade",
+        ),
+        (
+            "invoke_target_ability_deploy_from_resource",
+            "ability deploy CLI must use one accountable target ability.deploy invocation for local and remote hosts",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_cli, 1, detail)
+    for token, detail in (
+        (
+            "Description: Publish an ability bundle to a canonical Device URA",
+            "ability deploy CLI docs must not describe deploy as direct Device-owned publishing",
+        ),
+        (
+            "require_caller_device_ura_from_credentials()",
+            "ability deploy CLI must not use Device custody as the public deployment caller",
+        ),
+    ):
+        offset = raw_text.find(token)
+        if offset != -1:
+            add(
+                "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+                ability_deploy_cli,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+if remote_device_support.exists():
+    raw_text = remote_device_support.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "struct PairedInvocationIdentity",
+            "CLI mutation identity must keep User accountability and Device locality in one typed value",
+        ),
+        (
+            "RuntimeUserBinding::Bound { user_ura }",
+            "CLI mutation identity must derive its caller from the paired User binding",
+        ),
+        (
+            "caller_user_ura",
+            "CLI mutation identity must expose the accountable User fact explicitly",
+        ),
+        (
+            "local_device_ura",
+            "CLI mutation identity must expose Device locality separately from caller identity",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", remote_device_support, 1, detail)
+
+if ability_group_cli.exists():
+    raw_text = ability_group_cli.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "PairedInvocationIdentity::load(",
+            "ability uninstall must require a paired User accountability root",
+        ),
+        (
+            "invoke_target_ability_uninstall(",
+            "ability uninstall must use the same target SystemAgent invocation boundary as deploy",
+        ),
+        (
+            "identity.caller_user_ura()",
+            "ability uninstall must preserve the paired User as caller",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_group_cli, 1, detail)
+    obsolete = "LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(\"ability.uninstall\""
+    offset = raw_text.find(obsolete)
+    if offset != -1:
+        add(
+            "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+            ability_group_cli,
+            line_number(raw_text, offset),
+            "public ability uninstall must not replace the paired User caller with _system.local",
+        )
+
+if remote_system_facade.exists():
+    raw_text = remote_system_facade.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "upload_target_resource_via_file_transfer",
+            "remote system facade must expose the remote deploy ResourceRef upload operation",
+        ),
+        (
+            "invoke_target_ability_deploy_from_resource",
+            "remote system facade must expose the target-owned ability.deploy operation",
+        ),
+        (
+            "invoke_target_ability_uninstall",
+            "remote system facade must expose the target-owned ability.uninstall operation",
+        ),
+        (
+            "FS_TRANSFER",
+            "remote deploy upload must materialize the bundle through target fs.transfer",
+        ),
+        (
+            "ABILITY_DEPLOY",
+            "remote deploy must invoke the target ability-management SystemAgent ability.deploy selector",
+        ),
+        (
+            "RemoteAbilityInvocationTarget::for_target_owned_selector",
+            "remote deploy facade must use descriptor-bound target-owned SystemAgent invocation",
+        ),
+        (
+            "RemoteUserActionInvocationIssuer::caller_declared_root_plan",
+            "remote deploy facade must delegate named subject/nonce/causal root policy to the User-action issuer",
+        ),
+        (
+            "ABILITY_UNINSTALL",
+            "remote uninstall must invoke the target ability-management SystemAgent selector",
+        ),
+        (
+            "caller_ura,\n        ability_ura,",
+            "remote uninstall must preserve User caller and removed Ability subject as distinct tuple facts",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", remote_system_facade, 1, detail)
+
+# Public CLI work is accountable to the paired User Principal. A Device may
+# select locality, host execution, publish custody, and carry bootstrap
+# federation traffic, but it must never be substituted as the caller of an
+# operator-originated ability invocation.
+for public_cli_path in (
+    cli_root / "src/cli/commands/invoke.rs",
+    cli_root / "src/cli/commands/ability_stream.rs",
+    cli_root / "src/cli/commands/ability_bidi.rs",
+):
+    if not public_cli_path.exists():
+        continue
+    raw_text = public_cli_path.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "PairedInvocationIdentity::load(",
+            "remote public ability ingress must load paired User accountability separately from Device locality",
+        ),
+        (
+            "identity.caller_user_ura()",
+            "remote public ability ingress must submit the paired User as caller",
+        ),
+    ):
+        if token not in raw_text:
+            add("R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT", public_cli_path, 1, detail)
+    for token, detail in (
+        (
+            "remote_device::caller_device_ura(",
+            "remote public ability ingress must not use Device custody as caller",
+        ),
+        (
+            "caller_ura = local_device_ura",
+            "remote public ability ingress must not copy Device locality into caller identity",
+        ),
+    ):
+        offset = raw_text.find(token)
+        if offset != -1:
+            add(
+                "R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT",
+                public_cli_path,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+if remote_system_facade.exists():
+    raw_text = remote_system_facade.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "PairedInvocationIdentity::load(action_label)",
+            "remote system/catalogue facade must load paired User accountability",
+        ),
+        (
+            "identity.caller_user_ura()",
+            "remote system/catalogue facade must use User caller independently of target Device",
+        ),
+        (
+            "identity.local_device_ura()",
+            "remote catalogue routing must use Device only for locality decisions",
+        ),
+        (
+            "RuntimeUserBinding::Bound { user_ura }",
+            "current Realm Hub calls must derive caller from the bound User Principal",
+        ),
+    ):
+        if token not in raw_text:
+            add("R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT", remote_system_facade, 1, detail)
+
+terminal_cli = cli_root / "src/cli/commands/device_terminal.rs"
+if terminal_cli.exists():
+    raw_text = terminal_cli.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "PairedInvocationIdentity::load(",
+            "remote terminal must load paired User accountability separately from Device locality",
+        ),
+        (
+            "identity.caller_user_ura().to_string()",
+            "remote terminal invocation and session authority must be issued by the paired User",
+        ),
+        (
+            "load_remote_invocation_caller_signer(\n                    &caller_ura,",
+            "remote terminal authority must use the signer bound to its User caller",
+        ),
+    ):
+        if token not in raw_text:
+            add("R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT", terminal_cli, 1, detail)
+    offset = raw_text.find("let caller_ura = local_device_ura")
+    if offset != -1:
+        add(
+            "R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT",
+            terminal_cli,
+            line_number(raw_text, offset),
+            "remote terminal must not use the local Device as caller or authority issuer",
+        )
+
+if remote_device_support.exists():
+    raw_text = remote_device_support.read_text(encoding="utf-8", errors="replace")
+    offset = raw_text.find("pub(crate) fn caller_device_ura(")
+    if offset != -1:
+        add(
+            "R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT",
+            remote_device_support,
+            line_number(raw_text, offset),
+            "Device locality derivation must stay private to PairedInvocationIdentity",
+        )
+
+if local_invoke.exists():
+    raw_text = local_invoke.read_text(encoding="utf-8", errors="replace")
+    if "pub struct LocalDaemonSystemAbilityIssuer" in raw_text:
+        for token, detail in (
+            (
+                "LocalAbilityTarget::for_device_sponsored_system_ability(",
+                "local daemon system issuer must project a Device execution host to the registry-declared SystemAgent owner",
+            ),
+            (
+                "crate::core::ura::URAKind::Authority =>",
+                "local daemon system issuer must preserve Authority-owned Hub abilities explicitly",
+            ),
+            (
+                "Self::invoke_target_root_timeout(&target, args, subject_ura, timeout)",
+                "local daemon system issuer must submit the resolved owner target instead of the execution host",
+            ),
+        ):
+            if token not in raw_text:
+                add("R159_LOCAL_SYSTEM_ABILITY_OWNER_HOST_SPLIT", local_invoke, 1, detail)
+        obsolete = "invoke_local_daemon_system_ability_root_for_subject_timeout("
+        offset = raw_text.find(obsolete)
+        if offset != -1:
+            add(
+                "R159_LOCAL_SYSTEM_ABILITY_OWNER_HOST_SPLIT",
+                local_invoke,
+                line_number(raw_text, offset),
+                "local daemon issuer must not submit an unowned Device-as-callee root",
+            )
+
+if easyremote_e2e.exists():
+    raw_text = easyremote_e2e.read_text(encoding="utf-8", errors="replace")
+    for stale, detail in (
+        (
+            'device_exec_records[0].get("caller_ura") == caller_ura',
+            "EasyRemote E2E must prove remote process execution is accountable to the paired User",
+        ),
+        (
+            'terminal_create_records[0].get("caller_ura") == caller_ura',
+            "EasyRemote E2E must prove remote terminal creation is accountable to the paired User",
+        ),
+    ):
+        offset = raw_text.find(stale)
+        if offset != -1:
+            add(
+                "R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT",
+                easyremote_e2e,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+if ability_deploy_descriptor.exists():
+    raw_text = ability_deploy_descriptor.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            'scope_subjects_kind = "only_ura_kinds"',
+            "ability.deploy descriptor must kind-gate its staged Resource subject",
+        ),
+        (
+            'scope_subjects_uras = ["resource"]',
+            "ability.deploy descriptor must admit only Resource subjects",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_descriptor, 1, detail)
+
+ability_uninstall_descriptor = (
+    cli_root / "ability-descriptors/system/device_control/ability.uninstall.ability.toml"
+)
+if ability_uninstall_descriptor.exists():
+    raw_text = ability_uninstall_descriptor.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            'scope_subjects_kind = "only_ura_kinds"',
+            "ability.uninstall descriptor must kind-gate its removed Ability subject",
+        ),
+        (
+            'scope_subjects_uras = ["ability"]',
+            "ability.uninstall descriptor must admit only Ability subjects",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_uninstall_descriptor, 1, detail)
+
+if easyremote_e2e.exists():
+    raw_text = easyremote_e2e.read_text(encoding="utf-8", errors="replace")
+    for stale, detail in (
+        (
+            'user_plugin_show.get("owner_ura") == provider_ura',
+            "EasyRemote E2E must not expect a user plugin AbilityDescriptor to be Device-owned",
+        ),
+        (
+            'native_discovery[0].get("owner_ura") == provider_ura',
+            "EasyRemote E2E must not expect a deployed AbilityDescriptor to be Device-owned",
+        ),
+    ):
+        offset = raw_text.find(stale)
+        if offset != -1:
+            add(
+                "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER",
+                easyremote_e2e,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+filesystem_resource_ref = cli_root / "src/daemon/resources/files/mod.rs"
+if filesystem_resource_ref.exists():
+    text = source(filesystem_resource_ref)
+    for token, detail in (
+        (
+            "pub struct FilesystemResourceProvider",
+            "filesystem ResourceRef operations must be owned by an explicit Device provider",
+        ),
+        (
+            "FilesystemResourceProvider::for_device",
+            "filesystem ResourceRef call sites must validate an explicit Device authority",
+        ),
+        (
+            "reference.owner_ura != local_owner_ura",
+            "filesystem ResourceRef resolution must reject foreign Device-owned refs",
+        ),
+        (
+            "filesystem ResourceRefs are daemon-local",
+            "foreign ResourceRef rejection must document daemon-local capability semantics",
+        ),
+        (
+            "resource_ref_for_target_tmp_relative_path",
+            "remote staging must use an explicit target-tmp ResourceRef constructor",
+        ),
+    ):
+        if token not in text:
+            add("R159_FILESYSTEM_RESOURCE_REF_LOCAL_OWNER", filesystem_resource_ref, 1, detail)
+    forbidden_ambient_owner = "identity::local_invocation::local_device_ura"
+    offset = text.find(forbidden_ambient_owner)
+    if offset != -1:
+        add(
+            "R159_FILESYSTEM_RESOURCE_REF_LOCAL_OWNER",
+            filesystem_resource_ref,
+            line_number(text, offset),
+            "filesystem ResourceRef domain must not recover Device authority from ambient process identity",
+        )
+if ability_deploy_target.exists():
+    text = source(ability_deploy_target)
+    raw_text = ability_deploy_target.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "DeployedAbilitySubject",
+            "daemon-system target policy must name deployed ability subject separately from callee owner",
+        ),
+        (
+            "is_ability_management_system_agent_callee",
+            "daemon-system target policy must recognize ability-management SystemAgent callees",
+        ),
+        (
+            "selector.owner_ura() == callee_ura",
+            "daemon-system target policy must only accept canonical dynamic Ability URAs owned by the callee",
+        ),
+        (
+            "owner_ability_ura(callee_ura, ability)",
+            "daemon-system target policy must derive public-name dynamic Ability subjects from the ability-management callee",
+        ),
+    ):
+        if token not in text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_target, 1, detail)
+    for token, detail in (
+        (
+            "deployed_dynamic_ability_subject_resolves_to_ability_ura_for_public_name",
+            "target tests must prove public-name dynamic abilities use the deployed Ability URA as subject",
+        ),
+        (
+            "deployed_dynamic_ability_subject_accepts_canonical_ability_ura",
+            "target tests must prove canonical dynamic Ability URAs remain the subject",
+        ),
+        (
+            "deployed_dynamic_ability_subject_rejects_cross_owner_ability_ura",
+            "target tests must prove dynamic Ability URAs from a different owner do not become the subject",
+        ),
+    ):
+        if token not in raw_text:
+            add("R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER", ability_deploy_target, 1, detail)
+
+hosted_authority = cli_root / "src/daemon/ability/authority/mod.rs"
+hosted_delegation_issuer = (
+    cli_root / "src/daemon/invocation/admission/hosted_agent_delegation.rs"
+)
+teach_grants_store = cli_root / "src/daemon/persistence/teach_grants.rs"
+if hosted_authority.exists():
+    text = source(hosted_authority)
+    raw_text = hosted_authority.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "host_device_ura: String",
+            "hosted-agent delegation binding/claims/context must carry host Device separately from wire callee",
+        ),
+        (
+            "host_device_ura: impl Into<String>",
+            "hosted-agent delegation envelope constructor must receive an explicit host Device URA",
+        ),
+        (
+            "validate_host_device_ura(",
+            "hosted-agent delegation must validate host_device_ura as a Device URA",
+        ),
+        (
+            "validate_delegation_callee_ura(",
+            "hosted-agent delegation must validate wire callee as Agent/SystemAgent or Authority, never Device",
+        ),
+        (
+            "host_device_ura != envelope.host_device_ura()",
+            "hosted-agent delegation metadata verification must compare signed host Device against the envelope binding",
+        ),
+        (
+            'let expected_host_authority = format!("hosted_by:{}", self.host_device_ura);',
+            "hosted-agent authorization must compare persisted authority against host_device_ura, not wire callee",
+        ),
+    ):
+        if token not in text:
+            add("R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT", hosted_authority, 1, detail)
+    for token, detail in (
+        (
+            "hosted_agent_delegation_binds_system_agent_callee_to_separate_host_device",
+            "authority tests must prove SystemAgent wire callee binds to a separate Device host",
+        ),
+        (
+            "hosted_agent_delegation_rejects_device_callee",
+            "authority tests must prove Device URAs are rejected as hosted-agent delegation wire callees",
+        ),
+    ):
+        if token not in raw_text:
+            add("R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT", hosted_authority, 1, detail)
+    authorize_body = rust_method_body(text, "authorize")
+    if authorize_body is not None:
+        offset, body = authorize_body
+        for token, detail in (
+            (
+                "wire_callee_ura",
+                "hosted-agent authorization must not use wire_callee_ura as host evidence",
+            ),
+            (
+                "parse_ura(&self.wire_callee_ura",
+                "hosted-agent authorization must not parse public callee as the host Device",
+            ),
+            (
+                'format!("hosted_by:{}", self.wire_callee_ura',
+                "hosted-agent authorization must not build hosted_by authority from wire callee",
+            ),
+        ):
+            local = body.find(token)
+            if local != -1:
+                add(
+                    "R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT",
+                    hosted_authority,
+                    line_number(text, offset + local),
+                    detail,
+                )
+if hosted_delegation_issuer.exists():
+    text = source(hosted_delegation_issuer)
+    raw_text = hosted_delegation_issuer.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "host_device_ura: &str",
+            "hosted-agent delegation issuer must receive explicit host Device URA from dispatch",
+        ),
+        (
+            "caller_ura,\n            callee_ura,\n            host_device_ura,",
+            "hosted-agent delegation issuer must sign wire callee and host Device as separate fields",
+        ),
+        (
+            "materialize_request_metadata_binds_system_agent_callee_to_host_device",
+            "issuer tests must prove signed metadata separates SystemAgent callee from Device host",
+        ),
+    ):
+        haystack = raw_text if "tests must prove" in detail else text
+        if token not in haystack:
+            add("R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT", hosted_delegation_issuer, 1, detail)
+for dispatch_file in (
+    cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs",
+    cli_root / "src/daemon/invocation/streams/stream_dispatcher.rs",
+    cli_root / "src/daemon/invocation/bidi/bidi_dispatcher.rs",
+):
+    if not dispatch_file.exists():
+        continue
+    text = source(dispatch_file)
+    if (
+        "HostedAgentDelegationIssuer::materialize_request_metadata(" in text
+        and "&selected_route.execution_host_ura," not in text
+    ):
+        add(
+            "R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT",
+            dispatch_file,
+            1,
+            "selected-route dispatch must pass execution_host_ura as hosted-agent delegation host Device",
+        )
+
+if teach_grants_store.exists():
+    text = source(teach_grants_store)
+    raw_text = teach_grants_store.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "validate_hosted_delegation_snapshot_callee(",
+            "teach grant durable validation must reject Device public callees for hosted delegation snapshots",
+        ),
+        (
+            "host Device belongs in hosted authority host_device_ura",
+            "teach grant durable validation must keep callee separate from host Device authority",
+        ),
+    ):
+        if token not in text:
+            add("R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT", teach_grants_store, 1, detail)
+    if "snapshot.callee_ura != *host_device_ura" in text:
+        add(
+            "R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT",
+            teach_grants_store,
+            line_number(text, text.find("snapshot.callee_ura != *host_device_ura")),
+            "teach grant hosted delegation validation must not require public callee to equal host Device",
+        )
+    if "hosted_delegation_snapshot_rejects_device_callee" not in raw_text:
+        add(
+            "R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT",
+            teach_grants_store,
+            1,
+            "teach grant tests must prove Device callees are rejected for hosted delegation snapshots",
+        )
+
+policy_engine = cli_root / "src/daemon/invocation/admission/policy_engine.rs"
+if policy_engine.exists():
+    text = source(policy_engine)
+    policy_input_start = text.find("pub struct PolicyInput")
+    policy_input_end = (
+        text.find("\n}\n\npub struct PolicyEngine", policy_input_start)
+        if policy_input_start != -1
+        else -1
+    )
+    policy_input_body = (
+        text[policy_input_start:policy_input_end]
+        if policy_input_start != -1 and policy_input_end != -1
+        else ""
+    )
+    if "pub enum SystemPolicyRuleMatch" not in text:
+        add(
+            "R102_POLICY_SYSTEM_RULE_MATCH_TYPED",
+            policy_engine,
+            1,
+            "policy system allow facts must use typed SystemPolicyRuleMatch",
+        )
+    if "pub system_rule_matches: Vec<SystemPolicyRuleMatch>" not in policy_input_body:
+        add(
+            "R102_POLICY_SYSTEM_RULE_MATCH_TYPED",
+            policy_engine,
+            1,
+            "PolicyInput must carry typed system_rule_matches",
+        )
+    for token in (
+        "pub authority_self_read:",
+        "pub authority_self_manage:",
+        "pub authority_self_stream:",
+        "pub authority_peer_directory_stream:",
+        "pub realm_authority_public_read:",
+        "pub device_publication_custody_manage:",
+        "pub device_self_session_stream:",
+        "pub remote_owner_forward_allowed:",
+    ):
+        offset = policy_input_body.find(token)
+        if offset != -1 and policy_input_start != -1:
+            add(
+                "R102_POLICY_SYSTEM_RULE_MATCH_TYPED",
+                policy_engine,
+                line_number(text, policy_input_start + offset),
+                "PolicyInput must not reintroduce procedural system allow booleans",
+            )
+    allow_reason_start = text.find("fn allow_reason(")
+    allow_reason_end = (
+        text.find("\n}\n\n#[derive(Debug, Clone)]\npub struct PolicyInput", allow_reason_start)
+        if allow_reason_start != -1
+        else -1
+    )
+    allow_reason_body = (
+        text[allow_reason_start:allow_reason_end]
+        if allow_reason_start != -1 and allow_reason_end != -1
+        else ""
+    )
+    if "PolicyDecisionReason::ExplicitGrantAllow" in allow_reason_body:
+        add(
+            "R105_POLICY_RULE_AUDIT_REASON_BOUNDARY",
+            policy_engine,
+            line_number(
+                text,
+                allow_reason_start
+                + allow_reason_body.find("PolicyDecisionReason::ExplicitGrantAllow"),
+            ),
+            "typed system policy rules must not be audited as durable ExplicitGrantAllow",
+        )
+    verified_authority_start = text.find("if input.verified_authority_id.is_some()")
+    verified_authority_end = (
+        text.find("let Some(owner_user_ura)", verified_authority_start)
+        if verified_authority_start != -1
+        else -1
+    )
+    verified_authority_body = (
+        text[verified_authority_start:verified_authority_end]
+        if verified_authority_start != -1 and verified_authority_end != -1
+        else ""
+    )
+    if "PolicyDecisionReason::AuthorityProofAllow" not in verified_authority_body:
+        add(
+            "R105_POLICY_RULE_AUDIT_REASON_BOUNDARY",
+            policy_engine,
+            line_number(text, verified_authority_start if verified_authority_start != -1 else 0),
+            "verified authority proof admission must use AuthorityProofAllow, not ExplicitGrantAllow",
+        )
+
+owner_resolution = cli_root / "src/daemon/invocation/admission/owner_resolution.rs"
+if owner_resolution.exists():
+    text = source(owner_resolution)
+    owner_fact_start = text.find("pub struct OwnerFact")
+    owner_fact_end = (
+        text.find("\n}\n\nimpl OwnerFact", owner_fact_start)
+        if owner_fact_start != -1
+        else -1
+    )
+    owner_fact_body = (
+        text[owner_fact_start:owner_fact_end]
+        if owner_fact_start != -1 and owner_fact_end != -1
+        else ""
+    )
+    if "pub owner_user_ura: Option<String>" not in owner_fact_body:
+        add(
+            "R104_OWNER_FACT_USER_URA_BOUNDARY",
+            owner_resolution,
+            1,
+            "OwnerFact must carry canonical owner_user_ura, not bare owner_user_id",
+        )
+    if "pub owner_user_id:" in owner_fact_body:
+        add(
+            "R104_OWNER_FACT_USER_URA_BOUNDARY",
+            owner_resolution,
+            1,
+            "OwnerFact must not expose owner_user_id because that name admits bare id confusion",
+        )
+    if "pub fn user_ura(" not in text:
+        add(
+            "R104_OWNER_FACT_USER_URA_BOUNDARY",
+            owner_resolution,
+            1,
+            "OwnerFact constructor must require a canonical User URA boundary",
+        )
+    if "OwnerFact::user(" in text:
+        add(
+            "R104_OWNER_FACT_USER_URA_BOUNDARY",
+            owner_resolution,
+            1,
+            "OwnerFact::user must not be reintroduced; use OwnerFact::user_ura",
+        )
+
+terminal_owner_files = (
+    cli_root / "src/daemon/ability/builtins/device_control/terminal/lifecycle.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/terminal/io.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/terminal/attach.rs",
+)
+for path in terminal_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R106_TERMINAL_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "terminal.* abilities must be owned by the device-sponsored terminal SystemAgent, not direct Device",
+        )
+
+profiles_mod = cli_root / "src/daemon/ability/catalog/profiles/mod.rs"
+device_control_names = cli_root / "src/daemon/ability/names/device_control.rs"
+dispatch_rs = cli_root / "src/daemon/ability/dispatch.rs"
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "struct SystemAgentDescriptorProjection",
+            "SystemAgent host descriptor projection must be declared through one registry entry type",
+        ),
+        (
+            "const SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS",
+            "SystemAgent host descriptor projection must be table-driven",
+        ),
+        (
+            "fn system_agent_descriptor_projections_for_device(",
+            "SystemAgent host descriptor aggregation must use one registry iterator",
+        ),
+        (
+            "system_agent_descriptor_projections_for_device(device_ura)",
+            "host profile aggregation must consume the SystemAgent projection registry",
+        ),
+    ):
+        if token not in text:
+            add("R136_SYSTEM_AGENT_DESCRIPTOR_PROJECTION_REGISTRY", profiles_mod, 1, detail)
+    wrapper_pattern = re.compile(
+        r"\bfn\s+(?!system_agent_descriptors_for_device\b)"
+        r"(?!system_agent_descriptor_projections_for_device\b)"
+        r"\w+_system_descriptors_for_device\s*\("
+    )
+    wrapper_match = wrapper_pattern.search(text)
+    if wrapper_match:
+        add(
+            "R136_SYSTEM_AGENT_DESCRIPTOR_PROJECTION_REGISTRY",
+            profiles_mod,
+            line_number(text, wrapper_match.start()),
+            "SystemAgent descriptor projection must not keep one wrapper function per family; add a registry entry instead",
+        )
+    for rule, (system_agent_id, owner_constructor) in PROFILE_PROJECTION_RULES.items():
+        if system_agent_id not in text or owner_constructor not in text:
+            add(
+                "R136_SYSTEM_AGENT_DESCRIPTOR_PROJECTION_REGISTRY",
+                profiles_mod,
+                1,
+                f"SystemAgent projection registry missing {system_agent_id} / {owner_constructor} for {rule}",
+            )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "terminal_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include terminal SystemAgent descriptors",
+        ),
+        (
+            "fn terminal_system_descriptors_for_device(",
+            "terminal SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R106_TERMINAL_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+if device_control_names.exists():
+    text = source(device_control_names)
+    if "pub const TERMINAL_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R106_TERMINAL_SYSTEM_AGENT_OWNER",
+            device_control_names,
+            1,
+            "terminal SystemAgent id must be named in the device-control ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn terminal_system() -> Self" not in text:
+        add(
+            "R106_TERMINAL_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical terminal SystemAgent constructor",
+        )
+route_resolver = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
+if route_resolver.exists():
+    text = source(route_resolver)
+    for token, detail in (
+        (
+            '"system-agent" => Ok(Self::SystemAgent)',
+            "route selector must route SystemAgent-owned Ability URAs explicitly",
+        ),
+        (
+            "RouteOwnerKind::Agent | RouteOwnerKind::SystemAgent",
+            "local runtime routing must treat SystemAgent as a routable local Agent owner",
+        ),
+        (
+            "descriptor_public_ability_name(owner_ura, ability_name)",
+            "owner-local route queries must preserve SystemAgent public ability prefixes",
+        ),
+    ):
+        if token not in text:
+            add("R106_TERMINAL_SYSTEM_AGENT_OWNER", route_resolver, 1, detail)
+    for token, detail in (
+        (
+            '"device_hosted_ability"',
+            "final-route Device-hosted execution arm must be named as host/callee split, not direct Device ability",
+        ),
+        (
+            '"host_device_ura"',
+            "final-route Device-hosted execution arm must expose Device only as host_device_ura",
+        ),
+        (
+            '"callee_ura"',
+            "final-route Device-hosted execution arm must carry an explicit routable callee",
+        ),
+    ):
+        if token not in text:
+            add("R154_FINAL_ROUTE_DEVICE_HOSTED_ARM", route_resolver, 1, detail)
+    offset = text.find('"local_device_ability"')
+    if offset != -1:
+        add(
+            "R154_FINAL_ROUTE_DEVICE_HOSTED_ARM",
+            route_resolver,
+            line_number(text, offset),
+            "final-route next_hop must not use the obsolete local_device_ability arm",
+        )
+    for token, detail in (
+        (
+            "direct Device-owned catalog projections are not dispatchable public routes",
+            "route projection must reject direct Device-owned catalog rows as public routes",
+        ),
+        (
+            "migrate the descriptor owner to a device-sponsored SystemAgent",
+            "route projection rejection must direct dynamic/device-hosted abilities to SystemAgent ownership",
+        ),
+    ):
+        if token not in text:
+            add("R155_NO_SAME_REALM_DEVICE_ROUTE_KIND", route_resolver, 1, detail)
+    offset = text.find("SelectedRouteKind::SameRealmDevice")
+    if offset != -1:
+        add(
+            "R155_NO_SAME_REALM_DEVICE_ROUTE_KIND",
+            route_resolver,
+            line_number(text, offset),
+            "route resolver must not preserve SameRealmDevice as a direct Device owner/callee dispatch kind",
+        )
+    if "RoutableAgentOwned" not in text:
+        add(
+            "R157_ROUTABLE_AGENT_ROUTE_KIND",
+            route_resolver,
+            1,
+            "daemon-internal selected route kind must name Agent/SystemAgent callees as routable Agent-family owners",
+        )
+    offset = text.find("SelectedRouteKind::HostedAgent")
+    if offset != -1:
+        add(
+            "R157_ROUTABLE_AGENT_ROUTE_KIND",
+            route_resolver,
+            line_number(text, offset),
+            "daemon-internal selected route kind must not call Agent/SystemAgent owner selection HostedAgent; keep HostedAgent only as wire/product projection",
+        )
+
+key_resolver_rs = cli_root / "src/daemon/trust/key_resolver.rs"
+if key_resolver_rs.exists():
+    text = source(key_resolver_rs)
+    raw_text = key_resolver_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "sponsor_device_ura_for_system_agent",
+            "trust key resolver must document the SystemAgent -> sponsor Device key-custody projection",
+        ),
+        (
+            "parsed.device_agent_ids()",
+            "SystemAgent key-custody projection must use the canonical URA parser",
+        ),
+    ):
+        if token not in text:
+            add("R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY", key_resolver_rs, 1, detail)
+    for token, detail in (
+        (
+            "resolve_system_agent_uses_sponsor_device_key",
+            "trust key resolver must test SystemAgent signer resolution through its sponsor Device",
+        ),
+        (
+            "resolve_user_hosted_agent_does_not_use_device_sponsor_fallback",
+            "ordinary hosted Agents must not inherit Device trust keys",
+        ),
+    ):
+        if token not in raw_text:
+            add("R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY", key_resolver_rs, 1, detail)
+
+receipt_signing_rs = cli_root / "src/daemon/identity/receipt_signing.rs"
+if receipt_signing_rs.exists():
+    text = source(receipt_signing_rs)
+    raw_text = receipt_signing_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "system_agent_sponsor_device_identity",
+            "production receipt signing must classify SystemAgent callees through their sponsor Device",
+        ),
+        (
+            "system_agent_sponsor_device",
+            "production receipt signing must fail closed unless the sponsor Device signer is owner-bound",
+        ),
+        (
+            "hosted_agent_device.as_ref()",
+            "production SystemAgent custody must be limited to the configured hosted Device sponsor",
+        ),
+        (
+            "is_declared_daemon_native_system_agent_id",
+            "production SystemAgent custody must be limited to declared daemon-native SystemAgent ids",
+        ),
+        (
+            "system_agent_authority",
+            "production receipt signing must project SystemAgent callee receipts to sponsor Device signer authority",
+        ),
+        (
+            "system_agent_sponsor_device(caller_ura)",
+            "production child Invocation signing must project SystemAgent callers to sponsor Device key custody",
+        ),
+        (
+            "resolve_invocation_verifying_key",
+            "production child Invocation verification must project SystemAgent callers to sponsor Device verification keys",
+        ),
+    ):
+        if token not in text:
+            add("R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY", receipt_signing_rs, 1, detail)
+    for token, detail in (
+        (
+            "system_agent_receipt_signer_uses_sponsor_device_key_custody",
+            "receipt-signing tests must prove SystemAgent receipts are signed by sponsor Device",
+        ),
+        (
+            "system_agent_invocation_signing_and_verification_use_sponsor_device",
+            "receipt-signing tests must prove SystemAgent child Invocation signing and verification use sponsor Device keys",
+        ),
+        (
+            "unknown_system_agent_id_has_no_sponsor_device_custody",
+            "receipt-signing tests must prove undeclared SystemAgent ids do not receive Device key custody",
+        ),
+        (
+            "foreign_system_agent_sponsor_does_not_inherit_local_device_key",
+            "receipt-signing tests must prove foreign Device-sponsored SystemAgents do not inherit local Device keys",
+        ),
+    ):
+        if token not in raw_text:
+            add("R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY", receipt_signing_rs, 1, detail)
+
+runtime_factory_rs = cli_root / "src/daemon/axon_bridge/runtime_factory.rs"
+if runtime_factory_rs.exists():
+    text = source(runtime_factory_rs)
+    raw_text = runtime_factory_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "EphemeralTestReceiptSigningAuthority::for_callee",
+            "test receipt provider must select hosted signing authority by callee ontology",
+        ),
+        (
+            "sponsor_device_identity_for_system_agent",
+            "test receipt provider must project device-sponsored SystemAgent callee to sponsor Device signer",
+        ),
+        (
+            "canonical_host_attestation_bytes",
+            "hosted SystemAgent test receipts must carry canonical host attestation",
+        ),
+        (
+            "ephemeral_receipt_provider_uses_sponsor_device_for_system_agent",
+            "test receipt provider must prove SystemAgent receipts are signed by sponsor Device",
+        ),
+    ):
+        if token not in raw_text:
+            add("R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY", runtime_factory_rs, 1, detail)
+
+dispatch_selected_route_fixtures = (
+    cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs",
+    cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/local_rpc.rs",
+    cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs",
+    cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/stream.rs",
+)
+for path in dispatch_selected_route_fixtures:
+    if not path.exists():
+        continue
+    text = source(path)
+    required_tokens = [
+        (
+            "catalog_test_descriptor_ref(",
+            "selected-route descriptor refs must be catalog-bound and owner-scoped",
+        )
+    ]
+    if path.name != "stream.rs":
+        required_tokens.append(
+            (
+                "test_dispatch_system_agent_ura",
+                "selected-route positive fixtures must use a device-sponsored SystemAgent owner/callee helper",
+            )
+        )
+    for token, detail in required_tokens:
+        if token not in text:
+            add("R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY", path, 1, detail)
+    for token, detail in (
+        (
+            "owner_ability_ura(TEST_DAEMON_URA, \"demo.",
+            "positive selected-route demo fixtures must not use direct Device ability owners",
+        ),
+        (
+            "publish_test_route(&svc, TEST_DAEMON_URA, \"demo.",
+            "positive selected-route demo fixtures must not publish direct Device-owned demo routes",
+        ),
+        (
+            "catalog_with_json_echo_on_runtime(\n        TARGET_DEVICE_URA",
+            "remote selected-route stream fixture must use a SystemAgent callee owner, not target Device",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add("R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY", path, line_number(text, offset), detail)
+
+locomotion_owner_files = (
+    cli_root / "src/daemon/ability/builtins/device_control/files.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/file_edit.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/process.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/shell.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/http.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/file_transfer.rs",
+)
+for path in locomotion_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R107_LOCOMOTION_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "locomotion abilities must be owned by the device-sponsored locomotion SystemAgent, not direct Device",
+        )
+    if "OwnerKind::locomotion_system()" not in text:
+        add(
+            "R107_LOCOMOTION_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "locomotion ability registration must use the canonical OwnerKind::locomotion_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "locomotion_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include locomotion SystemAgent descriptors",
+        ),
+        (
+            "fn locomotion_system_descriptors_for_device(",
+            "locomotion SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R107_LOCOMOTION_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+if device_control_names.exists():
+    text = source(device_control_names)
+    if "pub const LOCOMOTION_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R107_LOCOMOTION_SYSTEM_AGENT_OWNER",
+            device_control_names,
+            1,
+            "locomotion SystemAgent id must be named in the device-control ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn locomotion_system() -> Self" not in text:
+        add(
+            "R107_LOCOMOTION_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical locomotion SystemAgent constructor",
+        )
+
+skill_owner_files = (
+    cli_root / "src/daemon/ability/builtins/resources/skills/install.rs",
+    cli_root / "src/daemon/ability/builtins/resources/skills/publish.rs",
+)
+for path in skill_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R108_SKILL_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "skill.* management abilities must be owned by the device-sponsored skill-management SystemAgent, not direct Device",
+        )
+    if "OwnerKind::skill_management_system()" not in text:
+        add(
+            "R108_SKILL_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "skill.* management ability registration must use the canonical OwnerKind::skill_management_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "skill_management_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include skill-management SystemAgent descriptors",
+        ),
+        (
+            "fn skill_management_system_descriptors_for_device(",
+            "skill-management SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R108_SKILL_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+resources_names = cli_root / "src/daemon/ability/names/resources.rs"
+if resources_names.exists():
+    text = source(resources_names)
+    if "pub const SKILL_MANAGEMENT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R108_SKILL_SYSTEM_AGENT_OWNER",
+            resources_names,
+            1,
+            "skill-management SystemAgent id must be named in the resource ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn skill_management_system() -> Self" not in text:
+        add(
+            "R108_SKILL_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical skill-management SystemAgent constructor",
+        )
+
+context_owner_files = (
+    cli_root / "src/daemon/ability/builtins/resources/context/ability.rs",
+)
+for path in context_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R109_CONTEXT_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "context.* abilities must be owned by the device-sponsored context SystemAgent, not direct Device",
+        )
+    if "OwnerKind::context_system()" not in text:
+        add(
+            "R109_CONTEXT_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "context.* ability registration must use the canonical OwnerKind::context_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "context_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include context SystemAgent descriptors",
+        ),
+        (
+            "fn context_system_descriptors_for_device(",
+            "context SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R109_CONTEXT_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+if resources_names.exists():
+    text = source(resources_names)
+    if "pub const CONTEXT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R109_CONTEXT_SYSTEM_AGENT_OWNER",
+            resources_names,
+            1,
+            "context SystemAgent id must be named in the resource ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn context_system() -> Self" not in text:
+        add(
+            "R109_CONTEXT_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical context SystemAgent constructor",
+        )
+
+media_owner_files = (
+    cli_root / "src/daemon/ability/builtins/resources/media/mic_subscribe.rs",
+    cli_root / "src/daemon/ability/builtins/resources/media/camera_snapshot.rs",
+    cli_root / "src/daemon/ability/builtins/resources/media/screen_snapshot.rs",
+)
+for path in media_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R110_MEDIA_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "local sensor media abilities must be owned by the device-sponsored media SystemAgent, not direct Device",
+        )
+    if "OwnerKind::media_system()" not in text:
+        add(
+            "R110_MEDIA_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "local sensor media registration must use the canonical OwnerKind::media_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "media_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include media SystemAgent descriptors",
+        ),
+        (
+            "fn media_system_descriptors_for_device(",
+            "media SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R110_MEDIA_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+if resources_names.exists():
+    text = source(resources_names)
+    if "pub const MEDIA_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R110_MEDIA_SYSTEM_AGENT_OWNER",
+            resources_names,
+            1,
+            "media SystemAgent id must be named in the resource ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn media_system() -> Self" not in text:
+        add(
+            "R110_MEDIA_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical media SystemAgent constructor",
+        )
+
+plugin_owner_files = (
+    cli_root / "src/daemon/ability/builtins/integrations/plugins.rs",
+)
+for path in plugin_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R111_PLUGIN_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "plugin lifecycle abilities must be owned by the device-sponsored plugin-management SystemAgent, not direct Device",
+        )
+    if "OwnerKind::plugin_management_system()" not in text:
+        add(
+            "R111_PLUGIN_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "plugin lifecycle ability registration must use the canonical OwnerKind::plugin_management_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "plugin_management_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include plugin-management SystemAgent descriptors",
+        ),
+        (
+            "fn plugin_management_system_descriptors_for_device(",
+            "plugin-management SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R111_PLUGIN_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+integrations_names = cli_root / "src/daemon/ability/names/integrations.rs"
+if integrations_names.exists():
+    text = source(integrations_names)
+    if "pub const PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R111_PLUGIN_SYSTEM_AGENT_OWNER",
+            integrations_names,
+            1,
+            "plugin-management SystemAgent id must be named in the integration ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn plugin_management_system() -> Self" not in text:
+        add(
+            "R111_PLUGIN_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical plugin-management SystemAgent constructor",
+        )
+
+automation_owner_files = (
+    cli_root / "src/daemon/ability/builtins/automation/loop_ability.rs",
+    cli_root / "src/daemon/ability/builtins/automation/schedule.rs",
+    cli_root / "src/daemon/ability/builtins/automation/discuss.rs",
+    cli_root / "src/daemon/ability/builtins/automation/mission.rs",
+    cli_root / "src/daemon/ability/builtins/automation/think.rs",
+    cli_root / "src/daemon/ability/builtins/automation/orchestration.rs",
+)
+for path in automation_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R115_AUTOMATION_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "automation abilities must be owned by the device-sponsored automation SystemAgent, not direct Device",
+        )
+    registers_automation_ability = any(
+        token in text
+        for token in (
+            "register_rpc_with_owner",
+            "register_stream_with_owner",
+            "register_rpc_with_envelope_and_owner",
+            "register_rpc_with_owner_and_action",
+        )
+    )
+    if registers_automation_ability and "OwnerKind::automation_system()" not in text:
+        add(
+            "R115_AUTOMATION_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "automation ability registration must use the canonical OwnerKind::automation_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "automation_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include automation SystemAgent descriptors",
+        ),
+        (
+            "fn automation_system_descriptors_for_device(",
+            "automation SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R115_AUTOMATION_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+automation_names = cli_root / "src/daemon/ability/names/automation.rs"
+if automation_names.exists():
+    text = source(automation_names)
+    if "pub const AUTOMATION_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R115_AUTOMATION_SYSTEM_AGENT_OWNER",
+            automation_names,
+            1,
+            "automation SystemAgent id must be named in the automation ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn automation_system() -> Self" not in text:
+        add(
+            "R115_AUTOMATION_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical automation SystemAgent constructor",
+        )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if "automation_system_agent_ability_resolves_from_local_device_authority" not in raw_text:
+        add(
+            "R115_AUTOMATION_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove automation SystemAgent callee with Device execution host",
+        )
+
+session_owner_files = (
+    cli_root / "src/daemon/ability/builtins/device_control/session.rs",
+)
+for path in session_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R116_SESSION_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "session.list/session.attach must be owned by the device-sponsored session SystemAgent, not direct Device",
+        )
+    registers_session_ability = any(
+        token in text
+        for token in (
+            "register_rpc_with_owner",
+            "register_stream_with_owner",
+            "register_rpc_with_envelope_and_owner",
+            "register_rpc_with_owner_and_action",
+        )
+    )
+    if registers_session_ability and "OwnerKind::session_system()" not in text:
+        add(
+            "R116_SESSION_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "session ability registration must use the canonical OwnerKind::session_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "session_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include session SystemAgent descriptors",
+        ),
+        (
+            "fn session_system_descriptors_for_device(",
+            "session SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R116_SESSION_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+device_control_names = cli_root / "src/daemon/ability/names/device_control.rs"
+if device_control_names.exists():
+    text = source(device_control_names)
+    if "pub const SESSION_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R116_SESSION_SYSTEM_AGENT_OWNER",
+            device_control_names,
+            1,
+            "session SystemAgent id must be named in the device-control ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn session_system() -> Self" not in text:
+        add(
+            "R116_SESSION_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical session SystemAgent constructor",
+        )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if "session_system_agent_ability_resolves_from_local_device_authority" not in raw_text:
+        add(
+            "R116_SESSION_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove session SystemAgent callee with Device execution host",
+        )
+
+runtime_governance_owner_files = (
+    cli_root / "src/daemon/ability/builtins/governance/access_control.rs",
+)
+for path in runtime_governance_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "authority.binding.*, policy.request.*, and admission.explain must be owned by the device-sponsored runtime-governance SystemAgent, not direct Device",
+        )
+    registers_runtime_governance_ability = any(
+        token in text
+        for token in (
+            "AUTHORITY_BINDING_GRANT",
+            "POLICY_REQUEST_CREATE",
+            "ADMISSION_EXPLAIN",
+        )
+    )
+    if (
+        registers_runtime_governance_ability
+        and "OwnerKind::runtime_governance_system()" not in text
+    ):
+        add(
+            "R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "runtime governance ability registration must use the canonical OwnerKind::runtime_governance_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "runtime_governance_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include runtime-governance SystemAgent descriptors",
+        ),
+        (
+            "fn runtime_governance_system_descriptors_for_device(",
+            "runtime-governance SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+governance_names = cli_root / "src/daemon/ability/names/governance.rs"
+if governance_names.exists():
+    text = source(governance_names)
+    if "pub const RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            governance_names,
+            1,
+            "runtime-governance SystemAgent id must be named in the governance ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn runtime_governance_system() -> Self" not in text:
+        add(
+            "R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical runtime-governance SystemAgent constructor",
+        )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if (
+        "runtime_governance_system_agent_ability_resolves_from_local_device_authority"
+        not in raw_text
+    ):
+        add(
+            "R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove runtime-governance SystemAgent callee with Device execution host",
+        )
+
+invocation_governance_owner_files = (
+    cli_root / "src/daemon/ability/builtins/governance/invocation_history.rs",
+    cli_root / "src/daemon/ability/builtins/governance/invocation_cancel.rs",
+)
+for path in invocation_governance_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R122_INVOCATION_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            path,
+            line_number(text, offset),
+            "Device-scoped invocation history/cancel abilities must be owned by runtime-governance SystemAgent, not direct Device",
+        )
+if (cli_root / "src/daemon/ability/builtins/governance/invocation_cancel.rs").exists():
+    invocation_cancel_text = source(
+        cli_root / "src/daemon/ability/builtins/governance/invocation_cancel.rs"
+    )
+    if "OwnerKind::runtime_governance_system()" not in invocation_cancel_text:
+        add(
+            "R122_INVOCATION_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            cli_root / "src/daemon/ability/builtins/governance/invocation_cancel.rs",
+            1,
+            "invocation.cancel Device-side registration must use runtime-governance SystemAgent",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    ledger_governance_offset = text.find("pub(crate) fn ledger_governance_owner")
+    if ledger_governance_offset == -1:
+        add(
+            "R122_INVOCATION_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "AbilityAuthorityContext must centralize ledger governance owner projection",
+        )
+    else:
+        ledger_governance_body = text[ledger_governance_offset : ledger_governance_offset + 500]
+        if "OwnerKind::runtime_governance_system()" not in ledger_governance_body:
+            add(
+                "R122_INVOCATION_GOVERNANCE_SYSTEM_AGENT_OWNER",
+                dispatch_rs,
+                line_number(text, ledger_governance_offset),
+                "Device ledger governance owner must project to runtime-governance SystemAgent",
+            )
+invocation_governance_device_profile = (
+    cli_root / "src/daemon/ability/catalog/profiles/device.rs"
+)
+if invocation_governance_device_profile.exists():
+    text = source(invocation_governance_device_profile)
+    direct_inventory_offset = text.find("fn direct_device_owner_inventory_is_explicit")
+    direct_inventory_body = (
+        text[direct_inventory_offset : direct_inventory_offset + 1200]
+        if direct_inventory_offset != -1
+        else text
+    )
+    for token in (
+        '"invocation.cancel"',
+        '"invocation.history.get"',
+        '"invocation.history.list"',
+        '"invocation.history.path"',
+        '"invocation.record.get"',
+        '"invocation.trace.get"',
+    ):
+        offset = direct_inventory_body.find(token)
+        if offset != -1:
+            add(
+                "R122_INVOCATION_GOVERNANCE_SYSTEM_AGENT_OWNER",
+                invocation_governance_device_profile,
+                line_number(text, direct_inventory_offset + offset),
+                "invocation governance abilities must not remain in direct Device profile inventory",
+            )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if (
+        "invocation_governance_system_agent_ability_resolves_from_local_device_authority"
+        not in raw_text
+    ):
+        add(
+            "R122_INVOCATION_GOVERNANCE_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove invocation governance SystemAgent callee with Device execution host",
+        )
+
+runtime_health_owner_files = (
+    cli_root / "src/daemon/ability/builtins/governance/health.rs",
+    cli_root / "src/daemon/ability/builtins/governance/network_health.rs",
+    cli_root / "src/daemon/ability/builtins/governance/admin_status.rs",
+)
+runtime_health_tokens = (
+    "OBSERVE_HEALTH",
+    "OBSERVE_NETWORK_HEALTH",
+    "ADMIN_STATUS",
+    '"observe.health"',
+    '"observe.network_health"',
+    '"admin.status"',
+)
+for path in runtime_health_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    for token in runtime_health_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            window = text[offset : offset + 700]
+            if "OwnerKind::Device" in window and "register_rpc_with_owner" in window:
+                add(
+                    "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER",
+                    path,
+                    line_number(text, offset),
+                    "observe.health, observe.network_health, and admin.status must be owned by the device-sponsored runtime-health SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_runtime_health = any(token in text for token in runtime_health_tokens) and (
+        "register_rpc_with_owner" in text
+    )
+    if registers_runtime_health and "OwnerKind::runtime_health_system()" not in text:
+        add(
+            "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "runtime health/admin registration must use the canonical OwnerKind::runtime_health_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "runtime_health_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include runtime-health SystemAgent descriptors",
+        ),
+        (
+            "fn runtime_health_system_descriptors_for_device(",
+            "runtime-health SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+governance_names = cli_root / "src/daemon/ability/names/governance.rs"
+if governance_names.exists():
+    text = source(governance_names)
+    if "pub const RUNTIME_HEALTH_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER",
+            governance_names,
+            1,
+            "runtime-health SystemAgent id must be named in the governance ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn runtime_health_system() -> Self" not in text:
+        add(
+            "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical runtime-health SystemAgent constructor",
+        )
+if invocation_governance_device_profile.exists():
+    text = source(invocation_governance_device_profile)
+    direct_inventory_offset = text.find("fn direct_device_owner_inventory_is_explicit")
+    direct_inventory_body = (
+        text[direct_inventory_offset : direct_inventory_offset + 1200]
+        if direct_inventory_offset != -1
+        else text
+    )
+    for token in (
+        '"observe.health"',
+        '"observe.network_health"',
+        '"admin.status"',
+    ):
+        offset = direct_inventory_body.find(token)
+        if offset != -1:
+            add(
+                "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER",
+                invocation_governance_device_profile,
+                line_number(text, direct_inventory_offset + offset),
+                "runtime health/admin abilities must not remain in direct Device profile inventory",
+            )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if (
+        "runtime_health_system_agent_ability_resolves_from_local_device_authority"
+        not in raw_text
+    ):
+        add(
+            "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove runtime-health SystemAgent callee with Device execution host",
+        )
+
+node_management_owner = cli_root / "src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+node_management_tokens = (
+    "ABILITY_DESCRIBE_NODE",
+    "ABILITY_REMOVE_NODE",
+    "NODE_DESCRIBE",
+    "NODE_REMOVE",
+    '"node.describe"',
+    '"node.remove"',
+)
+if node_management_owner.exists():
+    text = source(node_management_owner)
+    for token in node_management_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            window = text[offset : offset + 700]
+            if "OwnerKind::Device" in window and (
+                "register_rpc_with_owner" in window
+                or "register_rpc_with_spec" in window
+            ):
+                add(
+                    "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER",
+                    node_management_owner,
+                    line_number(text, offset),
+                    "node.describe and node.remove must be owned by the device-sponsored node-management SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_node_management = any(token in text for token in node_management_tokens) and (
+        "register_rpc_with_owner" in text or "register_rpc_with_spec" in text
+    )
+    if registers_node_management and "OwnerKind::node_management_system()" not in text:
+        add(
+            "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            node_management_owner,
+            1,
+            "node lifecycle registration must use the canonical OwnerKind::node_management_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "node_management_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include node-management SystemAgent descriptors",
+        ),
+        (
+            "fn node_management_system_descriptors_for_device(",
+            "node-management SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+device_control_names = cli_root / "src/daemon/ability/names/device_control.rs"
+if device_control_names.exists():
+    text = source(device_control_names)
+    if "pub const NODE_MANAGEMENT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            device_control_names,
+            1,
+            "node-management SystemAgent id must be named in the device-control ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn node_management_system() -> Self" not in text:
+        add(
+            "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical node-management SystemAgent constructor",
+        )
+if invocation_governance_device_profile.exists():
+    text = source(invocation_governance_device_profile)
+    direct_inventory_offset = text.find("fn direct_device_owner_inventory_is_explicit")
+    direct_inventory_body = (
+        text[direct_inventory_offset : direct_inventory_offset + 1200]
+        if direct_inventory_offset != -1
+        else text
+    )
+    for token in ('"node.describe"', '"node.remove"'):
+        offset = direct_inventory_body.find(token)
+        if offset != -1:
+            add(
+                "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER",
+                invocation_governance_device_profile,
+                line_number(text, direct_inventory_offset + offset),
+                "node lifecycle abilities must not remain in direct Device profile inventory",
+            )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if (
+        "node_management_system_agent_ability_resolves_from_local_device_authority"
+        not in raw_text
+    ):
+        add(
+            "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove node-management SystemAgent callee with Device execution host",
+        )
+
+runtime_introspection_owner_files = (
+    cli_root / "src/daemon/ability/builtins/governance/meta.rs",
+    cli_root / "src/daemon/ability/builtins/resources/list.rs",
+)
+runtime_introspection_tokens = (
+    "ABILITY_DESCRIBE",
+    "ABILITY_LIST_ABILITIES",
+    "ABILITY_META_LIST_RESOURCES",
+    "META_DESCRIBE",
+    "META_LIST_ABILITIES",
+    "META_LIST_RESOURCES",
+    '"meta.describe"',
+    '"meta.list_abilities"',
+    '"meta.list_resources"',
+)
+for path in runtime_introspection_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    for token in runtime_introspection_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            statement_start = text.rfind(";", 0, offset) + 1
+            statement_end = text.find(";", offset)
+            statement = text[
+                statement_start : statement_end + 1 if statement_end != -1 else len(text)
+            ]
+            if "OwnerKind::Device" in statement and (
+                "register_rpc_with_owner" in statement
+                or "register_rpc_with_envelope_and_owner" in statement
+                or "register_rpc_with_spec" in statement
+            ):
+                add(
+                    "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER",
+                    path,
+                    line_number(text, offset),
+                    "meta.describe/list_abilities/list_resources must be owned by runtime-introspection SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_runtime_introspection = any(
+        token in text for token in runtime_introspection_tokens
+    ) and (
+        "register_rpc_with_owner" in text
+        or "register_rpc_with_envelope_and_owner" in text
+        or "register_rpc_with_spec" in text
+    )
+    if (
+        registers_runtime_introspection
+        and "OwnerKind::runtime_introspection_system()" not in text
+        and "runtime_introspection_system()" not in text
+    ):
+        add(
+            "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "runtime introspection read registration must use the canonical OwnerKind::runtime_introspection_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "out.extend(runtime_introspection_system_descriptors_for_device",
+            "host profile aggregation must include runtime-introspection SystemAgent descriptors",
+        ),
+        (
+            "fn runtime_introspection_system_descriptors_for_device(",
+            "runtime-introspection SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+governance_names = cli_root / "src/daemon/ability/names/governance.rs"
+if governance_names.exists():
+    text = source(governance_names)
+    if "pub const RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER",
+            governance_names,
+            1,
+            "runtime-introspection SystemAgent id must be named in the governance ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn runtime_introspection_system() -> Self" not in text:
+        add(
+            "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical runtime-introspection SystemAgent constructor",
+        )
+if invocation_governance_device_profile.exists():
+    text = source(invocation_governance_device_profile)
+    direct_inventory_offset = text.find("fn direct_device_owner_inventory_is_explicit")
+    direct_inventory_body = (
+        text[direct_inventory_offset : direct_inventory_offset + 1200]
+        if direct_inventory_offset != -1
+        else text
+    )
+    for token in ('"meta.describe"', '"meta.list_abilities"', '"meta.list_resources"'):
+        offset = direct_inventory_body.find(token)
+        if offset != -1:
+            add(
+                "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER",
+                invocation_governance_device_profile,
+                line_number(text, direct_inventory_offset + offset),
+                "runtime introspection read abilities must not remain in direct Device profile inventory",
+            )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if (
+        "runtime_introspection_system_agent_ability_resolves_from_local_device_authority"
+        not in raw_text
+    ):
+        add(
+            "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove runtime-introspection SystemAgent callee with Device execution host",
+        )
+target_rs = cli_root / "src/daemon/invocation/routing/target.rs"
+if target_rs.exists():
+    raw_text = target_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "runtime_introspection_subject_ura",
+            "target subject policy must derive runtime-introspection read subject from the host Device",
+        ),
+        (
+            "runtime_introspection_subject_projects_system_agent_callee_to_host_device",
+            "target tests must prove runtime-introspection callee and Device subject remain distinct",
+        ),
+    ):
+        if token not in raw_text:
+            add("R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER", target_rs, 1, detail)
+remote_invoke_rs = cli_root / "src/daemon/invocation/routing/remote_invoke.rs"
+if remote_invoke_rs.exists():
+    raw_text = remote_invoke_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "runtime_introspection_owner_for_execution_target",
+            "remote catalogue reads must bind Device execution targets to runtime-introspection SystemAgent owners",
+        ),
+        (
+            "remote_catalogue_read_issuer_uses_read_projection_subject",
+            "remote catalogue read tests must prove subject remains the execution target, not the SystemAgent callee",
+        ),
+    ):
+        if token not in raw_text:
+            add("R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER", remote_invoke_rs, 1, detail)
+    for token, detail in (
+        (
+            "remote_target_owned_selector_owner_ura(execution_target_ura, selector)",
+            "target-owned remote selectors must project descriptor owner from execution target and selector before deriving Ability URA",
+        ),
+        (
+            "fn remote_target_owned_selector_owner_ura(",
+            "remote selector owner projection must be centralized in one helper",
+        ),
+        (
+            "execution_target_owner_ura_for_public_ability(",
+            "Device target selector projection must consume the centralized execution-target owner projection",
+        ),
+        (
+            "RemoteRootAbilityAdmission::evaluate(&public_ability).require(&public_ability)?",
+            "target-owned selector admission must run on the public ability before owner projection",
+        ),
+        (
+            "target_owned_selector_projects_device_target_to_system_agent_callee",
+            "remote invoke tests must prove Device target selectors project to SystemAgent callees",
+        ),
+        (
+            "remote_execution_validation_rejects_direct_device_owned_ability_on_device_target",
+            "remote invoke tests must prove direct Device-owned Ability URAs are migration-only",
+        ),
+        (
+            '(URAKind::Device, "device") => bail!',
+            "remote execution validation must reject direct Device-owned Ability URAs on Device targets",
+        ),
+        (
+            "migration-only",
+            "direct Device-owned remote Ability URA rejection must name migration-only semantics",
+        ),
+        (
+            "callee.device_agent_ids().is_some()",
+            "target-owned remote subject selection must recognize device-sponsored SystemAgent callees",
+        ),
+        (
+            "target.execution_target_ura().to_string()",
+            "SystemAgent target-owned remote subjects must project to the host Device, not the SystemAgent callee",
+        ),
+    ):
+        if token not in raw_text:
+            add("R135_REMOTE_DESCRIPTOR_OWNER_CALLEE_SPLIT", remote_invoke_rs, 1, detail)
+    forbidden_tokens = (
+        (
+            "owner_ability_ura(execution_target_ura",
+            "target-owned selector factory must not derive Ability URA from Device execution target",
+        ),
+        (
+            '(URAKind::Device, "device") => Ok',
+            "remote execution validation must not admit direct Device-owned Ability URAs",
+        ),
+        (
+            "URAKind::Device => target.callee_ura().to_string()",
+            "target-owned remote subject selection must not treat Device as a routable callee",
+        ),
+        (
+            "fn device_system_agent_id_for_public_ability(",
+            "remote routing must not maintain a second public-ability-to-SystemAgent mapping table",
+        ),
+        (
+            "match public_ability.trim()",
+            "remote routing must not infer SystemAgent ownership from an ability-name match table",
+        ),
+    )
+    for token, detail in forbidden_tokens:
+        offset = raw_text.find(token)
+        if offset != -1:
+            add(
+                "R135_REMOTE_DESCRIPTOR_OWNER_CALLEE_SPLIT",
+                remote_invoke_rs,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+descriptor_ref_rs = cli_root / "src/daemon/axon_bridge/descriptor_ref.rs"
+if descriptor_ref_rs.exists():
+    raw_text = descriptor_ref_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "is_declared_daemon_native_system_agent_id(",
+            "descriptor-ref owner projection must reject undeclared device-scoped Agents",
+        ),
+        (
+            "catalog_owner_rejects_undeclared_device_scoped_agent",
+            "descriptor-ref tests must prove unknown device-scoped Agents cannot become SystemAgent owners",
+        ),
+    ):
+        if token not in raw_text:
+            add("R135_REMOTE_DESCRIPTOR_OWNER_CALLEE_SPLIT", descriptor_ref_rs, 1, detail)
+if ffi_invocation.exists():
+    raw_text = ffi_invocation.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "parse_invocation_json_rejects_device_callee_before_daemon_io",
+            "FFI tests must prove public invocation JSON rejects Device callees before daemon I/O",
+        ),
+        (
+            "URAKind::Device => Err(InvocationJsonError::InvalidInvocationRole",
+            "FFI invocation ingress must reject Device callees as invalid public invocation roles",
+        ),
+    ):
+        if token not in raw_text:
+            add("R135_REMOTE_DESCRIPTOR_OWNER_CALLEE_SPLIT", ffi_invocation, 1, detail)
+
+route_resolver_rs = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
+if route_resolver_rs.exists():
+    raw_text = route_resolver_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "RouteOwnerKind::LegacyDeviceProfileProjection",
+            "route selectors must quarantine Device-owned abilities as legacy projections",
+        ),
+        (
+            "Device-owned Ability URAs and descriptor refs are migration read-models only",
+            "route data sources must reject explicit Device-owned selectors while allowing Device placement plus a public ability to resolve through the registry",
+        ),
+        (
+            "system_agent_ability_online_resolves_final_local_execution_route",
+            "positive local routing tests must separate SystemAgent callee from Device execution host",
+        ),
+    ):
+        if token not in raw_text:
+            add("R135_REMOTE_DESCRIPTOR_OWNER_CALLEE_SPLIT", route_resolver_rs, 1, detail)
+
+dispatch_tests_rs = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+if dispatch_tests_rs.exists():
+    raw_text = dispatch_tests_rs.read_text(encoding="utf-8", errors="replace")
+    if "positive test routes must not make Device an ability owner/callee" not in raw_text:
+        add(
+            "R135_REMOTE_DESCRIPTOR_OWNER_CALLEE_SPLIT",
+            dispatch_tests_rs,
+            1,
+            "generic positive dispatch fixtures must reject Device owner/callee inputs",
+        )
+
+descriptor_transfer_owner = cli_root / "src/daemon/ability/builtins/governance/teach.rs"
+descriptor_transfer_tokens = (
+    "TEACH",
+    "ACQUIRE",
+    "FORGET",
+    "META_TEACH",
+    "META_ACQUIRE",
+    "META_FORGET",
+    '"meta.teach"',
+    '"meta.acquire"',
+    '"meta.forget"',
+)
+if descriptor_transfer_owner.exists():
+    text = source(descriptor_transfer_owner)
+    for token in descriptor_transfer_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            statement_start = text.rfind(";", 0, offset) + 1
+            statement_end = text.find(";", offset)
+            statement = text[
+                statement_start : statement_end + 1 if statement_end != -1 else len(text)
+            ]
+            if "OwnerKind::Device" in statement and (
+                "register_rpc_with_owner" in statement
+                or "register_rpc_with_envelope_and_owner" in statement
+                or "register_rpc_with_spec" in statement
+                or "register_rpc_with_envelope_and_spec" in statement
+            ):
+                add(
+                    "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER",
+                    descriptor_transfer_owner,
+                    line_number(text, offset),
+                    "meta.teach/acquire/forget must be owned by descriptor-transfer SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_descriptor_transfer = any(
+        token in text for token in descriptor_transfer_tokens
+    ) and (
+        "register_rpc_with_owner" in text
+        or "register_rpc_with_envelope_and_owner" in text
+        or "register_rpc_with_spec" in text
+        or "register_rpc_with_envelope_and_spec" in text
+    )
+    if registers_descriptor_transfer and "OwnerKind::descriptor_transfer_system()" not in text:
+        add(
+            "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER",
+            descriptor_transfer_owner,
+            1,
+            "descriptor-transfer registration must use the canonical OwnerKind::descriptor_transfer_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "out.extend(descriptor_transfer_system_descriptors_for_device",
+            "host profile aggregation must include descriptor-transfer SystemAgent descriptors",
+        ),
+        (
+            "fn descriptor_transfer_system_descriptors_for_device(",
+            "descriptor-transfer SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+if governance_names.exists():
+    text = source(governance_names)
+    if "pub const DESCRIPTOR_TRANSFER_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER",
+            governance_names,
+            1,
+            "descriptor-transfer SystemAgent id must be named in the governance ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn descriptor_transfer_system() -> Self" not in text:
+        add(
+            "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical descriptor-transfer SystemAgent constructor",
+        )
+if invocation_governance_device_profile.exists():
+    text = source(invocation_governance_device_profile)
+    direct_inventory_offset = text.find("fn direct_device_owner_inventory_is_explicit")
+    direct_inventory_body = (
+        text[direct_inventory_offset : direct_inventory_offset + 1200]
+        if direct_inventory_offset != -1
+        else text
+    )
+    for token in ('"meta.teach"', '"meta.acquire"', '"meta.forget"'):
+        offset = direct_inventory_body.find(token)
+        if offset != -1:
+            add(
+                "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER",
+                invocation_governance_device_profile,
+                line_number(text, direct_inventory_offset + offset),
+                "descriptor-transfer abilities must not remain in direct Device profile inventory",
+            )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if (
+        "descriptor_transfer_system_agent_ability_resolves_from_local_device_authority"
+        not in raw_text
+    ):
+        add(
+            "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove descriptor-transfer SystemAgent callee with Device execution host",
+        )
+conformance_rs = cli_root / "src/daemon/ability/conformance.rs"
+if conformance_rs.exists():
+    raw_text = conformance_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "DescriptorTransferSystemAgent",
+            "conformance baseline must name the descriptor-transfer SystemAgent domain",
+        ),
+        (
+            'local_rpc!("meta.acquire", DescriptorTransferSystemAgent)',
+            "conformance baseline must include descriptor-transfer lifecycle abilities",
+        ),
+    ):
+        if token not in raw_text:
+            add("R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER", conformance_rs, 1, detail)
+
+ability_management_owner_files = (
+    cli_root / "src/daemon/ability/builtins/device_control/ability_management/publish.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/ability_management/ops.rs",
+)
+ability_management_tokens = (
+    "ABILITY_PUBLISH",
+    "ABILITY_UNPUBLISH",
+    "ABILITY_DEPLOY_ABILITY",
+    "ABILITY_UNINSTALL_ABILITY",
+    '"ability.publish"',
+    '"ability.unpublish"',
+    '"ability.deploy"',
+    '"ability.uninstall"',
+)
+for path in ability_management_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    for token in ability_management_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            window = text[offset : offset + 700]
+            if "OwnerKind::Device" in window and (
+                "register_rpc_with_owner" in window
+                or "register_rpc_with_spec" in window
+                or "register_rpc_with_envelope_and_spec" in window
+            ):
+                add(
+                    "R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER",
+                    path,
+                    line_number(text, offset),
+                    "ability.publish/unpublish/deploy/uninstall must be owned by the device-sponsored ability-management SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_ability_management = any(token in text for token in ability_management_tokens)
+    if registers_ability_management and "OwnerKind::ability_management_system()" not in text:
+        add(
+            "R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "ability-management registration must use the canonical OwnerKind::ability_management_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "ability_management_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include ability-management SystemAgent descriptors",
+        ),
+        (
+            "fn ability_management_system_descriptors_for_device(",
+            "ability-management SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+federation_names = cli_root / "src/daemon/ability/names/federation.rs"
+if federation_names.exists():
+    text = source(federation_names)
+    if "pub const ABILITY_MANAGEMENT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            federation_names,
+            1,
+            "ability-management SystemAgent id must be named with the ability-management ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn ability_management_system() -> Self" not in text:
+        add(
+            "R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical ability-management SystemAgent constructor",
+        )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if (
+        "ability_management_system_agent_ability_resolves_from_local_device_authority"
+        not in raw_text
+    ):
+        add(
+            "R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove ability-management SystemAgent callee with Device execution host",
+        )
+
+openai_compat_owner = cli_root / "src/daemon/ability/builtins/integrations/openai_compat.rs"
+openai_compat_tokens = (
+    "OPENAI_CHAT_COMPLETIONS",
+    "OPENAI_LIST_MODELS",
+    "OPENAI_FILES_UPLOAD",
+    "OPENAI_FILES_RETRIEVE",
+    "OPENAI_FILES_DELETE",
+    '"openai.chat_completions"',
+    '"openai.list_models"',
+    '"openai.files.upload"',
+    '"openai.files.retrieve"',
+    '"openai.files.delete"',
+)
+if openai_compat_owner.exists():
+    text = source(openai_compat_owner)
+    for token in openai_compat_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            window = text[offset : offset + 700]
+            if "OwnerKind::Device" in window and "register_rpc_with_owner" in window:
+                add(
+                    "R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER",
+                    openai_compat_owner,
+                    line_number(text, offset),
+                    "openai.* compatibility abilities must be owned by the device-sponsored openai-compat SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_openai_compat = any(token in text for token in openai_compat_tokens) and (
+        "register_rpc_with_owner" in text
+    )
+    if registers_openai_compat and "OwnerKind::openai_compat_system()" not in text:
+        add(
+            "R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER",
+            openai_compat_owner,
+            1,
+            "OpenAI compatibility registration must use the canonical OwnerKind::openai_compat_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "openai_compat_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include openai-compat SystemAgent descriptors",
+        ),
+        (
+            "fn openai_compat_system_descriptors_for_device(",
+            "openai-compat SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+integrations_names = cli_root / "src/daemon/ability/names/integrations.rs"
+if integrations_names.exists():
+    text = source(integrations_names)
+    if "pub const OPENAI_COMPAT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER",
+            integrations_names,
+            1,
+            "openai-compat SystemAgent id must be named in the integrations ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn openai_compat_system() -> Self" not in text:
+        add(
+            "R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical openai-compat SystemAgent constructor",
+        )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if "openai_compat_system_agent_ability_resolves_from_local_device_authority" not in raw_text:
+        add(
+            "R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove openai-compat SystemAgent callee with Device execution host",
+        )
+
+api_key_owner = cli_root / "src/daemon/ability/builtins/governance/api_key.rs"
+api_key_tokens = (
+    ".api_key.create",
+    ".api_key.list",
+    ".api_key.revoke",
+)
+if api_key_owner.exists():
+    text = source(api_key_owner)
+    for token in api_key_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            window = text[max(0, offset - 450) : offset + 700]
+            if "OwnerKind::Device" in window and (
+                "register_rpc_with_owner" in window
+                or "register_rpc_with_owner_and_action" in window
+            ):
+                add(
+                    "R120_API_KEY_SYSTEM_AGENT_OWNER",
+                    api_key_owner,
+                    line_number(text, offset),
+                    "<user>.api_key.* lifecycle abilities must be owned by the device-sponsored api-key-management SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_api_key = any(token in text for token in api_key_tokens) and (
+        "register_rpc_with_owner" in text
+        or "register_rpc_with_owner_and_action" in text
+    )
+    if registers_api_key and "OwnerKind::api_key_management_system()" not in text:
+        add(
+            "R120_API_KEY_SYSTEM_AGENT_OWNER",
+            api_key_owner,
+            1,
+            "API-key lifecycle registration must use the canonical OwnerKind::api_key_management_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "api_key_management_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include api-key-management SystemAgent descriptors",
+        ),
+        (
+            "fn api_key_management_system_descriptors_for_device(",
+            "api-key-management SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R120_API_KEY_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+governance_names = cli_root / "src/daemon/ability/names/governance.rs"
+if governance_names.exists():
+    text = source(governance_names)
+    if "pub const API_KEY_MANAGEMENT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R120_API_KEY_SYSTEM_AGENT_OWNER",
+            governance_names,
+            1,
+            "api-key-management SystemAgent id must be named in the governance ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn api_key_management_system() -> Self" not in text:
+        add(
+            "R120_API_KEY_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical api-key-management SystemAgent constructor",
+        )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if "api_key_management_system_agent_ability_resolves_from_local_device_authority" not in raw_text:
+        add(
+            "R120_API_KEY_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove api-key-management SystemAgent callee with Device execution host",
+        )
+
+a2a_owner_files = (
+    cli_root / "src/daemon/ability/builtins/integrations/a2a/bridge.rs",
+    cli_root / "src/daemon/ability/builtins/integrations/a2a/client.rs",
+)
+a2a_tokens = (
+    "A2A_BRIDGE_LIST_SKILLS",
+    "A2A_BRIDGE_SEND_TASK",
+    "A2A_CLIENT_SEND_TASK",
+    '"a2a.bridge.list_skills"',
+    '"a2a.bridge.send_task"',
+    '"a2a.client.send_task"',
+)
+for path in a2a_owner_files:
+    if not path.exists():
+        continue
+    text = source(path)
+    for token in a2a_tokens:
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            window = text[offset : offset + 800]
+            if "OwnerKind::Device" in window and (
+                "register_rpc_with_owner" in window
+                or "register_rpc_with_envelope_and_owner" in window
+            ):
+                add(
+                    "R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER",
+                    path,
+                    line_number(text, offset),
+                    "A2A bridge/client abilities must be owned by the device-sponsored a2a-integration SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    registers_a2a = any(token in text for token in a2a_tokens) and (
+        "register_rpc_with_owner" in text
+        or "register_rpc_with_envelope_and_owner" in text
+    )
+    if registers_a2a and "OwnerKind::a2a_integration_system()" not in text:
+        add(
+            "R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER",
+            path,
+            1,
+            "A2A bridge/client registration must use the canonical OwnerKind::a2a_integration_system constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "a2a_integration_system_descriptors_for_device(device_ura)",
+            "host profile aggregation must include a2a-integration SystemAgent descriptors",
+        ),
+        (
+            "fn a2a_integration_system_descriptors_for_device(",
+            "a2a-integration SystemAgent descriptor projection must be explicit",
+        ),
+    ):
+        if token not in text:
+            add("R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER", profiles_mod, 1, detail)
+integrations_names = cli_root / "src/daemon/ability/names/integrations.rs"
+if integrations_names.exists():
+    text = source(integrations_names)
+    if "pub const A2A_INTEGRATION_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER",
+            integrations_names,
+            1,
+            "a2a-integration SystemAgent id must be named in the integrations ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn a2a_integration_system() -> Self" not in text:
+        add(
+            "R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical a2a-integration SystemAgent constructor",
+        )
+if route_resolver.exists():
+    raw_text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if "a2a_integration_system_agent_ability_resolves_from_local_device_authority" not in raw_text:
+        add(
+            "R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER",
+            route_resolver,
+            1,
+            "route resolver must prove a2a-integration SystemAgent callee with Device execution host",
+        )
+
+mcp_reflective_registry = (
+    cli_root / "src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs"
+)
+if mcp_reflective_registry.exists():
+    text = source(mcp_reflective_registry)
+    forbidden = (
+        "crate::core::ura::URAKind::Device => (\n"
+        "            OwnerKind::Device"
+    )
+    offset = text.find(forbidden)
+    if offset != -1:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            mcp_reflective_registry,
+            line_number(text, offset),
+            "MCP reflective descriptors must reject direct Device owners; MCP owner must be MCP SystemAgent, explicit hosted Agent, or Authority",
+        )
+    if "Device cannot own MCP reflective descriptors" not in text:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            mcp_reflective_registry,
+            1,
+            "MCP reflective owner classifier must fail closed for direct Device owner URAs",
+        )
+    if "User Principal cannot own MCP reflective descriptors" not in text:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            mcp_reflective_registry,
+            1,
+            "MCP reflective owner classifier must fail closed for User Principal owner URAs",
+        )
+    if "not the MCP integration SystemAgent" not in text:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            mcp_reflective_registry,
+            1,
+            "MCP reflective owner classifier must admit only the exact MCP integration SystemAgent",
+        )
+    if '"authority".to_string()' not in text:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            mcp_reflective_registry,
+            1,
+            "MCP reflective Authority owner must use the canonical authority scope marker, not hub/device aliases",
+        )
+    if '"hub".to_string()' in text:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            mcp_reflective_registry,
+            line_number(text, text.find('"hub".to_string()')),
+            "MCP reflective Authority owner must not use the obsolete hub authority-scope marker",
+        )
+mcp_bridge = cli_root / "src/daemon/ability/builtins/integrations/mcp/bridge.rs"
+mcp_client = cli_root / "src/daemon/ability/builtins/integrations/mcp/client.rs"
+for path in (mcp_bridge, mcp_client):
+    if not path.exists():
+        continue
+    text = source(path)
+    for token in (
+        '"mcp.bridge.list_tools"',
+        '"mcp.bridge.call_tool"',
+        "MCP_CLIENT_LIST",
+        "MCP_CLIENT_CALL",
+        "ABILITY_LIST",
+        "ABILITY_CALL",
+    ):
+        search_from = 0
+        while True:
+            offset = text.find(token, search_from)
+            if offset == -1:
+                break
+            window = text[offset : offset + 700]
+            if "OwnerKind::Device" in window and "register_rpc_with_owner" in window:
+                add(
+                    "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+                    path,
+                    line_number(text, offset),
+                    "MCP bridge/client abilities must be owned by the MCP integration SystemAgent, not direct Device",
+                )
+            search_from = offset + len(token)
+    if "register_rpc_with_owner" in text and "OwnerKind::mcp_integration_system()" not in text:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            path,
+            1,
+            "MCP bridge/client registration must use OwnerKind::mcp_integration_system()",
+        )
+mcp_profile = cli_root / "src/daemon/ability/catalog/profiles/mcp.rs"
+if mcp_profile.exists():
+    text = source(mcp_profile)
+    if "OwnerKind::mcp_integration_system()" not in text:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            mcp_profile,
+            1,
+            "MCP profile descriptors must project the MCP integration SystemAgent owner",
+        )
+conformance_rs = cli_root / "src/daemon/ability/conformance.rs"
+if conformance_rs.exists():
+    text = source(conformance_rs)
+    offset = text.find("DeviceBridge")
+    if offset != -1:
+        add(
+            "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+            conformance_rs,
+            line_number(text, offset),
+            "MCP conformance domain must be hosted MCP Agent, not DeviceBridge",
+        )
+    for token in (
+        "McpIntegrationSystemAgent",
+        'local_rpc!("mcp.bridge.list_tools", McpIntegrationSystemAgent)',
+        'local_rpc!("mcp.client.call", McpIntegrationSystemAgent)',
+    ):
+        if token not in text:
+            add(
+                "R127_MCP_HOSTED_AGENT_ONTOLOGY",
+                conformance_rs,
+                1,
+                "MCP conformance baseline must classify bridge/client rows as McpIntegrationSystemAgent",
+            )
+
+account_agent_patterns = (
+    (
+        re.compile(r"\bagent_ura\s*\([^)]*\"account\"[^)]*\)", re.S),
+        "production code must not synthesize a User account as an Agent URA",
+    ),
+    (
+        re.compile(r"\.account\b"),
+        "production code must not use .account Agent fallback vocabulary",
+    ),
+    (
+        re.compile(r"\baccount-as-agent\b"),
+        "production code must not preserve account-as-agent fallback vocabulary",
+    ),
+    (
+        re.compile(r"\buser\.<account>\b"),
+        "production code must not describe user.<account> as an Agent fallback",
+    ),
+)
+for path in production_files(cli_root / "src", {".rs"}):
+    text = source(path)
+    for pattern, detail in account_agent_patterns:
+        match = pattern.search(text)
+        if match:
+            add(
+                "R128_ACCOUNT_NOT_AGENT_ONTOLOGY",
+                path,
+                line_number(text, match.start()),
+                detail,
+            )
+
+login_profile_doc = cli_root / "docs/login-profile-join.md"
+if login_profile_doc.exists():
+    text = login_profile_doc.read_text(encoding="utf-8", errors="replace")
+    if "An Account is not an Agent" not in text:
+        add(
+            "R128_ACCOUNT_NOT_AGENT_ONTOLOGY",
+            login_profile_doc,
+            1,
+            "login/profile documentation must state that Account is not Agent",
+        )
+
+ontology_doc = cli_root / "docs/easynet_ontology.tex"
+if ontology_doc.exists():
+    text = ontology_doc.read_text(encoding="utf-8", errors="replace")
+    if "A User account is not an Agent" not in text:
+        add(
+            "R128_ACCOUNT_NOT_AGENT_ONTOLOGY",
+            ontology_doc,
+            1,
+            "ontology must state that User account is Principal/accountability, not Agent",
+        )
+    for token, detail in (
+        (
+            r"\item \textbf{Agent} --- routable behavior subject",
+            "ontology must define ordinary Agent as a routable behavior subject",
+        ),
+        (
+            r"\item \textbf{Authority} --- routable realm governance actor",
+            "ontology must define Authority separately from execution substrate",
+        ),
+        (
+            "Service, or Authority} identities advertising governed AbilityDescriptors.",
+            "ontology must name ordinary public callees as Agent/SystemAgent/Service/Authority, not Device",
+        ),
+        (
+            "Device selector to choose the execution host",
+            "ability.deploy ontology must describe --to <node> as execution-host selection",
+        ),
+        (
+            "ability-management\nSystem Agent",
+            "ability.deploy ontology must state deployed descriptors are owned by the ability-management SystemAgent",
+        ),
+    ):
+        if token not in text:
+            add("R138_ONTOLOGY_ACTOR_MODEL_CLOSED", ontology_doc, 1, detail)
+    for token, detail in (
+        (
+            "Agent (the only addressable actor)",
+            "ontology must not preserve the pre-SystemAgent claim that ordinary Agent is the only addressable actor",
+        ),
+        (
+            "This is \\textbf{not fixed in the current PR}",
+            "ability.deploy ontology must not claim the Device-owner leak remains unfixed after SystemAgent owner migration",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add("R138_ONTOLOGY_ACTOR_MODEL_CLOSED", ontology_doc, line_number(text, offset), detail)
+
+    for token, detail in (
+        (
+            "\\textbf{Canonical actor contract.}",
+            "active ontology must expose one canonical actor contract block",
+        ),
+        (
+            "User/Account = Principal/accountability",
+            "canonical actor contract must pin User/Account to principal accountability, not Agent",
+        ),
+        (
+            "Agent = routable AbilityDescriptor owner/callee",
+            "canonical actor contract must define Agent as the routable descriptor owner/callee",
+        ),
+        (
+            "System Agent = Device-sponsored restricted Agent",
+            "canonical actor contract must define SystemAgent as Device-sponsored Agent, not Device",
+        ),
+        (
+            "Authority = realm governance actor",
+            "canonical actor contract must keep Authority distinct from execution substrate",
+        ),
+        (
+            "Device = execution host/custody/sponsor, not an ordinary public actor",
+            "canonical actor contract must define Device as host/custody/sponsor, not ordinary actor",
+        ),
+        (
+            "\\texttt{DeviceCallerPurpose} classifier",
+            "ontology must bind bounded Device caller exceptions to the shared DeviceCallerPurpose classifier",
+        ),
+        (
+            "AbilityImpl/Plugin/Skill = implementation/resource plane, not public ownership identity",
+            "canonical actor contract must keep implementation/resource plane out of public ownership identity",
+        ),
+    ):
+        if token not in text:
+            add("R148_CANONICAL_ACTOR_CONTRACT", ontology_doc, 1, detail)
+
+authority_proof_rs = cli_root / "src/daemon/invocation/admission/authority_proof.rs"
+if authority_proof_rs.exists():
+    text = source(authority_proof_rs)
+    raw_text = authority_proof_rs.read_text(encoding="utf-8", errors="replace")
+    proof_body = rust_struct_body(text, "AuthorityProof")
+    if proof_body is None:
+        add(
+            "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+            authority_proof_rs,
+            1,
+            "AuthorityProof must remain an explicit signed authority proof contract",
+        )
+    else:
+        start, body = proof_body
+        if "pub owner_user_ura: String" not in body:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, start),
+                "AuthorityProof must expose canonical owner_user_ura internally",
+            )
+        if re.search(r"\bpub\s+owner_user_id\s*:", body):
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, start),
+                "AuthorityProof must not expose owner_user_id as a runtime field",
+            )
+        if 'serde(rename = "owner_user_id"' not in body:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, start),
+                "AuthorityProof must preserve serialized owner_user_id compatibility through serde rename",
+            )
+        if "pub session_owner_user_ura: Option<String>" not in body:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, start),
+                "AuthorityProof session owner must be canonical session_owner_user_ura internally",
+            )
+        if re.search(r"\bpub\s+session_owner_user_id\s*:", body):
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, start),
+                "AuthorityProof must not expose session_owner_user_id as a runtime field",
+            )
+        if 'rename = "session_owner_user_id"' not in body:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, start),
+                "AuthorityProof must preserve serialized session_owner_user_id compatibility through serde rename",
+            )
+    context_match = re.search(
+        r"pub\s+struct\s+AuthorityProofVerificationContext\s*<[^>]+>\s*\{(?P<body>.*?)\n\}",
+        text,
+        re.S,
+    )
+    if context_match is None:
+        add(
+            "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+            authority_proof_rs,
+            1,
+            "AuthorityProofVerificationContext must remain an explicit runtime authority context",
+        )
+    else:
+        body = context_match.group("body")
+        if "pub owner_user_ura: &'a str" not in body:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, context_match.start()),
+                "runtime AuthorityProofVerificationContext must expose owner_user_ura, not owner_user_id",
+            )
+        owner_user_id_field = re.search(r"\bpub\s+owner_user_id\s*:", body)
+        if owner_user_id_field is not None:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, context_match.start() + owner_user_id_field.start()),
+                "runtime authority verification context must not use owner_user_id compatibility naming",
+            )
+        if "pub session_owner_user_ura: Option<&'a str>" not in body:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, context_match.start()),
+                "runtime AuthorityProofVerificationContext must expose session_owner_user_ura, not session_owner_user_id",
+            )
+        session_owner_user_id_field = re.search(r"\bpub\s+session_owner_user_id\s*:", body)
+        if session_owner_user_id_field is not None:
+            add(
+                "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+                authority_proof_rs,
+                line_number(text, context_match.start() + session_owner_user_id_field.start()),
+                "runtime authority verification context must not use session_owner_user_id compatibility naming",
+            )
+    for token, detail in (
+        (
+            "RFC-014 durable/wire compatibility only",
+            "AuthorityProof owner_user_id compatibility field must document its durable/wire-only lifecycle",
+        ),
+        (
+            "not reinterpret it as a bare account id or Agent identity",
+            "AuthorityProof owner_user_id compatibility field must explicitly reject Account/User-as-Agent confusion",
+        ),
+        (
+            "compatibility wire name",
+            "AuthorityProof session_owner_user_id must be documented as a compatibility wire key",
+        ),
+        (
+            "must not be used as a runtime scalar helper name",
+            "AuthorityProof session owner compatibility key must not leak back into runtime naming",
+        ),
+        (
+            "fn issuer_authorized_for_owner_ura(",
+            "issuer authorization resolver must name the canonical User URA contract",
+        ),
+        (
+            "validate_user_principal_ura(context.owner_user_ura, \"owner_user_ura\")",
+            "runtime authority context owner must be validated as canonical User URA",
+        ),
+        (
+            "proof.owner_user_ura != context.owner_user_ura",
+            "AuthorityProof runtime owner must be compared through canonical owner_user_ura",
+        ),
+        (
+            "validate_user_principal_ura(session_owner_user_ura, \"session_owner_user_id\")",
+            "AuthorityProof session owner must be validated as canonical User URA despite the compatibility wire key",
+        ),
+        (
+            "proof.session_owner_user_ura.as_deref() != context.session_owner_user_ura",
+            "AuthorityProof session owner must be compared through canonical session_owner_user_ura",
+        ),
+        (
+            "verifier_rejects_bare_context_owner_user_id",
+            "authority proof tests must reject bare user ids at the runtime context boundary",
+        ),
+        (
+            "verifier_rejects_bare_context_session_owner_user_id",
+            "authority proof tests must reject bare session owner user ids at the runtime context boundary",
+        ),
+    ):
+        haystack = raw_text if token.startswith("verifier_") or " " in token else text
+        if token not in haystack:
+            add("R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA", authority_proof_rs, 1, detail)
+    if "fn issuer_authorized_for_owner(" in text:
+        add(
+            "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA",
+            authority_proof_rs,
+            line_number(text, text.find("fn issuer_authorized_for_owner(")),
+            "issuer authorization resolver must not keep ambiguous owner_user_id method naming",
+        )
+
+authority_metadata_rs = cli_root / "src/daemon/invocation/admission/authority_metadata.rs"
+if authority_metadata_rs.exists():
+    text = source(authority_metadata_rs)
+    raw_text = authority_metadata_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "Public session-authority wire scalar",
+            "SessionAuthorityPayload must document session_owner_user_id as a public wire scalar",
+        ),
+        (
+            "It is not a User URA",
+            "SessionAuthorityPayload must state that session_owner_user_id is not a runtime User URA",
+        ),
+        (
+            "do not use this field as a runtime User URA",
+            "SessionAuthorityRequest must keep session_owner_user_id confined to request/wire scalar semantics",
+        ),
+        (
+            "parsed.user_id() != Some(payload.session_owner_user_id.as_str())",
+            "session authority validation must compare the wire scalar to the User segment derived from subject_ura",
+        ),
+    ):
+        if token not in raw_text:
+            add("R149_SESSION_AUTHORITY_OWNER_SCALAR_BOUNDARY", authority_metadata_rs, 1, detail)
+if admission_facade.exists():
+    text = source(admission_facade)
+    for token, detail in (
+        (
+            "fn session_owner_user_ura(payload: &SessionAuthorityPayload) -> Result<String, Status>",
+            "admission must name conversion from session_owner_user_id scalar to canonical User URA as session_owner_user_ura",
+        ),
+        (
+            "let owner_user_ura = session_owner_user_ura(payload)?",
+            "session issuer authorization must consume a canonical owner_user_ura variable",
+        ),
+    ):
+        if token not in text:
+            add("R149_SESSION_AUTHORITY_OWNER_SCALAR_BOUNDARY", admission_facade, 1, detail)
+    legacy = "fn session_owner_user_id(payload: &SessionAuthorityPayload) -> Result<String, Status>"
+    offset = text.find(legacy)
+    if offset != -1:
+        add(
+            "R149_SESSION_AUTHORITY_OWNER_SCALAR_BOUNDARY",
+            admission_facade,
+            line_number(text, offset),
+            "function returning canonical User URA must not be named session_owner_user_id",
+        )
+
+pages_mod_rs = cli_root / "src/daemon/ability/builtins/resources/pages/mod.rs"
+pages_health_rs = cli_root / "src/daemon/ability/builtins/resources/pages/list_get_unpublish.rs"
+if pages_mod_rs.exists():
+    text = source(pages_mod_rs)
+    raw_text = pages_mod_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "pub(crate) fn pages_service_owner(owner_user_id: &str) -> OwnerKind",
+            "Pages abilities must centralize the principal-scoped Pages Service owner projection",
+        ),
+        (
+            "handle_health(&owner_ura, &user, &realm, args)",
+            "pages.health must report the committed Pages Service owner",
+        ),
+        (
+            "runtime_binding_facts_for_mode",
+            "Pages health owner must come from the committed descriptor binding",
+        ),
+    ):
+        if token not in raw_text:
+            add("R150_PAGES_OWNER_SEGMENT_BOUNDARY", pages_mod_rs, 1, detail)
+    for token, detail in (
+        (
+            "OwnerKind::pages_system()",
+            "Pages abilities must use the principal-scoped Pages Service, not the retired Pages SystemAgent",
+        ),
+        ("pages_authority_scope", "Pages must not declare a shared hosted-Agent authority scope"),
+        ("management_agent_ura", "Pages must not reconstruct a shared user-hosted Agent URA"),
+        ('OwnerKind::Agent("pages"', "Pages must not use a hosted User Agent owner"),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R150_PAGES_OWNER_SEGMENT_BOUNDARY",
+                pages_mod_rs,
+                line_number(text, offset),
+                detail,
+            )
+if pages_health_rs.exists():
+    text = source(pages_health_rs)
+    raw_text = pages_health_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "pub fn handle_health(\n    owner_ura: &str,\n    user: &str,",
+            "pages.health must receive the committed execution owner separately from display user",
+        ),
+        (
+            "owner_ura.to_string()",
+            "pages.health must return the supplied committed SystemAgent owner",
+        ),
+    ):
+        if token not in raw_text:
+            add("R150_PAGES_OWNER_SEGMENT_BOUNDARY", pages_health_rs, 1, detail)
+    for token, detail in (
+        (
+            'let owner_ura = crate::core::ura::agent_ura(realm, user, "pages")',
+            "pages.health must not build owner_ura from display user slug",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R150_PAGES_OWNER_SEGMENT_BOUNDARY",
+                pages_health_rs,
+                line_number(text, offset),
+                detail,
+            )
+
+hosted_agent_publication_rs = (
+    cli_root / "src/daemon/invocation/admission/hosted_agent_publication.rs"
+)
+unary_dispatcher_rs = cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs"
+federation_client_contract_rs = cli_root / "src/daemon/federation/client/ability_contract.rs"
+federation_wire_contract_rs = cli_root / "src/daemon/federation/wire_contract.rs"
+if hosted_agent_publication_rs.exists():
+    text = source(hosted_agent_publication_rs)
+    body = rust_struct_body(text, "HostedAgentPublication")
+    if body is not None:
+        start, struct_body = body
+        if "owner_user_segment: String" not in struct_body:
+            add(
+                "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+                hosted_agent_publication_rs,
+                line_number(text, start),
+                "HostedAgentPublication must name its private bare user-id segment owner_user_segment",
+            )
+        if re.search(r"\bowner_user_id\s*:\s*String\b", struct_body):
+            add(
+                "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+                hosted_agent_publication_rs,
+                line_number(text, start),
+                "HostedAgentPublication must not name a private runtime field owner_user_id",
+            )
+    if "pub(crate) fn owner_user_id(" in text:
+        add(
+            "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+            hosted_agent_publication_rs,
+            line_number(text, text.find("pub(crate) fn owner_user_id(")),
+            "HostedAgentPublication must expose owner_user_segment, not owner_user_id",
+        )
+if unary_dispatcher_rs.exists():
+    text = source(unary_dispatcher_rs)
+    body = rust_struct_body(text, "PrincipalOwnerFilter")
+    if body is not None:
+        start, struct_body = body
+        if "owner_user_segment: String" not in struct_body:
+            add(
+                "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+                unary_dispatcher_rs,
+                line_number(text, start),
+                "PrincipalOwnerFilter must name its private bare user-id segment owner_user_segment",
+            )
+        if re.search(r"\bowner_user_id\s*:\s*String\b", struct_body):
+            add(
+                "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+                unary_dispatcher_rs,
+                line_number(text, start),
+                "PrincipalOwnerFilter must not name a private runtime field owner_user_id",
+            )
+    if "let Some(owner_user_id) = request.local_user_id.as_deref()" in text:
+        add(
+            "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+            unary_dispatcher_rs,
+            line_number(text, text.find("let Some(owner_user_id) = request.local_user_id.as_deref()")),
+            "federation.discover local_user_id scalar must be named owner_user_segment internally",
+        )
+if federation_client_contract_rs.exists():
+    raw_text = federation_client_contract_rs.read_text(encoding="utf-8", errors="replace")
+    if "principal_owner_user_id" in raw_text and "This is not a runtime User URA" not in raw_text:
+        add(
+            "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+            federation_client_contract_rs,
+            1,
+            "federation client DTO must document principal_owner_user_id as a wire scalar, not a runtime User URA",
+        )
+if federation_wire_contract_rs.exists():
+    raw_text = federation_wire_contract_rs.read_text(encoding="utf-8", errors="replace")
+    if "principal_owner_user_id" in raw_text and "This is not a runtime User URA" not in raw_text:
+        add(
+            "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY",
+            federation_wire_contract_rs,
+            1,
+            "federation wire DTO must document principal_owner_user_id as a wire scalar, not a runtime User URA",
+        )
+
+daemon_invocation_service_tests_rs = (
+    cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+)
+daemon_invocation_service_unary_tests_rs = (
+    cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+)
+if unary_dispatcher_rs.exists():
+    text = source(unary_dispatcher_rs)
+    raw_text = unary_dispatcher_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "enum FederationDiscoverReadScope",
+            "federation.discover must resolve an explicit read scope before merging directory rows",
+        ),
+        (
+            "OperatorAudit",
+            "federation.discover must name the unfiltered operator/audit read scope explicitly",
+        ),
+        (
+            "federation.discover unfiltered operator/audit scope requires the local daemon principal",
+            "unfiltered federation.discover must require the local Authority/daemon principal",
+        ),
+        (
+            "caller.kind != crate::core::ura::URAKind::User",
+            "user-scoped federation.discover must require a canonical User caller",
+        ),
+        (
+            "caller.user_id() != Some(owner_user_segment)",
+            "user-scoped federation.discover must bind caller User segment to local_user_id",
+        ),
+        (
+            "owner_filter(&self) -> Option<&PrincipalOwnerFilter>",
+            "federation.discover must keep user-scoped owner filtering explicit",
+        ),
+    ):
+        if token not in raw_text:
+            add("R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE", unary_dispatcher_rs, 1, detail)
+    for token, detail in (
+        (
+            "return Ok(Self::OperatorAudit);",
+            "unfiltered federation.discover must not return OperatorAudit before checking the local daemon principal",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            window = text[max(0, offset - 260): offset]
+            if "Some(caller_ura) != local_daemon_ura" not in window:
+                add(
+                    "R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE",
+                    unary_dispatcher_rs,
+                    line_number(text, offset),
+                    detail,
+                )
+if daemon_invocation_service_tests_rs.exists():
+    raw_text = daemon_invocation_service_tests_rs.read_text(
+        encoding="utf-8", errors="replace"
+    )
+    if "authority_invoke_request" in raw_text:
+        for token, detail in (
+            (
+                "fn authority_invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest>",
+                "federation.discover tests must provide an Authority self-call request helper",
+            ),
+            (
+                "signed_invoke_request(\n        TEST_HUB_URA,\n        TEST_HUB_URA,\n        TEST_HUB_URA,",
+                "Authority request helper must sign caller, callee, and subject as the local Authority",
+            ),
+            (
+                "TrustAnchorRole::Hub",
+                "test trust anchor must register the local Authority as a Hub/Authority actor",
+            ),
+        ):
+            if token not in raw_text:
+                add("R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE", daemon_invocation_service_tests_rs, 1, detail)
+if daemon_invocation_service_unary_tests_rs.exists():
+    text = daemon_invocation_service_unary_tests_rs.read_text(
+        encoding="utf-8", errors="replace"
+    )
+    if "ABILITY_FEDERATION_DISCOVER" in text or "federation_discover" in text:
+        for token, detail in (
+            (
+                ".invoke(authority_invoke_request(ABILITY_FEDERATION_DISCOVER, \"{}\"))",
+                "unfiltered federation.discover positive test must call as Authority, not Device",
+            ),
+            (
+                "make_unregistered_service_for_route_owner(TEST_HUB_URA).with_session_realm(\"local-realm\")",
+                "local-presence federation.discover test must register the route owner as Authority",
+            ),
+            (
+                "register_test_daemon_routes(svc, TEST_HUB_URA)",
+                "federation.discover local-presence test must route through the Authority owner",
+            ),
+            (
+                "user_scoped_discover_request",
+                "federation.discover tests must retain a separate canonical User caller path for local_user_id",
+            ),
+        ):
+            if token not in text:
+                add("R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE", daemon_invocation_service_unary_tests_rs, 1, detail)
+        for token, detail in (
+            (
+                ".invoke(invoke_request(ABILITY_FEDERATION_DISCOVER",
+                "federation.discover tests must not exercise unfiltered operator/audit scope through generic Device-style invoke_request",
+            ),
+            (
+                "make_unregistered_service_for_route_owner(TEST_DAEMON_URA).with_session_realm(\"local-realm\")",
+                "federation.discover tests must not use the Device route owner for operator/audit discovery",
+            ),
+        ):
+            offset = text.find(token)
+            if offset != -1:
+                add(
+                    "R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE",
+                    daemon_invocation_service_unary_tests_rs,
+                    line_number(text, offset),
+                    detail,
+                )
+
+decision_rs = cli_root / "src/daemon/invocation/admission/decision.rs"
+grant_matcher_rs = cli_root / "src/daemon/invocation/admission/grant_matcher.rs"
+persistence_access_control_rs = cli_root / "src/daemon/persistence/access_control.rs"
+if decision_rs.exists():
+    text = source(decision_rs)
+    raw_text = decision_rs.read_text(encoding="utf-8", errors="replace")
+    principal_kind = rust_enum_body(text, "PrincipalKind")
+    if principal_kind is None:
+        add("R141_DEVICE_CUSTODY_NOT_PRINCIPAL", decision_rs, 1, "PrincipalKind must remain explicit")
+    else:
+        start, body = principal_kind
+        if "DeviceCustody" not in body:
+            add(
+                "R141_DEVICE_CUSTODY_NOT_PRINCIPAL",
+                decision_rs,
+                line_number(text, start),
+                "device custody projection must be named DeviceCustody, not generic Device",
+            )
+        if re.search(r"(^|[\s,])Device\s*(?:,|$)", body):
+            add(
+                "R141_DEVICE_CUSTODY_NOT_PRINCIPAL",
+                decision_rs,
+                line_number(text, start),
+                "PrincipalKind must not expose a generic Device actor variant",
+            )
+        if 'serde(rename = "device")' not in body:
+            add(
+                "R141_DEVICE_CUSTODY_NOT_PRINCIPAL",
+                decision_rs,
+                line_number(text, start),
+                "DeviceCustody may preserve wire `device` compatibility only through serde rename",
+            )
+    for struct_name, required_field in (
+        ("OwnerResolution", "pub owner_user_ura: Option<String>"),
+        ("PolicyDecision", "pub owner_user_ura: Option<String>"),
+        ("PermissionRequest", "pub owner_user_ura: String"),
+    ):
+        body = rust_struct_body(text, struct_name)
+        if body is None:
+            add("R139_RUNTIME_OWNER_USER_URA_NAMING", decision_rs, 1, f"{struct_name} must remain present")
+            continue
+        start, struct_body = body
+        if required_field not in struct_body:
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                decision_rs,
+                line_number(text, start),
+                f"{struct_name} must expose canonical owner_user_ura internally",
+            )
+        if re.search(r"\bpub\s+owner_user_id\s*:", struct_body):
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                decision_rs,
+                line_number(text, start),
+                f"{struct_name} must not expose owner_user_id as a runtime field",
+            )
+        if 'serde(rename = "owner_user_id"' not in struct_body:
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                decision_rs,
+                line_number(text, start),
+                f"{struct_name} must preserve serialized owner_user_id compatibility through serde rename",
+            )
+    for token, detail in (
+        (
+            "key is retained only for durable/wire compatibility",
+            "OwnerResolution owner_user_id compatibility field must document its durable/wire-only lifecycle",
+        ),
+        (
+            "policy-decision wire compatibility",
+            "PolicyDecision owner_user_id compatibility field must document its policy-decision wire lifecycle",
+        ),
+        (
+            "permission-request durable/wire compatibility",
+            "PermissionRequest owner_user_id compatibility field must document its permission-request compatibility lifecycle",
+        ),
+    ):
+        if token not in raw_text:
+            add("R139_RUNTIME_OWNER_USER_URA_NAMING", decision_rs, 1, detail)
+if grant_matcher_rs.exists():
+    text = source(grant_matcher_rs)
+    raw_text = grant_matcher_rs.read_text(encoding="utf-8", errors="replace")
+    grant_body = rust_struct_body(text, "PermissionGrant")
+    if grant_body is None:
+        add("R139_RUNTIME_OWNER_USER_URA_NAMING", grant_matcher_rs, 1, "PermissionGrant must remain present")
+    else:
+        start, body = grant_body
+        if "pub owner_user_ura: String" not in body:
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                grant_matcher_rs,
+                line_number(text, start),
+                "PermissionGrant must expose canonical owner_user_ura internally",
+            )
+        if re.search(r"\bpub\s+owner_user_id\s*:", body):
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                grant_matcher_rs,
+                line_number(text, start),
+                "PermissionGrant must not expose owner_user_id as a runtime field",
+            )
+        if 'serde(rename = "owner_user_id"' not in body:
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                grant_matcher_rs,
+                line_number(text, start),
+                "PermissionGrant must preserve serialized owner_user_id compatibility through serde rename",
+            )
+    if "permission-grant durable/wire compatibility" not in raw_text:
+        add(
+            "R139_RUNTIME_OWNER_USER_URA_NAMING",
+            grant_matcher_rs,
+            1,
+            "PermissionGrant owner_user_id compatibility field must document its permission-grant lifecycle",
+        )
+    input_body = rust_struct_body(text, "GrantMatchInput")
+    if input_body is None:
+        add("R139_RUNTIME_OWNER_USER_URA_NAMING", grant_matcher_rs, 1, "GrantMatchInput must remain present")
+    else:
+        start, body = input_body
+        if "pub owner_user_ura: &'a str" not in body:
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                grant_matcher_rs,
+                line_number(text, start),
+                "GrantMatchInput must expose canonical owner_user_ura internally",
+            )
+        if re.search(r"\bpub\s+owner_user_id\s*:", body):
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                grant_matcher_rs,
+                line_number(text, start),
+                "GrantMatchInput must not expose owner_user_id as a runtime field",
+            )
+if access_control.exists():
+    text = source(access_control)
+    for token, detail in (
+        (
+            "owner_user_ura_from_boundary(",
+            "access-control ability boundary must name canonical owner User URA extraction",
+        ),
+        (
+            "owner_user_ura_from_mutation_boundary(",
+            "access-control mutation boundary must name canonical owner User URA extraction",
+        ),
+        (
+            "owner_user_ura =",
+            "access-control runtime locals must use owner_user_ura naming",
+        ),
+    ):
+        if token not in text:
+            add("R139_RUNTIME_OWNER_USER_URA_NAMING", access_control, 1, detail)
+    for token, detail in (
+        (
+            "owner_user_id_from_boundary(",
+            "access-control runtime helper must not preserve owner_user_id naming for canonical User URAs",
+        ),
+        (
+            "owner_user_id_from_mutation_boundary(",
+            "access-control mutation helper must not preserve owner_user_id naming for canonical User URAs",
+        ),
+        (
+            "let owner_user_id",
+            "access-control runtime local must not preserve owner_user_id naming for canonical User URAs",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R139_RUNTIME_OWNER_USER_URA_NAMING",
+                access_control,
+                line_number(text, offset),
+                detail,
+            )
+if persistence_access_control_rs.exists():
+    raw_text = persistence_access_control_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "v0 policy-store compatibility name",
+            "policy store owner_user_id key must be documented as compatibility storage, not a runtime identity",
+        ),
+        (
+            "audit-log compatibility only",
+            "grant audit owner_user_id key must be documented as audit-log compatibility storage",
+        ),
+    ):
+        if token not in raw_text:
+            add("R139_RUNTIME_OWNER_USER_URA_NAMING", persistence_access_control_rs, 1, detail)
+
+ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
+if ffi_invocation.exists():
+    text = source(ffi_invocation)
+    raw_text = ffi_invocation.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            'let caller_ura = required_exact_string(obj, "caller_ura")?',
+            "public Invocation caller_ura must be extracted without trimming",
+        ),
+        (
+            'let callee_ura = required_exact_string(obj, "callee_ura")?',
+            "public Invocation callee_ura must be extracted without trimming",
+        ),
+        (
+            'let subject_ura = required_exact_string(obj, "subject_ura")?',
+            "public Invocation subject_ura must be extracted without trimming",
+        ),
+    ):
+        if token not in text:
+            add("R140_PUBLIC_INVOCATION_TUPLE_URA_EXACT", ffi_invocation, 1, detail)
+    tuple_body = rust_method_body(text, "validate_public_tuple_ura")
+    if tuple_body is None:
+        add(
+            "R140_PUBLIC_INVOCATION_TUPLE_URA_EXACT",
+            ffi_invocation,
+            1,
+            "public Invocation FFI must keep a single tuple URA validator",
+        )
+    else:
+        start, body = tuple_body
+        if "value.trim() != value" not in body:
+            add(
+                "R140_PUBLIC_INVOCATION_TUPLE_URA_EXACT",
+                ffi_invocation,
+                line_number(text, start),
+                "public Invocation tuple URAs must reject surrounding whitespace before parse",
+            )
+        if "parse_ura(value.trim())" in body:
+            add(
+                "R140_PUBLIC_INVOCATION_TUPLE_URA_EXACT",
+                ffi_invocation,
+                line_number(text, start + body.find("parse_ura(value.trim())")),
+                "public Invocation tuple URAs must not be trimmed into canonical form",
+            )
+    if "parse_invocation_json_rejects_whitespace_padded_tuple_uras_before_daemon_io" not in raw_text:
+        add(
+            "R140_PUBLIC_INVOCATION_TUPLE_URA_EXACT",
+            ffi_invocation,
+            1,
+            "FFI tests must reject whitespace-padded caller/callee/subject URAs before daemon I/O",
+        )
+
+ability_descriptor_surface = cli_root / "src/daemon/ability/descriptors/surface.rs"
+if ability_descriptor_surface.exists():
+    raw_text = ability_descriptor_surface.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "callee ∈ {authority, device, agent}",
+            "AbilityDescriptor docs must not describe Device URAs as ordinary public callees",
+        ),
+        (
+            "device-built-ins",
+            "AbilityDescriptor docs must not preserve device-native builtin public callee vocabulary",
+        ),
+        (
+            "DeviceAgent",
+            "AbilityDescriptor docs must use SystemAgent or DeviceProfileProjection, not DeviceAgent",
+        ),
+        (
+            "ability/device/",
+            "AbilityDescriptor examples must route device-hosted public abilities through SystemAgent URAs",
+        ),
+    ):
+        offset = raw_text.find(token)
+        if offset != -1:
+            add(
+                "R142_DEVICE_NOT_PUBLIC_CALLEE",
+                ability_descriptor_surface,
+                line_number(raw_text, offset),
+                detail,
+            )
+    for required, detail in (
+        (
+            "SystemAgent",
+            "AbilityDescriptor docs must name the device-sponsored SystemAgent public callee model",
+        ),
+        (
+            "never an AbilityDescriptor owner/callee",
+            "AbilityDescriptor docs must state that Device is never a descriptor owner/callee",
+        ),
+    ):
+        if required not in raw_text:
+            add("R142_DEVICE_NOT_PUBLIC_CALLEE", ability_descriptor_surface, 1, detail)
+
+for state_doc in (
+    cli_root / "docs/状态机器/easynet-state-machines.md",
+    cli_root / "docs/状态机器/easynet-state-machines.zh-CN.tex",
+    cli_root / "docs/状态机器/current-code-audit-and-corrected-state-machines.md",
+):
+    if not state_doc.exists():
+        continue
+    raw_text = state_doc.read_text(encoding="utf-8", errors="replace")
+    for pattern, detail in (
+        (
+            r'"callee_ura"\s*:\s*"easynet:///r/[^"]*/device/',
+            "state-machine examples must not use Device URAs as public invocation callees",
+        ),
+        (
+            r'"ability_ura"\s*:\s*"easynet:///r/[^"]*/ability/device[./]',
+            "state-machine examples must not publish device-hosted public abilities as ability/device rows",
+        ),
+        (
+            r"\\texttt\{callee\\_ura\}\s*:\s*\\texttt\{easynet:///r/[^}]*/device/",
+            "state-machine TeX examples must not use Device URAs as public invocation callees",
+        ),
+        (
+            r"\\texttt\{ability\\_ura\}\s*:\s*\\texttt\{easynet:///r/[^}]*/ability/device[./]",
+            "state-machine TeX examples must not publish device-hosted public abilities as ability/device rows",
+        ),
+    ):
+        match = re.search(pattern, raw_text)
+        if match:
+            add("R142_DEVICE_NOT_PUBLIC_CALLEE", state_doc, line_number(raw_text, match.start()), detail)
+
+for registrar_file in (
+    cli_root / "src/daemon/ability/builtins/device_control/ability_management/ops.rs",
+    cli_root / "src/daemon/ability/builtins/device_control/ability_management/registrar.rs",
+    cli_root / "src/daemon/ability/catalog/build.rs",
+    cli_root / "src/bin/easynet-daemon.rs",
+    cli_root / "tests/seven_axes_fixture/mod.rs",
+):
+    if not registrar_file.exists():
+        continue
+    text = source(registrar_file)
+    for token in (
+        "DeviceAbilityRecord",
+        "DeviceAbilityStore",
+        "DeviceAbilityInstall",
+        "DeviceAbilityUninstall",
+        "DeviceAbilityCallModeResolution",
+        "DeviceAbilityRegistrar",
+        "SharedDeviceRegistrarCell",
+        "device_registrar_cell",
+        "require_device_registrar",
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R143_ABILITY_DEPLOYMENT_REGISTRAR_NAMING",
+                registrar_file,
+                line_number(text, offset),
+                f"ability deployment lifecycle must not keep obsolete registrar name `{token}`",
+            )
+if (cli_root / "src/daemon/ability/builtins/device_control/ability_management/registrar.rs").exists():
+    registrar_text = source(cli_root / "src/daemon/ability/builtins/device_control/ability_management/registrar.rs")
+    for required in ("AbilityDeploymentRegistrar", "SharedAbilityDeploymentRegistrarCell"):
+        if required not in registrar_text:
+            add(
+                "R143_ABILITY_DEPLOYMENT_REGISTRAR_NAMING",
+                cli_root / "src/daemon/ability/builtins/device_control/ability_management/registrar.rs",
+                1,
+                f"ability deployment registrar module must expose `{required}`",
+            )
+
+daemon_service = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+daemon_service_tests = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests"
+boot_invocation = cli_root / "src/daemon/boot/invocation/mod.rs"
+catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
+if daemon_service.exists():
+    text = source(daemon_service)
+    for token, detail in (
+        (
+            "fn validate_daemon_route_authority_owner(",
+            "daemon exact route registration must have one shared Authority-owner validator",
+        ),
+        (
+            "parsed.kind != crate::core::ura::URAKind::Authority",
+            "daemon exact route validator must reject every non-Authority owner",
+        ),
+        (
+            'validate_daemon_route_authority_owner(owner_ura, "unary")',
+            "unary exact route owner normalization must reuse the Authority-owner validator",
+        ),
+        (
+            'validate_daemon_route_authority_owner(owner_ura.trim(), "stream")',
+            "stream exact route registration must reuse the Authority-owner validator",
+        ),
+        (
+            'validate_daemon_route_authority_owner(owner_ura.trim(), "bidi")',
+            "bidi exact route registration must reuse the Authority-owner validator",
+        ),
+    ):
+        if token not in text:
+            add("R144_DAEMON_INVOCATION_AUTHORITY_OWNER", daemon_service, 1, detail)
+    for token, detail in (
+        (
+            "URAKind::Device | crate::core::ura::URAKind::Authority",
+            "daemon exact route owner validation must not accept Device as an alternative to Authority",
+        ),
+        (
+            "canonical Device or Authority URA",
+            "daemon exact route owner error text must not present Device as valid public route owner",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R144_DAEMON_INVOCATION_AUTHORITY_OWNER",
+                daemon_service,
+                line_number(text, offset),
+                detail,
+            )
+if daemon_service_tests.exists():
+    test_files = [
+        daemon_service_tests / "unary.rs",
+        daemon_service_tests / "stream.rs",
+        daemon_service_tests / "bidi.rs",
+        cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs",
+        daemon_service,
+    ]
+    test_text = "\n".join(source(path) for path in test_files if path.exists())
+    if "daemon_exact_route_owner_rejects_device_ura" not in test_text:
+        add(
+            "R144_DAEMON_INVOCATION_AUTHORITY_OWNER",
+            daemon_service_tests,
+            1,
+            "service tests must prove Device cannot own public daemon exact routes",
+        )
+    for specific_token, generic_token, detail in (
+        (
+            "daemon_exact_unary_route_registration_rejects_device_owner",
+            "daemon_exact_route_owner_rejects_device_ura",
+            "service tests must prove Device cannot own public daemon exact unary routes",
+        ),
+        (
+            "daemon_exact_stream_route_registration_rejects_device_owner",
+            "daemon_exact_route_owner_rejects_device_ura",
+            "service tests must prove Device cannot own public daemon exact stream routes",
+        ),
+        (
+            "exact_bidi_route_registration_rejects_device_owner",
+            "daemon_exact_route_owner_rejects_device_ura",
+            "service tests must prove Device cannot own public daemon exact bidi routes",
+        ),
+    ):
+        if specific_token not in test_text and generic_token not in test_text:
+            add("R144_DAEMON_INVOCATION_AUTHORITY_OWNER", daemon_service_tests, 1, detail)
+if boot_invocation.exists():
+    text = source(boot_invocation)
+    required_hub_route_tokens = (
+        (
+            "Invocation transport cannot register Hub daemon routes without its canonical Authority URA",
+            "Hub route boot must fail closed without canonical Authority URA",
+        ),
+        (
+            "service.register_daemon_unary_routes(daemon_route_owner)",
+            "Hub boot must register unary exact routes under the canonical Authority owner",
+        ),
+        (
+            "service.register_daemon_stream_routes(daemon_route_owner)",
+            "Hub boot must register stream exact routes under the canonical Authority owner",
+        ),
+        (
+            "service.register_daemon_bidi_routes(daemon_route_owner)",
+            "Hub boot must register bidi exact routes under the canonical Authority owner",
+        ),
+    )
+    hub_block_starts = [
+        match.start()
+        for match in re.finditer(r"\bif\s+capabilities\.hub_runtime\s*\{", text)
+    ]
+    if not hub_block_starts:
+        add(
+            "R144_DAEMON_INVOCATION_AUTHORITY_OWNER",
+            boot_invocation,
+            1,
+            "boot must guard exact daemon route registration behind hub_runtime",
+        )
+    else:
+        route_blocks = [
+            brace_block_from(text, offset)
+            for offset in hub_block_starts
+            if any(token in brace_block_from(text, offset) for token, _ in required_hub_route_tokens)
+        ]
+        hub_block = route_blocks[0] if route_blocks else ""
+        for token, detail in required_hub_route_tokens:
+            if token not in hub_block:
+                add("R144_DAEMON_INVOCATION_AUTHORITY_OWNER", boot_invocation, 1, detail)
+if catalog_build.exists():
+    text = source(catalog_build)
+    device_contract = re.search(
+        r"daemon_invocation_contracts::register_for_owner\([^)]*OwnerKind::Device",
+        text,
+        re.S,
+    )
+    if device_contract:
+        add(
+            "R144_DAEMON_INVOCATION_AUTHORITY_OWNER",
+            catalog_build,
+            line_number(text, device_contract.start()),
+            "daemon Invocation descriptor contracts must not be registered for direct Device owners",
+        )
+    if "register Authority-owned daemon Invocation descriptor contracts" not in text:
+        add(
+            "R144_DAEMON_INVOCATION_AUTHORITY_OWNER",
+            catalog_build,
+            1,
+            "catalog build must document daemon Invocation contracts as Authority-owned",
+        )
+
+keyring_abilities = cli_root / "src/daemon/keyring/abilities.rs"
+plugin_contribution = cli_root / "src/daemon/plugins/contribution.rs"
+catalog_publication = cli_root / "src/daemon/ability/catalog/publication.rs"
+catalog_metadata = cli_root / "src/daemon/ability/catalog/catalog_metadata.rs"
+assembly_tests = cli_root / "src/daemon/ability/catalog/assembly_tests.rs"
+remote_desktop_registration = cli_root / "plugins/remote-desktop/src/registration.rs"
+remote_desktop_ability_dir = cli_root / "plugins/remote-desktop/abilities"
+ability_toml_parser = cli_root / "src/daemon/ability/catalog/ability_toml.rs"
+ability_descriptor_dir = cli_root / "ability-descriptors"
+ability_manifest = cli_root / "src/daemon/ability/manifest.rs"
+governance_names = cli_root / "src/daemon/ability/names/governance.rs"
+if keyring_abilities.exists():
+    text = source(keyring_abilities)
+    offset = text.find("OwnerKind::Device")
+    if offset != -1:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            keyring_abilities,
+            line_number(text, offset),
+            "device.keyring.* public descriptors must be owned by keyring-management SystemAgent, not direct Device",
+        )
+    if "OwnerKind::keyring_management_system()" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            keyring_abilities,
+            1,
+            "keyring registration must use the canonical OwnerKind::keyring_management_system constructor",
+        )
+if governance_names.exists():
+    text = source(governance_names)
+    if "pub const KEYRING_MANAGEMENT_SYSTEM_AGENT_ID" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            governance_names,
+            1,
+            "keyring-management SystemAgent id must be named in the governance ability namespace",
+        )
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    if "pub(crate) fn keyring_management_system() -> Self" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            dispatch_rs,
+            1,
+            "OwnerKind must expose a canonical keyring-management SystemAgent constructor",
+        )
+if profiles_mod.exists():
+    text = source(profiles_mod)
+    for token, detail in (
+        (
+            "KEYRING_MANAGEMENT_SYSTEM_AGENT_ID",
+            "host profile aggregation must include keyring-management SystemAgent descriptors",
+        ),
+        (
+            "OwnerKind::keyring_management_system",
+            "keyring-management SystemAgent descriptor projection must use the canonical owner constructor",
+        ),
+    ):
+        if token not in text:
+            add("R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY", profiles_mod, 1, detail)
+if catalog_build.exists():
+    text = catalog_build.read_text(encoding="utf-8", errors="replace")
+    if "keyring-management" not in text or "Device callee/owner assertion" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            catalog_build,
+            1,
+            "catalog build must document device.keyring.* as legacy local names, not Device-owned descriptors",
+        )
+if plugin_contribution.exists():
+    text = source(plugin_contribution)
+    owner_policy_device = re.search(r"owner_policy\s*:\s*OwnerKind::Device", text)
+    if owner_policy_device:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            plugin_contribution,
+            line_number(text, owner_policy_device.start()),
+            "plugin-provided AbilityImpls must publish through plugin-management SystemAgent, not direct Device",
+        )
+    if "public_owner: OwnerKind::plugin_management_system()" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            plugin_contribution,
+            1,
+            "PluginContributionBuilder must default generic plugin contribution owners to plugin-management SystemAgent",
+        )
+    if "set_public_owner(&mut self, owner: OwnerKind)" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            plugin_contribution,
+            1,
+            "daemon-native plugin packages must have an explicit public owner policy override",
+        )
+if catalog_publication.exists():
+    text = catalog_publication.read_text(encoding="utf-8", errors="replace")
+    if '"plugin.dynamic"' in text and "OwnerKind::Device" in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            catalog_publication,
+            line_number(text, text.find('"plugin.dynamic"')),
+            "publication tests must not model plugin dynamic abilities as direct Device-owned rows",
+        )
+if catalog_metadata.exists():
+    text = source(catalog_metadata)
+    for forbidden, detail in (
+        (
+            '.filter(|row| !row.name.starts_with("device.keyring."))',
+            "keyring abilities must not be excluded from published layer classification",
+        ),
+        (
+            "filter(|n| !n.starts_with(\"device.keyring.\"))",
+            "keyring abilities must not be excluded from published layer classification",
+        ),
+    ):
+        offset = text.find(forbidden)
+        if offset != -1:
+            add(
+                "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+                catalog_metadata,
+                line_number(text, offset),
+                detail,
+            )
+    for token, detail in (
+        ('"device.keyring.list"', "keyring list must be classified as an introspection ability"),
+        ('"device.keyring.get_public"', "keyring get_public must be classified as an introspection ability"),
+        ('"device.keyring.peer_list"', "keyring peer_list must be classified as an introspection ability"),
+        ('"device.keyring.peer_add"', "keyring peer_add must be classified as a control ability"),
+        ('"device.keyring.create"', "keyring create must be classified as an operational ability"),
+        ('"device.keyring.rotate"', "keyring rotate must be classified as an operational ability"),
+        ('"device.keyring.revoke"', "keyring revoke must be classified as an operational ability"),
+        ('"device.keyring.expire_set"', "keyring expire_set must be classified as an operational ability"),
+        ('"device.keyring.bind_subject"', "keyring bind_subject must be classified as an operational ability"),
+        (
+            '"device.keyring.federate_user_identity_token"',
+            "keyring federate_user_identity_token must be classified as an operational ability",
+        ),
+    ):
+        if token not in text:
+            add("R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY", catalog_metadata, 1, detail)
+if assembly_tests.exists():
+    text = source(assembly_tests)
+    raw_text = assembly_tests.read_text(encoding="utf-8", errors="replace")
+    offset = text.find('filter(|n| !n.starts_with("device.keyring."))')
+    if offset != -1:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            assembly_tests,
+            line_number(text, offset),
+            "classification completeness tests must not carve out keyring abilities",
+        )
+    if "OwnerKind::keyring_management_system()" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            assembly_tests,
+            1,
+            "registry assembly tests must pin device.keyring.* rows to keyring-management SystemAgent owner",
+        )
+    if (
+        '"remote_desktop."' in raw_text
+        and "OwnerKind::remote_desktop_system()" not in raw_text
+    ):
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            assembly_tests,
+            1,
+            "registry assembly tests must pin remote_desktop.* rows to remote-desktop SystemAgent owner",
+        )
+if remote_desktop_registration.exists():
+    text = source(remote_desktop_registration)
+    raw_text = remote_desktop_registration.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            'const RESOURCE_SUBJECT_KINDS: &[&str] = &["resource"];',
+            "remote-desktop resource-bound specs must name the dynamic Resource subject kind explicitly",
+        ),
+        (
+            'const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "resource", "user"];',
+            "remote-desktop permission probes must name Agent/User and descriptor-bound Resource probe subject kinds explicitly",
+        ),
+        (
+            "subject_ura_kinds: RESOURCE_SUBJECT_KINDS",
+            "remote-desktop resource-bound descriptors must not publish broad `any` subject scope",
+        ),
+        (
+            "subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS",
+            "remote-desktop permission probe descriptors must not publish broad `any` subject scope",
+        ),
+    ):
+        if token not in text:
+            add("R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY", remote_desktop_registration, 1, detail)
+    if "ScopeRule::OnlyUraKinds" not in raw_text:
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            remote_desktop_registration,
+            1,
+            "remote-desktop catalog snapshot tests must pin kind-gated subject scopes",
+        )
+if remote_desktop_ability_dir.exists():
+    for ability_toml in sorted(remote_desktop_ability_dir.glob("remote_desktop.*.ability.toml")):
+        raw_text = ability_toml.read_text(encoding="utf-8", errors="replace")
+        offset = raw_text.find('scope_subjects_kind = "any"')
+        if offset != -1:
+            add(
+                "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+                ability_toml,
+                line_number(raw_text, offset),
+                "remote-desktop public ability TOML must use kind-gated subject scope, not `any`",
+            )
+        if 'scope_subjects_kind = "only_ura_kinds"' not in raw_text:
+            add(
+                "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+                ability_toml,
+                1,
+                "remote-desktop public ability TOML must declare `only_ura_kinds` subject scope",
+            )
+        if ability_toml.name in (
+            "remote_desktop.permission_status.ability.toml",
+            "remote_desktop.request_permission.ability.toml",
+        ):
+            if 'scope_subjects_uras = ["agent", "resource", "user"]' not in raw_text:
+                add(
+                    "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+                    ability_toml,
+                    1,
+                    "remote-desktop permission probes must admit Agent/User and descriptor-bound Resource subjects",
+                )
+        elif 'scope_subjects_uras = ["resource"]' not in raw_text:
+            add(
+                "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+                ability_toml,
+                1,
+                "remote-desktop session/control abilities must only admit Resource subjects",
+            )
+core_ura = cli_root / "src/core/ura/mod.rs"
+if core_ura.exists():
+    text = source(core_ura)
+    raw_text = core_ura.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "pub const URA_KIND_SCOPE_LABELS",
+            "core URA facade must own canonical URA-kind scope label inventory",
+        ),
+        (
+            "pub fn ura_kind_scope_label(",
+            "core URA facade must own URA-kind to scope-label projection",
+        ),
+        (
+            "pub fn canonical_ura_kind_scope_labels(",
+            "core URA facade must own sorted/deduplicated URA-kind scope validation",
+        ),
+    ):
+        if token not in text:
+            add("R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY", core_ura, 1, detail)
+    if "canonical_ura_kind_scope_labels_rejects_drift" not in raw_text:
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            core_ura,
+            1,
+            "core URA tests must reject unknown, unsorted, duplicate, and whitespace-mutated scope labels",
+        )
+if ability_descriptor_surface.exists():
+    text = source(ability_descriptor_surface)
+    for token, detail in (
+        (
+            "OnlyUraKinds",
+            "descriptor subject policy must support dynamic URA-kind scopes",
+        ),
+        (
+            "crate::core::ura::ura_kind_scope_label",
+            "descriptor subject policy must use the shared core URA-kind scope label projection",
+        ),
+        (
+            "scope_subjects_from_manifest",
+            "compiled plugin manifest subject scope must project into governed descriptors",
+        ),
+    ):
+        if token not in text:
+            add("R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY", ability_descriptor_surface, 1, detail)
+    local_label = re.search(r"fn\s+ura_kind_scope_label\s*\(", text)
+    if local_label:
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            ability_descriptor_surface,
+            line_number(text, local_label.start()),
+            "descriptor surface must not keep a second URA-kind scope label mapper",
+        )
+    admits_agent_body = rust_method_body(text, "admits_agent")
+    if admits_agent_body is None:
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            ability_descriptor_surface,
+            1,
+            "descriptor scope rule must keep a distinct caller-axis admission method",
+        )
+    else:
+        start, body = admits_agent_body
+        if "ScopeRule::OnlyUraKinds(_) => false" not in body:
+            add(
+                "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+                ability_descriptor_surface,
+                line_number(text, start),
+                "caller/agent scope must fail closed for `OnlyUraKinds`; kind-wide scopes are subject-axis only",
+            )
+    raw_text = ability_descriptor_surface.read_text(encoding="utf-8", errors="replace")
+    if "scope_rule_rejects_ura_kind_scope_on_caller_axis" not in raw_text:
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            ability_descriptor_surface,
+            1,
+            "descriptor tests must prove `OnlyUraKinds` fails closed on caller/agent scope",
+        )
+if ability_toml_parser.exists():
+    text = source(ability_toml_parser)
+    if (
+        "fn parse_subject_scope" not in text
+        or '("only_ura_kinds", false)' not in text
+        or "ScopeRule::OnlyUraKinds" not in text
+        or "crate::core::ura::canonical_ura_kind_scope_labels(&uras)" not in text
+    ):
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            ability_toml_parser,
+            1,
+            "ability TOML parser must round-trip `only_ura_kinds` subject scopes through the shared core label validator",
+        )
+    if (
+        "fn parse_agent_scope" not in text
+        or 'scope_agents_kind cannot be `only_ura_kinds`' not in text
+        or "scope_agents cannot use only_ura_kinds" not in text
+    ):
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            ability_toml_parser,
+            1,
+            "ability TOML parser must reject `only_ura_kinds` on caller/agent scopes",
+        )
+if ability_descriptor_dir.exists():
+    for ability_toml in sorted(ability_descriptor_dir.glob("**/*.ability.toml")):
+        raw_text = ability_toml.read_text(encoding="utf-8", errors="replace")
+        offset = raw_text.find('scope_agents_kind = "only_ura_kinds"')
+        if offset != -1:
+            add(
+                "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+                ability_toml,
+                line_number(raw_text, offset),
+                "caller/agent scope must not use `only_ura_kinds`; use explicit URAs or authority bindings",
+            )
+if ability_manifest.exists():
+    text = ability_manifest.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "ManifestSubjectScope",
+            "compiled plugin manifests must carry subject-scope policy",
+        ),
+        (
+            "OnlyUraKinds",
+            "compiled plugin manifests must support dynamic URA-kind subject scopes",
+        ),
+        (
+            "crate::core::ura::canonical_ura_kind_scope_labels(kinds)",
+            "compiled plugin manifests must validate URA-kind subject scopes through the shared core label validator",
+        ),
+    ):
+        if token not in text:
+            add("R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY", ability_manifest, 1, detail)
+    local_canonical = re.search(r"fn\s+canonical_subject_scope_values\s*\(", text)
+    if local_canonical:
+        add(
+            "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
+            ability_manifest,
+            line_number(text, local_canonical.start()),
+            "ability manifest must not keep a second URA-kind subject-scope validator",
+        )
+if route_resolver.exists():
+    text = route_resolver.read_text(encoding="utf-8", errors="replace")
+    if "keyring_management_system_agent_ability_resolves_from_local_device_authority" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            route_resolver,
+            1,
+            "route resolver tests must prove device.keyring.* resolves to keyring-management SystemAgent callee",
+        )
+
+owner_projection_rs = cli_root / "src/daemon/ability/owner_projection.rs"
+ability_authority_mod = cli_root / "src/daemon/ability/authority/mod.rs"
+if owner_projection_rs.exists():
+    text = source(owner_projection_rs)
+    raw_text = owner_projection_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "pub(crate) enum OwnerProjection",
+            "ability owner-projection marker grammar must live in the shared OwnerProjection value object",
+        ),
+        (
+            "pub(crate) fn parse(",
+            "shared OwnerProjection must own marker parsing and validation",
+        ),
+        (
+            "pub(crate) fn canonical(",
+            "shared OwnerProjection must own canonical marker rendering",
+        ),
+        (
+            "Plugin(String)",
+            "shared OwnerProjection must keep plugin-plane marker parsing even though dispatch OwnerKind does not map it",
+        ),
+        (
+            "fn is_valid_owner_projection_id(",
+            "shared OwnerProjection must own owner-plane id validation",
+        ),
+    ):
+        if token not in text:
+            add("R156_OWNER_PROJECTION_VALUE_OBJECT", owner_projection_rs, 1, detail)
+    for test_name in (
+        "owner_projection_round_trips_all_canonical_shapes",
+        "owner_projection_rejects_ambiguous_or_retired_markers",
+    ):
+        if test_name not in raw_text:
+            add(
+                "R156_OWNER_PROJECTION_VALUE_OBJECT",
+                owner_projection_rs,
+                1,
+                f"OwnerProjection tests must keep {test_name}",
+            )
+else:
+    add(
+        "R156_OWNER_PROJECTION_VALUE_OBJECT",
+        cli_root / "src/daemon/ability",
+        1,
+        "ability owner-projection marker grammar must be centralized in src/daemon/ability/owner_projection.rs",
+    )
+if ability_authority_mod.exists():
+    text = source(ability_authority_mod)
+    if "super::owner_projection::OwnerProjection" not in text:
+        add(
+            "R156_OWNER_PROJECTION_VALUE_OBJECT",
+            ability_authority_mod,
+            1,
+            "AuthorityScope must validate owner_projection through the shared OwnerProjection value object",
+        )
+    for token, detail in (
+        (
+            "enum OwnerProjection",
+            "authority module must not keep a second OwnerProjection enum",
+        ),
+        (
+            "fn is_valid_owner_projection_id(",
+            "authority module must not keep a second owner-projection id validator",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add("R156_OWNER_PROJECTION_VALUE_OBJECT", ability_authority_mod, line_number(text, offset), detail)
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    for token, detail in (
+        (
+            "owner_projection_for_kind(self).canonical()",
+            "OwnerKind -> owner_projection rendering must go through the shared OwnerProjection value object",
+        ),
+        (
+            "OwnerProjection::parse(owner_projection).ok()?",
+            "owner_projection -> OwnerKind parsing must go through the shared OwnerProjection value object",
+        ),
+        (
+            "OwnerProjection::Plugin(_) => None",
+            "dispatch must explicitly fail closed for plugin-plane projections because OwnerKind has no Plugin actor",
+        ),
+    ):
+        if token not in text:
+            add("R156_OWNER_PROJECTION_VALUE_OBJECT", dispatch_rs, 1, detail)
+    for token, detail in (
+        (
+            'strip_prefix("system-agent:")',
+            "dispatch must not manually parse system-agent owner projections",
+        ),
+        (
+            'strip_prefix("agent:")',
+            "dispatch must not manually parse hosted-Agent owner projections",
+        ),
+        (
+            'format!("system-agent:{agent_id}")',
+            "dispatch must not manually render system-agent owner projections",
+        ),
+        (
+            'format!("agent:{agent_id}")',
+            "dispatch must not manually render hosted-Agent owner projections",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add("R156_OWNER_PROJECTION_VALUE_OBJECT", dispatch_rs, line_number(text, offset), detail)
+
+if dispatch_rs.exists():
+    text = source(dispatch_rs)
+    agent_root_body = rust_method_body(text, "agent_authority_root")
+    if agent_root_body is None:
+        add(
+            "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT",
+            dispatch_rs,
+            1,
+            "OwnerKind::Agent must resolve through an explicit hosted-Agent authority root",
+        )
+    else:
+        start, body = agent_root_body
+        signature = text[start : text.find("{", start)]
+        if "Result<String, AbilityControlPlaneError>" not in signature:
+            add(
+                "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT",
+                dispatch_rs,
+                line_number(text, start),
+                "agent_authority_root must fail closed with AbilityControlPlaneError instead of returning a synthesized String",
+            )
+        device_agent_offset = body.find("device_agent_ura")
+        if device_agent_offset != -1:
+            add(
+                "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT",
+                dispatch_rs,
+                line_number(text, start + device_agent_offset),
+                "OwnerKind::Agent must not synthesize a device-sponsored SystemAgent URA when a hosted root is missing",
+            )
+        if "UnsupportedOwnerForAuthoritySet" not in body:
+            add(
+                "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT",
+                dispatch_rs,
+                line_number(text, start),
+                "missing hosted Agent roots must be reported as an unsupported owner plane",
+            )
+    supports_owner_body = rust_method_body(text, "supports_owner")
+    if supports_owner_body is None:
+        add(
+            "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT",
+            dispatch_rs,
+            1,
+            "AbilityAuthorityContext must gate OwnerKind::Agent support explicitly",
+        )
+    else:
+        start, body = supports_owner_body
+        if "OwnerKind::Agent(agent_id) => self.hosted_agent_authority_root(agent_id).is_some()" not in body:
+            add(
+                "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT",
+                dispatch_rs,
+                line_number(text, start),
+                "supports_owner(OwnerKind::Agent) must depend on an explicit hosted-Agent root, not Device authority presence",
+            )
+    hosted_roots_body = rust_method_body(text, "hosted_agent_roots_for_device")
+    if hosted_roots_body is not None:
+        start, body = hosted_roots_body
+        device_agent_offset = body.find("device_agent_ids")
+        if device_agent_offset != -1:
+            add(
+                "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT",
+                dispatch_rs,
+                line_number(text, start + device_agent_offset),
+                "hosted-Agent authority inventory must reject device-sponsored SystemAgent URAs",
+            )
+
+device_control_plane_model = cli_root / "docs/design/ability-control-plane-model.md"
+if device_control_plane_model.exists():
+    text = source(device_control_plane_model)
+    offset = text.find("DeviceAgent")
+    if offset != -1:
+        add(
+            "R113_DEVICE_OWNER_INVENTORY_BOUNDARY",
+            device_control_plane_model,
+            line_number(text, offset),
+            "target architecture notes must use SystemAgent or DeviceProfileProjection, not DeviceAgent",
+        )
+    if "DeviceProfileProjection" not in text:
+        add(
+            "R113_DEVICE_OWNER_INVENTORY_BOUNDARY",
+            device_control_plane_model,
+            1,
+            "control-plane model must name the remaining direct Device-owner projection as a migration read-model",
+        )
+
+owner_truth_table = cli_root / "docs/spec/owner-truth-table/ability-owner-truth-table.tex"
+if owner_truth_table.exists():
+    text = owner_truth_table.read_text(encoding="utf-8", errors="replace")
+    raw_text = text
+    for token, detail in (
+        (
+            "SystemAgent-owned, Device-hosted",
+            "active owner truth table must describe device.* descriptors as SystemAgent-owned and Device-hosted",
+        ),
+        (
+            "\\codew{device.*} is a legacy/local public-name namespace, not a",
+            "active owner truth table must separate legacy public names from descriptor ownership",
+        ),
+        (
+            "A User account is a principal and",
+            "active owner truth table must state that User/Account is principal/accountability, not Agent",
+        ),
+        (
+            "agent/device.<id>.ability-management",
+            "active owner truth table must pin dynamic deployment owner to the device-sponsored ability-management SystemAgent",
+        ),
+        (
+            "agent/device.<id>.keyring-management",
+            "active owner truth table must pin keyring owner to the keyring-management SystemAgent",
+        ),
+    ):
+        if token not in raw_text:
+            add("R146_OWNER_TRUTH_TABLE_CURRENT_ACTOR_MODEL", owner_truth_table, 1, detail)
+    for forbidden, detail in (
+        (
+            "\\subsection{Device-owned ---",
+            "active owner truth table must not use obsolete Device-owned section headings",
+        ),
+        (
+            "with \\code{owner\\_ura = device URA}",
+            "active owner truth table must not describe daemon-bundle descriptors as direct Device-owned rows",
+        ),
+        (
+            "\\code{user/<user>} &",
+            "active owner truth table must not model User account as a callable ability owner row",
+        ),
+        (
+            "device/<id>}            & \\code{<id>} & \\code{-}    & \\code{-}    & rows~1",
+            "CLI render projection must not map current rows 1/2/3/5 to direct Device ownership",
+        ),
+    ):
+        offset = raw_text.find(forbidden)
+        if offset != -1:
+            add(
+                "R146_OWNER_TRUTH_TABLE_CURRENT_ACTOR_MODEL",
+                owner_truth_table,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+device_profile_rs = cli_root / "src/daemon/ability/catalog/profiles/device.rs"
+if device_profile_rs.exists():
+    text = source(device_profile_rs)
+    raw_text = device_profile_rs.read_text(encoding="utf-8", errors="replace")
+    if "OwnerKind::DeviceProfileProjection" not in raw_text:
+        add(
+            "R113_DEVICE_OWNER_INVENTORY_BOUNDARY",
+            device_profile_rs,
+            1,
+            "direct Device migration inventory must use OwnerKind::DeviceProfileProjection, not an ordinary Device owner name",
+        )
+    old_owner = re.search(r"\bOwnerKind::Device\b", raw_text)
+    if old_owner is not None:
+        add(
+            "R113_DEVICE_OWNER_INVENTORY_BOUNDARY",
+            device_profile_rs,
+            line_number(raw_text, old_owner.start()),
+            "direct Device migration inventory must not use obsolete OwnerKind::Device spelling",
+        )
+    for forbidden, detail in (
+        (
+            "device-profile Agent",
+            "device profile comments must not describe a target architecture Agent identity",
+        ),
+        (
+            "daemon-hosted Agent anchored at the local device URA",
+            "device profile must be described as a migration projection, not a daemon-hosted Agent",
+        ),
+    ):
+        offset = text.find(forbidden)
+        if offset != -1:
+            add(
+                "R113_DEVICE_OWNER_INVENTORY_BOUNDARY",
+                device_profile_rs,
+                line_number(text, offset),
+                detail,
+            )
+    if "fn direct_device_owner_inventory_is_explicit(" not in raw_text:
+        add(
+            "R113_DEVICE_OWNER_INVENTORY_BOUNDARY",
+            device_profile_rs,
+            1,
+            "remaining direct OwnerKind::Device abilities must be pinned by an explicit live-catalog inventory test",
+        )
+    for token, detail in (
+        (
+            "let expected: Vec<String> = Vec::new();",
+            "direct Device owner inventory must remain empty unless a bootstrap/self-maintenance exception is explicitly designed",
+        ),
+        (
+            "direct Device-owner ability inventory changed; migrate the family to a SystemAgent",
+            "direct Device owner inventory assertion must direct new families toward SystemAgent ownership",
+        ),
+    ):
+        if token not in raw_text:
+            add("R113_DEVICE_OWNER_INVENTORY_BOUNDARY", device_profile_rs, 1, detail)
+
+seven_axes_fixture = cli_root / "tests/seven_axes_fixture/mod.rs"
+if seven_axes_fixture.exists():
+    text = seven_axes_fixture.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "invoke_device_hosted_system_ability",
+            "positive seven-axes fixture helper must name Device as host, not descriptor owner",
+        ),
+        (
+            "Invoke one Device-hosted system ability",
+            "positive seven-axes fixture docs must say Device-hosted, not Device-owned",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", seven_axes_fixture, 1, detail)
+    for forbidden, detail in (
+        (
+            "invoke_device_system_ability",
+            "positive seven-axes fixture helper must not preserve obsolete Device-owner naming",
+        ),
+        (
+            "Device-owned system ability",
+            "positive seven-axes fixture docs must not describe SystemAgent-owned calls as Device-owned",
+        ),
+    ):
+        offset = text.find(forbidden)
+        if offset != -1:
+            add(
+                "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL",
+                seven_axes_fixture,
+                line_number(text, offset),
+                detail,
+            )
+
+conformance_rs = cli_root / "src/daemon/ability/conformance.rs"
+if conformance_rs.exists():
+    text = conformance_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "RemoteDesktopSystemAgent",
+            "positive remote_desktop conformance domain must name remote-desktop SystemAgent ownership, not Device or plugin-management ownership",
+        ),
+        (
+            "REMOTE_DESKTOP_SYSTEM_AGENT_BASELINE",
+            "remote_desktop conformance baseline constant must name remote-desktop SystemAgent ownership",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", conformance_rs, 1, detail)
+    for forbidden, detail in (
+        (
+            "DeviceRemoteDesktop",
+            "positive remote_desktop conformance domain must not imply direct Device ownership",
+        ),
+        (
+            "DEVICE_REMOTE_DESKTOP_BASELINE",
+            "positive remote_desktop baseline constant must not imply direct Device ownership",
+        ),
+    ):
+        offset = text.find(forbidden)
+        if offset != -1:
+            add(
+                "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL",
+                conformance_rs,
+                line_number(text, offset),
+                detail,
+            )
+
+resolve_before_invoke_e2e = cli_root / "tests/resolve_before_invoke_e2e.rs"
+if resolve_before_invoke_e2e.exists():
+    text = resolve_before_invoke_e2e.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA",
+            "resolve-before-invoke positive fixture must use the remote runtime-health SystemAgent as callee",
+        ),
+        (
+            '"owner_ura": REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA',
+            "hub ability projection fixture must publish the remote SystemAgent owner, not the Device host",
+        ),
+        (
+            '"host_device_ura": REMOTE_DEVICE_URA',
+            "hub ability projection fixture must keep Device as execution host",
+        ),
+        (
+            "OwnerKind::SystemAgent(",
+            "fixture descriptor lookup must select a SystemAgent owner kind",
+        ),
+        (
+            "RUNTIME_HEALTH_SYSTEM_AGENT_ID",
+            "fixture descriptor lookup must select the runtime-health SystemAgent id",
+        ),
+        (
+            "invoke_resolves_published_system_agent_ability_to_session_dispatch",
+            "positive resolve-before-invoke test name must say SystemAgent ability, not Device-owned ability",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", resolve_before_invoke_e2e, 1, detail)
+    for forbidden, detail in (
+        (
+            "URAKind::Device => OwnerKind::Device",
+            "positive resolve-before-invoke fixture must not map a Device callee to direct Device owner",
+        ),
+        (
+            "invoke_resolves_published_device_ability_to_session_dispatch",
+            "positive resolve-before-invoke test name must not preserve obsolete Device ability wording",
+        ),
+    ):
+        offset = text.find(forbidden)
+        if offset != -1:
+            add(
+                "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL",
+                resolve_before_invoke_e2e,
+                line_number(text, offset),
+                detail,
+            )
+
+ability_catalog_read_model = cli_root / "src/daemon/federation/read_model/ability_catalog.rs"
+if ability_catalog_read_model.exists():
+    text = ability_catalog_read_model.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "projection_rows_for_live_hosts_at",
+            "ability projection read model must expose live-host joins for Device-hosted SystemAgent owners",
+        ),
+        (
+            "SystemAgent must not be inserted into `PresenceRegistry`",
+            "ability projection read model docs must forbid synthetic SystemAgent presence rows",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", ability_catalog_read_model, 1, detail)
+
+federation_wrappers_rs = cli_root / "src/daemon/invocation/dispatch/federation_wrappers.rs"
+if federation_wrappers_rs.exists():
+    text = federation_wrappers_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "device_sponsored_system_agent_host_node_id",
+            "federation.resolve must join Device-hosted SystemAgent projections through the host Device",
+        ),
+        (
+            "is_declared_daemon_native_system_agent_id",
+            "federation.resolve must not surface arbitrary device-scoped Agents as SystemAgents",
+        ),
+        (
+            "handle_resolve_includes_device_sponsored_system_agent_when_host_device_is_online",
+            "resolve tests must prove host Device liveness surfaces its SystemAgent projection",
+        ),
+        (
+            "SystemAgent visibility must be driven by host Device presence",
+            "resolve tests must prove SystemAgent visibility is not an independent presence row",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", federation_wrappers_rs, 1, detail)
+
+route_resolver_rs = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
+if route_resolver_rs.exists():
+    text = route_resolver_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "device-scoped Agent owner is not a declared daemon-native SystemAgent",
+            "route resolver must refuse undeclared device-scoped Agent owners on the SystemAgent execution path",
+        ),
+        (
+            "device-sponsored SystemAgent host_node_id does not match owner device",
+            "route resolver must verify SystemAgent owner Device matches the selected execution host",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", route_resolver_rs, 1, detail)
+
+dispatch_rs = cli_root / "src/daemon/ability/dispatch.rs"
+if dispatch_rs.exists():
+    text = dispatch_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "is_declared_daemon_native_system_agent_id(\n                        agent_id,",
+            "ability authority context must only support declared daemon-native SystemAgent owners",
+        ),
+        (
+            "owner_projection_refuses_undeclared_system_agent_owner_kind",
+            "dispatch tests must reject undeclared system-agent owner projections",
+        ),
+        (
+            "undeclared device-scoped Agent must not become a SystemAgent owner",
+            "dispatch tests must reject arbitrary device-scoped Agent ids as SystemAgent owners",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", dispatch_rs, 1, detail)
+    forbidden = "OwnerKind::Device | OwnerKind::SystemAgent(_) => self.authorities.device().is_some()"
+    offset = text.find(forbidden)
+    if offset != -1:
+        add(
+            "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL",
+            dispatch_rs,
+            line_number(text, offset),
+            "authority support must not admit arbitrary SystemAgent ids through Device authority",
+        )
+
+llm_profile = cli_root / "src/daemon/ability/catalog/profiles/llm.rs"
+if llm_profile.exists():
+    text = llm_profile.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "SYSTEM_SKILL_ABILITIES",
+            "LLM profile tests must not preserve obsolete Device-skill naming for SystemAgent-owned skill abilities",
+        ),
+        (
+            "Runtime-introspection metadata",
+            "LLM profile fixture metadata must describe meta.* as runtime-introspection, not Device-owned metadata",
+        ),
+    ):
+        if token not in text:
+            add("R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL", llm_profile, 1, detail)
+    for forbidden, detail in (
+        (
+            "DEVICE_SKILL_ABILITIES",
+            "LLM profile must not preserve obsolete Device-skill naming for SystemAgent-owned skill abilities",
+        ),
+        (
+            "Device-owned metadata",
+            "LLM profile positive fixture metadata must not describe runtime-introspection as Device-owned",
+        ),
+    ):
+        offset = text.find(forbidden)
+        if offset != -1:
+            add(
+                "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL",
+                llm_profile,
+                line_number(text, offset),
+                detail,
+            )
+
+daemon_route_runtime = cli_root / "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
+if daemon_route_runtime.exists():
+    text = daemon_route_runtime.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "delegation_exact_route_rejects_direct_device_callee",
+            "daemon exact-route tests must prove hosted-agent delegation rejects direct Device callees",
+        ),
+        (
+            "delegation_exact_route_derives_host_from_system_agent_callee",
+            "daemon exact-route tests must prove delegation derives host only from SystemAgent callee",
+        ),
+        (
+            "requires a device-sponsored SystemAgent callee",
+            "hosted-agent delegation helper must name SystemAgent callee as the only valid callee",
+        ),
+    ):
+        if token not in text:
+            add("R148_DISPATCH_FIXTURE_SYSTEM_AGENT_CALLEE", daemon_route_runtime, 1, detail)
+    for forbidden, detail in (
+        (
+            "Device or device-sponsored SystemAgent",
+            "hosted-agent delegation helper must not accept direct Device callee semantics",
+        ),
+        (
+            "if parsed.kind == crate::core::ura::URAKind::Device",
+            "hosted-agent delegation helper must not derive host Device from a direct Device callee",
+        ),
+    ):
+        offset = text.find(forbidden)
+        if offset != -1:
+            add(
+                "R148_DISPATCH_FIXTURE_SYSTEM_AGENT_CALLEE",
+                daemon_route_runtime,
+                line_number(text, offset),
+                detail,
+            )
+
+for fixture_path, forbidden_tokens in (
+    (
+        cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/stream.rs",
+        (
+            (
+                "publish_test_stream_route(&svc, TARGET_DEVICE_URA, CATALOGUE_READ)",
+                "stream governance fixture must publish SystemAgent callee hosted by target Device",
+            ),
+            (
+                "test_descriptor_ref(TARGET_DEVICE_URA, CATALOGUE_READ)",
+                "stream governance fixture descriptor_ref must bind SystemAgent callee, not direct Device",
+            ),
+        ),
+    ),
+    (
+        cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/bidi.rs",
+        (
+            (
+                "resolve_route(TARGET_DEVICE_URA, CATALOGUE_READ)",
+                "bidi governance fixture must resolve SystemAgent callee, not direct Device target/callee",
+            ),
+            (
+                "test_descriptor_ref(TARGET_DEVICE_URA, CATALOGUE_READ)",
+                "bidi governance fixture descriptor_ref must bind SystemAgent callee, not direct Device",
+            ),
+        ),
+    ),
+):
+    if fixture_path.exists():
+        text = fixture_path.read_text(encoding="utf-8", errors="replace")
+        for forbidden, detail in forbidden_tokens:
+            offset = text.find(forbidden)
+            if offset != -1:
+                add(
+                    "R148_DISPATCH_FIXTURE_SYSTEM_AGENT_CALLEE",
+                    fixture_path,
+                    line_number(text, offset),
+                    detail,
+                )
 
 companion_manager = cli_root / "src/daemon/plugins/companion/mod.rs"
 if companion_manager.exists():
@@ -12352,6 +18969,180 @@ if companion_manager.exists():
                 line_number(text, runtime_stop_start + offset),
                 detail,
             )
+
+for adapter_path in (
+    cli_root / "src/cli/commands/teach.rs",
+    cli_root / "src/cli/commands/discover.rs",
+):
+    if adapter_path.exists():
+        text = adapter_path.read_text(encoding="utf-8", errors="replace")
+        if "LocalAbilityTarget::for_device_sponsored_system_ability(" not in text:
+            add(
+                "R159_LOCAL_SYSTEM_ABILITY_OWNER_HOST_SPLIT",
+                adapter_path,
+                1,
+                "local system-ability adapters must resolve the catalog-owned SystemAgent callee separately from the Device execution host",
+            )
+
+if ability_deploy_target.exists():
+    text = ability_deploy_target.read_text(encoding="utf-8", errors="replace")
+    if "pub fn for_device_sponsored_system_ability" in text:
+        for token, detail in (
+            (
+                "descriptor_public_ability_name(&callee_ura, &public_ability)",
+                "local SystemAgent target construction must derive the Ability URA from the public descriptor name",
+            ),
+            (
+                "for_device_sponsored_system_ability_with_dispatch",
+                "local SystemAgent target construction must preserve the split between public descriptor name and daemon-local dispatch key",
+            ),
+            (
+                "local_terminal_target_preserves_namespace_when_owner_has_same_id",
+                "local target tests must prove terminal owner/ability URA boundaries remain invertible",
+            ),
+            (
+                "local_service_target_can_separate_public_descriptor_from_dispatch_key",
+                "local target tests must prove Service descriptor identity can differ from daemon-local dispatch key",
+            ),
+        ):
+            if token not in text:
+                add("R159_LOCAL_SYSTEM_ABILITY_OWNER_HOST_SPLIT", ability_deploy_target, 1, detail)
+
+remote_invoke_path = cli_root / "src/daemon/invocation/routing/remote_invoke.rs"
+if remote_invoke_path.exists():
+    text = remote_invoke_path.read_text(encoding="utf-8", errors="replace")
+    if "pub(crate) fn for_target_owned_selector" in text:
+        for token, detail in (
+            (
+                "descriptor_public_ability_name(&owner_ura, selector)",
+                "remote SystemAgent target construction must preserve a public namespace that equals its owner id",
+            ),
+            (
+                "target_owned_terminal_selector_preserves_owner_ability_boundary",
+                "remote target tests must prove terminal owner/ability URA boundaries remain invertible",
+            ),
+        ):
+            if token not in text:
+                add("R159_LOCAL_SYSTEM_ABILITY_OWNER_HOST_SPLIT", remote_invoke_path, 1, detail)
+
+dispatch_catalog = cli_root / "src/daemon/ability/dispatch.rs"
+if dispatch_catalog.exists():
+    text = dispatch_catalog.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "dynamic_catalog_index",
+            "dynamic descriptor lifecycle must not be inferred from the execution index",
+        ),
+        (
+            "hot_register_descriptor_only_with_authority_scope",
+            "the canonical catalog must accept discoverable descriptors without installing execution handlers",
+        ),
+        (
+            "ControlPlaneImplementation::descriptor_only()",
+            "descriptor-only catalog rows must declare the absence of an execution implementation explicitly",
+        ),
+    ):
+        if token not in text:
+            add("R160_DESCRIPTOR_CATALOG_EXECUTION_SPLIT", dispatch_catalog, 1, detail)
+
+hot_agent_registrar = cli_root / "src/daemon/axon_bridge/hot_agent_registrar.rs"
+if hot_agent_registrar.exists():
+    text = hot_agent_registrar.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "register_descriptor_only(",
+            "hosted-Agent synchronization must publish declaration-only manifests into the canonical catalog",
+        ),
+        (
+            "dynamic_catalog_abilities_for_authority(",
+            "hosted-Agent reconciliation must include non-executable catalog rows instead of enumerating only runtime handlers",
+        ),
+    ):
+        if token not in text:
+            add("R160_DESCRIPTOR_CATALOG_EXECUTION_SPLIT", hot_agent_registrar, 1, detail)
+
+# Rules 161-164: durable automation and dynamic mutation authority must remain
+# explicit across restart. These are lifecycle facts, not optional read-model
+# decoration or ambient local-system defaults.
+domain_mod = cli_root / "src/core/domain/mod.rs"
+if domain_mod.exists():
+    text = source(domain_mod)
+    for token, detail in (
+        ("pub fire_ledger: BTreeMap<i64, ScheduleFireRecord>", "schedule must persist a per-fire causality ledger"),
+        ("pub invocation_ledger: Vec<LoopInvocationRecord>", "loop must persist body/verify invocation causality"),
+        ("pub causal_parent_receipt_ura: Option<String>", "loop invocation records must preserve the causal parent receipt"),
+    ):
+        if token not in text:
+            add("R161_DEFERRED_AUTOMATION_CAUSAL_LEDGER", domain_mod, 1, detail)
+
+if schedule_mod.exists():
+    text = source(schedule_mod)
+    for token, detail in (
+        ("fn update_fire_record(", "schedule terminal transitions must address an exact fire record"),
+        ("fire_at_unix_ms: i64", "schedule complete/fail operations must carry the exact fire key"),
+        ("validate_schedule_fire_ledger(&entry)?", "schedule boot bind must validate its causality ledger"),
+    ):
+        if token not in text:
+            add("R161_DEFERRED_AUTOMATION_CAUSAL_LEDGER", schedule_mod, 1, detail)
+    if "fn current_fire_at(" in text or "pub last_fire:" in text:
+        add("R161_DEFERRED_AUTOMATION_CAUSAL_LEDGER", schedule_mod, 1, "schedule must not collapse concurrent fires into one ambient cursor")
+
+if loop_mod.exists():
+    text = source(loop_mod)
+    for token, detail in (
+        ("fn reserve_loop_invocation(", "loop must reserve a body/verify step before dispatch"),
+        ("fn complete_loop_invocation(", "loop must persist exact invocation and receipt completion facts"),
+        ("CausalContext::Scalar", "loop verify/next-body dispatch must cite its prior receipt"),
+        ("validate_loop_invocation_ledger(&inst)?", "loop boot bind must validate its causality ledger"),
+    ):
+        if token not in text:
+            add("R162_LOOP_INVOCATION_CAUSALITY", loop_mod, 1, detail)
+
+deployment_store = cli_root / "src/daemon/ability/builtins/device_control/ability_management/store.rs"
+if deployment_store.exists():
+    text = source(deployment_store)
+    for token, detail in (
+        ("mutated_by: String", "dynamic ability records must retain the admitted logical actor"),
+        ("creator_invocation_id: String", "dynamic ability records must retain their creating Invocation id"),
+        ("validate_mutation_authority", "dynamic ability state must validate authority on read and write"),
+    ):
+        if token not in text:
+            add("R163_DYNAMIC_ABILITY_MUTATION_AUTHORITY", deployment_store, 1, detail)
+
+ability_ops = cli_root / "src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+if ability_ops.exists():
+    text = source(ability_ops).split("#[cfg(test)]", 1)[0]
+    if "Self::LocalSystem" in text or "return Ok(Self::LocalSystem)" in text:
+        add("R163_DYNAMIC_ABILITY_MUTATION_AUTHORITY", ability_ops, 1, "public deploy/uninstall must not accept ambient _system.local mutation authority")
+
+desktop_identity = cli_root / "plugins/remote-desktop/src/session_identity.rs"
+desktop_consent = cli_root / "plugins/remote-desktop/src/session_consent.rs"
+if desktop_identity.exists() and "creator_caller_ura: Option<String>" in source(desktop_identity):
+    add("R164_REMOTE_DESKTOP_REQUIRED_AUTHORITY", desktop_identity, 1, "remote desktop creator caller must be structurally required")
+if desktop_consent.exists() and "approval_receipt: Option<RemoteDesktopConsentReceipt>" in source(desktop_consent):
+    add("R164_REMOTE_DESKTOP_REQUIRED_AUTHORITY", desktop_consent, 1, "remote desktop consent receipt must be structurally required")
+
+# Rule 165: the retired CLI-private execution sidecar must stay absent. Local
+# and remote calls share the daemon invocation adapter -> Axon LocalRuntime
+# path; reintroducing a second socket would restore split execution ownership.
+retired_runtime_dispatch = cli_root / "src/services/control/runtime_dispatch.rs"
+if retired_runtime_dispatch.exists():
+    add(
+        "R165_SINGLE_RUNTIME_EXECUTION_PATH",
+        retired_runtime_dispatch,
+        1,
+        "runtime-dispatch sidecar is retired; execution must enter Axon LocalRuntime through the canonical daemon invocation path",
+    )
+for path in production_files(cli_root / "src"):
+    text = source(path)
+    offset = text.find("runtime-dispatch.sock")
+    if offset != -1:
+        add(
+            "R165_SINGLE_RUNTIME_EXECUTION_PATH",
+            path,
+            line_number(text, offset),
+            "production code must not bind or depend on the retired runtime-dispatch socket",
+        )
 
 
 if violations:

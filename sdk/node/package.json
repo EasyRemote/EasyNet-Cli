@@ -1,6 +1,6 @@
 {
   "name": "@runtime/sdk",
-  "version": "0.0.0-seam",
+  "version": "0.139.14",
   "private": true,
   "type": "module",
   "main": "./index.js",
@@ -12,6 +12,7 @@
     "index.js",
     "index.d.ts",
     "runtime-principals.js",
+    "runtime-governance-routes.js",
     "runtime-subjects.js",
     "provider",
     "README.md"

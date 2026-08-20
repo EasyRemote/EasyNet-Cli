@@ -15,8 +15,8 @@ use tonic::transport::server::Connected;
 #[cfg(unix)]
 use super::local_peer::{LocalPeerGate, PeerGateError};
 use super::paths::expand_home;
-use super::MAX_INVOCATION_GRPC_MESSAGE_BYTES;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use crate::daemon::invocation::transport::MAX_INVOCATION_GRPC_MESSAGE_BYTES;
 use crate::daemon::persistence::daemon_config::DaemonConfig;
 #[cfg(windows)]
 use crate::support::platform::named_pipe::PipeListener;
@@ -122,9 +122,9 @@ pub(super) fn spawn_uds_listener(
     );
 
     if uds_path.exists() {
-        // The existing daemon's control.sock bind code unlinks
-        // before binding; mirror that semantic so a previous
-        // process's stale daemon.sock does not block us.
+        // Daemon main acquires the state root's process-lifetime lease before
+        // invocation transport boot. Therefore an existing inode is stale by
+        // construction; a competing live process cannot reach this bind path.
         if let Err(err) = std::fs::remove_file(&uds_path) {
             if err.kind() != std::io::ErrorKind::NotFound {
                 let uds_path_display = format!("{}", uds_path.display());

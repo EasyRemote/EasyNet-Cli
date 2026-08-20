@@ -424,11 +424,9 @@ mod tests {
         );
         drop(registration);
 
-        assert_eq!(
-            rx.recv_timeout(std::time::Duration::from_secs(2))
-                .expect("shutdown should proceed after registration guard drops"),
-            true
-        );
+        assert!(rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("shutdown should proceed after registration guard drops"));
         session.mark_released();
         assert!(release(handle));
     }

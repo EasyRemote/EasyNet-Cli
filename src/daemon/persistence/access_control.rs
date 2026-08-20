@@ -69,7 +69,10 @@ pub struct AccessControlStoreManifest {
 pub struct PolicyStoreSection {
     pub format: String,
     pub schema_version: u64,
-    pub owner_user_id: String,
+    /// Runtime field is a canonical User URA. The stored `owner_user_id` key is
+    /// a v0 policy-store compatibility name; it is not a bare account id.
+    #[serde(rename = "owner_user_id")]
+    pub owner_user_ura: String,
     pub created_at: String,
     pub last_compacted_at: String,
     pub head_hash: String,
@@ -97,7 +100,10 @@ pub struct GrantAuditRecord {
     pub audit_record_id: String,
     pub grant_id: String,
     pub mutation: GrantMutation,
-    pub owner_user_id: String,
+    /// Runtime field is a canonical User URA. The stored `owner_user_id` key is
+    /// kept for audit-log compatibility only.
+    #[serde(rename = "owner_user_id")]
+    pub owner_user_ura: String,
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
@@ -121,6 +127,7 @@ pub enum GrantMutation {
     Created,
     Revoked,
     Expired,
+    Consumed,
     Edited,
 }
 
@@ -199,7 +206,7 @@ struct JournalRecord {
     record_kind: RecordKind,
     schema_version: u64,
     sequence: u64,
-    owner_user_id: String,
+    owner_user_ura: String,
     record_id: String,
     operation: RecordOperation,
     payload: Value,
@@ -290,9 +297,8 @@ impl AccessControlStoreRegistry {
         }
     }
 
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn ephemeral() -> Self {
+    pub(crate) fn transient() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
@@ -310,6 +316,12 @@ impl AccessControlStoreRegistry {
         }
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn ephemeral() -> Self {
+        Self::transient()
+    }
+
     /// Execute one transaction against an owner's canonical in-process store.
     ///
     /// Store acquisition failures are returned by the outer `Result`. The
@@ -317,7 +329,7 @@ impl AccessControlStoreRegistry {
     /// `Result`, so callers retain their own error classification.
     pub fn with_store<T>(
         &self,
-        owner_user_id: &str,
+        owner_user_ura: &str,
         transaction: impl FnOnce(&mut AccessControlStore) -> T,
     ) -> anyhow::Result<T> {
         let store = {
@@ -325,14 +337,16 @@ impl AccessControlStoreRegistry {
                 .stores
                 .lock()
                 .map_err(|_| anyhow::anyhow!("access-control store registry lock poisoned"))?;
-            if let Some(store) = stores.get(owner_user_id) {
+            if let Some(store) = stores.get(owner_user_ura) {
                 Arc::clone(store)
             } else {
+                let store_dir =
+                    prepare_policy_store_dir_for_owner_at(&self.root.path, owner_user_ura)?;
                 let store = Arc::new(Mutex::new(AccessControlStore::open_or_create_at(
-                    policy_store_dir_for_owner_at(&self.root.path, owner_user_id),
-                    owner_user_id,
+                    store_dir,
+                    owner_user_ura,
                 )?));
-                stores.insert(owner_user_id.to_string(), Arc::clone(&store));
+                stores.insert(owner_user_ura.to_string(), Arc::clone(&store));
                 store
             }
         };
@@ -346,11 +360,11 @@ impl AccessControlStoreRegistry {
 impl AccessControlStore {
     pub fn open_or_create_at(
         root: impl Into<PathBuf>,
-        owner_user_id: impl Into<String>,
+        owner_user_ura: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let root = root.into();
-        let owner_user_id = owner_user_id.into();
-        validate_nonzero_user_id(&owner_user_id, "policy store owner_user_id")?;
+        let owner_user_ura = owner_user_ura.into();
+        validate_user_principal_ura(&owner_user_ura, "policy store owner_user_id")?;
         fs::create_dir_all(&root)?;
         ensure_owner_private_dir(&root)?;
 
@@ -364,7 +378,7 @@ impl AccessControlStore {
                 policy_store: PolicyStoreSection {
                     format: STORE_FORMAT.to_string(),
                     schema_version: SCHEMA_VERSION,
-                    owner_user_id: owner_user_id.clone(),
+                    owner_user_ura: owner_user_ura.clone(),
                     created_at: now.clone(),
                     last_compacted_at: now,
                     head_hash: ZERO_HASH.to_string(),
@@ -383,7 +397,7 @@ impl AccessControlStore {
             write_manifest(&manifest_path, &manifest)?;
             manifest
         };
-        validate_manifest(&manifest, &owner_user_id)?;
+        validate_manifest(&manifest, &owner_user_ura)?;
 
         let mut store = Self {
             root,
@@ -465,7 +479,7 @@ impl AccessControlStore {
         let last_source_sequence = self.last_sequence;
         let last_source_record_hash = self.head_hash.clone();
         let checkpoint_id = sha256_value(&json!({
-            "owner_user_id": self.manifest.policy_store.owner_user_id,
+            "owner_user_id": self.manifest.policy_store.owner_user_ura,
             "last_source_sequence": last_source_sequence,
             "last_source_record_hash": last_source_record_hash,
             "compacted_at": compacted_at,
@@ -559,7 +573,7 @@ impl AccessControlStore {
     pub fn revoke_grant(
         &mut self,
         grant_id: &str,
-        owner_user_id: &str,
+        owner_user_ura: &str,
         actor_ura: &str,
         reason: Option<String>,
     ) -> anyhow::Result<PermissionGrant> {
@@ -568,8 +582,8 @@ impl AccessControlStore {
             .get(grant_id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("grant_id `{grant_id}` not found"))?;
-        if existing.owner_user_id != owner_user_id {
-            anyhow::bail!("grant `{grant_id}` does not belong to owner `{owner_user_id}`");
+        if existing.owner_user_ura != owner_user_ura {
+            anyhow::bail!("grant `{grant_id}` does not belong to owner `{owner_user_ura}`");
         }
         if existing.state == PermissionGrantState::Revoked {
             return Ok(existing);
@@ -606,6 +620,56 @@ impl AccessControlStore {
             .insert(revoked.grant_id.clone(), revoked.clone());
         self.audit.insert(audit.audit_record_id.clone(), audit);
         Ok(revoked)
+    }
+
+    pub fn consume_once_grant_if_applicable(
+        &mut self,
+        grant_id: &str,
+        actor_ura: &str,
+    ) -> anyhow::Result<Option<PermissionGrant>> {
+        let existing = self
+            .grants
+            .get(grant_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("grant_id `{grant_id}` not found"))?;
+        if existing.lifetime != PermissionGrantLifetime::Once {
+            return Ok(None);
+        }
+        if existing.state != PermissionGrantState::Active || existing.last_used_at.is_some() {
+            anyhow::bail!("once grant `{grant_id}` is no longer active");
+        }
+        let now = now_rfc3339();
+        let previous_hash = grant_hash(&existing)?;
+        let mut consumed = existing;
+        consumed.state = PermissionGrantState::Expired;
+        consumed.last_used_at = Some(now.clone());
+        consumed.updated_at = Some(now);
+        let new_hash = grant_hash(&consumed)?;
+        let audit = audit_record(
+            &consumed,
+            GrantMutation::Consumed,
+            actor_ura,
+            &previous_hash,
+            &new_hash,
+        )?;
+        self.append(
+            RecordKind::PermissionGrant,
+            &consumed.grant_id,
+            RecordOperation::Consumed,
+            serde_json::to_value(&consumed)?,
+            actor_ura,
+        )?;
+        self.append(
+            RecordKind::Audit,
+            &audit.audit_record_id,
+            RecordOperation::Consumed,
+            serde_json::to_value(&audit)?,
+            actor_ura,
+        )?;
+        self.grants
+            .insert(consumed.grant_id.clone(), consumed.clone());
+        self.audit.insert(audit.audit_record_id.clone(), audit);
+        Ok(Some(consumed))
     }
 
     pub fn upsert_permission_request(
@@ -923,8 +987,8 @@ impl AccessControlStore {
             if !seen_sequences.insert(record.sequence) {
                 anyhow::bail!("duplicate policy journal sequence {}", record.sequence);
             }
-            validate_nonzero_user_id(&record.owner_user_id, "policy journal owner_user_id")?;
-            if record.owner_user_id != self.manifest.policy_store.owner_user_id {
+            validate_user_principal_ura(&record.owner_user_ura, "policy journal owner_user_id")?;
+            if record.owner_user_ura != self.manifest.policy_store.owner_user_ura {
                 anyhow::bail!("policy journal owner does not match store manifest");
             }
             validate_runtime_identity_ura(&record.actor_ura, "policy journal actor_ura")?;
@@ -1017,7 +1081,7 @@ impl AccessControlStore {
             }
             RecordKind::Audit => {
                 let audit: GrantAuditRecord = serde_json::from_value(record.payload)?;
-                validate_nonzero_user_id(&audit.owner_user_id, "policy audit owner_user_id")?;
+                validate_user_principal_ura(&audit.owner_user_ura, "policy audit owner_user_id")?;
                 if crate::core::identity::is_all_zero_principal_id(&audit.principal_id) {
                     anyhow::bail!(
                         "policy audit principal_id must not be the all-zero principal placeholder"
@@ -1056,7 +1120,7 @@ impl AccessControlStore {
             record_kind,
             schema_version: SCHEMA_VERSION,
             sequence: self.last_sequence,
-            owner_user_id: self.manifest.policy_store.owner_user_id.clone(),
+            owner_user_ura: self.manifest.policy_store.owner_user_ura.clone(),
             record_id: record_id.to_string(),
             operation,
             payload,
@@ -1121,12 +1185,59 @@ pub fn default_policy_store_dir() -> PathBuf {
     state_dir().join(STORE_DIR)
 }
 
-pub fn policy_store_dir_for_owner(owner_user_id: &str) -> PathBuf {
-    policy_store_dir_for_owner_at(&default_policy_store_dir(), owner_user_id)
+pub fn policy_store_dir_for_owner(owner_user_ura: &str) -> PathBuf {
+    policy_store_dir_for_owner_at(&default_policy_store_dir(), owner_user_ura)
 }
 
-fn policy_store_dir_for_owner_at(root: &Path, owner_user_id: &str) -> PathBuf {
-    let safe_owner = owner_user_id
+fn policy_store_dir_for_owner_at(root: &Path, owner_user_ura: &str) -> PathBuf {
+    root.join(policy_store_owner_dir_name(owner_user_ura))
+}
+
+fn policy_store_owner_dir_name(owner_user_ura: &str) -> String {
+    format!(
+        "owner-sha256-{}",
+        hex::encode(Sha256::digest(owner_user_ura.as_bytes()))
+    )
+}
+
+fn prepare_policy_store_dir_for_owner_at(
+    root: &Path,
+    owner_user_ura: &str,
+) -> anyhow::Result<PathBuf> {
+    let hashed = policy_store_dir_for_owner_at(root, owner_user_ura);
+    if hashed.exists() {
+        return Ok(hashed);
+    }
+
+    let legacy = legacy_policy_store_dir_for_owner_at(root, owner_user_ura);
+    if legacy != hashed
+        && legacy.exists()
+        && legacy_policy_store_matches_owner(&legacy, owner_user_ura)?
+    {
+        fs::create_dir_all(root)?;
+        fs::rename(&legacy, &hashed).map_err(|error| {
+            anyhow::anyhow!(
+                "migrate legacy policy store directory {} -> {}: {error}",
+                legacy.display(),
+                hashed.display()
+            )
+        })?;
+    }
+    Ok(hashed)
+}
+
+fn legacy_policy_store_matches_owner(dir: &Path, owner_user_ura: &str) -> anyhow::Result<bool> {
+    let manifest_path = dir.join(MANIFEST_FILE);
+    if !manifest_path.exists() {
+        return Ok(false);
+    }
+    let raw = fs::read_to_string(&manifest_path)?;
+    let manifest = toml::from_str::<AccessControlStoreManifest>(&raw)?;
+    Ok(validate_manifest(&manifest, owner_user_ura).is_ok())
+}
+
+fn legacy_policy_store_dir_for_owner_at(root: &Path, owner_user_ura: &str) -> PathBuf {
+    let safe_owner = owner_user_ura
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
@@ -1141,7 +1252,7 @@ fn policy_store_dir_for_owner_at(root: &Path, owner_user_id: &str) -> PathBuf {
 
 pub fn grant_idempotency_key(grant: &PermissionGrant) -> anyhow::Result<String> {
     let value = json!({
-        "owner_user_id": grant.owner_user_id,
+        "owner_user_id": grant.owner_user_ura,
         "principal_kind": grant.principal_kind,
         "principal_id": grant.principal_id,
         "token_id": grant.token_id,
@@ -1160,11 +1271,11 @@ pub fn grant_idempotency_key(grant: &PermissionGrant) -> anyhow::Result<String> 
 
 fn validate_manifest(
     manifest: &AccessControlStoreManifest,
-    owner_user_id: &str,
+    owner_user_ura: &str,
 ) -> anyhow::Result<()> {
-    validate_nonzero_user_id(owner_user_id, "requested policy store owner_user_id")?;
-    validate_nonzero_user_id(
-        &manifest.policy_store.owner_user_id,
+    validate_user_principal_ura(owner_user_ura, "requested policy store owner_user_id")?;
+    validate_user_principal_ura(
+        &manifest.policy_store.owner_user_ura,
         "manifest policy store owner_user_id",
     )?;
     if manifest.policy_store.format != STORE_FORMAT
@@ -1174,11 +1285,11 @@ fn validate_manifest(
     {
         anyhow::bail!("unsupported RFC-014 policy store manifest");
     }
-    if manifest.policy_store.owner_user_id != owner_user_id {
+    if manifest.policy_store.owner_user_ura != owner_user_ura {
         anyhow::bail!(
             "policy store owner mismatch: manifest={} requested={}",
-            manifest.policy_store.owner_user_id,
-            owner_user_id
+            manifest.policy_store.owner_user_ura,
+            owner_user_ura
         );
     }
     Ok(())
@@ -1186,18 +1297,22 @@ fn validate_manifest(
 
 fn validate_grant(grant: &PermissionGrant) -> anyhow::Result<()> {
     if grant.grant_id.trim().is_empty()
-        || grant.owner_user_id.trim().is_empty()
+        || grant.owner_user_ura.trim().is_empty()
         || grant.principal_id.trim().is_empty()
         || grant.actions.is_empty()
         || grant.created_by.trim().is_empty()
         || grant.created_at.trim().is_empty()
     {
-        anyhow::bail!("PermissionGrant requires grant_id, owner_user_id, principal_id, actions, created_by, and created_at");
+        anyhow::bail!(
+            "PermissionGrant requires grant_id, owner_user_id, principal_id, actions, created_by, and created_at"
+        );
     }
-    validate_nonzero_user_id(&grant.owner_user_id, "PermissionGrant owner_user_id")?;
-    if grant.principal_kind == PrincipalKind::User {
-        validate_nonzero_user_id(&grant.principal_id, "PermissionGrant principal_id")?;
-    }
+    validate_user_principal_ura(&grant.owner_user_ura, "PermissionGrant owner_user_id")?;
+    validate_principal_id_for_kind(
+        grant.principal_kind,
+        &grant.principal_id,
+        "PermissionGrant principal_id",
+    )?;
     validate_runtime_identity_ura(&grant.created_by, "PermissionGrant created_by")?;
     for (field, value) in [
         ("PermissionGrant callee_ura", grant.callee_ura.as_deref()),
@@ -1212,7 +1327,7 @@ fn validate_grant(grant: &PermissionGrant) -> anyhow::Result<()> {
     }
     reject_broad_pattern(grant.ability_ura_pattern.as_deref())?;
     reject_unenforceable_constraints(grant.constraints.as_ref())?;
-    DateTime::parse_from_rfc3339(&grant.created_at)
+    let created_at = DateTime::parse_from_rfc3339(&grant.created_at)
         .map_err(|_| anyhow::anyhow!("PermissionGrant created_at must be RFC3339"))?;
     if grant
         .expires_at
@@ -1220,6 +1335,43 @@ fn validate_grant(grant: &PermissionGrant) -> anyhow::Result<()> {
         .is_some_and(|raw| DateTime::parse_from_rfc3339(raw).is_err())
     {
         anyhow::bail!("PermissionGrant expires_at must be RFC3339");
+    }
+    if grant.lifetime == PermissionGrantLifetime::Ttl && grant.expires_at.is_none() {
+        anyhow::bail!("PermissionGrant lifetime=ttl requires expires_at");
+    }
+    if grant.lifetime == PermissionGrantLifetime::Session {
+        let session_id = grant
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|session_id| !session_id.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("PermissionGrant lifetime=session requires session_id")
+            })?;
+        if !crate::core::identity::is_canonical_session_authority_id(session_id) {
+            anyhow::bail!("PermissionGrant session_id must be canonical");
+        }
+        let session_expires_at = grant
+            .session_expires_at
+            .as_deref()
+            .map(str::trim)
+            .filter(|expires_at| !expires_at.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("PermissionGrant lifetime=session requires session_expires_at")
+            })?;
+        let session_expires_at = DateTime::parse_from_rfc3339(session_expires_at)
+            .map_err(|_| anyhow::anyhow!("PermissionGrant session_expires_at must be RFC3339"))?;
+        if session_expires_at <= created_at {
+            anyhow::bail!("PermissionGrant session_expires_at must be after created_at");
+        }
+    } else if grant.session_id.is_some() || grant.session_expires_at.is_some() {
+        anyhow::bail!("PermissionGrant session_id/session_expires_at require lifetime=session");
+    }
+    if grant.lifetime == PermissionGrantLifetime::Once
+        && grant.last_used_at.is_some()
+        && grant.state == PermissionGrantState::Active
+    {
+        anyhow::bail!("PermissionGrant lifetime=once cannot be active after last_used_at is set");
     }
     if grant
         .review_required_after
@@ -1234,6 +1386,13 @@ fn validate_grant(grant: &PermissionGrant) -> anyhow::Result<()> {
         .is_some_and(|raw| DateTime::parse_from_rfc3339(raw).is_err())
     {
         anyhow::bail!("PermissionGrant last_reviewed_at must be RFC3339");
+    }
+    if grant
+        .last_used_at
+        .as_deref()
+        .is_some_and(|raw| DateTime::parse_from_rfc3339(raw).is_err())
+    {
+        anyhow::bail!("PermissionGrant last_used_at must be RFC3339");
     }
     Ok(())
 }
@@ -1328,7 +1487,7 @@ fn validate_request_transition(
     next: &PermissionRequest,
 ) -> anyhow::Result<()> {
     if next.request_id.trim().is_empty()
-        || next.owner_user_id.trim().is_empty()
+        || next.owner_user_ura.trim().is_empty()
         || next.principal_id.trim().is_empty()
         || next.caller_ura.trim().is_empty()
         || next.callee_ura.trim().is_empty()
@@ -1337,10 +1496,12 @@ fn validate_request_transition(
     {
         anyhow::bail!("PermissionRequest identity fields must not be empty");
     }
-    validate_nonzero_user_id(&next.owner_user_id, "PermissionRequest owner_user_id")?;
-    if next.principal_kind == PrincipalKind::User {
-        validate_nonzero_user_id(&next.principal_id, "PermissionRequest principal_id")?;
-    }
+    validate_user_principal_ura(&next.owner_user_ura, "PermissionRequest owner_user_id")?;
+    validate_principal_id_for_kind(
+        next.principal_kind,
+        &next.principal_id,
+        "PermissionRequest principal_id",
+    )?;
     validate_runtime_identity_ura(&next.caller_ura, "PermissionRequest caller_ura")?;
     validate_runtime_identity_ura(&next.callee_ura, "PermissionRequest callee_ura")?;
     validate_runtime_identity_ura(&next.subject_ura, "PermissionRequest subject_ura")?;
@@ -1403,12 +1564,22 @@ fn validate_authority_proof_identity(proof: &AuthorityProof) -> anyhow::Result<(
         .map_err(|field| anyhow::anyhow!("AuthorityProof contains inadmissible {field}"))
 }
 
-fn validate_nonzero_user_id(value: &str, field: &str) -> anyhow::Result<()> {
-    if value.trim().is_empty() {
-        anyhow::bail!("{field} must not be empty");
+fn validate_user_principal_ura(value: &str, field: &str) -> anyhow::Result<()> {
+    validate_nonzero_user_id(value, field)?;
+    validate_runtime_identity_ura(value, field)?;
+    let parsed = crate::core::ura::parse_ura(value)
+        .map_err(|error| anyhow::anyhow!("{field} must be a canonical User URA: {error}"))?;
+    if parsed.kind != crate::core::ura::URAKind::User || parsed.user_id().is_none() {
+        anyhow::bail!("{field} must be a canonical User URA");
     }
-    if crate::core::identity::is_all_zero_principal_id(value) {
-        anyhow::bail!("{field} must not be the all-zero principal placeholder");
+    Ok(())
+}
+
+fn validate_nonzero_user_id(value: &str, field: &str) -> anyhow::Result<()> {
+    if crate::core::identity::is_all_zero_principal_id(value)
+        || crate::core::identity::contains_all_zero_principal_placeholder(value)
+    {
+        anyhow::bail!("{field} must not contain the all-zero principal placeholder");
     }
     Ok(())
 }
@@ -1420,6 +1591,26 @@ fn validate_runtime_identity_ura(value: &str, field: &str) -> anyhow::Result<()>
         anyhow::bail!("{field} must not contain surrounding whitespace");
     }
     Ok(())
+}
+
+fn validate_principal_id_for_kind(
+    kind: PrincipalKind,
+    value: &str,
+    field: &str,
+) -> anyhow::Result<()> {
+    match kind {
+        PrincipalKind::User => validate_user_principal_ura(value, field),
+        PrincipalKind::Agent => {
+            let parsed = crate::core::ura::parse_ura(value).map_err(|error| {
+                anyhow::anyhow!("{field} must be a canonical Agent URA: {error}")
+            })?;
+            if parsed.kind != crate::core::ura::URAKind::Agent {
+                anyhow::bail!("{field} must be a canonical Agent URA");
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_request_timestamps(request: &PermissionRequest) -> anyhow::Result<()> {
@@ -1450,7 +1641,7 @@ fn validate_grant_resolves_request(
     grant: &PermissionGrant,
     request: &PermissionRequest,
 ) -> anyhow::Result<()> {
-    if grant.owner_user_id != request.owner_user_id {
+    if grant.owner_user_ura != request.owner_user_ura {
         anyhow::bail!("grant owner does not match PermissionRequest owner");
     }
     if grant.principal_kind != request.principal_kind
@@ -1481,7 +1672,7 @@ fn validate_proof_resolves_request(
     if proof.permission_request_id.as_deref() != Some(request.request_id.as_str()) {
         anyhow::bail!("authority proof does not reference PermissionRequest");
     }
-    if proof.owner_user_id != request.owner_user_id
+    if proof.owner_user_ura != request.owner_user_ura
         || proof.principal_kind != request.principal_kind
         || proof.principal_id != request.principal_id
         || proof.token_id != request.token_id
@@ -1533,7 +1724,7 @@ fn is_one_time_authority_proof(proof: &AuthorityProof) -> bool {
 
 fn permission_request_idempotency_key(request: &PermissionRequest) -> String {
     sha256_value(&json!({
-        "owner_user_id": request.owner_user_id,
+        "owner_user_id": request.owner_user_ura,
         "principal_id": request.principal_id,
         "token_id": request.token_id,
         "callee_ura": request.callee_ura,
@@ -1555,7 +1746,7 @@ fn audit_record(
     let payload = json!({
         "grant_id": grant.grant_id,
         "mutation": mutation,
-        "owner_user_id": grant.owner_user_id,
+        "owner_user_id": grant.owner_user_ura,
         "principal_id": grant.principal_id,
         "token_id": grant.token_id,
         "actions": grant.actions,
@@ -1571,7 +1762,7 @@ fn audit_record(
         audit_record_id,
         grant_id: grant.grant_id.clone(),
         mutation,
-        owner_user_id: grant.owner_user_id.clone(),
+        owner_user_ura: grant.owner_user_ura.clone(),
         principal_id: grant.principal_id.clone(),
         token_id: grant.token_id.clone(),
         actions: grant.actions.clone(),
@@ -1673,11 +1864,13 @@ mod tests {
     fn sample_grant(id: &str) -> PermissionGrant {
         PermissionGrant {
             grant_id: id.to_string(),
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
             token_class: Some(TokenClass::HubLink),
+            session_id: None,
+            session_expires_at: None,
             callee_ura: Some("easynet:///r/test/device/dev".to_string()),
             subject_ura_pattern: Some("easynet:///r/test/device/dev".to_string()),
             ability_ura_pattern: Some("meta.describe".to_string()),
@@ -1703,7 +1896,7 @@ mod tests {
             policy_store: PolicyStoreSection {
                 format: STORE_FORMAT.to_string(),
                 schema_version: SCHEMA_VERSION,
-                owner_user_id: "alice".to_string(),
+                owner_user_ura: "easynet:///r/test/user/alice".to_string(),
                 created_at: "2026-07-09T00:00:00Z".to_string(),
                 last_compacted_at: "2026-07-09T00:00:00Z".to_string(),
                 head_hash: ZERO_HASH.to_string(),
@@ -1726,7 +1919,7 @@ mod tests {
             record_kind: kind,
             schema_version: SCHEMA_VERSION,
             sequence: 1,
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
             record_id: "record-1".to_string(),
             operation: RecordOperation::Created,
             payload,
@@ -1782,11 +1975,11 @@ mod tests {
         assert!(!dir.path().join("zero").exists());
 
         let mut grant = sample_grant("grant-zero-user");
-        grant.owner_user_id = zero.to_string();
+        grant.owner_user_ura = zero.to_string();
         assert!(validate_grant(&grant).is_err());
 
         let mut request = pending_request();
-        request.owner_user_id = zero.to_string();
+        request.owner_user_ura = zero.to_string();
         assert!(validate_request_transition(None, &request).is_err());
     }
 
@@ -1872,7 +2065,7 @@ mod tests {
                 grant.token_id = Some(format!("token-{index}"));
                 barrier.wait();
                 registry
-                    .with_store("alice", |store| {
+                    .with_store("easynet:///r/test/user/alice", |store| {
                         store.create_grant(grant, "easynet:///r/test/user/alice")
                     })
                     .expect("open owner store")
@@ -1884,14 +2077,14 @@ mod tests {
         }
 
         let grants = registry
-            .with_store("alice", |store| store.grants())
+            .with_store("easynet:///r/test/user/alice", |store| store.grants())
             .expect("read owner store");
         assert_eq!(grants.len(), WRITERS);
         drop(registry);
 
         let reopened = AccessControlStore::open_or_create_at(
-            policy_store_dir_for_owner_at(root.path(), "alice"),
-            "alice",
+            policy_store_dir_for_owner_at(root.path(), "easynet:///r/test/user/alice"),
+            "easynet:///r/test/user/alice",
         )
         .expect("replay serialized owner journal");
         assert_eq!(reopened.grants().len(), WRITERS);
@@ -1899,10 +2092,89 @@ mod tests {
     }
 
     #[test]
+    fn policy_store_owner_paths_are_collision_free() {
+        let root = tempfile::tempdir().expect("policy root");
+        let slash_owner = "owner/a";
+        let colon_owner = "owner:a";
+
+        assert_eq!(
+            legacy_policy_store_dir_for_owner_at(root.path(), slash_owner),
+            legacy_policy_store_dir_for_owner_at(root.path(), colon_owner),
+            "legacy sanitizer demonstrates the collision being removed"
+        );
+        assert_ne!(
+            policy_store_dir_for_owner_at(root.path(), slash_owner),
+            policy_store_dir_for_owner_at(root.path(), colon_owner),
+            "hashed owner directories must not collide"
+        );
+        assert!(policy_store_dir_for_owner_at(root.path(), slash_owner)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("owner-sha256-")));
+    }
+
+    #[test]
+    fn registry_migrates_matching_legacy_policy_store_to_hashed_owner_path() {
+        let root = tempfile::tempdir().expect("policy root");
+        let owner = "easynet:///r/test/user/alice";
+        let legacy_dir = legacy_policy_store_dir_for_owner_at(root.path(), owner);
+        let hashed_dir = policy_store_dir_for_owner_at(root.path(), owner);
+
+        let mut legacy_store =
+            AccessControlStore::open_or_create_at(&legacy_dir, owner).expect("legacy store");
+        legacy_store
+            .create_grant(sample_grant("grant-legacy"), owner)
+            .expect("legacy grant");
+        drop(legacy_store);
+
+        let registry = AccessControlStoreRegistry::new(root.path());
+        let grants = registry
+            .with_store(owner, |store| store.grants())
+            .expect("migrate and open owner store");
+
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].grant_id, "grant-legacy");
+        assert!(hashed_dir.exists(), "hashed policy store must exist");
+        assert!(
+            !legacy_dir.exists(),
+            "matching legacy policy store should be moved to the hashed path"
+        );
+    }
+
+    #[test]
+    fn registry_does_not_migrate_legacy_policy_store_for_a_different_owner() {
+        let root = tempfile::tempdir().expect("policy root");
+        let requested_owner = "easynet:///r/test/user/alice";
+        let colliding_owner = "easynet:///r/test/user/bob";
+        let legacy_dir = legacy_policy_store_dir_for_owner_at(root.path(), requested_owner);
+        let hashed_dir = policy_store_dir_for_owner_at(root.path(), requested_owner);
+
+        AccessControlStore::open_or_create_at(&legacy_dir, colliding_owner)
+            .expect("legacy store for a different owner");
+
+        let registry = AccessControlStoreRegistry::new(root.path());
+        let grants = registry
+            .with_store(requested_owner, |store| store.grants())
+            .expect("open new hashed store without migrating mismatched legacy");
+
+        assert!(grants.is_empty());
+        assert!(
+            legacy_dir.exists(),
+            "mismatched legacy directory must not be moved into requested owner path"
+        );
+        assert!(
+            hashed_dir.exists(),
+            "requested owner gets an isolated hashed store"
+        );
+    }
+
+    #[test]
     fn grant_create_is_idempotent_and_replay_rebuilds_index() {
         let _home = HomeGuard::new();
         let root = default_policy_store_dir();
-        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let mut store =
+            AccessControlStore::open_or_create_at(&root, "easynet:///r/test/user/alice")
+                .expect("store");
         let first = store
             .create_grant(sample_grant("grant-1"), "easynet:///r/test/user/alice")
             .expect("create grant");
@@ -1913,7 +2185,8 @@ mod tests {
         assert!(second.idempotent_replay);
         assert_eq!(second.grant.grant_id, "grant-1");
 
-        let reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        let reopened = AccessControlStore::open_or_create_at(root, "easynet:///r/test/user/alice")
+            .expect("reopen");
         assert_eq!(reopened.grants().len(), 1);
         assert_eq!(reopened.grants()[0].grant_id, "grant-1");
     }
@@ -1922,29 +2195,35 @@ mod tests {
     fn revoke_is_monotonic() {
         let _home = HomeGuard::new();
         let root = default_policy_store_dir();
-        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let mut store =
+            AccessControlStore::open_or_create_at(&root, "easynet:///r/test/user/alice")
+                .expect("store");
         store
             .create_grant(sample_grant("grant-1"), "easynet:///r/test/user/alice")
             .expect("create grant");
         let revoked = store
             .revoke_grant(
                 "grant-1",
-                "alice",
+                "easynet:///r/test/user/alice",
                 "easynet:///r/test/user/alice",
                 Some("operator revoked".to_string()),
             )
             .expect("revoke grant");
         assert_eq!(revoked.state, PermissionGrantState::Revoked);
 
-        let reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        let reopened = AccessControlStore::open_or_create_at(root, "easynet:///r/test/user/alice")
+            .expect("reopen");
         assert_eq!(reopened.grants()[0].state, PermissionGrantState::Revoked);
     }
 
     #[test]
     fn permanent_stream_grant_materializes_default_review_deadline() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let mut grant = sample_grant("grant-stream");
         grant.actions = vec![AccessAction::Stream];
         grant.ability_ura_pattern = Some("terminal.create".to_string());
@@ -1963,8 +2242,11 @@ mod tests {
     #[test]
     fn permanent_manage_or_grant_uses_thirty_day_review_deadline() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let mut grant = sample_grant("grant-manage");
         grant.actions = vec![AccessAction::Stream, AccessAction::Manage];
         grant.ability_ura_pattern = Some("device.settings".to_string());
@@ -1983,8 +2265,11 @@ mod tests {
     #[test]
     fn grant_timestamps_must_be_rfc3339() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let mut grant = sample_grant("grant-invalid-time");
         grant.created_at = "2026-07-09 00:00:00".to_string();
 
@@ -1997,10 +2282,87 @@ mod tests {
     }
 
     #[test]
+    fn ttl_grant_requires_expires_at() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
+        let mut grant = sample_grant("grant-ttl-no-expiry");
+        grant.lifetime = PermissionGrantLifetime::Ttl;
+        grant.expires_at = None;
+
+        let err = store
+            .create_grant(grant, "easynet:///r/test/user/alice")
+            .expect_err("ttl grant without expires_at must fail");
+        assert!(err.to_string().contains("lifetime=ttl requires expires_at"));
+    }
+
+    #[test]
+    fn session_grant_requires_session_lifecycle_binding() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
+        let mut unbound = sample_grant("grant-session-unbound");
+        unbound.lifetime = PermissionGrantLifetime::Session;
+
+        let err = store
+            .create_grant(unbound, "easynet:///r/test/user/alice")
+            .expect_err("session grant without session_id must fail");
+        assert!(err
+            .to_string()
+            .contains("lifetime=session requires session_id"));
+
+        let mut bound = sample_grant("grant-session-bound");
+        bound.lifetime = PermissionGrantLifetime::Session;
+        bound.session_id = Some("session-1".to_string());
+        bound.session_expires_at = Some("2026-07-09T01:00:00Z".to_string());
+        store
+            .create_grant(bound, "easynet:///r/test/user/alice")
+            .expect("session grant with lifecycle facts must be valid");
+    }
+
+    #[test]
+    fn once_grant_consumption_is_journaled_and_replayed() {
+        let _home = HomeGuard::new();
+        let root = default_policy_store_dir();
+        let mut store =
+            AccessControlStore::open_or_create_at(&root, "easynet:///r/test/user/alice")
+                .expect("store");
+        let mut grant = sample_grant("grant-once");
+        grant.lifetime = PermissionGrantLifetime::Once;
+
+        store
+            .create_grant(grant, "easynet:///r/test/user/alice")
+            .expect("create once grant");
+        let consumed = store
+            .consume_once_grant_if_applicable("grant-once", "easynet:///r/test/user/alice")
+            .expect("consume once grant")
+            .expect("once grant should consume");
+        assert_eq!(consumed.state, PermissionGrantState::Expired);
+        assert!(consumed.last_used_at.is_some());
+        assert!(!consumed.active_at(Utc::now()));
+
+        let replayed = AccessControlStore::open_or_create_at(&root, "easynet:///r/test/user/alice")
+            .expect("reopen");
+        let replayed_grant = replayed.grant("grant-once").expect("replayed grant");
+        assert_eq!(replayed_grant.state, PermissionGrantState::Expired);
+        assert!(replayed_grant.last_used_at.is_some());
+        assert!(!replayed_grant.active_at(Utc::now()));
+    }
+
+    #[test]
     fn compaction_rejects_retention_below_rfc014_floor() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let policy = AccessControlCompactionPolicy {
             grant_mutation_audit_retention_days: 364,
             ..AccessControlCompactionPolicy::default()
@@ -2018,7 +2380,9 @@ mod tests {
     fn expired_grant_remains_denied_after_compaction_and_replay() {
         let _home = HomeGuard::new();
         let root = default_policy_store_dir();
-        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let mut store =
+            AccessControlStore::open_or_create_at(&root, "easynet:///r/test/user/alice")
+                .expect("store");
         let mut grant = sample_grant("grant-expired");
         grant.lifetime = PermissionGrantLifetime::Ttl;
         grant.expires_at = Some("2026-07-01T00:00:00Z".to_string());
@@ -2042,7 +2406,8 @@ mod tests {
         assert_ne!(result.new_segment_head_hash, head_before);
         assert_eq!(result.retained_active_grants, 0);
 
-        let reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        let reopened = AccessControlStore::open_or_create_at(root, "easynet:///r/test/user/alice")
+            .expect("reopen");
         let reopened_grant = reopened
             .grants()
             .into_iter()
@@ -2054,8 +2419,11 @@ mod tests {
     #[test]
     fn broad_patterns_are_rejected() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let mut grant = sample_grant("grant-1");
         grant.ability_ura_pattern = Some("*".to_string());
         let err = store
@@ -2068,7 +2436,7 @@ mod tests {
     fn approved_request_requires_effective_grant_or_proof() {
         let request = PermissionRequest {
             request_id: "req-1".to_string(),
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
             caller_ura: "easynet:///r/test/authority".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
@@ -2095,8 +2463,11 @@ mod tests {
         assert!(validate_request_transition(Some(&pending_request()), &request).is_err());
 
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let err = store
             .upsert_permission_request(request, "easynet:///r/test/user/alice")
             .expect_err("policy.request.create must not create approved records");
@@ -2109,7 +2480,9 @@ mod tests {
     fn approved_request_resolution_creates_effective_grant() {
         let _home = HomeGuard::new();
         let root = default_policy_store_dir();
-        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let mut store =
+            AccessControlStore::open_or_create_at(&root, "easynet:///r/test/user/alice")
+                .expect("store");
         let pending = store
             .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
@@ -2129,7 +2502,8 @@ mod tests {
         assert!(result.request.authority_proof_id.is_none());
         assert!(result.created_grant.is_some());
 
-        let reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        let reopened = AccessControlStore::open_or_create_at(root, "easynet:///r/test/user/alice")
+            .expect("reopen");
         assert_eq!(
             reopened.requests()[0].status,
             PermissionRequestStatus::Approved
@@ -2140,8 +2514,11 @@ mod tests {
     #[test]
     fn approved_request_rejects_missing_effective_grant() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let pending = store
             .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
@@ -2161,8 +2538,11 @@ mod tests {
     #[test]
     fn approved_request_rejects_scope_mismatched_created_grant() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let pending = store
             .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
@@ -2184,8 +2564,11 @@ mod tests {
     #[test]
     fn approved_request_rejects_unbound_authority_proof() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let pending = store
             .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
@@ -2213,7 +2596,9 @@ mod tests {
     fn one_time_authority_proof_consumption_is_durable_and_single_use() {
         let _home = HomeGuard::new();
         let root = default_policy_store_dir();
-        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let mut store =
+            AccessControlStore::open_or_create_at(&root, "easynet:///r/test/user/alice")
+                .expect("store");
         let pending = store
             .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
@@ -2237,7 +2622,9 @@ mod tests {
             .expect_err("one-time proof must not be reusable");
         assert!(err.to_string().contains("was already consumed"));
 
-        let mut reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        let mut reopened =
+            AccessControlStore::open_or_create_at(root, "easynet:///r/test/user/alice")
+                .expect("reopen");
         let err = reopened
             .consume_authority_proof_once("proof-request-1", "easynet:///r/test/device/dev")
             .expect_err("consumed proof must stay consumed after replay");
@@ -2247,8 +2634,11 @@ mod tests {
     #[test]
     fn request_creation_rejects_unbounded_prompt_shape() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
 
         let mut no_lifetimes = pending_request();
         no_lifetimes.requested_lifetimes.clear();
@@ -2282,8 +2672,11 @@ mod tests {
     #[test]
     fn request_lifecycle_allows_one_pending_to_terminal_transition() {
         let _home = HomeGuard::new();
-        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
-            .expect("store");
+        let mut store = AccessControlStore::open_or_create_at(
+            default_policy_store_dir(),
+            "easynet:///r/test/user/alice",
+        )
+        .expect("store");
         let pending = store
             .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
@@ -2320,7 +2713,7 @@ mod tests {
     fn pending_request() -> PermissionRequest {
         let mut request = PermissionRequest {
             request_id: "req-1".to_string(),
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
             caller_ura: "easynet:///r/test/authority".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
@@ -2350,11 +2743,13 @@ mod tests {
     fn grant_for_request(id: &str, request: &PermissionRequest) -> PermissionGrant {
         PermissionGrant {
             grant_id: id.to_string(),
-            owner_user_id: request.owner_user_id.clone(),
+            owner_user_ura: request.owner_user_ura.clone(),
             principal_kind: request.principal_kind,
             principal_id: request.principal_id.clone(),
             token_id: request.token_id.clone(),
             token_class: request.token_class,
+            session_id: None,
+            session_expires_at: None,
             callee_ura: Some(request.callee_ura.clone()),
             subject_ura_pattern: Some(request.subject_ura.clone()),
             ability_ura_pattern: Some(request.ability_ura.clone()),
@@ -2380,10 +2775,11 @@ mod tests {
             proof_id: id.to_string(),
             grant_id: None,
             permission_request_id: Some(request.request_id.clone()),
-            owner_user_id: request.owner_user_id.clone(),
+            owner_user_ura: request.owner_user_ura.clone(),
             principal_kind: request.principal_kind,
             principal_id: request.principal_id.clone(),
             token_id: request.token_id.clone(),
+            token_class: request.token_class,
             callee_ura: request.callee_ura.clone(),
             subject_ura: request.subject_ura.clone(),
             ability_ura: request.ability_ura.clone(),
@@ -2391,7 +2787,7 @@ mod tests {
             nonce: request.nonce.clone(),
             canonical_hash: request.canonical_hash.clone(),
             session_id: None,
-            session_owner_user_id: None,
+            session_owner_user_ura: None,
             allowed_followup_abilities: vec![],
             session_expires_at: None,
             issued_at: "2026-07-09T00:01:00Z".to_string(),

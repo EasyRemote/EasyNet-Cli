@@ -54,8 +54,71 @@ func isRuntimeGovernanceReadSubjectURA(subjectURA string, calleeURA string) bool
 	if subjectErr != nil || calleeErr != nil {
 		return false
 	}
-	return (subject.Kind == URAKindAuthority || subject.Kind == URAKindDevice) &&
+	if (subject.Kind == URAKindAuthority || subject.Kind == URAKindDevice) &&
 		subject.Kind == callee.Kind &&
 		subject.Realm == callee.Realm &&
-		subjectURA == calleeURA
+		subjectURA == calleeURA {
+		return true
+	}
+	return subject.Kind == URAKindDevice &&
+		callee.Kind == URAKindAgent &&
+		subject.Realm == callee.Realm &&
+		strings.TrimSpace(callee.DeviceID) != "" &&
+		strings.TrimSpace(subject.DeviceID) == strings.TrimSpace(callee.DeviceID)
+}
+
+// RuntimeGovernanceReadSubjectURA projects a business subject into the
+// canonical runtime governance-read subject accepted by provider-backed
+// descriptor and receipt-history reads.
+//
+// Runtime governance reads are not product actions against the target device.
+// User-, agent-, ability-, and user-owned resource subjects are projected to
+// the user's runtime-state/read resource; a runtime owner subject is admitted
+// only when it exactly matches the selected callee runtime owner.
+func RuntimeGovernanceReadSubjectURA(subjectURA string, calleeURA string) (string, error) {
+	subjectURA = strings.TrimSpace(subjectURA)
+	calleeURA = strings.TrimSpace(calleeURA)
+	if subjectURA == "" {
+		return "", invalidInvocation("runtime governance read subject_ura is required", nil)
+	}
+	if isRuntimeGovernanceReadSubjectURA(subjectURA, calleeURA) {
+		return subjectURA, nil
+	}
+	parts, err := ParseURAParts(subjectURA)
+	if err != nil {
+		return "", invalidInvocation("runtime governance read subject_ura must be canonical", err)
+	}
+	switch parts.Kind {
+	case URAKindUser:
+		return RuntimeStateReadSubjectURA(parts.Realm, parts.UserID)
+	case URAKindAgent:
+		if strings.TrimSpace(parts.UserID) == "" {
+			if strings.TrimSpace(parts.DeviceID) != "" {
+				return DeviceURA(parts.Realm, parts.DeviceID), nil
+			}
+			break
+		}
+		return RuntimeStateReadSubjectURA(parts.Realm, parts.UserID)
+	case URAKindAbility:
+		userID := strings.TrimSpace(parts.AbilityOwner.UserID)
+		if userID == "" {
+			userID = strings.TrimSpace(parts.UserID)
+		}
+		if userID != "" {
+			return RuntimeStateReadSubjectURA(parts.Realm, userID)
+		}
+	case URAKindResource:
+		ownerID := strings.TrimSpace(parts.OwnerID)
+		if strings.HasPrefix(ownerID, "user.") {
+			userID := strings.TrimPrefix(ownerID, "user.")
+			if strings.TrimSpace(userID) != "" && !strings.Contains(userID, ".") && !strings.Contains(userID, "/") {
+				return RuntimeStateReadSubjectURA(parts.Realm, userID)
+			}
+		}
+	}
+	return "", invalidInvocation("runtime governance read subject_ura must be a runtime owner or user-owned runtime-state read subject", nil)
+}
+
+func runtimeGovernanceReadSubjectURA(subjectURA string, calleeURA string) (string, error) {
+	return RuntimeGovernanceReadSubjectURA(subjectURA, calleeURA)
 }

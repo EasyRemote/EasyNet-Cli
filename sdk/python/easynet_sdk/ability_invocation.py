@@ -750,9 +750,10 @@ def _addressing_descriptor_ref(
             projection.public_name, projection.ability_ura
         )
         return projection.descriptor_ref
-    return addressing.canonical_ability_descriptor_ref(
-        ability_ura,
-        _required_string(request.descriptor_version, "descriptor_version"),
+    projection = addressing.project_ability_ura(ability_ura)
+    _reject_governance_read_action(projection.public_name, projection.ura)
+    raise _invalid_ability_invocation(
+        "descriptor_ref is required when building an invocation without a runtime descriptor provider"
     )
 
 

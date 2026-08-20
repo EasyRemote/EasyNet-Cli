@@ -95,7 +95,11 @@ struct ExpectedPublication {
 
 impl ExpectedPublication {
     fn from_manifest(manifest: &AbilityManifest) -> Self {
-        let call_mode = if matches!(manifest.exec(), Some(AbilityExec::HostStream(_))) {
+        let call_mode = if manifest.admission_action() == Some("invoke") {
+            CallMode::Rpc
+        } else if manifest.admission_action() == Some("stream") {
+            CallMode::Stream
+        } else if matches!(manifest.exec(), Some(AbilityExec::HostStream(_))) {
             CallMode::Stream
         } else {
             CallMode::Rpc
@@ -257,7 +261,7 @@ pub fn register(registry: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotR
     let manifest = command_manifest();
     registry.register_rpc_with_envelope_and_spec(
         ABILITY_PUT_AGENT_ABILITY,
-        OwnerKind::Device,
+        OwnerKind::agent_management_system(),
         manifest,
         Arc::new(move |envelope: EnvelopeContext, args: Value| {
             put_agent_abilities_handler(envelope, args, &hot_registrar)
@@ -510,11 +514,22 @@ fn authorize_local_authoring(envelope: &EnvelopeContext) -> anyhow::Result<()> {
             envelope.callee()
         )
     })?;
-    if callee.kind != crate::core::ura::URAKind::Device {
-        anyhow::bail!("agent.ability.put: authoring must target the local Device authority");
+    let Some((_device_id, system_agent_id)) = callee.device_agent_ids() else {
+        anyhow::bail!(
+            "agent.ability.put: authoring must target the local agent-management SystemAgent"
+        );
+    };
+    if system_agent_id != crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID {
+        anyhow::bail!(
+            "agent.ability.put: authoring callee must be the agent-management SystemAgent"
+        );
     }
+    let caller_is_user = crate::core::ura::parse_ura(envelope.caller())
+        .map(|caller| caller.kind == crate::core::ura::URAKind::User)
+        .unwrap_or(false);
     if envelope.caller() != envelope.callee()
         && envelope.caller() != crate::core::ura::LOCAL_SYSTEM_AGENT_URA
+        && !caller_is_user
     {
         anyhow::bail!(
             "agent.ability.put: caller {:?} is not authorized to mutate local Agent abilities",
@@ -648,19 +663,25 @@ mod tests {
     }
 
     #[test]
-    fn authoring_authority_is_local_device_only() {
+    fn authoring_authority_is_local_agent_management_system_agent_only() {
         let device = crate::core::ura::device_ura("authoring-test", "device-1");
+        let agent_management = crate::core::ura::device_agent_ura(
+            "authoring-test",
+            "device-1",
+            crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
         let local = EnvelopeContext::for_test_targeted_ability(
             crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
-            &device,
+            &agent_management,
             ABILITY_PUT_AGENT_ABILITY,
             &device,
         );
-        authorize_local_authoring(&local).expect("local system may author Device abilities");
+        authorize_local_authoring(&local)
+            .expect("local system may invoke the agent-management SystemAgent");
 
         let foreign = EnvelopeContext::for_test_targeted_ability(
             crate::core::ura::agent_ura("authoring-test", "other", "agent"),
-            &device,
+            &agent_management,
             ABILITY_PUT_AGENT_ABILITY,
             &device,
         );
@@ -675,7 +696,7 @@ mod tests {
         assert!(authorize_local_authoring(&wrong_owner)
             .expect_err("Hub target must not mutate hosted-Agent files")
             .to_string()
-            .contains("local Device authority"));
+            .contains("agent-management SystemAgent"));
     }
 
     #[test]

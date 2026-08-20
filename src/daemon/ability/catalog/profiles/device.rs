@@ -1,66 +1,22 @@
 //! Device profile — RFC-001 §1.
 //!
-//! The daemon-hosted Agent anchored at the local device URA. This is not the
-//! physical device object itself. The physical device hosts resources and the
-//! daemon; the device-profile Agent advertises the public abilities that
-//! operate on those resources under device authority.
+//! Empty migration cursor for retired direct Device-owned daemon-local rows.
+//! This is not an actor identity and cannot emit `AbilityDescriptor` values.
+//! The physical Device hosts resources and the daemon; device-native callable
+//! surfaces are emitted by named device-sponsored SystemAgent profiles.
 //!
-//! Default-on; one per `easynet-daemon` instance. It advertises the local
-//! host's operational surface: filesystem, process, terminal, session,
-//! browser/media, hosted-Agent authoring, skill package management,
-//! observe/admin/meta, and
-//! schedule/loop/discuss abilities that run in the daemon.
+//! The empty cursor may remain for migration/high-water bookkeeping. Its live
+//! descriptor inventory is unconditionally empty.
 //!
-//! Per RFC §A4: "device" is an implementation profile, NOT a
-//! protocol type. The Agent has no `kind` field on the wire.
+//! Per RFC §A4: "device" is an implementation profile, NOT a protocol type.
+//! The projection has no `kind` field on the wire.
 //!
-//! Descriptor projection
-//! ---------------------
-//! The dispatch registry stores an `OwnerKind` for every ability at
-//! registration time. Device profile descriptors are generated from entries
-//! whose authority/projection class is exactly `OwnerKind::Device`; this module
-//! does not infer ownership from ability name prefixes.
-
-/// Build AbilityDescriptors for every system ability the registry flags as
-/// advertised by the device-profile Agent under device authority, with the
-/// visibility + scope defaults from RFC plan §18.
-///
-/// Wire shape — for each name in the registry whose owner is
-/// `OwnerKind::Device`:
-///   * observe.*  → PUBLIC
-///   * everything else (fs/process/terminal/session/device/admin/
-///     schedule/loop/discuss/meta/skill/media/etc.) → SCOPED with
-///     scope_subjects/scope_agents = Any (P4.1 default).
-///     P4.7 narrows the SCOPED axes to the host operator URA on
-///     daemon boot.
-///
-/// `owner_ura` is the device-profile Agent's canonical URA,
-/// minted at first `federation.join` and persisted via
-/// `local-agents.json`. Caller passes it in so this module stays
-/// pure (no daemon-state coupling).
+/// Return the intentionally empty live inventory for the retired Device
+/// projection. Device-sponsored callable behavior belongs to SystemAgents.
 pub fn descriptors_for(
-    owner_ura: &str,
+    _owner_ura: &str,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    use crate::daemon::ability::descriptors::Visibility;
-    use crate::daemon::ability::dispatch::OwnerKind;
-
-    let mut out = Vec::new();
-    for descriptor in
-        crate::daemon::ability::catalog::published_system_abilities_for_owner(OwnerKind::Device)
-    {
-        let visibility = if descriptor.name.starts_with("observe.") {
-            Visibility::Public
-        } else {
-            Visibility::Scoped
-        };
-        let descriptor = descriptor
-            .rebind_owner_ura(owner_ura)
-            .expect("registry-derived descriptor accepts canonical device owner")
-            .with_visibility(visibility)
-            .with_source("kernel:built-in");
-        out.push(descriptor);
-    }
-    out
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -68,70 +24,155 @@ mod tests {
     use super::*;
 
     #[test]
-    fn baseline_locomotion_abilities_are_all_described_by_device_profile() {
-        // Pin the AXIOM Tier 2.5 Baseline Locomotion contract.
-        // Every member of the profile MUST be emitted from registry
-        // OwnerKind::Device metadata; otherwise meta.list_abilities and
-        // federation.advertise silently drop it.
+    fn device_profile_excludes_migrated_system_agent_families() {
+        // Device is the execution substrate, not the public owner for
+        // device-native agent, terminal, session, node-management, locomotion,
+        // skill-management, context, media, plugin lifecycle,
+        // automation/orchestration, runtime-governance, runtime-health,
+        // runtime-introspection, descriptor-transfer, ability-management,
+        // openai-compat, or A2A integration descriptors.
         let descriptors = descriptors_for("easynet:///r/acme/device/01DEV");
         let names = descriptors
             .iter()
             .map(|d| d.name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
-        for name in [
-            "fs.read",
-            "fs.write",
-            "fs.stat",
-            "fs.list",
-            "fs.edit",
-            "process.exec",
-            "shell.run",
-            "http.request",
-            // PTY family — pin the full terminal surface here so a
-            // future renamer trips this
-            // test instead of silently breaking the catalog. The
-            // unary I/O trio (input/read/resize) lives alongside
-            // attach (bidi) so the backend's PTYDriver — which
-            // talks unary RPC — sees a fully-served wire surface.
-            "terminal.create",
-            "terminal.list",
-            "terminal.close",
-            "terminal.attach",
-            "terminal.input",
-            "terminal.read",
-            "terminal.resize",
-            // Device agent lifecycle is device-profile-owned. These abilities
-            // must be advertised by the device projection before RFC-005
-            // resolve-before-invoke can start or refresh hosted agents.
-            "agent.start",
-            "agent.stop",
-            "agent.purge",
-            "agent.refresh",
+        for migrated in [
+            crate::daemon::ability::names::agents::AGENT_LIST,
+            crate::daemon::ability::names::agents::AGENT_START,
+            crate::daemon::ability::names::agents::AGENT_STOP,
+            crate::daemon::ability::names::agents::AGENT_PURGE,
+            crate::daemon::ability::names::agents::AGENT_REFRESH,
             crate::daemon::ability::names::agents::AGENT_ABILITY_PUT,
-            "meta.list_resources",
-            // Session timeline state is daemon-local and therefore belongs
-            // to the device-profile Agent, not the LLM sub-agent whose run
-            // produced a given event.
+            crate::daemon::ability::names::agents::CHAT_HISTORY_LIST,
+            crate::daemon::ability::names::agents::CHAT_HISTORY_GET,
+            crate::daemon::ability::names::device_control::TERMINAL_CREATE,
+            crate::daemon::ability::names::device_control::TERMINAL_LIST,
+            crate::daemon::ability::names::device_control::TERMINAL_CLOSE,
+            crate::daemon::ability::names::device_control::TERMINAL_ATTACH,
+            crate::daemon::ability::names::device_control::TERMINAL_INPUT,
+            crate::daemon::ability::names::device_control::TERMINAL_READ,
+            crate::daemon::ability::names::device_control::TERMINAL_RESIZE,
             crate::daemon::ability::names::device_control::SESSION_LIST,
-            "session.attach",
-            // Skill management and skill package file browsing are
-            // device-profile-owned because the package tree lives on this
-            // host.
-            "skill.install",
-            "skill.remove",
-            "skill.upgrade",
-            "skill.publish",
-            "skill.unpublish",
-            "skill.list",
-            "skill.tree",
-            "skill.read_file",
-            "skill.write_file",
+            crate::daemon::ability::names::device_control::SESSION_ATTACH,
+            crate::daemon::ability::names::device_control::NODE_DESCRIBE,
+            crate::daemon::ability::names::device_control::NODE_REMOVE,
+            crate::daemon::ability::names::device_control::FS_READ,
+            crate::daemon::ability::names::device_control::FS_WRITE,
+            crate::daemon::ability::names::device_control::FS_STAT,
+            crate::daemon::ability::names::device_control::FS_LIST,
+            crate::daemon::ability::names::device_control::FS_EDIT,
+            crate::daemon::ability::names::device_control::FS_TRANSFER,
+            crate::daemon::ability::names::device_control::PROCESS_EXEC,
+            crate::daemon::ability::names::device_control::SHELL_RUN,
+            crate::daemon::ability::names::device_control::HTTP_REQUEST,
+            crate::daemon::ability::names::resources::SKILL_INSTALL,
+            crate::daemon::ability::names::resources::SKILL_REMOVE,
+            crate::daemon::ability::names::resources::SKILL_UPGRADE,
+            crate::daemon::ability::names::resources::SKILL_PUBLISH,
+            crate::daemon::ability::names::resources::SKILL_UNPUBLISH,
+            crate::daemon::ability::names::resources::SKILL_LIST,
+            crate::daemon::ability::names::resources::SKILL_TREE,
+            crate::daemon::ability::names::resources::SKILL_READ_FILE,
+            crate::daemon::ability::names::resources::SKILL_WRITE_FILE,
+            crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_LIST,
+            crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_GET,
+            crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_TRACK,
+            crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_REMOVE,
+            crate::daemon::ability::names::resources::CONTEXT_CATALOG,
+            crate::daemon::ability::names::resources::CONTEXT_FOLDERS_LIST,
+            crate::daemon::ability::names::resources::CONTEXT_FS_LIST,
+            crate::daemon::ability::names::resources::CONTEXT_FAVORITES_LIST,
+            crate::daemon::ability::names::resources::CONTEXT_FAVORITES_ADD,
+            crate::daemon::ability::names::resources::CONTEXT_FAVORITES_REMOVE,
+            crate::daemon::ability::names::resources::CONTEXT_CAPTURES_LIST,
+            crate::daemon::ability::names::resources::CONTEXT_CAPTURES_GET,
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            crate::daemon::ability::names::integrations::PLUGIN_RELOAD,
+            crate::daemon::ability::names::integrations::PLUGIN_STATUS,
+            crate::daemon::ability::names::integrations::PLUGIN_ACTIVATE_REALTIME,
+            crate::daemon::ability::names::integrations::PLUGIN_COMPANION_STATUS,
+            crate::daemon::ability::names::integrations::PLUGIN_COMPANION_RECONCILE,
+            crate::daemon::ability::names::automation::DISCUSS_CREATE,
+            crate::daemon::ability::names::automation::DISCUSS_POST,
+            crate::daemon::ability::names::automation::DISCUSS_LIST_TURNS,
+            crate::daemon::ability::names::automation::DISCUSS_SUBSCRIBE,
+            crate::daemon::ability::names::automation::LOOP_CREATE,
+            crate::daemon::ability::names::automation::LOOP_STATUS,
+            crate::daemon::ability::names::automation::LOOP_SUBSCRIBE,
+            crate::daemon::ability::names::automation::LOOP_CANCEL,
+            crate::daemon::ability::names::automation::MISSION_RUN,
+            crate::daemon::ability::names::automation::MISSION_TRACK,
+            crate::daemon::ability::names::automation::MISSION_CANCEL,
+            crate::daemon::ability::names::automation::MISSION_THINK,
+            crate::daemon::ability::names::automation::MISSION_DISCUSS_ROUND,
+            crate::daemon::ability::names::automation::SCHEDULE_ADD,
+            crate::daemon::ability::names::automation::SCHEDULE_LIST,
+            crate::daemon::ability::names::automation::SCHEDULE_REMOVE,
+            crate::daemon::ability::names::automation::SCHEDULE_ENABLE,
+            crate::daemon::ability::names::governance::AUTHORITY_BINDING_GRANT,
+            crate::daemon::ability::names::governance::AUTHORITY_BINDING_REVOKE,
+            crate::daemon::ability::names::governance::AUTHORITY_BINDING_LIST,
+            crate::daemon::ability::names::governance::AUTHORITY_BINDING_CHECK,
+            crate::daemon::ability::names::governance::POLICY_REQUEST_CREATE,
+            crate::daemon::ability::names::governance::POLICY_REQUEST_RESOLVE,
+            crate::daemon::ability::names::governance::POLICY_REQUEST_LIST,
+            crate::daemon::ability::names::governance::ADMISSION_EXPLAIN,
+            crate::daemon::ability::names::governance::OBSERVE_HEALTH,
+            crate::daemon::ability::names::governance::OBSERVE_NETWORK_HEALTH,
+            crate::daemon::ability::names::governance::ADMIN_STATUS,
+            crate::daemon::ability::names::governance::META_DESCRIBE,
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            crate::daemon::ability::names::governance::META_TEACH,
+            crate::daemon::ability::names::governance::META_ACQUIRE,
+            crate::daemon::ability::names::governance::META_FORGET,
+            crate::daemon::ability::names::resources::META_LIST_RESOURCES,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_GET,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH,
+            crate::daemon::ability::names::governance::INVOCATION_RECORD_GET,
+            crate::daemon::ability::names::governance::INVOCATION_TRACE_GET,
+            crate::daemon::ability::names::governance::INVOCATION_CANCEL,
+            crate::daemon::ability::names::federation::ABILITY_DEPLOY,
+            crate::daemon::ability::names::federation::ABILITY_UNINSTALL,
+            crate::daemon::ability::names::federation::ABILITY_PUBLISH,
+            crate::daemon::ability::names::federation::ABILITY_UNPUBLISH,
+            crate::daemon::ability::names::integrations::OPENAI_CHAT_COMPLETIONS,
+            crate::daemon::ability::names::integrations::OPENAI_LIST_MODELS,
+            crate::daemon::ability::names::integrations::OPENAI_FILES_UPLOAD,
+            crate::daemon::ability::names::integrations::OPENAI_FILES_RETRIEVE,
+            crate::daemon::ability::names::integrations::OPENAI_FILES_DELETE,
+            crate::daemon::ability::names::integrations::A2A_BRIDGE_LIST_SKILLS,
+            crate::daemon::ability::names::integrations::A2A_BRIDGE_SEND_TASK,
+            crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK,
+            crate::daemon::ability::names::resources::CONTEXT_CAPTURES_READ,
+            crate::daemon::ability::names::resources::MEDIA_MIC_SUBSCRIBE,
+            crate::daemon::ability::names::resources::MEDIA_CAMERA_SUBSCRIBE,
+            crate::daemon::ability::names::resources::MEDIA_CAMERA_SNAPSHOT,
+            crate::daemon::ability::names::resources::MEDIA_CAMERA_RECORD_START,
+            crate::daemon::ability::names::resources::MEDIA_CAMERA_RECORD_STOP,
+            crate::daemon::ability::names::resources::MEDIA_SCREEN_SUBSCRIBE,
+            crate::daemon::ability::names::resources::MEDIA_SCREEN_SNAPSHOT,
+            crate::daemon::ability::names::resources::MEDIA_SPEAKER_PUBLISH,
         ] {
             assert!(
-                names.contains(name),
-                "{name} must be emitted from registry OwnerKind::Device metadata; got {names:?}"
+                !names.contains(migrated),
+                "{migrated} is owned by a device-sponsored SystemAgent, not direct Device"
             );
         }
+    }
+
+    #[test]
+    fn direct_device_owner_inventory_is_explicit() {
+        let actual = descriptors_for("easynet:///r/acme/device/01DEV")
+            .into_iter()
+            .map(|descriptor| descriptor.name)
+            .collect::<Vec<_>>();
+        let expected: Vec<String> = Vec::new();
+        assert_eq!(
+            actual, expected,
+            "direct Device-owner ability inventory changed; migrate the family to a SystemAgent or document a bootstrap/self-maintenance exception"
+        );
     }
 
     #[test]
@@ -152,7 +193,7 @@ mod tests {
         ] {
             assert!(
                 !names.contains(name),
-                "{name} is not OwnerKind::Device and must not be described by the device profile"
+                "{name} is not OwnerKind::DeviceProfileProjection and must not be described by the device profile"
             );
         }
     }
@@ -178,43 +219,42 @@ mod tests {
         let owner = "easynet:///r/acme/device/01DEV";
         let descriptors = descriptors_for(owner);
         assert!(
-            !descriptors.is_empty(),
-            "device profile must own at least observe.health"
+            descriptors.is_empty(),
+            "Device profile is a migration projection; no public direct Device descriptors should remain"
         );
         for d in &descriptors {
             assert_eq!(d.owner_ura, owner);
             assert_eq!(d.source, "kernel:built-in");
         }
-        let fs = descriptors
-            .iter()
-            .find(|d| d.name == "fs.read")
-            .expect("fs.read must publish under the device owner-local name");
-        assert_eq!(
-            fs.canonical_ability_ura().as_deref(),
-            Some("easynet:///r/acme/ability/device.01DEV.fs.read")
+        assert!(
+            descriptors
+                .iter()
+                .all(|d| d.name != crate::daemon::ability::names::resources::META_LIST_RESOURCES),
+            "meta.list_resources is owned by runtime-introspection, not direct Device"
+        );
+        assert!(
+            descriptors.iter().all(|d| d.name
+                != crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS),
+            "resource.refresh_remote_targets is owned by media SystemAgent, not direct Device"
+        );
+        assert!(
+            descriptors.iter().all(|d| d.name
+                != crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS),
+            "resource.watch_remote_targets is owned by media SystemAgent, not direct Device"
         );
     }
 
     #[test]
-    fn descriptors_for_marks_observe_as_public_and_others_scoped() {
+    fn descriptors_for_marks_remaining_direct_device_rows_scoped() {
         use crate::daemon::ability::descriptors::Visibility;
         let descriptors = descriptors_for("easynet:///r/acme/device/01DEV");
         for d in descriptors {
-            if d.name.starts_with("observe.") {
-                assert_eq!(
-                    d.visibility,
-                    Visibility::Public,
-                    "{} must be PUBLIC",
-                    d.name
-                );
-            } else {
-                assert_eq!(
-                    d.visibility,
-                    Visibility::Scoped,
-                    "{} must be SCOPED",
-                    d.name
-                );
-            }
+            assert_eq!(
+                d.visibility,
+                Visibility::Scoped,
+                "{} must be SCOPED",
+                d.name
+            );
         }
     }
 }

@@ -3,6 +3,11 @@ pub const ABILITY_UNINSTALL: &str = "ability.uninstall";
 pub const ABILITY_PUBLISH: &str = "ability.publish";
 pub const ABILITY_UNPUBLISH: &str = "ability.unpublish";
 
+/// Device-sponsored SystemAgent id for local ability-management control
+/// abilities. The canonical callee shape is
+/// `easynet:///r/<realm>/agent/device.<device-id>.ability-management`.
+pub const ABILITY_MANAGEMENT_SYSTEM_AGENT_ID: &str = "ability-management";
+
 pub const JOIN: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN;
 pub const ADVERTISE_AGENT: &str =
     crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_AGENT;
