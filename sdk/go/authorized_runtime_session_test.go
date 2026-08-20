@@ -60,9 +60,9 @@ func TestAuthorizedRuntimeSessionRejectsRetiredInvocationHistorySubjectExactAuth
 		SessionOwnerURA:          "easynet:///r/example/user/alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
 		CreatorPrincipalURA:      "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               retiredSubject,
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"observe.health"},
 		AllowedActions:           []string{"invoke"},
 		AllowedFollowupAbilities: []string{"observe.health"},
@@ -125,6 +125,25 @@ func TestAuthorizedRuntimeSessionRejectsMissingCallerSignerBeforeSubmit(t *testi
 	}
 	if session.runtime.prepareCalls != 1 || session.runtime.submitCalls != 0 {
 		t.Fatalf("unexpected runtime calls: prepare=%d submit=%d", session.runtime.prepareCalls, session.runtime.submitCalls)
+	}
+}
+
+func TestAuthorizedRuntimeSessionPrepareUsesDescriptorOwnerCalleeNotDeviceTarget(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	intent := canonicalSessionIntentFixture()
+
+	prepared, err := session.sdk.Prepare(context.Background(), intent)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if prepared.Intent.Target.URA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("intent target = %q", prepared.Intent.Target.URA)
+	}
+	if prepared.Draft.CalleeURA() != "easynet:///r/example/agent/device.dev-a.runtime-governance" {
+		t.Fatalf("draft callee = %q, want descriptor owner callee", prepared.Draft.CalleeURA())
+	}
+	if prepared.Draft.CalleeURA() == prepared.Intent.Target.URA {
+		t.Fatalf("draft callee must not collapse to execution target")
 	}
 }
 
@@ -195,7 +214,7 @@ func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeRec
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    subject,
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -226,7 +245,7 @@ func TestAuthorizedRuntimeSessionHistoryRejectsAllZeroSubjectBeforeReceiptProvid
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history",
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -252,7 +271,7 @@ func TestAuthorizedRuntimeSessionHistoryRejectsRetiredSessionSubjectBeforeReceip
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    "easynet:///r/example/resource/user.alice/session/invocation_history",
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -285,7 +304,7 @@ func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeRece
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    subject,
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -316,7 +335,7 @@ func TestAuthorizedRuntimeSessionHistoryUsesReceiptProviderAuthorityScope(t *tes
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    subject,
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -346,7 +365,7 @@ func TestAuthorizedRuntimeSessionHistoryRejectsProviderWithoutAuthorityScope(t *
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    subject,
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -380,7 +399,7 @@ func TestRuntimeStateReadSubjectURABuildsUserOwnedResourceSubject(t *testing.T) 
 func TestRuntimeGovernanceReadSubjectURAProjectsUserBusinessSubject(t *testing.T) {
 	subject, err := RuntimeGovernanceReadSubjectURA(
 		"easynet:///r/example/user/alice",
-		"easynet:///r/example/device/dev-a",
+		"easynet:///r/example/agent/device.dev-a.runtime-governance",
 	)
 	if err != nil {
 		t.Fatalf("RuntimeGovernanceReadSubjectURA error = %v", err)
@@ -392,8 +411,8 @@ func TestRuntimeGovernanceReadSubjectURAProjectsUserBusinessSubject(t *testing.T
 
 func TestRuntimeGovernanceReadSubjectURAAdmitsMatchingRuntimeOwner(t *testing.T) {
 	subject, err := RuntimeGovernanceReadSubjectURA(
-		"easynet:///r/example/device/dev-a",
-		"easynet:///r/example/device/dev-a",
+		"easynet:///r/example/agent/device.dev-a.runtime-governance",
+		"easynet:///r/example/agent/device.dev-a.runtime-governance",
 	)
 	if err != nil {
 		t.Fatalf("RuntimeGovernanceReadSubjectURA error = %v", err)
@@ -422,7 +441,7 @@ func TestAuthorizedRuntimeSessionHistoryRejectsPathSubstringOwnerSubjectBeforeRe
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    "easynet:///r/example/resource/device.dev-a/archive/resource/user.alice/session/session-1",
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -455,7 +474,7 @@ func TestAuthorizedRuntimeSessionHistoryAllowsSessionAuthorityWithExactDeviceSub
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
-			CalleeURA:     "easynet:///r/example/device/dev-a",
+			CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			SubjectURA:    subject,
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
@@ -465,7 +484,7 @@ func TestAuthorizedRuntimeSessionHistoryAllowsSessionAuthorityWithExactDeviceSub
 			}),
 		},
 		Filter: ReceiptFilter{
-			SubjectURAs: []string{"easynet:///r/example/device/dev-a"},
+			SubjectURAs: []string{"easynet:///r/example/agent/device.dev-a.runtime-governance"},
 		},
 		Limit: 10,
 	}
@@ -817,7 +836,8 @@ func (p *sessionDescriptorProviderFixture) ResolveDescriptor(context.Context, De
 	p.calls++
 	return DescriptorResolution{
 		State:                 DescriptorResolved,
-		DescriptorRef:         "easynet:///r/example/ability/invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		DescriptorRef:         "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+		ResolvedCalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		DescriptorFingerprint: "descriptor-fingerprint",
 		OwnerPrincipal:        PrincipalRef{URA: "easynet:///r/example/user/alice"},
 	}, nil

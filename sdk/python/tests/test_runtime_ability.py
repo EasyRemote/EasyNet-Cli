@@ -632,7 +632,10 @@ def test_runtime_ability_rejects_short_scope_for_descriptor_owner_mismatch() -> 
         RuntimeClient(transport),  # type: ignore[arg-type]
         AddressingClient(AxonAddressingTransport()),
     )
-    call = replace(_call(), callee_ura="easynet:///r/example/device/device-a")
+    call = replace(
+        _call(),
+        callee_ura="easynet:///r/example/agent/device.device-a.runtime-introspection",
+    )
     authority = _runtime_session_authority(call, "alice")
 
     with pytest.raises(

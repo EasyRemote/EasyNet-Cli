@@ -15,7 +15,7 @@ func TestDelegationProofFromMetadataProjectsTypedAuthority(t *testing.T) {
 		"issuer_ura":    "easynet:///r/example/user/alice",
 		"subject_ura":   "easynet:///r/example/user/alice",
 		"caller_ura":    "easynet:///r/example/agent/backend",
-		"audience":      "easynet:///r/example/device/dev-a",
+		"audience":      "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"scopes":        []string{"device.observe.*"},
 		"issued_at_ms":  float64(1000),
 		"expires_at_ms": float64(2000),
@@ -76,7 +76,7 @@ func TestAuthorityMetadataRejectsUnknownWireAndPayloadFields(t *testing.T) {
 		"issuer_ura":     "easynet:///r/example/user/alice",
 		"subject_ura":    "easynet:///r/example/user/alice",
 		"caller_ura":     "easynet:///r/example/agent/backend",
-		"audience":       "easynet:///r/example/device/dev-a",
+		"audience":       "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"scopes":         []string{"device.observe.*"},
 		"issued_at_ms":   float64(1000),
 		"expires_at_ms":  float64(2000),
@@ -195,9 +195,9 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 		SessionID:                "session-1",
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/device/dev-a",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -206,6 +206,55 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical User, Agent, or Resource") {
 		t.Fatalf("non-session subject error = %v", err)
+	}
+}
+
+func TestAuthorityMetadataRejectsDeviceAuthorityTargets(t *testing.T) {
+	delegationPayload := map[string]any{
+		"issuer_ura":    "easynet:///r/example/user/alice",
+		"subject_ura":   "easynet:///r/example/user/alice",
+		"caller_ura":    "easynet:///r/example/agent/backend",
+		"audience":      "easynet:///r/example/device/dev-a",
+		"scopes":        []string{"device.observe.*"},
+		"issued_at_ms":  float64(1000),
+		"expires_at_ms": float64(2000),
+	}
+	_, err := NewDelegationProofFromMetadata(authorityMetadataFixture(t, delegationPayload, []byte("delegation-signature")))
+	if err == nil || !strings.Contains(err.Error(), "delegation authority audience") {
+		t.Fatalf("device delegation audience error = %v", err)
+	}
+
+	sessionPayload := sessionAuthorityPayloadFixture()
+	sessionPayload["callee_ura"] = "easynet:///r/example/device/dev-a"
+	_, err = NewSessionAuthorityFromMetadata(authorityMetadataFixture(t, sessionPayload, []byte("session-signature")))
+	if err == nil || !strings.Contains(err.Error(), "session authority callee_ura") {
+		t.Fatalf("device session callee error = %v", err)
+	}
+
+	sessionPayload = sessionAuthorityPayloadFixture()
+	sessionPayload["audience"] = "easynet:///r/example/device/dev-a"
+	_, err = NewSessionAuthorityFromMetadata(authorityMetadataFixture(t, sessionPayload, []byte("session-signature")))
+	if err == nil || !strings.Contains(err.Error(), "session authority audience") {
+		t.Fatalf("device session audience error = %v", err)
+	}
+}
+
+func TestAuthorityMetadataAllowsSelectorAudiences(t *testing.T) {
+	for _, audience := range []string{"*", "easynet:///r/example/"} {
+		t.Run(audience, func(t *testing.T) {
+			payload := map[string]any{
+				"issuer_ura":    "easynet:///r/example/user/alice",
+				"subject_ura":   "easynet:///r/example/user/alice",
+				"caller_ura":    "easynet:///r/example/agent/backend",
+				"audience":      audience,
+				"scopes":        []string{"device.observe.*"},
+				"issued_at_ms":  float64(1000),
+				"expires_at_ms": float64(2000),
+			}
+			if _, err := NewDelegationProofFromMetadata(authorityMetadataFixture(t, payload, []byte("delegation-signature"))); err != nil {
+				t.Fatalf("NewDelegationProofFromMetadata(%q): %v", audience, err)
+			}
+		})
 	}
 }
 
@@ -219,9 +268,9 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 		SessionID:                "session-1",
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -293,7 +342,7 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 	if !decoded.MatchesScope("device.observe.health") || decoded.MatchesScope("device.write.health") {
 		t.Fatalf("scope matching drifted for decoded authority")
 	}
-	if !decoded.MatchesAudience("easynet:///r/example/device/dev-a") ||
+	if !decoded.MatchesAudience("easynet:///r/example/agent/device.dev-a.runtime-governance") ||
 		decoded.MatchesAudience("easynet:///r/example/device/dev-b") {
 		t.Fatalf("audience matching drifted for decoded authority")
 	}
@@ -320,7 +369,7 @@ func TestInvocationBuilderAttachesOneAuthorityMetadata(t *testing.T) {
 		"issuer_ura":    "easynet:///r/example/user/alice",
 		"subject_ura":   "easynet:///r/example/user/alice",
 		"caller_ura":    "easynet:///r/example/agent/backend",
-		"audience":      "*",
+		"audience":      "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"scopes":        []string{"*"},
 		"issued_at_ms":  float64(1000),
 		"expires_at_ms": float64(2000),
@@ -378,7 +427,7 @@ func TestAuthorityClientMintsDelegationThroughTransport(t *testing.T) {
 		"issuer_ura":    "easynet:///r/example/user/alice",
 		"subject_ura":   "easynet:///r/example/user/alice",
 		"caller_ura":    "easynet:///r/example/agent/backend",
-		"audience":      "easynet:///r/example/device/dev-a",
+		"audience":      "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"scopes":        []string{"device.observe.*"},
 		"issued_at_ms":  float64(1000),
 		"expires_at_ms": float64(2000),
@@ -395,7 +444,7 @@ func TestAuthorityClientMintsDelegationThroughTransport(t *testing.T) {
 		IssuerURA:   "easynet:///r/example/user/alice",
 		SubjectURA:  "easynet:///r/example/user/alice",
 		CallerURA:   "easynet:///r/example/agent/backend",
-		Audience:    "easynet:///r/example/device/dev-a",
+		Audience:    "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:      []string{"device.observe.*"},
 		IssuedAtMS:  1000,
 		ExpiresAtMS: 2000,
@@ -426,9 +475,9 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 		SessionID:                "session-1",
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -438,10 +487,10 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintSessionAuthority: %v", err)
 	}
-	if authority.Audience != "easynet:///r/example/device/dev-a" || authority.metadataValue != value {
+	if authority.Audience != "easynet:///r/example/agent/device.dev-a.runtime-governance" || authority.metadataValue != value {
 		t.Fatalf("unexpected authority: %#v", authority)
 	}
-	if transport.seenSession["audience"] != "easynet:///r/example/device/dev-a" {
+	if transport.seenSession["audience"] != "easynet:///r/example/agent/device.dev-a.runtime-governance" {
 		t.Fatalf("transport did not receive session request: %#v", transport.seenSession)
 	}
 }
@@ -463,9 +512,9 @@ func TestAuthorityClientProjectsCanonicalPrincipalURAsToCurrentSessionWire(t *te
 		SessionID:                "session-1",
 		SessionOwnerURA:          "easynet:///r/example/user/alice",
 		CreatorPrincipalURA:      "easynet:///r/example/authority",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -498,9 +547,9 @@ func TestAuthorityClientRejectsConflictingCanonicalPrincipalURAs(t *testing.T) {
 		SessionOwnerUserID:       "bob",
 		SessionOwnerURA:          "easynet:///r/example/user/alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -532,9 +581,9 @@ func TestCanonicalAuthorityClientMintsSessionMetadataWithOpaqueSigner(t *testing
 		SessionID:                "session-1",
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -563,9 +612,9 @@ func TestCanonicalAuthorityClientMintsSessionMetadataWithOpaqueSigner(t *testing
 		SessionID:                "session-2",
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-2",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -588,7 +637,7 @@ func TestAuthorityClientRejectsInvalidMintBeforeTransport(t *testing.T) {
 		IssuerURA:   "easynet:///r/example/user/alice",
 		SubjectURA:  "easynet:///r/example/user/alice",
 		CallerURA:   "easynet:///r/example/agent/backend",
-		Audience:    "easynet:///r/example/device/dev-a",
+		Audience:    "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		IssuedAtMS:  1000,
 		ExpiresAtMS: 2000,
 	})
@@ -604,9 +653,9 @@ func TestAuthorityClientRejectsInvalidMintBeforeTransport(t *testing.T) {
 		SessionID:                "session-1",
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
-		CalleeURA:                "easynet:///r/example/device/dev-a",
+		CalleeURA:                "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
-		Audience:                 "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
 		AllowedFollowupAbilities: []string{"device.observe.health"},
@@ -681,9 +730,9 @@ func sessionAuthorityPayloadFixture() map[string]any {
 		"session_id":                 "session-1",
 		"session_owner_user_id":      "alice",
 		"creator_principal_id":       "easynet:///r/example/agent/backend",
-		"callee_ura":                 "easynet:///r/example/device/dev-a",
+		"callee_ura":                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"subject_ura":                "easynet:///r/example/resource/user.alice/session/session-1",
-		"audience":                   "easynet:///r/example/device/dev-a",
+		"audience":                   "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"scopes":                     []string{"device.observe.*"},
 		"allowed_actions":            []string{"read"},
 		"allowed_followup_abilities": []string{"device.observe.health"},

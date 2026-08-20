@@ -19,7 +19,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_authority.py",
-          "sha256": "ce7e255e3ff515060b4bdf848f2aeff2d8123c6ec430c1f3e37f2ac77adbe161"
+          "sha256": "0e2d4c9f2353cbd24a9a1d6a0fdae761b7546b1ecc853065fddf59f764bed46d"
         }
       ],
       "profile": "authority"
@@ -74,7 +74,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_runtime_ability.py",
-          "sha256": "dbdd1989cb5107f45786eaec59f2a05749707666800eaf77a441ab7a62a1931a"
+          "sha256": "ef7a130bc24b4ccf8ee83e2bc25d37553d42459bb877bd0f41fc8e07d245f977"
         }
       ],
       "profile": "runtime_core"
@@ -96,7 +96,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_authority.py",
-          "sha256": "ce7e255e3ff515060b4bdf848f2aeff2d8123c6ec430c1f3e37f2ac77adbe161"
+          "sha256": "0e2d4c9f2353cbd24a9a1d6a0fdae761b7546b1ecc853065fddf59f764bed46d"
         }
       ],
       "profile": "runtime_core"
@@ -272,7 +272,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_receipt.py",
-          "sha256": "ec98f788b51a8f5715808bbb9f3f9c6d1539e087b925e2eb57ada696e1fd8826"
+          "sha256": "880f1ccb971c839c9699b9d5c1eff1e86599019c478e003ee5605c279910a564"
         }
       ],
       "profile": "receipts"
@@ -493,7 +493,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_runtime_ability.py",
-          "sha256": "dbdd1989cb5107f45786eaec59f2a05749707666800eaf77a441ab7a62a1931a"
+          "sha256": "ef7a130bc24b4ccf8ee83e2bc25d37553d42459bb877bd0f41fc8e07d245f977"
         }
       ]
     },

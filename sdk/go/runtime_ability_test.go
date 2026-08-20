@@ -500,7 +500,7 @@ func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithGovernanceReadSu
 		t.Fatalf("NewRuntimeAbilityClient: %v", err)
 	}
 	call := runtimeAbilityTestContext()
-	call.CalleeURA = "easynet:///r/example/device/device-1"
+	call.CalleeURA = "easynet:///r/example/agent/device.device-1.runtime-introspection"
 	call.SubjectURA = "easynet:///r/example/user/alice"
 
 	draft, err := client.buildWithCallModePolicy(
@@ -641,7 +641,7 @@ func TestRuntimeAbilityClientCatalogueReadUsesSessionOwnerForGovernanceSubject(t
 		t.Fatalf("NewRuntimeAbilityClient: %v", err)
 	}
 	call := runtimeAbilityTestContext()
-	call.CalleeURA = "easynet:///r/example/device/device-1"
+	call.CalleeURA = "easynet:///r/example/agent/device.device-1.runtime-introspection"
 	call.SubjectURA = "easynet:///r/example/user/alice"
 	authority := runtimeAbilitySessionAuthority(t, call, "c658f249-e5b5-4126-8a5e-79d1d2322885")
 	authority.CalleeURA = "easynet:///r/example/agent/device.device-1.runtime-introspection"
@@ -1142,7 +1142,7 @@ func TestRuntimeAbilityClientRejectsShortScopeForDescriptorOwnerMismatch(t *test
 		t.Fatalf("NewRuntimeAbilityClient: %v", err)
 	}
 	call := runtimeAbilityTestContext()
-	call.CalleeURA = "easynet:///r/example/device/device-a"
+	call.CalleeURA = "easynet:///r/example/agent/device.device-a.runtime-introspection"
 	authority := runtimeAbilitySessionAuthority(t, call, "alice")
 	call.Authority = &authority
 

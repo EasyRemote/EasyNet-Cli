@@ -134,6 +134,17 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         self.assertEqual(fixture.runtime.prepare_calls, 1)
         self.assertEqual(fixture.runtime.submit_calls, 0)
 
+    def test_prepare_uses_descriptor_owner_callee_not_device_target(self) -> None:
+        fixture = _SessionFixture()
+        prepared = fixture.session.prepare(_intent())
+
+        self.assertEqual(prepared.intent.target.ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(
+            prepared.draft.callee_ura,
+            "easynet:///r/example/agent/device.dev-a.runtime-governance",
+        )
+        self.assertNotEqual(prepared.draft.callee_ura, prepared.intent.target.ura)
+
     def test_descriptor_resolution_requires_descriptor_vocabulary(self) -> None:
         canonical = _descriptor_resolution_from_error(
             SDKError(
@@ -625,6 +636,7 @@ class _DescriptorProvider:
         return DescriptorResolution(
             state=DescriptorResolutionState.RESOLVED,
             descriptor_ref="easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            resolved_callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
             descriptor_fingerprint="descriptor-fingerprint",
             owner_principal=PrincipalRef("easynet:///r/example/user/alice"),
         )
@@ -706,9 +718,7 @@ def _intent(caller: str = "easynet:///r/example/agent/backend") -> InvocationInt
         acting_principal=ActingPrincipalRef(
             PrincipalRef("easynet:///r/example/agent/backend")
         ),
-        target=RuntimeTargetRef(
-            "easynet:///r/example/agent/device.dev-a.runtime-governance"
-        ),
+        target=RuntimeTargetRef("easynet:///r/example/device/dev-a"),
         ability=AbilityRef("invocation.history.list"),
         subject=SubjectRef(
             "easynet:///r/example/resource/user.alice/session/session-1",

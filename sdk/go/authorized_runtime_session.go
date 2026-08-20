@@ -88,6 +88,7 @@ type DescriptorResolutionRequest struct {
 type DescriptorResolution struct {
 	State                 DescriptorResolutionState `json:"state"`
 	DescriptorRef         string                    `json:"descriptor_ref,omitempty"`
+	ResolvedCalleeURA     string                    `json:"resolved_callee_ura,omitempty"`
 	DescriptorFingerprint string                    `json:"descriptor_fingerprint,omitempty"`
 	OwnerPrincipal        PrincipalRef              `json:"owner_principal,omitempty"`
 	Reason                string                    `json:"reason,omitempty"`
@@ -281,6 +282,11 @@ func (s *AuthorizedRuntimeSession) Prepare(ctx context.Context, intent Invocatio
 	if err := validateDescriptorResolution(resolution); err != nil {
 		return PreparedInvocationState{}, err
 	}
+	calleeURA, err := resolvedDescriptorCalleeURA(ctx, resolution)
+	if err != nil {
+		return PreparedInvocationState{}, err
+	}
+	resolution.ResolvedCalleeURA = calleeURA
 	nonce, err := s.clock.NewNonceBase64()
 	if err != nil {
 		return PreparedInvocationState{}, v3SessionError(ErrProviderUnavailable, "prepare", "nonce source failed", sessionIntentDetails(intent), err)
@@ -288,7 +294,7 @@ func (s *AuthorizedRuntimeSession) Prepare(ctx context.Context, intent Invocatio
 	metadata := runtimeSessionIntentMetadata(intent, resolution)
 	draft, err := NewInvocationBuilder().
 		WithCallerURA(intent.CallerIdentity.Principal.URA).
-		WithCalleeURA(intent.Target.URA).
+		WithCalleeURA(calleeURA).
 		WithSubjectURA(intent.Subject.URA).
 		WithDescriptorRef(resolution.DescriptorRef).
 		WithNonceBase64(nonce).
@@ -670,8 +676,20 @@ func (p RuntimeClientDescriptorProvider) ResolveDescriptor(ctx context.Context, 
 	return DescriptorResolution{
 		State:                 DescriptorResolved,
 		DescriptorRef:         ref,
+		ResolvedCalleeURA:     resolvedDescriptorCalleeURAFromRef(ctx, ref),
 		DescriptorFingerprint: descriptorFingerprint(ref),
 	}, nil
+}
+
+func resolvedDescriptorCalleeURAFromRef(ctx context.Context, descriptorRef string) string {
+	projection, err := NewCanonicalAddressing().ProjectDescriptorRef(ctx, CanonicalDescriptorRefRequest{
+		DescriptorRef: descriptorRef,
+	})
+	if err != nil {
+		return ""
+	}
+	owner, _ := projection.Components["owner_ura"].(string)
+	return strings.TrimSpace(owner)
 }
 
 func (p RuntimeClientDescriptorProvider) requireClient() (*RuntimeClient, error) {
@@ -780,6 +798,31 @@ func validateDescriptorResolution(resolution DescriptorResolution) error {
 	}
 }
 
+func resolvedDescriptorCalleeURA(ctx context.Context, resolution DescriptorResolution) (string, error) {
+	if callee := strings.TrimSpace(resolution.ResolvedCalleeURA); callee != "" {
+		if err := validateCallableAuthorityTarget("resolved descriptor callee_ura", callee); err != nil {
+			return "", v3SessionError(ErrInvalidInvocation, "descriptor", err.Error(), nil, err)
+		}
+		return callee, nil
+	}
+	projection, err := NewCanonicalAddressing().ProjectDescriptorRef(ctx, CanonicalDescriptorRefRequest{
+		DescriptorRef: resolution.DescriptorRef,
+	})
+	if err != nil {
+		return "", v3SessionError(ErrDescriptorNotFound, "descriptor", "resolved descriptor_ref does not project to a callable owner", map[string]any{
+			"descriptor_ref": resolution.DescriptorRef,
+		}, err)
+	}
+	owner, _ := projection.Components["owner_ura"].(string)
+	if err := validateCallableAuthorityTarget("resolved descriptor callee_ura", owner); err != nil {
+		return "", v3SessionError(ErrInvalidInvocation, "descriptor", err.Error(), map[string]any{
+			"descriptor_ref": resolution.DescriptorRef,
+			"owner_ura":      owner,
+		}, err)
+	}
+	return owner, nil
+}
+
 func validateAuthorizedRuntimeBinding(artifact AuthorityArtifact, prepared PreparedInvocationState) error {
 	details := sessionPreparedDetails(prepared)
 	details["authority_session_subject"] = artifact.Subject.URA
@@ -813,8 +856,8 @@ func validateDelegationAuthorityForSession(authority DelegationProof, prepared P
 	if strings.TrimSpace(authority.SubjectURA) != strings.TrimSpace(intent.Subject.URA) {
 		return v3SessionError(ErrAuthoritySubjectMismatch, "authorize", "authority subject does not admit invocation subject", details, nil)
 	}
-	if !authority.MatchesAudience(intent.Target.URA) || !authority.MatchesScope(intent.Ability.Name) {
-		return v3SessionError(ErrAuthorityDenied, "authorize", "authority does not admit target or ability", details, nil)
+	if !authority.MatchesAudience(prepared.Draft.CalleeURA()) || !authority.MatchesScope(intent.Ability.Name) {
+		return v3SessionError(ErrAuthorityDenied, "authorize", "authority does not admit resolved callee or ability", details, nil)
 	}
 	return nil
 }
@@ -825,14 +868,14 @@ func validateSessionAuthorityForSession(authority SessionAuthority, prepared Pre
 	if strings.TrimSpace(authority.IssuerURA) != strings.TrimSpace(intent.CallerIdentity.Principal.URA) {
 		return v3SessionError(ErrAuthorityDenied, "authorize", "authority issuer does not match caller identity", details, nil)
 	}
-	if strings.TrimSpace(authority.CalleeURA) != strings.TrimSpace(intent.Target.URA) {
-		return v3SessionError(ErrAuthorityDenied, "authorize", "authority target does not match invocation target", details, nil)
+	if strings.TrimSpace(authority.CalleeURA) != strings.TrimSpace(prepared.Draft.CalleeURA()) {
+		return v3SessionError(ErrAuthorityDenied, "authorize", "authority callee does not match resolved descriptor callee", details, nil)
 	}
 	if !runtimeSessionAuthorityAdmitsSubject(&authority, intent.Subject.URA) {
 		return v3SessionError(ErrAuthoritySubjectMismatch, "authorize", "authority subject does not admit invocation subject", details, nil)
 	}
-	if !authority.MatchesAudience(intent.Target.URA) || !authority.MatchesScope(intent.Ability.Name) {
-		return v3SessionError(ErrAuthorityDenied, "authorize", "authority does not admit target or ability", details, nil)
+	if !authority.MatchesAudience(prepared.Draft.CalleeURA()) || !authority.MatchesScope(intent.Ability.Name) {
+		return v3SessionError(ErrAuthorityDenied, "authorize", "authority does not admit resolved callee or ability", details, nil)
 	}
 	return nil
 }
@@ -1080,6 +1123,7 @@ func runtimeSessionIntentMetadata(intent InvocationIntent, resolution Descriptor
 		"caller_ura":             intent.CallerIdentity.Principal.URA,
 		"acting_principal_ura":   intent.ActingPrincipal.Principal.URA,
 		"target_ura":             intent.Target.URA,
+		"callee_ura":             resolution.ResolvedCalleeURA,
 		"ability":                intent.Ability.Name,
 		"subject_ura":            intent.Subject.URA,
 		"subject_derivation":     intent.Subject.DerivationRule,
@@ -1123,6 +1167,7 @@ func preparationFingerprint(prepared PreparedInvocationState) string {
 		"caller":                 prepared.Intent.CallerIdentity.Principal.URA,
 		"acting_principal":       prepared.Intent.ActingPrincipal.Principal.URA,
 		"target":                 prepared.Intent.Target.URA,
+		"callee":                 prepared.Draft.CalleeURA(),
 		"ability":                prepared.Intent.Ability.Name,
 		"subject":                prepared.Intent.Subject.URA,
 		"call_mode":              prepared.Intent.CallMode,

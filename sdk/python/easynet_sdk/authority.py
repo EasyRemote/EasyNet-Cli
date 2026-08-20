@@ -991,6 +991,7 @@ def _validate_delegation(proof: DelegationProof) -> None:
     )
     if not proof.scopes:
         raise _invalid_authority("delegation authority scopes are required")
+    _validate_authority_audience_selector("delegation authority audience", proof.audience)
     if proof.expires_at_ms <= proof.issued_at_ms:
         raise _invalid_authority(
             "delegation authority expires_at_ms must be greater than issued_at_ms"
@@ -1037,6 +1038,8 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
         raise _invalid_authority(
             "session authority allowed follow-up abilities are required"
         )
+    _validate_callable_authority_target("session authority callee_ura", authority.callee_ura)
+    _validate_authority_audience_selector("session authority audience", authority.audience)
     if authority.expires_at_ms <= authority.issued_at_ms:
         raise _invalid_authority(
             "session authority expires_at_ms must be greater than issued_at_ms"
@@ -1046,6 +1049,29 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
     _validate_session_authority_subject_binding(
         authority.subject_ura, authority.session_owner_user_id, authority.session_id
     )
+
+
+def _validate_callable_authority_target(label: str, target_ura: str) -> None:
+    try:
+        projection = parse_ura(target_ura.strip())
+    except SDKError as exc:
+        raise _invalid_authority(
+            f"{label} must be a canonical Agent, Service, or Authority URA",
+            exc,
+        ) from exc
+    if projection.kind not in {"agent", "service", "authority"}:
+        raise _invalid_authority(
+            f"{label} must identify a callable Agent, Service, or Authority principal"
+        )
+
+
+def _validate_authority_audience_selector(label: str, audience: str) -> None:
+    selector = audience.strip()
+    if selector == "*":
+        return
+    if selector.startswith("easynet:///r/") and selector.endswith("/"):
+        return
+    _validate_callable_authority_target(label, selector)
 
 
 def _reject_all_zero_authority_fields(fields: Mapping[str, str]) -> None:

@@ -317,7 +317,7 @@ def test_receipt_read_call_context_requires_complete_tuple_fields() -> None:
                 "issuer_ura": "easynet:///r/example/user/backend",
                 "subject_ura": "easynet:///r/example/device/dev-a",
                 "caller_ura": "easynet:///r/example/user/backend",
-                "audience": "easynet:///r/example/device/dev-a",
+                "audience": "easynet:///r/example/agent/device.dev-a.runtime-governance",
                 "scopes": ["invocation.history.*"],
                 "issued_at_ms": 1000,
                 "expires_at_ms": 2000,

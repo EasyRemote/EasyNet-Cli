@@ -2445,7 +2445,7 @@
         },
         {
           "item": "DescriptorResolution",
-          "sha256": "f1cc9ed5465bb44e6d51392b79eccd012fbdbff192f949374394ecd8025a2fd7"
+          "sha256": "7c9c9c8139d8938d08388f0a2d9ff7af29a71bf2909ab28da388735f34a82387"
         },
         {
           "item": "DescriptorResolutionRequest",
@@ -2720,6 +2720,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "DescriptorResolution.ResolvedCalleeURA",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "DescriptorResolution.State",
           "sha256": "90aa77c2b9451ad91d7aa160c3906c74632de2becc49494f31cf83d747d7bdcb"
         },
@@ -2872,7 +2876,7 @@
             },
             {
               "item": "DescriptorResolution",
-              "sha256": "f1cc9ed5465bb44e6d51392b79eccd012fbdbff192f949374394ecd8025a2fd7"
+              "sha256": "7c9c9c8139d8938d08388f0a2d9ff7af29a71bf2909ab28da388735f34a82387"
             },
             {
               "item": "DescriptorResolutionRequest",
@@ -3144,6 +3148,10 @@
             },
             {
               "item": "DescriptorResolution.Reason",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DescriptorResolution.ResolvedCalleeURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -3299,7 +3307,7 @@
             },
             {
               "item": "DescriptorResolution",
-              "sha256": "f1cc9ed5465bb44e6d51392b79eccd012fbdbff192f949374394ecd8025a2fd7"
+              "sha256": "7c9c9c8139d8938d08388f0a2d9ff7af29a71bf2909ab28da388735f34a82387"
             },
             {
               "item": "DescriptorResolutionRequest",
@@ -3574,6 +3582,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "DescriptorResolution.ResolvedCalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DescriptorResolution.State",
               "sha256": "90aa77c2b9451ad91d7aa160c3906c74632de2becc49494f31cf83d747d7bdcb"
             },
@@ -3723,7 +3735,7 @@
         },
         {
           "item": "DescriptorResolution",
-          "sha256": "93e38754784c8891cfa2ba2957109dce6a1ff6db8edcf1fb5c6736659f76a5ba"
+          "sha256": "f720e6a583244af375f832f1518c444d0a0f9842d6add563aa4a69e83575a989"
         },
         {
           "item": "DescriptorResolutionRequest",
@@ -3739,7 +3751,7 @@
         },
         {
           "item": "RuntimeClientDescriptorProvider",
-          "sha256": "c72b93be95f5d5ec25d30093c439a4a8ec7215b50f90c223b96aecfce0ba2e24"
+          "sha256": "830ae946757878a68be0c821ade9bd5a8dca1109b773bff980c15a9409d53b08"
         },
         {
           "item": "parse_ability_descriptor_ref",
@@ -3934,6 +3946,10 @@
           "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
         },
         {
+          "item": "DescriptorResolution.resolved_callee_ura",
+          "sha256": "44e3297c8270157bc2fa5cb3006925bb1480d0398c54757a2006a9650d5d839f"
+        },
+        {
           "item": "DescriptorResolution.state",
           "sha256": "0d2a19e29b7bb3f9e84712ebea0a84e1eaa552ade8ac4c0904040d381965e75b"
         },
@@ -4011,7 +4027,7 @@
         },
         {
           "item": "RuntimeClientDescriptorProvider.resolve_descriptor",
-          "sha256": "b2aa8c65730fb9389e6c489df9035d0fd478f5048f36c89ee9ae7a125c48024c"
+          "sha256": "f9f2dbba3d9ba5096aa304462268ded3be9338395fb4196387a5a1cd4c4f83f1"
         }
       ],
       "step_shape_evidence": [
@@ -4058,7 +4074,7 @@
             },
             {
               "item": "DescriptorResolution",
-              "sha256": "93e38754784c8891cfa2ba2957109dce6a1ff6db8edcf1fb5c6736659f76a5ba"
+              "sha256": "f720e6a583244af375f832f1518c444d0a0f9842d6add563aa4a69e83575a989"
             },
             {
               "item": "DescriptorResolutionRequest",
@@ -4074,7 +4090,7 @@
             },
             {
               "item": "RuntimeClientDescriptorProvider",
-              "sha256": "c72b93be95f5d5ec25d30093c439a4a8ec7215b50f90c223b96aecfce0ba2e24"
+              "sha256": "830ae946757878a68be0c821ade9bd5a8dca1109b773bff980c15a9409d53b08"
             },
             {
               "item": "parse_ability_descriptor_ref",
@@ -4269,6 +4285,10 @@
               "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
             },
             {
+              "item": "DescriptorResolution.resolved_callee_ura",
+              "sha256": "44e3297c8270157bc2fa5cb3006925bb1480d0398c54757a2006a9650d5d839f"
+            },
+            {
               "item": "DescriptorResolution.state",
               "sha256": "0d2a19e29b7bb3f9e84712ebea0a84e1eaa552ade8ac4c0904040d381965e75b"
             },
@@ -4346,7 +4366,7 @@
             },
             {
               "item": "RuntimeClientDescriptorProvider.resolve_descriptor",
-              "sha256": "b2aa8c65730fb9389e6c489df9035d0fd478f5048f36c89ee9ae7a125c48024c"
+              "sha256": "f9f2dbba3d9ba5096aa304462268ded3be9338395fb4196387a5a1cd4c4f83f1"
             }
           ]
         },
@@ -4393,7 +4413,7 @@
             },
             {
               "item": "DescriptorResolution",
-              "sha256": "93e38754784c8891cfa2ba2957109dce6a1ff6db8edcf1fb5c6736659f76a5ba"
+              "sha256": "f720e6a583244af375f832f1518c444d0a0f9842d6add563aa4a69e83575a989"
             },
             {
               "item": "DescriptorResolutionRequest",
@@ -4409,7 +4429,7 @@
             },
             {
               "item": "RuntimeClientDescriptorProvider",
-              "sha256": "c72b93be95f5d5ec25d30093c439a4a8ec7215b50f90c223b96aecfce0ba2e24"
+              "sha256": "830ae946757878a68be0c821ade9bd5a8dca1109b773bff980c15a9409d53b08"
             },
             {
               "item": "parse_ability_descriptor_ref",
@@ -4604,6 +4624,10 @@
               "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
             },
             {
+              "item": "DescriptorResolution.resolved_callee_ura",
+              "sha256": "44e3297c8270157bc2fa5cb3006925bb1480d0398c54757a2006a9650d5d839f"
+            },
+            {
               "item": "DescriptorResolution.state",
               "sha256": "0d2a19e29b7bb3f9e84712ebea0a84e1eaa552ade8ac4c0904040d381965e75b"
             },
@@ -4681,7 +4705,7 @@
             },
             {
               "item": "RuntimeClientDescriptorProvider.resolve_descriptor",
-              "sha256": "b2aa8c65730fb9389e6c489df9035d0fd478f5048f36c89ee9ae7a125c48024c"
+              "sha256": "f9f2dbba3d9ba5096aa304462268ded3be9338395fb4196387a5a1cd4c4f83f1"
             }
           ]
         }
@@ -151243,7 +151267,7 @@
         },
         {
           "item": "AuthorizedRuntimeSession",
-          "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+          "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
         },
         {
           "item": "PrepareOptions",
@@ -151319,7 +151343,7 @@
         },
         {
           "item": "AuthorizedRuntimeSession.prepare",
-          "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+          "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
         },
         {
           "item": "AuthorizedRuntimeSession.sign",
@@ -151646,7 +151670,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -151722,7 +151746,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",
@@ -152049,7 +152073,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -152125,7 +152149,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",
@@ -152452,7 +152476,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -152528,7 +152552,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",
@@ -152855,7 +152879,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -152931,7 +152955,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",
@@ -153258,7 +153282,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -153334,7 +153358,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",
@@ -153661,7 +153685,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -153737,7 +153761,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",
@@ -154064,7 +154088,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -154140,7 +154164,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",
@@ -154467,7 +154491,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession",
-              "sha256": "f8cda5600f4cf307faf8a54e2cc9a7e74729a9e6f625910e5f67b04fc3a15cf5"
+              "sha256": "c69fae9e2da7765c24dbf7ba65bf4899b750243d22b166ba00d288b680d8b470"
             },
             {
               "item": "PrepareOptions",
@@ -154543,7 +154567,7 @@
             },
             {
               "item": "AuthorizedRuntimeSession.prepare",
-              "sha256": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb"
+              "sha256": "8af5cf3d1c45e08c0302401ec20885412b6ffcbb4ef529ff78b2bec9142f4b2e"
             },
             {
               "item": "AuthorizedRuntimeSession.sign",

@@ -32,7 +32,7 @@ class AuthorityTests(unittest.TestCase):
                 creator_principal_id="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
-                audience="easynet:///r/example/device/dev-a",
+                audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                 scopes=("device.observe.*",),
                 allowed_actions=("read",),
                 allowed_followup_abilities=("device.observe.health",),
@@ -41,7 +41,7 @@ class AuthorityTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(authority.audience, "easynet:///r/example/device/dev-a")
+        self.assertEqual(authority.audience, "easynet:///r/example/agent/device.dev-a.runtime-health")
         self.assertEqual(len(authority.signature), 64)
         self.assertEqual(len(signer.payloads), 1)
 
@@ -55,7 +55,7 @@ class AuthorityTests(unittest.TestCase):
                     creator_principal_id="easynet:///r/example/agent/backend",
                     callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/resource/user.alice/session/session-2",
-                    audience="easynet:///r/example/device/dev-a",
+                    audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                     scopes=("device.observe.*",),
                     allowed_actions=("read",),
                     allowed_followup_abilities=("device.observe.health",),
@@ -70,7 +70,7 @@ class AuthorityTests(unittest.TestCase):
                 "issuer_ura": "easynet:///r/example/user/alice",
                 "subject_ura": "easynet:///r/example/user/alice",
                 "caller_ura": "easynet:///r/example/agent/backend",
-                "audience": "easynet:///r/example/device/dev-a",
+                "audience": "easynet:///r/example/agent/device.dev-a.runtime-health",
                 "scopes": ["device.observe.*"],
                 "issued_at_ms": 1000,
                 "expires_at_ms": 2000,
@@ -115,7 +115,7 @@ class AuthorityTests(unittest.TestCase):
                         "issuer_ura": "easynet:///r/example/user/alice",
                         "subject_ura": "easynet:///r/example/user/alice",
                         "caller_ura": "easynet:///r/example/agent/backend",
-                        "audience": "easynet:///r/example/device/dev-a",
+                        "audience": "easynet:///r/example/agent/device.dev-a.runtime-health",
                         "scopes": ["device.observe.*"],
                         "issued_at_ms": 1000,
                         "expires_at_ms": 2000,
@@ -129,7 +129,7 @@ class AuthorityTests(unittest.TestCase):
             "issuer_ura": "easynet:///r/example/user/alice",
             "subject_ura": "easynet:///r/example/user/alice",
             "caller_ura": "easynet:///r/example/agent/backend",
-            "audience": "easynet:///r/example/device/dev-a",
+            "audience": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "scopes": ["device.observe.*"],
             "issued_at_ms": 1000,
             "expires_at_ms": 2000,
@@ -161,6 +161,51 @@ class AuthorityTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SDKError, "session_owner_user_id must not be all-zero"):
             SessionAuthority.from_metadata(value)
+
+    def test_authority_metadata_rejects_device_authority_targets(self) -> None:
+        delegation_payload = {
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": "easynet:///r/example/user/alice",
+            "caller_ura": "easynet:///r/example/agent/backend",
+            "audience": "easynet:///r/example/device/dev-a",
+            "scopes": ["device.observe.*"],
+            "issued_at_ms": 1000,
+            "expires_at_ms": 2000,
+        }
+        with self.assertRaisesRegex(SDKError, "delegation authority audience"):
+            DelegationProof.from_metadata(
+                _authority_metadata(delegation_payload, b"delegation-signature")
+            )
+
+        session_payload = _session_authority_payload()
+        session_payload["callee_ura"] = "easynet:///r/example/device/dev-a"
+        with self.assertRaisesRegex(SDKError, "session authority callee_ura"):
+            SessionAuthority.from_metadata(
+                _authority_metadata(session_payload, b"session-signature")
+            )
+
+        session_payload = _session_authority_payload()
+        session_payload["audience"] = "easynet:///r/example/device/dev-a"
+        with self.assertRaisesRegex(SDKError, "session authority audience"):
+            SessionAuthority.from_metadata(
+                _authority_metadata(session_payload, b"session-signature")
+            )
+
+    def test_authority_metadata_allows_selector_audiences(self) -> None:
+        for audience in ("*", "easynet:///r/example/"):
+            with self.subTest(audience=audience):
+                payload = {
+                    "issuer_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/user/alice",
+                    "caller_ura": "easynet:///r/example/agent/backend",
+                    "audience": audience,
+                    "scopes": ["device.observe.*"],
+                    "issued_at_ms": 1000,
+                    "expires_at_ms": 2000,
+                }
+                DelegationProof.from_metadata(
+                    _authority_metadata(payload, b"delegation-signature")
+                )
 
     def test_session_authority_binds_canonical_subject(self) -> None:
         payload = _session_authority_payload()
@@ -224,7 +269,7 @@ class AuthorityTests(unittest.TestCase):
                     creator_principal_id="easynet:///r/example/agent/backend",
                     callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/device/dev-a",
-                    audience="easynet:///r/example/device/dev-a",
+                    audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                     scopes=("device.observe.*",),
                     allowed_actions=("read",),
                     allowed_followup_abilities=("device.observe.health",),
@@ -241,7 +286,7 @@ class AuthorityTests(unittest.TestCase):
                     "issuer_ura": "easynet:///r/example/user/alice",
                     "subject_ura": "easynet:///r/example/user/alice",
                     "caller_ura": "easynet:///r/example/agent/backend",
-                    "audience": "*",
+                    "audience": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "scopes": ["*"],
                     "issued_at_ms": 1000,
                     "expires_at_ms": 2000,
@@ -301,7 +346,7 @@ class AuthorityTests(unittest.TestCase):
                 "issuer_ura": "easynet:///r/example/user/alice",
                 "subject_ura": "easynet:///r/example/user/alice",
                 "caller_ura": "easynet:///r/example/agent/backend",
-                "audience": "easynet:///r/example/device/dev-a",
+                "audience": "easynet:///r/example/agent/device.dev-a.runtime-health",
                 "scopes": ["device.observe.*"],
                 "issued_at_ms": 1000,
                 "expires_at_ms": 2000,
@@ -318,7 +363,7 @@ class AuthorityTests(unittest.TestCase):
                 issuer_ura="easynet:///r/example/user/alice",
                 subject_ura="easynet:///r/example/user/alice",
                 caller_ura="easynet:///r/example/agent/backend",
-                audience="easynet:///r/example/device/dev-a",
+                audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                 scopes=("device.observe.*",),
                 issued_at_ms=1000,
                 expires_at_ms=2000,
@@ -349,7 +394,7 @@ class AuthorityTests(unittest.TestCase):
                 creator_principal_id="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
-                audience="easynet:///r/example/device/dev-a",
+                audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                 scopes=("device.observe.*",),
                 allowed_actions=("read",),
                 allowed_followup_abilities=("device.observe.health",),
@@ -358,9 +403,9 @@ class AuthorityTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(authority.audience, "easynet:///r/example/device/dev-a")
+        self.assertEqual(authority.audience, "easynet:///r/example/agent/device.dev-a.runtime-health")
         self.assertEqual(authority.metadata().value, value)
-        self.assertEqual(transport.seen_session["audience"], "easynet:///r/example/device/dev-a")
+        self.assertEqual(transport.seen_session["audience"], "easynet:///r/example/agent/device.dev-a.runtime-health")
 
     def test_authority_client_projects_canonical_principal_uras_to_current_session_wire(self) -> None:
         payload = _session_authority_payload()
@@ -383,7 +428,7 @@ class AuthorityTests(unittest.TestCase):
                 creator_principal_ura="easynet:///r/example/authority",
                 callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
-                audience="easynet:///r/example/device/dev-a",
+                audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                 scopes=("device.observe.*",),
                 allowed_actions=("read",),
                 allowed_followup_abilities=("device.observe.health",),
@@ -411,7 +456,7 @@ class AuthorityTests(unittest.TestCase):
             creator_principal_id="easynet:///r/example/authority",
             callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
             subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
-            audience="easynet:///r/example/device/dev-a",
+            audience="easynet:///r/example/agent/device.dev-a.runtime-health",
             scopes=("device.observe.*",),
             allowed_actions=("read",),
             allowed_followup_abilities=("device.observe.health",),
@@ -439,7 +484,7 @@ class AuthorityTests(unittest.TestCase):
                     creator_principal_id="easynet:///r/example/agent/backend",
                     callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
-                    audience="easynet:///r/example/device/dev-a",
+                    audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                     scopes=("device.observe.*",),
                     allowed_actions=("read",),
                     allowed_followup_abilities=("device.observe.health",),
@@ -460,7 +505,7 @@ class AuthorityTests(unittest.TestCase):
                     issuer_ura="easynet:///r/example/user/alice",
                     subject_ura="easynet:///r/example/user/alice",
                     caller_ura="easynet:///r/example/agent/backend",
-                    audience="easynet:///r/example/device/dev-a",
+                    audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                     scopes=(),
                     issued_at_ms=1000,
                     expires_at_ms=2000,
@@ -478,7 +523,7 @@ class AuthorityTests(unittest.TestCase):
                     creator_principal_id="easynet:///r/example/agent/backend",
                     callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
-                    audience="easynet:///r/example/device/dev-a",
+                    audience="easynet:///r/example/agent/device.dev-a.runtime-health",
                     scopes=("device.observe.*",),
                     allowed_actions=("read",),
                     allowed_followup_abilities=("device.observe.health",),
@@ -517,7 +562,7 @@ def _session_authority_payload() -> dict[str, object]:
         "creator_principal_id": "easynet:///r/example/agent/backend",
         "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
         "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
-        "audience": "easynet:///r/example/device/dev-a",
+        "audience": "easynet:///r/example/agent/device.dev-a.runtime-health",
         "scopes": ["device.observe.*"],
         "allowed_actions": ["read"],
         "allowed_followup_abilities": ["device.observe.health"],
