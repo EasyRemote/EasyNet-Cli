@@ -337,6 +337,15 @@ async fn run_attachment(
         })
     };
     let mut render_sequence: u64 = 0;
+    // CDP event fan-out is subscription-based. The interactive viewer
+    // consumes only render frames and input acks; unconditionally
+    // forwarding every Page/DOM/Runtime event flooded the downstream
+    // callback queue on busy pages, and overflow shedding then dropped
+    // fresh render frames while stale ones aged at the queue head — the
+    // viewer experienced that as severe latency. Agents that want raw
+    // events opt in per method (or "*") via a cdp.subscribe frame.
+    let mut cdp_event_subscriptions: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     {
         // The plugin owns the screencast lifecycle: start immediately so
         // consumers only ever observe frames. Bounded capture size — every
@@ -423,6 +432,14 @@ async fn run_attachment(
                 let Some(frame) = frame else {
                     break;
                 };
+                if let Some(reply) =
+                    handle_cdp_subscription_frame(&frame, &mut cdp_event_subscriptions)
+                {
+                    if send_json(&outbound, reply).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 if is_input_frame(&frame) {
                     if input_lane.is_empty() {
                         let session = Arc::clone(&session);
@@ -515,6 +532,11 @@ async fn run_attachment(
                         {
                             session.clear_foreground();
                         }
+                        if !(cdp_event_subscriptions.contains("*")
+                            || cdp_event_subscriptions.contains(event.method.as_str()))
+                        {
+                            continue;
+                        }
                         if send_json(&outbound, json!({
                             "type": "cdp.event",
                             "method": event.method,
@@ -560,6 +582,45 @@ fn attachment_operation_count(
     queued_input: &VecDeque<Value>,
 ) -> usize {
     concurrent_lane.len() + input_lane.len() + queued_input.len()
+}
+
+/// Handle `cdp.subscribe` / `cdp.unsubscribe` frames in place. Returns the
+/// reply to send when the frame was a subscription control frame; None lets
+/// the frame continue down the normal lanes.
+fn handle_cdp_subscription_frame(
+    frame: &Value,
+    subscriptions: &mut std::collections::HashSet<String>,
+) -> Option<Value> {
+    let object = frame.as_object()?;
+    let frame_type = object.get("type").and_then(Value::as_str)?;
+    let subscribe = match frame_type {
+        "cdp.subscribe" => true,
+        "cdp.unsubscribe" => false,
+        _ => return None,
+    };
+    let id = object.get("id").cloned().unwrap_or(Value::Null);
+    let Some(methods) = object.get("methods").and_then(Value::as_array) else {
+        return Some(frame_error(
+            None,
+            "invalid_frame",
+            "cdp.subscribe requires a `methods` array of CDP method names (or *)",
+        ));
+    };
+    for method in methods {
+        let Some(method) = method.as_str().map(str::trim).filter(|m| !m.is_empty()) else {
+            continue;
+        };
+        if subscribe {
+            subscriptions.insert(method.to_string());
+        } else {
+            subscriptions.remove(method);
+        }
+    }
+    Some(json!({
+        "type": "cdp.subscription",
+        "id": id,
+        "subscribed": subscriptions.iter().collect::<Vec<_>>(),
+    }))
 }
 
 fn is_input_frame(frame: &Value) -> bool {
