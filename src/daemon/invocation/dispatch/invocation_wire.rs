@@ -655,7 +655,13 @@ pub(crate) fn try_entity_ref(ura: String) -> anyhow::Result<EntityRef> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EntityRefKindResolution {
-    Agent,
+    /// Callable Axon subject: Agent, Service surface, or realm Authority.
+    ///
+    /// Axon v1 has one generic `ENTITY_REF_KIND_AGENT` wire kind for routable
+    /// callable subjects. EasyNet keeps the ontology distinction in the URA
+    /// itself (`/agent`, `/service`, `/authority`) and only projects these
+    /// subjects to the generic wire kind at this boundary.
+    CallableActor,
     Ability,
     Device,
     Resource,
@@ -670,9 +676,9 @@ impl EntityRefKindResolution {
             return Ok(resolution);
         }
         match crate::core::ura::parse_ura(ura.trim()).map(|parsed| parsed.kind) {
-            Ok(crate::core::ura::URAKind::Agent) => Ok(Self::Agent),
-            Ok(crate::core::ura::URAKind::Service) => Ok(Self::Agent),
-            Ok(crate::core::ura::URAKind::Authority) => Ok(Self::Agent),
+            Ok(crate::core::ura::URAKind::Agent) => Ok(Self::CallableActor),
+            Ok(crate::core::ura::URAKind::Service) => Ok(Self::CallableActor),
+            Ok(crate::core::ura::URAKind::Authority) => Ok(Self::CallableActor),
             Ok(crate::core::ura::URAKind::Ability) => Ok(Self::Ability),
             Ok(crate::core::ura::URAKind::Device) => Ok(Self::Device),
             Ok(crate::core::ura::URAKind::Resource) => Ok(Self::Resource),
@@ -685,7 +691,7 @@ impl EntityRefKindResolution {
 
     fn protobuf_kind(self) -> EntityRefKind {
         match self {
-            Self::Agent => EntityRefKind::Agent,
+            Self::CallableActor => EntityRefKind::Agent,
             Self::Ability => EntityRefKind::Ability,
             Self::Device => EntityRefKind::Device,
             Self::Resource => EntityRefKind::Resource,
@@ -709,7 +715,7 @@ fn top_level_subject_resolution(ura: &str) -> Option<EntityRefKindResolution> {
         return None;
     }
     match role {
-        "agent" | "agents" | "service" | "services" => Some(EntityRefKindResolution::Agent),
+        "agent" | "agents" | "service" | "services" => Some(EntityRefKindResolution::CallableActor),
         "ability" | "abilities" => Some(EntityRefKindResolution::Ability),
         "device" | "devices" => Some(EntityRefKindResolution::Device),
         "resource" | "resources" => Some(EntityRefKindResolution::Resource),
@@ -1195,7 +1201,8 @@ mod tests {
         for (ura, expected) in cases {
             assert_eq!(
                 try_entity_ref(ura.to_string()).unwrap().kind,
-                expected as i32
+                expected as i32,
+                "{ura} should project to the current Axon wire kind without changing its EasyNet URA ontology"
             );
         }
     }

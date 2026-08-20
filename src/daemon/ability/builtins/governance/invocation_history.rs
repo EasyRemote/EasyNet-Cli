@@ -2088,7 +2088,7 @@ mod tests {
             .subject_ura("easynet:///r/test/user/alice".to_string())
             .ability_ura(history_agent_ability_ura("observe.health"))
             .ability_name("observe.health".to_string())
-            .authority_form("self".to_string())
+            .authority_form("self+identity".to_string())
             .state("completed".to_string())
             .started_unix_ms(1)
             .completed_unix_ms(2)
@@ -2124,7 +2124,7 @@ mod tests {
             .subject_ura("easynet:///r/test/user/alice".to_string())
             .ability_ura(ability_ura.to_string())
             .ability_name(ability_name.to_string())
-            .authority_form("self".to_string())
+            .authority_form("self+identity".to_string())
             .state("completed".to_string())
             .started_unix_ms(1)
             .args(axon_sdk::invocation::LedgerEventPayload::digest(

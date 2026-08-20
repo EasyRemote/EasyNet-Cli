@@ -1698,34 +1698,35 @@ func validateRuntimeReceiptAuthorityBindingShape(binding map[string]any, field s
 	if err != nil {
 		return err
 	}
+	// Kind is the compound "<relation>+<evidence>" tag produced by the
+	// daemon's authority-binding JSON projection — see RFC
+	// 001-authority-binding-relation-evidence.md in EasyNet-Axon.
+	// "credential_of+attestation" is deliberately NOT a recognized kind
+	// here: it is reserved/inadmissible in v1, so it falls through to
+	// the noncanonical-kind rejection below like any other unknown tag.
 	switch kind {
-	case "self":
-		return requireRuntimeReceiptExactKeys(binding, field, "kind", "principal_ura")
-	case "delegation":
+	case "self+identity":
+		return requireRuntimeReceiptExactKeys(binding, field, "kind", "authority_ura")
+	case "delegated_by+delegation":
 		return requireRuntimeReceiptExactKeys(
 			binding,
 			field,
 			"kind",
+			"authority_ura",
 			"issuer_ura",
-			"subject_ura",
-			"caller_ura",
 			"audience",
 			"scopes",
 			"issued_at_ms",
 			"expires_at_ms",
 			"signature_base64",
 		)
-	case "capability":
-		return requireRuntimeReceiptExactKeys(binding, field, "kind", "capability_ura")
-	case "policy":
-		return requireRuntimeReceiptExactKeys(binding, field, "kind", "policy_ura")
-	case "session":
+	case "session_of+session":
 		return requireRuntimeReceiptExactKeys(
 			binding,
 			field,
 			"kind",
+			"authority_ura",
 			"issuer_ura",
-			"subject_ura",
 			"session_id",
 			"scopes",
 			"audiences",
@@ -1986,146 +1987,146 @@ func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {
 	return nil
 }
 
-func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv.AuthorityBinding, error) {
+// runtimeReceiptAuthorityBinding parses the daemon's authority-binding JSON
+// projection into the Axon Go SDK's AuthorityOrBootstrap shape. The "kind"
+// discriminator is the compound "<relation>+<evidence>" tag (e.g. "self+identity",
+// "delegated_by+delegation", "session_of+session"); Bootstrap stays a
+// separate top-level "bootstrap" kind — see RFC
+// 001-authority-binding-relation-evidence.md in EasyNet-Axon. Bare URA
+// strings on the wire (no profile sibling key) are parsed with
+// axoninv.ProfileStrictV2, matching axoninv.SelfAuthority's own
+// convention for the same case.
+func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv.AuthorityOrBootstrap, error) {
 	if value == nil {
-		return axoninv.AuthorityBinding{}, invalidRuntimePayload(
+		return axoninv.AuthorityOrBootstrap{}, invalidRuntimePayload(
 			"runtime receipt summary is missing "+field,
 			nil,
 		)
 	}
 	kind, err := requiredRuntimeReceiptObjectText(value, "kind", field+".kind")
 	if err != nil {
-		return axoninv.AuthorityBinding{}, err
+		return axoninv.AuthorityOrBootstrap{}, err
 	}
 	switch kind {
-	case "self":
-		principal, err := requiredRuntimeReceiptObjectText(value, "principal_ura", field+".principal_ura")
+	case "self+identity":
+		authority, err := requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.SelfAuthority(principal), nil
-	case "delegation":
+		return axoninv.AuthorityOrBootstrapFromBinding(axoninv.SelfAuthority(authority)), nil
+	case "delegated_by+delegation":
+		authority, err := requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")
+		if err != nil {
+			return axoninv.AuthorityOrBootstrap{}, err
+		}
 		issuer, err := requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		subject, err := requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		caller, err := requiredRuntimeReceiptObjectText(value, "caller_ura", field+".caller_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		audience, err := requiredRuntimeReceiptObjectText(value, "audience", field+".audience")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		scopes, err := runtimeReceiptTextList(value["scopes"], field+".scopes")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		issuedAt, err := runtimeReceiptNonNegativeInt64(value["issued_at_ms"], field+".issued_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		expiresAt, err := runtimeReceiptNonNegativeInt64(value["expires_at_ms"], field+".expires_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signatureText, err := requiredRuntimeReceiptObjectText(value, "signature_base64", field+".signature_base64")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signature, err := runtimeReceiptBase64(signatureText, field+".signature_base64", 64, false)
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.DelegatedAuthority(axoninv.DelegationProof{
-			IssuerURA:   issuer,
-			SubjectURA:  subject,
-			CallerURA:   caller,
-			Audience:    audience,
-			Scopes:      scopes,
-			IssuedAtMs:  issuedAt,
-			ExpiresAtMs: expiresAt,
-			Signature:   signature,
-		}), nil
-	case "capability":
-		capability, err := requiredRuntimeReceiptObjectText(value, "capability_ura", field+".capability_ura")
+		binding := axoninv.DelegatedAuthority(
+			axoninv.NewAgentIdentity(authority, axoninv.ProfileStrictV2),
+			axoninv.DelegationEvidence{
+				Issuer:      axoninv.NewAgentIdentity(issuer, axoninv.ProfileStrictV2),
+				Scopes:      scopes,
+				Audience:    audience,
+				IssuedAtMs:  issuedAt,
+				ExpiresAtMs: expiresAt,
+				Signature:   signature,
+			},
+		)
+		return axoninv.AuthorityOrBootstrapFromBinding(binding), nil
+	case "session_of+session":
+		authority, err := requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.CapabilityAuthority(capability), nil
-	case "policy":
-		policy, err := requiredRuntimeReceiptObjectText(value, "policy_ura", field+".policy_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		return axoninv.PolicyAuthority(policy), nil
-	case "session":
 		issuer, err := requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
-		}
-		subject, err := requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")
-		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		sessionID, err := requiredRuntimeReceiptObjectText(value, "session_id", field+".session_id")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		scopes, err := runtimeReceiptTextList(value["scopes"], field+".scopes")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		audiences, err := runtimeReceiptTextList(value["audiences"], field+".audiences")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		issuedAt, err := runtimeReceiptNonNegativeInt64(value["issued_at_ms"], field+".issued_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		expiresAt, err := runtimeReceiptNonNegativeInt64(value["expires_at_ms"], field+".expires_at_ms")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signatureText, err := requiredRuntimeReceiptObjectText(value, "signature_base64", field+".signature_base64")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		signature, err := runtimeReceiptBase64(signatureText, field+".signature_base64", 64, false)
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
-			IssuerURA:   issuer,
-			SubjectURA:  subject,
-			SessionID:   sessionID,
-			Scopes:      scopes,
-			Audiences:   audiences,
-			IssuedAtMs:  issuedAt,
-			ExpiresAtMs: expiresAt,
-			Signature:   signature,
-		}), nil
+		binding := axoninv.SessionAuthority(
+			axoninv.NewAgentIdentity(authority, axoninv.ProfileStrictV2),
+			axoninv.SessionEvidence{
+				Issuer:      axoninv.NewAgentIdentity(issuer, axoninv.ProfileStrictV2),
+				SessionID:   sessionID,
+				Scopes:      scopes,
+				Audiences:   audiences,
+				IssuedAtMs:  issuedAt,
+				ExpiresAtMs: expiresAt,
+				Signature:   signature,
+			},
+		)
+		return axoninv.AuthorityOrBootstrapFromBinding(binding), nil
 	case "bootstrap":
 		principal, err := requiredRuntimeReceiptObjectText(value, "principal_ura", field+".principal_ura")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		realm, err := requiredRuntimeReceiptObjectText(value, "realm", field+".realm")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
 		ability, err := requiredRuntimeReceiptObjectText(value, "ability", field+".ability")
 		if err != nil {
-			return axoninv.AuthorityBinding{}, err
+			return axoninv.AuthorityOrBootstrap{}, err
 		}
-		return axoninv.BootstrapAuthority(principal, realm, ability), nil
+		return axoninv.AuthorityOrBootstrapFromBootstrap(
+			axoninv.BootstrapAuthority(principal, realm, ability),
+		), nil
 	default:
-		return axoninv.AuthorityBinding{}, invalidRuntimePayload(
+		return axoninv.AuthorityOrBootstrap{}, invalidRuntimePayload(
 			fmt.Sprintf("%s is not canonical: %q", field+".kind", kind),
 			nil,
 		)

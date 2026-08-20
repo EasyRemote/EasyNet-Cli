@@ -875,9 +875,7 @@ mod tests {
         assert_eq!(status, DeviceTrustSyncStatus::Synced);
         let snapshot = sync.cell.snapshot();
         assert!(
-            snapshot
-                .lookup_user_by_pubkey(user_ura, &admits)
-                .is_some(),
+            snapshot.lookup_user_by_pubkey(user_ura, &admits).is_some(),
             "the non-tombstoned hub-attested key must still be imported and admit the caller"
         );
         assert!(

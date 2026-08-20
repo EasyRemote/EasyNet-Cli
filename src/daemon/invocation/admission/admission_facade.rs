@@ -30,13 +30,16 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::Digest;
 use tonic::{Code, Status};
 
-use axon_sdk::invocation::axiom::{authority_proof_expected_hash, KeyResolver};
+use axon_sdk::invocation::axiom::{
+    authority_proof_expected_hash, AgentIdentity, KeyResolver, UraProfile,
+};
 use axon_sdk::invocation::{
-    AbilityContext, AuthorityBinding, AxonError as InvocationError,
-    AxonErrorKind as InvocationErrorKind, CallMode as AxonCallMode, DelegationProofBody,
-    DescriptorBoundEnvelope, ErrorCode, ErrorStage, InvocationAuthorityProof, SecurityClass,
-    SessionAuthorityBody, SignedEnvelope, VerifiedAdmissionPolicy, REASON_CALLER_SIGNATURE_INVALID,
-    REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
+    AbilityContext, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap, AuthorityRelation,
+    AxonError as InvocationError, AxonErrorKind as InvocationErrorKind, BootstrapBinding,
+    CallMode as AxonCallMode, DelegationEvidence, DescriptorBoundEnvelope, ErrorCode, ErrorStage,
+    InvocationAuthorityProof, SecurityClass, SessionEvidence, SignedEnvelope,
+    VerifiedAdmissionPolicy, REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE,
+    REASON_NONCE_REPLAY,
 };
 
 use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
@@ -211,7 +214,7 @@ struct VerifiedSignedAuthority<T> {
 struct VerifiedRuntimeAuthority {
     authority_id: Option<String>,
     session_id: Option<String>,
-    binding: AuthorityBinding,
+    binding: AuthorityOrBootstrap,
     proof_type: &'static str,
     proof_payload: Vec<u8>,
 }
@@ -227,53 +230,100 @@ impl VerifiedRuntimeAuthority {
         Self {
             authority_id: None,
             session_id: None,
-            binding: AuthorityBinding::Self_ {
-                principal_ura: principal_ura.into(),
-            },
+            binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: AgentIdentity::new(principal_ura.into(), UraProfile::StrictV2),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
             proof_type: "self-authority",
             proof_payload: Vec::new(),
         }
     }
 
-    fn capability(capability_ura: &str) -> Self {
-        Self {
+    // `capability`/`policy`/`trusted_local_system_capability` are all
+    // daemon-internal admission facts (the daemon vouches for its own
+    // structural policy evaluation, not a caller-presented cryptographic
+    // claim) — they map to Bootstrap, not a signed AuthorityBinding
+    // relation. See RFC 001-authority-binding-relation-evidence.md:
+    // Bootstrap is the admission-plane fact for exactly this shape.
+    // `capability_ura`/`policy_ura` are preserved as the audit payload
+    // (proof_payload), same as before — only the structured binding
+    // changed, not what's recorded for provenance.
+    fn capability(
+        envelope: &axon_sdk::invocation::InvocationEnvelope,
+        capability_ura: &str,
+    ) -> Result<Self, Status> {
+        let realm = parse_ura(&envelope.callee.ura)
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "capability authority callee is not a canonical URA: {error}"
+                ))
+            })?
+            .realm;
+        Ok(Self {
             authority_id: None,
             session_id: None,
-            binding: AuthorityBinding::Capability {
-                capability_ura: capability_ura.to_string(),
-            },
+            binding: AuthorityOrBootstrap::Bootstrap(BootstrapBinding {
+                principal_ura: envelope.caller.ura.clone(),
+                realm,
+                ability: envelope.ability.clone(),
+            }),
             proof_type: "causal-parent-capability",
             proof_payload: capability_ura.as_bytes().to_vec(),
-        }
+        })
     }
 
-    fn policy(policy_ura: &str, authority_id: Option<String>) -> Self {
-        Self {
+    fn policy(
+        envelope: &axon_sdk::invocation::InvocationEnvelope,
+        policy_ura: &str,
+        authority_id: Option<String>,
+    ) -> Result<Self, Status> {
+        let realm = parse_ura(&envelope.callee.ura)
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "policy authority callee is not a canonical URA: {error}"
+                ))
+            })?
+            .realm;
+        Ok(Self {
             authority_id,
             session_id: None,
-            binding: AuthorityBinding::Policy {
-                policy_ura: policy_ura.to_string(),
-            },
+            binding: AuthorityOrBootstrap::Bootstrap(BootstrapBinding {
+                principal_ura: envelope.caller.ura.clone(),
+                realm,
+                ability: envelope.ability.clone(),
+            }),
             proof_type: "system-policy-authority",
             proof_payload: policy_ura.as_bytes().to_vec(),
-        }
+        })
     }
 
-    fn trusted_local_system_capability() -> Self {
+    fn trusted_local_system_capability(
+        envelope: &axon_sdk::invocation::InvocationEnvelope,
+    ) -> Result<Self, Status> {
         let capability_ura = crate::core::ura::resource_dot_ura(
             "_system",
             "agent._system.local",
             "capability/local-system-invocation",
         );
-        Self {
+        let realm = parse_ura(&envelope.callee.ura)
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "trusted local system authority callee is not a canonical URA: {error}"
+                ))
+            })?
+            .realm;
+        Ok(Self {
             authority_id: None,
             session_id: None,
-            binding: AuthorityBinding::Capability {
-                capability_ura: capability_ura.clone(),
-            },
+            binding: AuthorityOrBootstrap::Bootstrap(BootstrapBinding {
+                principal_ura: envelope.caller.ura.clone(),
+                realm,
+                ability: envelope.ability.clone(),
+            }),
             proof_type: "local-system-invocation-capability",
             proof_payload: capability_ura.into_bytes(),
-        }
+        })
     }
 
     fn bootstrap(
@@ -290,11 +340,11 @@ impl VerifiedRuntimeAuthority {
         Ok(Self {
             authority_id,
             session_id: None,
-            binding: AuthorityBinding::Bootstrap {
+            binding: AuthorityOrBootstrap::Bootstrap(BootstrapBinding {
                 principal_ura: envelope.caller.ura.clone(),
                 realm,
                 ability: envelope.ability.clone(),
-            },
+            }),
             proof_type: "bootstrap-authority",
             proof_payload: Vec::new(),
         })
@@ -302,18 +352,30 @@ impl VerifiedRuntimeAuthority {
 
     fn delegated(verified: VerifiedSignedAuthority<DelegationPayload>) -> Result<Self, Status> {
         let authority_id = verified_delegation_authority_id(&verified.payload)?;
+        // Field provenance (RFC 001-authority-binding-relation-evidence.md
+        // "Field provenance" section): the old `subject_ura` ("who the
+        // caller acts for") maps to the outer AuthorityBinding.authority
+        // field, NOT to any subject slot. `issuer_ura` maps to
+        // evidence.issuer — a distinct role, MAY differ from authority
+        // (see "Issuer authenticity vs. issuer authority"). The old
+        // `caller_ura` is dropped entirely (redundant with
+        // envelope.caller): the SDK's signature verification binds
+        // envelope.caller as delegatee directly into the signed claim
+        // bytes instead of storing it as a plain field.
         Ok(Self {
             authority_id: Some(authority_id),
             session_id: None,
-            binding: AuthorityBinding::Delegated(DelegationProofBody {
-                issuer_ura: verified.payload.issuer_ura,
-                subject_ura: verified.payload.subject_ura,
-                caller_ura: verified.payload.caller_ura,
-                audience: verified.payload.audience,
-                scopes: verified.payload.scopes,
-                issued_at_ms: verified.payload.issued_at_ms,
-                expires_at_ms: verified.payload.expires_at_ms,
-                signature: verified.signature,
+            binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: AgentIdentity::new(verified.payload.subject_ura, UraProfile::StrictV2),
+                relation: AuthorityRelation::DelegatedBy,
+                evidence: AuthorityEvidence::Delegation(DelegationEvidence {
+                    issuer: AgentIdentity::new(verified.payload.issuer_ura, UraProfile::StrictV2),
+                    scopes: verified.payload.scopes,
+                    audience: verified.payload.audience,
+                    issued_at_ms: verified.payload.issued_at_ms,
+                    expires_at_ms: verified.payload.expires_at_ms,
+                    signature: verified.signature,
+                }),
             }),
             proof_type: "delegated-authority",
             proof_payload: verified.canonical_payload,
@@ -321,35 +383,51 @@ impl VerifiedRuntimeAuthority {
     }
 
     fn session(verified: VerifiedSignedAuthority<SessionAuthorityPayload>) -> Result<Self, Status> {
-        let parsed_subject = parse_ura(&verified.payload.subject_ura).map_err(|error| {
+        // Structural sanity check only — subject_ura must be a canonical
+        // URA. Do NOT derive a plain user_ura from it: envelope.subject is
+        // constrained by the SDK's DescriptorBoundEnvelope to
+        // Agent/Service/Authority/Ability/Device/Resource kinds and can
+        // never be a bare User URA (confirmed: EntityRefKind has no User
+        // variant). The daemon's own pre-existing
+        // verify_session_authority_bindings (via
+        // authority_metadata::session_authority_admits_subject) already
+        // requires `payload.subject_ura == envelope.subject` as a raw
+        // string equality — so binding.authority must be
+        // verified.payload.subject_ura itself, not a re-derived value.
+        parse_ura(&verified.payload.subject_ura).map_err(|error| {
             Status::invalid_argument(format!(
                 "session authority subject is not a canonical URA: {error}"
             ))
         })?;
-        let user_ura = crate::core::ura::user_ura(
-            &parsed_subject.realm,
-            &verified.payload.session_owner_user_id,
-        );
         Ok(Self {
             authority_id: Some(verified_session_authority_id(&verified.payload)),
             session_id: Some(verified.payload.session_id.clone()),
-            binding: AuthorityBinding::Session(SessionAuthorityBody {
-                issuer_ura: verified.payload.issuer_ura,
-                subject_ura: user_ura,
-                session_id: verified.payload.session_id,
-                scopes: verified.payload.scopes,
-                audiences: vec![verified.payload.audience],
-                issued_at_ms: verified.payload.issued_at_ms,
-                expires_at_ms: verified.payload.expires_at_ms,
-                signature: verified.signature,
+            // Field provenance: the old `subject_ura` genuinely always
+            // meant envelope.subject (Bucket A archaeology — confirmed
+            // unconditional from introduction through the field rename)
+            // and maps to the outer AuthorityBinding.authority field.
+            binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: AgentIdentity::new(
+                    verified.payload.subject_ura.clone(),
+                    UraProfile::StrictV2,
+                ),
+                relation: AuthorityRelation::SessionOf,
+                evidence: AuthorityEvidence::Session(SessionEvidence {
+                    issuer: AgentIdentity::new(verified.payload.issuer_ura, UraProfile::StrictV2),
+                    session_id: verified.payload.session_id,
+                    scopes: verified.payload.scopes,
+                    audiences: vec![verified.payload.audience],
+                    issued_at_ms: verified.payload.issued_at_ms,
+                    expires_at_ms: verified.payload.expires_at_ms,
+                    signature: verified.signature,
+                }),
             }),
             proof_type: "session-authority",
             proof_payload: verified.canonical_payload,
         })
     }
 
-    fn from_authority_proof(envelope: &Envelope, proof: &AuthorityProof) -> Result<Self, Status> {
-        let caller_ura = caller_ura_required(envelope)?.to_string();
+    fn from_authority_proof(proof: &AuthorityProof) -> Result<Self, Status> {
         let issued_at_ms = DateTime::parse_from_rfc3339(&proof.issued_at)
             .map_err(|error| {
                 Status::invalid_argument(format!(
@@ -377,15 +455,21 @@ impl VerifiedRuntimeAuthority {
         Ok(Self {
             authority_id: Some(proof.proof_id.clone()),
             session_id: proof.session_id.clone(),
-            binding: AuthorityBinding::Delegated(DelegationProofBody {
-                issuer_ura: proof.issuer_ura.clone(),
-                subject_ura: proof.subject_ura.clone(),
-                caller_ura,
-                audience: proof.audience_ura.clone(),
-                scopes: vec![proof.ability_ura.clone()],
-                issued_at_ms,
-                expires_at_ms,
-                signature,
+            // Same field provenance as delegated() above: subject_ura ->
+            // authority, issuer_ura -> evidence.issuer, caller_ura dropped
+            // (redundant with envelope.caller, bound into the signed
+            // claim bytes instead of a stored field).
+            binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: AgentIdentity::new(proof.subject_ura.clone(), UraProfile::StrictV2),
+                relation: AuthorityRelation::DelegatedBy,
+                evidence: AuthorityEvidence::Delegation(DelegationEvidence {
+                    issuer: AgentIdentity::new(proof.issuer_ura.clone(), UraProfile::StrictV2),
+                    scopes: vec![proof.ability_ura.clone()],
+                    audience: proof.audience_ura.clone(),
+                    issued_at_ms,
+                    expires_at_ms,
+                    signature,
+                }),
             }),
             proof_type: "delegated-authority",
             proof_payload: crate::daemon::ability::canonical_json_bytes(
@@ -502,7 +586,7 @@ enum RuntimeAdmissionIngress {
 /// public metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DerivedRuntimeAuthorityContext {
-    parent_authority: AuthorityBinding,
+    parent_authority: AuthorityOrBootstrap,
     capability_ura: String,
 }
 
@@ -542,15 +626,25 @@ impl DerivedRuntimeAuthorityContext {
                 .filter(|parsed| parsed.kind == URAKind::User)
                 .map(|_| candidate)
         }
-        match &self.parent_authority {
-            AuthorityBinding::Self_ { principal_ura } => canonical_user(principal_ura),
-            AuthorityBinding::Delegated(proof) => {
-                canonical_user(&proof.subject_ura).or_else(|| canonical_user(&proof.issuer_ura))
+        let AuthorityOrBootstrap::Binding(binding) = &self.parent_authority else {
+            // Bootstrap is a daemon-internal admission fact, not a
+            // caller-presented identity claim — no accountable user to
+            // extract (matches the old Capability/Policy/Bootstrap arms,
+            // all of which now map to Bootstrap).
+            return None;
+        };
+        match (&binding.relation, &binding.evidence) {
+            (AuthorityRelation::Self_, AuthorityEvidence::Identity) => {
+                canonical_user(&binding.authority.ura)
             }
-            AuthorityBinding::Session(session) => canonical_user(&session.subject_ura),
-            AuthorityBinding::Capability { .. }
-            | AuthorityBinding::Policy { .. }
-            | AuthorityBinding::Bootstrap { .. } => None,
+            (AuthorityRelation::DelegatedBy, AuthorityEvidence::Delegation(evidence)) => {
+                canonical_user(&binding.authority.ura)
+                    .or_else(|| canonical_user(&evidence.issuer.ura))
+            }
+            (AuthorityRelation::SessionOf, AuthorityEvidence::Session(_)) => {
+                canonical_user(&binding.authority.ura)
+            }
+            _ => None,
         }
     }
 }
@@ -1321,8 +1415,10 @@ impl AdmissionFacade {
                 }
                 return runtime_admission_decision(
                     admitted_envelope,
-                    VerifiedRuntimeAuthority::trusted_local_system_capability()
-                        .with_runtime_admission_fact("trusted-local-system capability admission")?,
+                    VerifiedRuntimeAuthority::trusted_local_system_capability(
+                        admitted_envelope.envelope(),
+                    )?
+                    .with_runtime_admission_fact("trusted-local-system capability admission")?,
                     RuntimeAdmissionReservation { quota: None },
                 );
             }
@@ -1784,9 +1880,10 @@ impl AdmissionFacade {
                 ));
             }
             return VerifiedRuntimeAuthority::policy(
+                descriptor_bound.envelope.envelope(),
                 authority.policy_ura(),
                 Some(authority.authority_id().to_string()),
-            )
+            )?
             .with_policy_decision(&policy_decision);
         }
         if let Some(authority_id) = bootstrap_authority_id.or(hosted_agent_publication_authority_id)
@@ -1798,8 +1895,11 @@ impl AdmissionFacade {
             .with_policy_decision(&policy_decision);
         }
         if let Some(derived_authority) = derived_authority {
-            return VerifiedRuntimeAuthority::capability(&derived_authority.capability_ura)
-                .with_policy_decision(&policy_decision);
+            return VerifiedRuntimeAuthority::capability(
+                descriptor_bound.envelope.envelope(),
+                &derived_authority.capability_ura,
+            )?
+            .with_policy_decision(&policy_decision);
         }
         VerifiedRuntimeAuthority::self_authority(
             descriptor_bound.envelope.envelope().caller.ura.clone(),
@@ -2121,7 +2221,7 @@ impl AdmissionFacade {
                     proof.owner_user_ura
                 ))
             })??;
-        VerifiedRuntimeAuthority::from_authority_proof(envelope, &proof).map(Some)
+        VerifiedRuntimeAuthority::from_authority_proof(&proof).map(Some)
     }
 }
 
@@ -4021,29 +4121,31 @@ fn authority_metadata_error_status(err: AuthorityMetadataError) -> Status {
     }
 }
 
+/// Shallow envelope cross-checks for a presented DelegatedBy claim.
+///
+/// Per the frozen compatibility matrix
+/// (document/rfcs/001-authority-binding-relation-evidence.md in
+/// EasyNet-Axon), DelegatedBy no longer has a `caller_ura`/`subject_ura`
+/// equality requirement at this layer:
+///   - the old `caller_ura` field no longer exists — the SDK's signature
+///     verification over the claim bytes binds `envelope.caller` as
+///     delegatee directly (a stronger check than a plain string equality
+///     here, since it's cryptographically bound, not just asserted);
+///   - the old `subject_ura == envelope.subject` check contradicted the
+///     RFC's own archaeology finding: `Delegated.subject_ura` (now
+///     `binding.authority`) is an independent dimension from
+///     `envelope.subject`, never cross-checked historically or by the
+///     SDK's own shallow/deep gates. Removed here so this daemon-side
+///     gate is consistent with what the SDK now enforces, rather than a
+///     second, contradictory gate.
+///
+/// Audience and scope checks remain — they are still real, meaningful
+/// requirements independent of this correction.
 fn verify_delegation_bindings(
     payload: &DelegationPayload,
     envelope: &Envelope,
     ability: &str,
 ) -> Result<(), Status> {
-    let caller = caller_ura_required(envelope)?;
-    if payload.caller_ura != caller {
-        return Err(Status::permission_denied(format!(
-            "{REASON_AUTHORITY_CALLER_MISMATCH}: authority caller `{}` does not match envelope \
-             caller `{caller}`",
-            payload.caller_ura
-        )));
-    }
-
-    let subject = subject_ura_required(envelope)?;
-    if payload.subject_ura != subject {
-        return Err(Status::permission_denied(format!(
-            "{REASON_AUTHORITY_SUBJECT_MISMATCH}: authority subject `{}` does not match envelope \
-             subject `{subject}`",
-            payload.subject_ura
-        )));
-    }
-
     let callee = callee_ura_required(envelope)?;
     if !authority_metadata::authority_audience_admits(&payload.audience, callee) {
         return Err(Status::permission_denied(format!(
@@ -4520,7 +4622,7 @@ mod tests {
             authority.authority_id(),
             Some("session_authority:session-1")
         );
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -4816,7 +4918,7 @@ mod tests {
         .expect("same-owner delegation must verify")
         .expect("delegation authority must project");
 
-        assert_eq!(authority.binding.form(), "delegated");
+        assert_eq!(authority.binding.form(), "delegated_by+delegation");
     }
 
     #[test]
@@ -4893,7 +4995,7 @@ mod tests {
         .expect("user-owned ability subject must verify")
         .expect("delegation authority must project");
 
-        assert_eq!(authority.binding.form(), "delegated");
+        assert_eq!(authority.binding.form(), "delegated_by+delegation");
     }
 
     fn assert_realm_trust_delegation_rejects_alice_subject(subject: &str, message: &str) {
@@ -4996,7 +5098,7 @@ mod tests {
         .expect("sponsor Device delegation over its SystemAgent subject must verify")
         .expect("delegation authority must project");
 
-        assert_eq!(authority.binding.form(), "delegated");
+        assert_eq!(authority.binding.form(), "delegated_by+delegation");
     }
 
     #[test]
@@ -5327,7 +5429,7 @@ mod tests {
             .expect("exact cross-realm User authority must verify")
             .expect("session authority must project");
 
-            assert_eq!(authority.binding.form(), "session");
+            assert_eq!(authority.binding.form(), "session_of+session");
         }
     }
 
@@ -5437,7 +5539,7 @@ mod tests {
         .expect("exact RealmAccountAdapter PrincipalLifecycle authority must verify")
         .expect("session authority must project");
 
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -5466,7 +5568,7 @@ mod tests {
         .expect("exact RealmIdentityAdapter registration authority must verify")
         .expect("session authority must project");
 
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -5495,7 +5597,7 @@ mod tests {
         .expect("exact RealmDirectoryReadAdapter authority must verify")
         .expect("session authority must project");
 
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -5527,7 +5629,7 @@ mod tests {
         .expect("exact RealmRuntimeInvocationAdapter authority must verify")
         .expect("session authority must project");
 
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -5564,7 +5666,7 @@ mod tests {
         .expect("Service callee RealmRuntimeInvocationAdapter authority must verify")
         .expect("session authority must project");
 
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -5684,7 +5786,7 @@ mod tests {
         .expect("exact peer-runtime adapter authority must verify")
         .expect("session authority must project");
 
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -5735,7 +5837,7 @@ mod tests {
         .expect("peer runtime authority must pass destination admission")
         .expect("session authority must project");
 
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -5831,7 +5933,7 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{label} governance adapter rejected: {error}"))
             .expect("governance session authority must project");
-            assert_eq!(authority.binding.form(), "session");
+            assert_eq!(authority.binding.form(), "session_of+session");
         }
     }
 
@@ -5868,7 +5970,7 @@ mod tests {
         )
         .expect("exact Authority-owned directory subject must verify")
         .expect("directory stream session authority must project");
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
 
         request.subject_ura = crate::core::ura::resource_dot_ura(
             "example",
@@ -5933,7 +6035,7 @@ mod tests {
         )
         .expect("exact lifecycle session authority must verify")
         .expect("lifecycle session authority must project");
-        assert_eq!(authority.binding.form(), "session");
+        assert_eq!(authority.binding.form(), "session_of+session");
     }
 
     #[test]
@@ -6285,7 +6387,7 @@ mod tests {
             .with_policy_decision(&decision)
             .expect("policy decision must bind into proof payload");
         assert_eq!(authority.binding.form(), expected_form);
-        assert_ne!(authority.binding.form(), "self");
+        assert_ne!(authority.binding.form(), "self+identity");
         let proof = authority.authority_proof(envelope);
         assert_eq!(proof.binding.as_ref(), Some(&authority.binding));
         assert!(
@@ -6369,7 +6471,7 @@ mod tests {
         .expect("verified delegation must project to generic authority");
         let envelope = receipt_policy_envelope(caller_ura, callee_ura, subject_ura);
 
-        assert_complete_non_self_policy(authority, &envelope, "delegated");
+        assert_complete_non_self_policy(authority, &envelope, "delegated_by+delegation");
     }
 
     #[test]
@@ -6401,7 +6503,7 @@ mod tests {
         .expect("verified session must project to generic authority");
         let envelope = receipt_policy_envelope(caller_ura, callee_ura, subject_ura);
 
-        assert_complete_non_self_policy(authority, &envelope, "session");
+        assert_complete_non_self_policy(authority, &envelope, "session_of+session");
     }
 
     #[test]
@@ -6410,9 +6512,11 @@ mod tests {
         let callee_ura = "easynet:///r/policy/agent/service.worker";
         let subject_ura = "easynet:///r/policy/resource/user.alice/session/session-42";
         let envelope = receipt_policy_envelope(caller_ura, callee_ura, subject_ura);
-        let authority = VerifiedRuntimeAuthority::trusted_local_system_capability()
-            .with_runtime_admission_fact("trusted-local-system capability admission")
-            .expect("runtime admission fact must bind into proof payload");
+        let authority =
+            VerifiedRuntimeAuthority::trusted_local_system_capability(envelope.envelope())
+                .expect("trusted local system authority must construct from a canonical callee URA")
+                .with_runtime_admission_fact("trusted-local-system capability admission")
+                .expect("runtime admission fact must bind into proof payload");
         let proof = authority.authority_proof(&envelope);
         let proof_payload: serde_json::Value =
             serde_json::from_slice(&proof.proof_payload).expect("canonical proof payload JSON");
@@ -6425,14 +6529,20 @@ mod tests {
             proof_payload["bootstrap_admission"]["reason"],
             "trusted-local-system capability admission"
         );
-        assert_eq!(authority.binding.form(), "capability");
+        // trusted_local_system_capability is a daemon-internal admission
+        // fact (the daemon vouches for its own structural policy
+        // evaluation, not a caller-presented cryptographic claim) — it
+        // maps to Bootstrap, not a signed AuthorityBinding relation. See
+        // RFC 001-authority-binding-relation-evidence.md.
+        assert_eq!(authority.binding.form(), "bootstrap");
         assert!(matches!(
             &authority.binding,
-            AuthorityBinding::Capability { capability_ura }
-                if capability_ura
-                    == "easynet:///r/_system/resource/agent._system.local/capability/local-system-invocation"
+            AuthorityOrBootstrap::Bootstrap(bootstrap)
+                if bootstrap.principal_ura == caller_ura
+                    && bootstrap.realm == "policy"
+                    && bootstrap.ability == envelope.envelope().ability
         ));
-        assert_ne!(authority.binding.form(), "self");
+        assert_ne!(authority.binding.form(), "self+identity");
         assert!(proof_payload.get("policy_decision").is_none());
         assert_eq!(proof.proof_hash, authority_proof_expected_hash(&proof));
         proof

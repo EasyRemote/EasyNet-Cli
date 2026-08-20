@@ -8778,7 +8778,10 @@ mod tests {
         );
         assert_eq!(json["terminal_receipt"]["causal_binding_kind"], "none");
         assert_eq!(json["terminal_receipt"]["causal_binding"]["form"], "none");
-        assert_eq!(json["terminal_receipt"]["authority_binding_kind"], "self+identity");
+        assert_eq!(
+            json["terminal_receipt"]["authority_binding_kind"],
+            "self+identity"
+        );
         assert_eq!(
             json["terminal_receipt"]["authority_binding"]["authority_ura"],
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
