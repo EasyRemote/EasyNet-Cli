@@ -1802,6 +1802,30 @@ fn route_owner_kind_from_selector(selector: &Selector) -> Result<RouteOwnerKind,
     }
 }
 
+enum RouteOwnerKind {
+    Agent,
+    SystemAgent,
+    DevicePlacement,
+}
+
+fn device_placement_route_selector_from_query(
+    query_name: &str,
+    ability_name: &str,
+) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
+    if query_name.starts_with("easynet:///r/localhost/device/")
+        && !ability_name.starts_with("easynet:///r/localhost/ability/")
+    {
+        return Ok(Some(RouteSelector));
+    }
+    Ok(None)
+}
+
+fn reject_explicit_device_owned_ability_selector() -> anyhow::Result<()> {
+    anyhow::bail!(
+        "invalid Ability URA: Device is execution substrate, not an Ability owner; use a device-sponsored SystemAgent owner"
+    )
+}
+
 fn local_runtime_route_kind(owner_kind: RouteOwnerKind) {
     match owner_kind {
         RouteOwnerKind::Agent | RouteOwnerKind::SystemAgent => {}

@@ -2238,7 +2238,7 @@ struct RouteSelector {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RouteOwnerKind {
-    LegacyDeviceProfileProjection,
+    DevicePlacement,
     Authority,
     Agent,
     SystemAgent,
@@ -2251,7 +2251,6 @@ impl RouteOwnerKind {
         query_name: &str,
     ) -> Result<Self, ResolveRouteFailure> {
         match selector.owner_kind() {
-            "device" => Ok(Self::LegacyDeviceProfileProjection),
             "authority" => Ok(Self::Authority),
             "agent" => Ok(Self::Agent),
             "system-agent" => Ok(Self::SystemAgent),
@@ -2356,10 +2355,16 @@ fn executable_route_selector_from_query(
     local_authority: Option<&LocalAbilityPublicationSnapshot>,
     federation_catalog: Option<(&AbilityCatalogStore, i64)>,
 ) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
-    let Some(selector) = route_selector_from_query(query_name, ability_name)? else {
+    let selector = if let Some(selector) =
+        device_placement_route_selector_from_query(query_name, ability_name)?
+    {
+        selector
+    } else if let Some(selector) = route_selector_from_query(query_name, ability_name)? {
+        selector
+    } else {
         return Ok(None);
     };
-    if selector.owner_kind != RouteOwnerKind::LegacyDeviceProfileProjection {
+    if selector.owner_kind != RouteOwnerKind::DevicePlacement {
         return Ok(Some(selector));
     }
     if ability_name.trim().is_empty()
@@ -2421,6 +2426,44 @@ fn executable_route_selector_from_query(
         owner_kind: RouteOwnerKind::SystemAgent,
         ability_ura,
         public_name: selector.public_name,
+    }))
+}
+
+fn device_placement_route_selector_from_query(
+    query_name: &str,
+    ability_name: &str,
+) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
+    let execution_target_ura = query_name.trim();
+    let ability_name = ability_name.trim();
+    if execution_target_ura.is_empty()
+        || ability_name.is_empty()
+        || is_ability_ura(ability_name)
+        || looks_like_descriptor_ref(ability_name)
+    {
+        return Ok(None);
+    }
+    let parsed = match crate::core::ura::parse_ura(execution_target_ura) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        return Ok(None);
+    }
+    let public_name =
+        crate::core::ura::descriptor_public_ability_name(execution_target_ura, ability_name);
+    if public_name.is_empty() {
+        return Err(ResolveRouteFailure::new(
+            execution_target_ura,
+            NegativeReason::Refused,
+            "Device placement ability name is empty",
+        ));
+    }
+    Ok(Some(RouteSelector {
+        query_name: format!("{execution_target_ura}#{public_name}"),
+        owner_ura: execution_target_ura.to_string(),
+        owner_kind: RouteOwnerKind::DevicePlacement,
+        ability_ura: String::new(),
+        public_name,
     }))
 }
 
@@ -3939,7 +3982,7 @@ mod tests {
 
     #[test]
     fn hub_route_provider_rejects_non_final_answer() {
-        let owner_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("meta.list_resources");
         let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "meta.list_resources")
             .expect("test ability ura");
         let answer = ResolveRouteFailure::owner_offline(&ability_ura, NegativeReason::Nxdomain)
@@ -4367,12 +4410,15 @@ mod tests {
         let device_ura = device_owner_ura();
         let device_ability =
             crate::core::ura::owner_ability_ura(&device_ura, "agent.list").expect("device ability");
-        let device_selector = route_selector_from_query(&device_ability, "")
-            .expect("device selector")
-            .expect("device selector present");
-        assert_eq!(
-            device_selector.owner_kind,
-            RouteOwnerKind::LegacyDeviceProfileProjection
+        let device_failure = route_selector_from_query(&device_ability, "")
+            .expect_err("explicit Device-owned Ability URA must fail closed");
+        assert_eq!(device_failure.reason, NegativeReason::Refused);
+        assert!(
+            device_failure
+                .detail
+                .contains("Device is execution substrate"),
+            "{}",
+            device_failure.detail
         );
 
         let authority_ura = crate::core::ura::authority_ura("test-realm");
@@ -4517,7 +4563,11 @@ mod tests {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let owner_ura = device_owner_ura();
-        let other_owner_ura = crate::core::ura::device_ura("test-realm", "other-daemon");
+        let other_owner_ura = crate::core::ura::device_agent_ura(
+            "test-realm",
+            "other-daemon",
+            crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
         mark_online(&registry, &owner_ura);
         let ability_ura = crate::core::ura::owner_ability_ura(&other_owner_ura, "agent.list")
             .expect("ability ura");
@@ -5703,7 +5753,7 @@ mod tests {
             .expect_err("Device-owned Ability URA must not be rewritten as a placement request");
 
         assert_eq!(failure.reason, NegativeReason::Refused);
-        assert!(failure.detail.contains("migration read-models"));
+        assert!(failure.detail.contains("Device is execution substrate"));
     }
 
     #[test]

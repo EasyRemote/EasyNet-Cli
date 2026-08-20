@@ -16187,12 +16187,16 @@ if route_resolver_rs.exists():
     raw_text = route_resolver_rs.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
-            "RouteOwnerKind::LegacyDeviceProfileProjection",
-            "route selectors must quarantine Device-owned abilities as legacy projections",
+            "RouteOwnerKind::DevicePlacement",
+            "route selectors must represent Device input as placement, not as an Ability owner",
         ),
         (
-            "Device-owned Ability URAs and descriptor refs are migration read-models only",
-            "route data sources must reject explicit Device-owned selectors while allowing Device placement plus a public ability to resolve through the registry",
+            "device_placement_route_selector_from_query",
+            "Device placement plus public ability must be projected before AbilitySelector parsing",
+        ),
+        (
+            "Device is execution substrate",
+            "route data sources must reject explicit Device-owned Ability selectors while allowing Device placement plus a public ability to resolve through the registry",
         ),
         (
             "system_agent_ability_online_resolves_final_local_execution_route",

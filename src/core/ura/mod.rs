@@ -219,10 +219,9 @@ impl AbilitySelector {
                 "system-agent",
                 agent_id.clone(),
             ),
-            AbilityOwner::Device { device_id } => {
-                let owner_ura = device_ura(&parsed.realm, &device_id);
-                (owner_ura.clone(), "device", owner_ura)
-            }
+            AbilityOwner::Device { .. } => anyhow::bail!(
+                "invalid Ability URA {ability_ura:?}: Device is execution substrate, not an Ability owner; use a device-sponsored SystemAgent owner"
+            ),
             AbilityOwner::Authority => {
                 let owner_ura = authority_ura(&parsed.realm);
                 (owner_ura.clone(), "authority", owner_ura)
@@ -254,7 +253,7 @@ impl AbilitySelector {
     }
 
     /// Owner kind encoded by the Ability URA: `"agent"`, `"service"`,
-    /// `"system-agent"`, `"device"`, or `"authority"`. Derived from the typed `AbilityOwner`
+    /// `"system-agent"`, or `"authority"`. Derived from the typed `AbilityOwner`
     /// arm at parse time — consumers never re-sniff URA strings (F-047).
     pub fn owner_kind(&self) -> &'static str {
         self.owner_kind
@@ -335,8 +334,10 @@ impl OwnerLocalAbilityName {
 /// Project an internal registry ability name into the public name a
 /// given owner publishes under RFC-005.
 ///
-/// Agent, Service, SystemAgent, Device, and Authority owners publish owner-local public
-/// ability names. The local daemon registry may store
+/// Agent, Service, SystemAgent, and Authority owners publish owner-local public
+/// ability names. Device URAs are accepted here only as execution-placement
+/// inputs for legacy local dispatch projection; they are not Ability owners.
+/// The local daemon registry may store
 /// implementation-qualified keys such as `claude.chat` or `fs.read`; those
 /// prefixes identify the local dispatch table, not the public Ability URA tail.
 pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
@@ -398,7 +399,7 @@ pub fn descriptor_public_ability_name(owner_ura: &str, ability_name: &str) -> St
 
 /// Return whether an Ability URA is canonically published under `owner_ura`.
 ///
-/// For User-Agent, Service, SystemAgent, Device, and Authority owners, this is a direct
+/// For User-Agent, Service, SystemAgent, and Authority owners, this is a direct
 /// inverse check against Axon's Ability owner token. There is no fallback from
 /// a device-sponsored SystemAgent ability to the sponsoring Device owner:
 /// Device is substrate/custodian, not the logical ability callee.
@@ -410,7 +411,23 @@ pub fn ability_ura_matches_owner_ura(owner_ura: &str, ability_ura: &str) -> bool
         return false;
     }
 
-    ability_owner_identity_ura(ability_ura).as_deref() == Some(owner_ura)
+    is_callable_ability_owner_ura(owner_ura)
+        && ability_owner_identity_ura(ability_ura).as_deref() == Some(owner_ura)
+}
+
+/// Return whether `owner_ura` can advertise governed AbilityDescriptors.
+///
+/// Device URAs are valid execution hosts and key-custody identities, but they
+/// are not callable Ability owners. Device-native capabilities must be exposed
+/// by a device-sponsored SystemAgent owner.
+pub fn is_callable_ability_owner_ura(owner_ura: &str) -> bool {
+    let Ok(owner) = parse_ura(owner_ura) else {
+        return false;
+    };
+    matches!(
+        owner.kind,
+        URAKind::Agent | URAKind::Service | URAKind::Authority
+    )
 }
 
 /// Convert an owner-local ability name back to the daemon registry key
@@ -643,7 +660,7 @@ mod tests {
             "easynet:///r/localhost/device/dev-1",
             ability
         ));
-        assert!(ability_ura_matches_owner_ura(
+        assert!(!ability_ura_matches_owner_ura(
             "easynet:///r/localhost/device/dev-1",
             "easynet:///r/localhost/ability/device.dev-1.fs.read"
         ));
@@ -703,14 +720,13 @@ mod tests {
     }
 
     #[test]
-    fn ability_selector_projects_device_owned_ability_ura() {
-        let selector = AbilitySelector::parse("easynet:///r/acme/ability/device.dev-1.fs.read")
-            .expect("device ability selector");
-        assert_eq!(selector.owner_ura(), "easynet:///r/acme/device/dev-1");
-        assert_eq!(selector.owner_kind(), "device");
-        assert_eq!(selector.dispatch_target(), "easynet:///r/acme/device/dev-1");
-        assert_eq!(selector.public_name(), "fs.read");
-        assert_eq!(selector.local_registry_ability(), "fs.read");
+    fn ability_selector_rejects_device_owned_ability_ura() {
+        let err = AbilitySelector::parse("easynet:///r/acme/ability/device.dev-1.fs.read")
+            .expect_err("Device-owned ability selectors must fail closed");
+        assert!(
+            err.to_string().contains("Device is execution substrate"),
+            "{err}"
+        );
     }
 
     #[test]
