@@ -49,6 +49,87 @@ def test_sdk_environment_reads_runtime_identity_from_control_discovery(monkeypat
     assert projection.principal == ""
 
 
+def test_paired_runtime_identity_projection_exposes_only_public_facts(
+    tmp_path,
+):
+    credentials = tmp_path / "credentials.json"
+    credentials.write_text(
+        json.dumps(
+            {
+                "realm": "acme",
+                "node_id": "device-a",
+                "user_id": "user-a",
+                "username": "alice",
+                "hub_endpoint": "https://hub.example",
+                "credential_token": "must-not-escape",
+                "deploy_signature": "must-not-escape",
+            }
+        )
+    )
+    control = _write_control_identity(tmp_path, runtime_instance_id="device-a")
+
+    projection = easynet_sdk.SdkEnvironment(
+        control_path=str(control)
+    ).paired_runtime_identity_projection(credentials)
+
+    assert projection == easynet_sdk.RuntimeIdentityProjection(
+        realm="acme",
+        runtime_instance_id="device-a",
+        principal="easynet:///r/acme/user/user-a",
+        principal_display_name="alice",
+        control_plane_endpoint="https://hub.example",
+    )
+    assert "must-not-escape" not in repr(projection)
+
+
+def test_paired_runtime_identity_projection_rejects_other_runtime(
+    tmp_path,
+):
+    credentials = tmp_path / "credentials.json"
+    credentials.write_text(
+        json.dumps(
+            {
+                "realm": "acme",
+                "node_id": "device-a",
+                "user_id": "user-a",
+                "username": "alice",
+                "hub_endpoint": "https://hub.example",
+            }
+        )
+    )
+    control = _write_control_identity(tmp_path, runtime_instance_id="device-b")
+
+    with pytest.raises(easynet_sdk.SDKError) as exc_info:
+        easynet_sdk.SdkEnvironment(
+            control_path=str(control)
+        ).paired_runtime_identity_projection(credentials)
+
+    assert exc_info.value.code == easynet_sdk.ErrorCode.CALLER_IDENTITY_UNAVAILABLE
+    assert "do not match" in exc_info.value.message
+
+
+def _write_control_identity(tmp_path, *, runtime_instance_id):
+    control = tmp_path / "control.json"
+    control.write_text(
+        json.dumps(
+            {
+                "socket_path": "/tmp/control.sock",
+                "invocation_endpoint": "/tmp/runtime.sock",
+                "daemon_identity": {
+                    "mode": "device",
+                    "realm": "acme",
+                    "node_id": runtime_instance_id,
+                },
+                "pid": 123,
+                "daemon_version": "test",
+                "supported_ipc_versions": {"min": 1, "max": 1},
+                "capability_flags": ["paired_user_runtime_signer"],
+            }
+        )
+    )
+    return control
+
+
 def test_runtime_identity_projection_rejects_daemon_node_id_alias():
     with pytest.raises(easynet_sdk.SDKError) as exc_info:
         easynet_sdk.runtime_identity_projection_from_json(

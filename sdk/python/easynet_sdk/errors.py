@@ -86,7 +86,7 @@ class RetryHint(StrEnum):
 RuntimeFailureCode = ErrorCode | str
 
 
-@dataclass(frozen=True)
+@dataclass
 class SDKError(Exception):
     """Typed error boundary used by Python SDK callers."""
 

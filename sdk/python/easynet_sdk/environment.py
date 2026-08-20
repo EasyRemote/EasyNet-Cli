@@ -24,6 +24,7 @@ from .runtime import RuntimeClient
 from .runtime_ability import RuntimeAbilityClient
 from .runtime_environment import (
     RuntimeIdentityProjection,
+    read_paired_runtime_identity_projection,
     read_runtime_control_discovery,
     read_runtime_identity_projection,
     runtime_credentials_path,
@@ -405,6 +406,22 @@ class SdkEnvironment:
         return RuntimeIdentityProjection(
             realm=identity.realm,
             runtime_instance_id=identity.runtime_instance_id,
+        )
+
+    def paired_runtime_identity_projection(
+        self,
+        credentials_path: str | Path = "",
+    ) -> RuntimeIdentityProjection:
+        """Return the paired principal bound to this attached runtime.
+
+        Secret-bearing credential persistence remains SDK-owned. The returned
+        value contains only public identity, display, and control-plane facts.
+        """
+
+        self._require_open()
+        return read_paired_runtime_identity_projection(
+            credentials_path or self.runtime_credentials_path(),
+            control_path=self.resolved_control_path(),
         )
 
     def _connect_options(self, options: ConnectOptions) -> ConnectOptions:
