@@ -109,29 +109,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn regenerate_checked_in_descriptors() {
-        let index = crate::daemon::plugins::PluginPackageIndex::builtin().unwrap();
-        let package = index
-            .package_for_ability(constants::ABILITY_OPEN_SESSION)
-            .unwrap();
-        let metadata = crate::daemon::plugins::PluginDescriptorProjector::project(&index).unwrap();
-        for meta in metadata
-            .iter()
-            .filter(|meta| constants::PUBLIC_ABILITIES.contains(&meta.name.as_str()))
-        {
-            let contract = crate::daemon::plugins::plugin_ability_contract(meta);
-            let rendered =
-                crate::daemon::ability::catalog::ability_toml::render_ability_contract_toml(
-                    &contract,
-                );
-            let path = std::path::Path::new(package.manifest().descriptor_dir())
-                .join(format!("{}.ability.toml", meta.name));
-            std::fs::write(&path, rendered).unwrap();
-        }
-    }
-
-    #[test]
     fn checked_in_browser_descriptors_match_the_canonical_projection() {
         let index = crate::daemon::plugins::PluginPackageIndex::builtin()
             .expect("builtin plugin package index");
