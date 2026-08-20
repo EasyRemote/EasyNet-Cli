@@ -5399,14 +5399,39 @@ async fn run_bidi_down_reader(
                     };
                     let terminal = projection.should_stop_after_frame();
                     let bytes = projection.into_json_bytes();
-                    let sent = send_callback_frame_or_backpressure(
-                        &tx,
-                        bytes,
-                        bidi_callback_backpressure_frame(sequence, BIDI_CALLBACK_QUEUE_CAPACITY),
-                    )
-                    .await;
-                    if !sent || terminal {
-                        break;
+                    // Backpressure policy: a full callback queue means the
+                    // consumer is momentarily behind. Killing the whole bidi
+                    // session with a terminal backpressure frame (the old
+                    // policy) tore the carrier down on every busy page —
+                    // loads burst hundreds of cdp.events past the 64-slot
+                    // queue and the viewer saw "bidi carrier is closed" in a
+                    // reopen loop. Blocking here instead deadlocks against
+                    // tonic flow control. So: shed the overflowing frame and
+                    // keep the stream alive — viewport frames are latest-wins
+                    // and self-heal, and a dropped cdp.event is strictly
+                    // better than a dead session.
+                    match tx.try_send(bytes) {
+                        Ok(()) => {
+                            if terminal {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            if terminal {
+                                // Never shed a terminal frame: block for it.
+                                let _ = tx.send(
+                                    bidi_callback_backpressure_frame(
+                                        sequence,
+                                        BIDI_CALLBACK_QUEUE_CAPACITY,
+                                    )
+                                    .to_string()
+                                    .into_bytes(),
+                                )
+                                .await;
+                                break;
+                            }
+                        }
                     }
                 }
                 Ok(None) => break,
@@ -8753,9 +8778,9 @@ mod tests {
         );
         assert_eq!(json["terminal_receipt"]["causal_binding_kind"], "none");
         assert_eq!(json["terminal_receipt"]["causal_binding"]["form"], "none");
-        assert_eq!(json["terminal_receipt"]["authority_binding_kind"], "self");
+        assert_eq!(json["terminal_receipt"]["authority_binding_kind"], "self+identity");
         assert_eq!(
-            json["terminal_receipt"]["authority_binding"]["principal_ura"],
+            json["terminal_receipt"]["authority_binding"]["authority_ura"],
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
         );
         assert_eq!(json["terminal_receipt"]["descriptor_version"], "1.0.0");
@@ -8780,7 +8805,7 @@ mod tests {
         );
         assert_eq!(
             json["terminal_receipt"]["authority_proof"]["binding"]["kind"],
-            "self"
+            "self+identity"
         );
     }
 
