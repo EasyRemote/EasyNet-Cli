@@ -1231,48 +1231,82 @@ async fn run_bidi_source(
         mut from_client,
     } = source;
     let mut to_client = Some(to_client);
-    loop {
-        if to_client.is_none() {
-            match from_client.recv().await {
-                Some(frame) => {
-                    if frame.terminal {
-                        return Ok(frame.payload);
-                    }
-                    ctx.emit_progress(frame.payload, frame.content_type).await?;
-                }
-                None => break,
+    // `ctx.recv_message` is NOT cancel-safe: it dequeues the inbound
+    // message and then awaits a second time to audit the consumption. A
+    // `select!` racing it against the outbound lane cancels that future
+    // whenever an outbound frame wins, silently dropping the already
+    // dequeued client frame — under interactive bidi traffic (browser
+    // input + acks) roughly every other inbound frame was lost. Pump the
+    // inbox from a dedicated task into an mpsc channel instead;
+    // `mpsc::Receiver::recv` is cancel-safe, and the audit emit stays
+    // ordered inside the pump task.
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(BIDI_CHANNEL_BOUND);
+    let inbound_ctx = Arc::clone(&ctx);
+    let inbound_pump = tokio::spawn(async move {
+        while let Some(msg) = inbound_ctx.recv_message(None).await {
+            if inbound_tx.send(msg).await.is_err() {
+                break;
             }
-            continue;
         }
+    });
+    let result = 'run: {
+        loop {
+            if to_client.is_none() {
+                match from_client.recv().await {
+                    Some(frame) => {
+                        if frame.terminal {
+                            break 'run Ok(frame.payload);
+                        }
+                        if let Err(error) =
+                            ctx.emit_progress(frame.payload, frame.content_type).await
+                        {
+                            break 'run Err(error);
+                        }
+                    }
+                    None => break 'run Ok(Vec::new()),
+                }
+                continue;
+            }
 
-        tokio::select! {
-            inbound = ctx.recv_message(None) => {
-                match inbound {
-                    Some(msg) => {
-                        let value = payload_to_json_value(&msg.payload).map_err(|e| *e)?;
-                        let send_closed = match to_client.as_ref() {
-                            Some(sender) => sender.send(value).await.is_err(),
-                            None => false,
-                        };
-                        if send_closed {
+            tokio::select! {
+                inbound = inbound_rx.recv() => {
+                    match inbound {
+                        Some(msg) => {
+                            let value = match payload_to_json_value(&msg.payload) {
+                                Ok(value) => value,
+                                Err(e) => break 'run Err(*e),
+                            };
+                            let send_closed = match to_client.as_ref() {
+                                Some(sender) => sender.send(value).await.is_err(),
+                                None => false,
+                            };
+                            if send_closed {
+                                to_client = None;
+                            }
+                        }
+                        None => {
                             to_client = None;
                         }
                     }
-                    None => {
-                        to_client = None;
+                }
+                outbound = from_client.recv() => {
+                    match outbound {
+                        Some(frame) if frame.terminal => break 'run Ok(frame.payload),
+                        Some(frame) => {
+                            if let Err(error) =
+                                ctx.emit_progress(frame.payload, frame.content_type).await
+                            {
+                                break 'run Err(error);
+                            }
+                        }
+                        None => break 'run Ok(Vec::new()),
                     }
                 }
             }
-            outbound = from_client.recv() => {
-                match outbound {
-                    Some(frame) if frame.terminal => return Ok(frame.payload),
-                    Some(frame) => ctx.emit_progress(frame.payload, frame.content_type).await?,
-                    None => break,
-                }
-            }
         }
-    }
-    Ok(Vec::new())
+    };
+    inbound_pump.abort();
+    result
 }
 
 fn bidi_handler_to_ability_fn(handler: LocalBidiHandler) -> AbilityFn {
