@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const EXPECTED_DESCRIPTOR_COUNT: usize = 195;
+const EXPECTED_DESCRIPTOR_COUNT: usize = 207;
 const NAMED_SURFACES: &[&str] = &[
     "browser",
     "file_transfer",
@@ -142,6 +142,15 @@ fn every_descriptor_has_one_honest_execution_surface() {
         "resource.watch_remote_targets",
     ] {
         assert_contract(&contracts, name, "operator", "none");
+    }
+    for name in [
+        "project_list",
+        "pages.publish",
+        "pages.get",
+        "pages.unpublish",
+        "pages.health",
+    ] {
+        assert_contract(&contracts, name, "operator", "pages");
     }
     for name in ["speaker.publish", "voice.subscribe", "voice.transcribe"] {
         assert_capability_state(&contracts, name, "unsupported");

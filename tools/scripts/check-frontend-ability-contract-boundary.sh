@@ -57,6 +57,12 @@ while IFS= read -r -d '' descriptor; do
   if [[ "$surface" == "remote_desktop" && "$name" != remote_desktop.* ]]; then
     fail "$relative only remote_desktop abilities may use dedicated_surface=remote_desktop"
   fi
+  if [[ ( "$name" == pages.* || "$name" == "project_list" ) && "$surface" != "pages" ]]; then
+    fail "$relative pages abilities must use dedicated_surface=pages"
+  fi
+  if [[ "$surface" == "pages" && "$name" != pages.* && "$name" != "project_list" ]]; then
+    fail "$relative only pages abilities may use dedicated_surface=pages"
+  fi
 done < <(find "${DESCRIPTOR_DIRS[@]}" -name '*.ability.toml' -print0 2>/dev/null)
 
 [[ "$count" -gt 0 ]] || fail "no system descriptors found"

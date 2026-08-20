@@ -82,6 +82,12 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - That wording was semantically wrong after the callable-owner migration: local catalogue rows are published by runtime SystemAgents and projected Services; Device remains host/custody/execution substrate.
 - Fix: both descriptor sources now describe local catalogue scope as SystemAgent- and Service-owned, and the convergence gate rejects the retired "device-owned abilities only" wording from the runtime schema.
 
+## Pages frontend execution-surface seam
+
+- Follow-up Pages review found the management descriptors (`project_list`, `pages.publish`, `pages.get`, `pages.unpublish`, `pages.health`) still declared `exposure = "internal"` and `subject_contract_kind = "route-target"` even after the implementation moved to the principal-scoped Pages Service owner.
+- That contradicted the product contract: these are user/operator-facing Pages surface abilities. Treating them as internal route-target abilities leaves frontend discovery and subject construction underspecified.
+- Fix: Pages management descriptors now declare `exposure = "operator"`, `dedicated_surface = "pages"`, and `subject_contract_kind = "dedicated-surface"`. The execution-surface matrix and frontend contract gate now pin this mapping.
+
 ## Verification
 
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
@@ -113,6 +119,9 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - `cargo test -q remote_target_refresh --features axon-pb`
 - `cargo test -q --test script_checks remoteapp`
 - `cargo test -q meta_list_abilities --features axon-pb`
+- `cargo test -q --test ability_execution_surface_matrix --features axon-pb`
+- `bash tests/scripts/test_check_frontend_ability_contract_boundary.sh`
+- `cargo test -q u14_pages_management_abilities_are_in_local_runtime --features axon-pb`
 - `rg -n "device-owned abilities only|hub-published abilities|Device-owned metadata|Device-owned system ability" src ability-descriptors sdk tools/scripts/check-canonical-runtime-convergence-v2.sh tests/scripts/test_check_canonical_runtime_convergence_v2.sh -S` (only the convergence-gate rejection remains)
 - `cargo build --bin easynet --bin easynet-daemon`
 - restarted local daemon with rebuilt binaries and confirmed `runtime_status=running`, `connection.state=FRONTEND_CONNECTED`, `product_presence.directory_status=online`, `session_admitted=true`
