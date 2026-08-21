@@ -379,18 +379,16 @@ fn resolve_target_for_binding(
             let windows = unsafe { content.windows() };
             let app_window_set =
                 select_application_window_set_for_binding(ability, &windows, binding, &display)?;
-            let window_refs = app_window_set
-                .windows
-                .iter()
-                .map(|window| window.as_ref())
-                .collect::<Vec<_>>();
-            let included_windows = NSArray::from_slice(&window_refs);
+            let application_refs = [app.as_ref()];
+            let included_applications = NSArray::from_slice(&application_refs);
+            let excepting_windows: Retained<NSArray<SCWindow>> = NSArray::new();
             proof_app_window_set = Some(app_window_set.proof);
             let filter = unsafe {
-                SCContentFilter::initWithDisplay_includingWindows(
+                SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
                     SCContentFilter::alloc(),
                     &display,
-                    &included_windows,
+                    &included_applications,
+                    &excepting_windows,
                 )
             };
             (filter, proof_display_id, None)
@@ -424,7 +422,6 @@ fn resolve_target_for_binding(
 }
 
 struct ApplicationWindowSetTarget {
-    windows: Vec<Retained<SCWindow>>,
     proof: AppWindowSetProof,
 }
 
@@ -449,7 +446,6 @@ fn select_application_window_set_for_binding(
             "application ScreenCaptureKit capture requires a committed display-scoped window set",
         )
     })?;
-    let mut selected_windows = Vec::new();
     let mut window_ids = Vec::new();
     let mut off_display_window_ids = Vec::new();
     let mut matched_application = false;
@@ -465,7 +461,6 @@ fn select_application_window_set_for_binding(
             }
             if sck_window_overlaps_display(&window, display) {
                 window_ids.push(window_id);
-                selected_windows.push(window);
             } else {
                 off_display_window_ids.push(window_id);
             }
@@ -510,10 +505,7 @@ fn select_application_window_set_for_binding(
         ));
     }
     let proof = committed_window_set.clone();
-    Ok(ApplicationWindowSetTarget {
-        windows: selected_windows,
-        proof,
-    })
+    Ok(ApplicationWindowSetTarget { proof })
 }
 
 fn sck_window_overlaps_display(window: &SCWindow, display: &SCDisplay) -> bool {
@@ -933,4 +925,25 @@ fn capture_queue() -> DispatchRetained<DispatchQueue> {
     // dispatch_queue_create via the dispatch2 crate; a serial queue keeps
     // sample ordering and avoids re-entrant callbacks.
     DispatchQueue::new("tech.easynet.remote-desktop.capture", None)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn application_capture_uses_screencapturekit_application_filter_contract() {
+        let source = include_str!("screencapturekit_capture.rs");
+        assert!(
+            source.contains("initWithDisplay_includingApplications_exceptingWindows"),
+            "application capture must use ScreenCaptureKit's application filter"
+        );
+        let application_arm = source
+            .split("RemoteDesktopTargetKind::Application =>")
+            .nth(1)
+            .and_then(|tail| tail.split("}\n    };").next())
+            .expect("application capture arm exists");
+        assert!(
+            !application_arm.contains("initWithDisplay_includingWindows"),
+            "application capture must not degrade to a window-list include filter"
+        );
+    }
 }
