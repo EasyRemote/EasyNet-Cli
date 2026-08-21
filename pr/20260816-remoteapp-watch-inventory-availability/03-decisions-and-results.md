@@ -8,6 +8,7 @@
 4. Include discovery availability in the stable inventory hash so available-empty and unavailable-empty snapshots remain distinguishable.
 5. Keep freshness-only timestamp changes excluded from the inventory hash.
 6. Extend both performance and picker-subject boundary gates because frontend target selection depends on the same inventory identity semantics.
+7. Treat Rust `input_schema()` source as DescriptorContract source material; duplicate JSON keys are guarded because they can hide descriptor-hash drift during review.
 
 ## Results
 
@@ -23,6 +24,19 @@
 - `bash tools/scripts/check-remoteapp-frontend-invocation-boundary.sh` passed.
 - `cargo test -q -p easynet --features remote-desktop,headless-media remoteapp_ --test script_checks` passed 7 tests.
 - EasyNet Frontend `npm test -- --run src/lib/api/remote-desktop-protocol.test.ts src/store/media-channel-store.test.ts src/store/media-channel-invocation.test.ts src/components/easynet/DeviceMediaAccess.test.tsx` passed 4 files and 50 tests.
+
+## 2026-08-21 schema-source guard update
+
+- `cargo fmt --all` passed.
+- `bash tools/scripts/check-remoteapp-performance-boundary.sh` passed.
+- `bash tests/scripts/test_check_remoteapp_performance_boundary.sh` passed all mutation cases.
+- `cargo test -q -p easynet --features remote-desktop,headless-media watch_input_schema_has_single_types_description_contract --lib` passed 1 test.
+- `cargo test -q -p easynet --features remote-desktop,headless-media watch_remote_targets --lib` passed 13 tests.
+- `bash tools/scripts/check-remoteapp-picker-subject-boundary.sh` passed.
+- `bash tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh` passed.
+- `bash tools/scripts/check-remoteapp-target-binding-boundary.sh` passed.
+- `bash tools/scripts/check-architecture-convergence.sh` passed.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` did not complete because the sibling EasyNet-Axon worktree is already dirty on `codex/lifecycle-authority-binding-refresh` and its lifecycle Rust execution report has a stale `source_digest`. This is external to the watch schema-source guard and was not rewritten in this turn.
 
 ## Boundary note
 

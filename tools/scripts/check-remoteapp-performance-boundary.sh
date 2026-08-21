@@ -97,6 +97,8 @@ require 'discovery_availability_participates_in_inventory_hash' "$WATCH_REMOTE_T
   'watch inventory must test discovery availability participates in the stable hash'
 require 'watch_handler_emits_unavailable_without_removed_targets' "$WATCH_REMOTE_TARGETS" \
   'watch handler must test typed unavailable frames through the stream boundary'
+require 'watch_input_schema_has_single_types_description_contract' "$WATCH_REMOTE_TARGETS" \
+  'resource.watch_remote_targets must test that descriptor schema source does not duplicate types.description'
 
 require 'sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_tick' "$TARGET_OBSERVER" \
   'PERF-03 must prove a sampled target observer fans out one host enumeration to 128 sessions'

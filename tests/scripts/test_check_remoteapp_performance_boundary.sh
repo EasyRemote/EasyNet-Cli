@@ -69,6 +69,9 @@ fn discovery_availability_participates_in_inventory_hash() {}
 
 #[test]
 fn watch_handler_emits_unavailable_without_removed_targets() {}
+
+#[test]
+fn watch_input_schema_has_single_types_description_contract() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/target_observer.rs" <<'RS'
@@ -420,6 +423,24 @@ grep -q "must not report previous targets as removed" /tmp/check-remoteapp-perfo
 
 perl -0pi -e 's/removed_resource_uras: previous_removed_resource_uras/removed_resource_uras: Vec::new()/' \
   "$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+perl -0pi -e 's/\n#\[test\]\nfn watch_input_schema_has_single_types_description_contract\(\) \{\}\n//' \
+  "$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-watch-schema-source.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing watch schema-source contract should exit 1 (got $rc)"
+grep -q "descriptor schema source does not duplicate types.description" /tmp/check-remoteapp-performance-boundary-watch-schema-source.out || fail "expected watch schema-source failure"
+
+cat >>"$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs" <<'RS'
+
+#[test]
+fn watch_input_schema_has_single_types_description_contract() {}
+RS
 perl -0pi -e 's/const SESSION_COUNT: usize = 128;/const SESSION_COUNT: usize = 8;/' \
   "$SB/plugins/remote-desktop/src/target_observer.rs"
 
