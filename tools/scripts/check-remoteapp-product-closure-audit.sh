@@ -8,6 +8,7 @@ MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
@@ -40,6 +41,7 @@ reject() {
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
+[[ -f "$SESSION_CANCEL" ]] || fail "missing RemoteApp session cancel E2E harness"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
@@ -166,11 +168,15 @@ require 'remoteapp-product-readiness-matrix.json' "$AUDIT" \
   'audit must name the machine-readable product readiness matrix'
 require 'host-remoteapp-session-timeout-e2e\.sh' "$AUDIT" \
   'audit must record the host session timeout E2E harness'
+require 'host-remoteapp-session-cancel-e2e\.sh' "$AUDIT" \
+  'audit must record the host session cancel E2E harness'
 
 require 'Full interactive RemoteApp product: incomplete' "$PLAN" \
   'plan evidence audit must keep the goal open'
 require 'host-remoteapp-session-timeout-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the host session timeout E2E harness'
+require 'host-remoteapp-session-cancel-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the host session cancel E2E harness'
 require 'Cross-platform capture implementation/evidence for Windows and Linux' "$PLAN" \
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'Frontend full lifecycle E2E' "$PLAN" \
@@ -204,6 +210,18 @@ require 'session_expired' "$SESSION_TIMEOUT" \
   'session timeout E2E must prove session_expired terminal reason'
 require 'terminal_receipt\.reason_code' "$SESSION_TIMEOUT" \
   'session timeout E2E must inspect timeout terminal_receipt.reason_code'
+require 'remote_desktop\.end_session' "$SESSION_CANCEL" \
+  'session cancel E2E must invoke public end_session'
+require 'remote_desktop\.show_session' "$SESSION_CANCEL" \
+  'session cancel E2E must observe cancel through public show_session'
+require 'user_cancelled' "$SESSION_CANCEL" \
+  'session cancel E2E must prove user_cancelled terminal reason'
+require 'terminal_receipt\.reason_code' "$SESSION_CANCEL" \
+  'session cancel E2E must inspect cancel terminal_receipt.reason_code'
+require 'end_cancel_again must be idempotent after user cancel' "$SESSION_CANCEL" \
+  'session cancel E2E must inspect repeated end_session idempotency'
+require 'end_cancel_again must preserve the original cancel terminal receipt' "$SESSION_CANCEL" \
+  'session cancel E2E must prove repeated end_session preserves the terminal receipt'
 
 require 'terminal_receipt: Option<Value>' "$SESSION" \
   'session aggregate must store a single terminal receipt projection'

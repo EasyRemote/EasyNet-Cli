@@ -325,6 +325,12 @@ Current frontend lifecycle evidence:
   through `remote_desktop.show_session`, and invokes
   `remote_desktop.end_session` afterward to prove idempotent terminal receipt
   preservation.
+- Host session cancel E2E now has a runnable entrypoint:
+  `host-remoteapp-session-cancel-e2e.sh`. It creates a live-target session
+  through the public CLI, invokes `remote_desktop.end_session` with
+  `user_cancelled`, observes the closed state through
+  `remote_desktop.show_session`, and invokes `end_session` again to prove
+  idempotent terminal receipt preservation.
 
 Missing or insufficient product evidence:
 

@@ -12,6 +12,7 @@ DISPLAY_FALLBACK_FORBIDDEN="$ROOT/tools/scripts/host-remoteapp-display-fallback-
 WEAK_IDENTITY_AMBIGUITY="$ROOT/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 VIEW_ONLY_INPUT_SAFETY="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -59,6 +60,7 @@ require_order() {
 [[ -f "$WEAK_IDENTITY_AMBIGUITY" ]] || fail "missing host weak identity ambiguity E2E harness"
 [[ -f "$VIEW_ONLY_INPUT_SAFETY" ]] || fail "missing host view-only input safety E2E harness"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing host session timeout E2E harness"
+[[ -f "$SESSION_CANCEL" ]] || fail "missing host session cancel E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -203,6 +205,25 @@ require 'end_after_timeout must preserve the original timeout terminal receipt' 
   'host session timeout E2E must prove post-timeout end_session preserves the terminal receipt'
 require 'create_session args must not carry subject identity' "$SESSION_TIMEOUT" \
   'host session timeout E2E must keep selected target identity in Invocation.subject, not args'
+
+require 'resource\.refresh_remote_targets' "$SESSION_CANCEL" \
+  'host session cancel E2E must select a live target through resource.refresh_remote_targets'
+require 'create-remote-desktop-session' "$SESSION_CANCEL" \
+  'host session cancel E2E must create the RemoteApp session through the EasyNet CLI'
+require 'remote_desktop\.end_session' "$SESSION_CANCEL" \
+  'host session cancel E2E must invoke public remote_desktop.end_session'
+require 'show-remote-desktop-session' "$SESSION_CANCEL" \
+  'host session cancel E2E must observe cancel through the public show_session view'
+require 'user_cancelled' "$SESSION_CANCEL" \
+  'host session cancel E2E must require user_cancelled as the product cancel reason'
+require 'terminal_receipt\.reason_code' "$SESSION_CANCEL" \
+  'host session cancel E2E must verify cancel terminal_receipt.reason_code'
+require 'end_cancel_again must be idempotent after user cancel' "$SESSION_CANCEL" \
+  'host session cancel E2E must require idempotent end_session after user cancel'
+require 'end_cancel_again must preserve the original cancel terminal receipt' "$SESSION_CANCEL" \
+  'host session cancel E2E must prove repeated end_session preserves the terminal receipt'
+require 'create_session args must not carry subject identity' "$SESSION_CANCEL" \
+  'host session cancel E2E must keep selected target identity in Invocation.subject, not args'
 
 require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must refresh through resource.refresh_remote_targets'

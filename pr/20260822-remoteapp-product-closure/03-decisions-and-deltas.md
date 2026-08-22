@@ -825,3 +825,34 @@ Product effect:
   unit/handler evidence.
 - This still does not prove long-outage reconnect, crash/restart recovery,
   consent revoke E2E, or cross-device timeout receipt chains.
+
+## 2026-08-23 — Session cancel needs host-level terminal evidence
+
+Decision:
+
+- RemoteApp product cancel is the user/session close path exposed by
+  `remote_desktop.end_session`; it is not the Axon transport-level
+  `invocation.cancel` lifecycle primitive.
+- A user cancel terminal receipt must be stable. Calling `end_session` again
+  after cancel should be idempotent and preserve the original `user_cancelled`
+  receipt instead of creating a second close fact.
+
+Implementation delta:
+
+- Added `host-remoteapp-session-cancel-e2e.sh`.
+- The harness selects a live Resource URA, creates a
+  `remote_desktop.create_session`, invokes public `remote_desktop.end_session`
+  with `user_cancelled`, observes the closed session through
+  `remote_desktop.show_session`, then invokes `remote_desktop.end_session`
+  again and verifies `already_ended=true`.
+- The E2E acceptance and product-closure gates now require the cancel harness,
+  public end-session invocation, public show-session observation,
+  `terminal_receipt.reason_code`, and idempotent receipt preservation.
+
+Product effect:
+
+- User-initiated close/cancel lifecycle now has host-level executable evidence
+  instead of only handler/unit evidence.
+- This still does not prove transport-level `invocation.cancel`,
+  long-outage reconnect, crash/restart recovery, consent revoke E2E, or
+  cross-device cancel receipt chains.
