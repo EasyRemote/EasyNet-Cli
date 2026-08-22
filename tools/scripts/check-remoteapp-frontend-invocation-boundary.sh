@@ -228,18 +228,38 @@ require 'RemoteDesktopInputReadiness' "$PROTOCOL" \
   'frontend must model daemon-projected remote desktop input readiness'
 require 'inputReadiness\?: RemoteDesktopInputReadiness' "$PROTOCOL" \
   'frontend session view must carry the daemon input_readiness projection'
+require 'RemoteDesktopTerminalReceipt' "$PROTOCOL" \
+  'frontend must model daemon-projected remote desktop terminal receipts'
+require 'terminalReceipt\?: RemoteDesktopTerminalReceipt' "$PROTOCOL" \
+  'frontend session view must carry the daemon terminal_receipt projection'
 require 'remoteDesktopInputReadinessFromResult\(result\)' "$PROTOCOL" \
   'frontend session projection must parse daemon input_readiness'
+require 'remoteDesktopTerminalReceiptFromResult\(result\)' "$PROTOCOL" \
+  'frontend session projection must parse daemon terminal_receipt'
 require 'objectField\(result, '\''input_readiness'\''\)' "$PROTOCOL" \
   'frontend input readiness parser must read the daemon input_readiness object'
+require 'objectField\(result, '\''terminal_receipt'\''\)' "$PROTOCOL" \
+  'frontend terminal receipt parser must read the daemon terminal_receipt object'
 require 'interactiveReady: value\.interactive_ready === true' "$PROTOCOL" \
   'frontend input readiness must expose daemon interactive_ready'
 require 'blockedReason: stringField\(value, '\''blocked_reason'\''\)' "$PROTOCOL" \
   'frontend input readiness must expose daemon blocked_reason'
+require 'remoteDesktopSessionTerminal' "$PROTOCOL" \
+  'frontend must expose one helper for terminal remote desktop session state'
 require 'remoteDesktopInputFrameAllowed' "$PROTOCOL" \
   'frontend must derive remote desktop input eligibility from runtime target tracking and input policy'
 require 'remoteDesktopInputFrameAllowed' "$STORE" \
   'frontend store input sender must use the remote desktop input eligibility helper'
+require 'remoteDesktopSessionTerminal\(session\)' "$STORE" \
+  'frontend store must use terminal session state before ending/reusing RemoteApp sessions'
+require 'guardTerminalRemoteDesktopSessionPatch' "$STORE" \
+  'frontend store must centralize stale async protection for terminal RemoteApp sessions'
+require 'remoteDesktopSessionTerminal\(current\)' "$STORE" \
+  'frontend store terminal guard must inspect the current RemoteApp session state'
+require '!remoteDesktopSessionTerminal\(next\)' "$STORE" \
+  'frontend store terminal guard must reject stale non-terminal projections over terminal sessions'
+require 'session: view \? \{ \.\.\.view, sessionToken: undefined \} : null' "$STORE" \
+  'frontend end_session must preserve daemon terminal session view while clearing the session token'
 require 'view\.inputReadiness\.interactiveReady !== true' "$PROTOCOL" \
   'frontend input gating must fail closed when daemon input_readiness says interactive is not ready'
 require 'view\.inputReadiness\.pointerEnabled === true' "$PROTOCOL" \
@@ -295,6 +315,10 @@ require 'input_injection_unavailable' "$ACCESS_TEST" \
   'frontend access tests must cover visible blocked input readiness reason'
 require 'interactive->view_only' "$ACCESS_TEST" \
   'frontend access tests must cover visible interactive-to-view-only input downgrade'
+require 'surfaces daemon remote desktop terminal receipts in session details' "$ACCESS_TEST" \
+  'frontend access tests must prove daemon terminal_receipt appears in session details'
+require 'terminal caller_ended #9' "$ACCESS_TEST" \
+  'frontend access tests must cover visible RemoteApp terminal receipt reason and event sequence'
 require 'remote_desktop\.grant_consent' "$ACCESS_TEST" \
   'frontend access tests must prove UI flow grants target-scoped consent'
 require 'input_control: true' "$ACCESS_TEST" \
@@ -307,5 +331,13 @@ require 'remote_desktop\.end_session' "$ACCESS_TEST" \
   'frontend access tests must prove UI flow ends the session'
 require 'subject_ura: screenResource\.resource_ura' "$ACCESS_TEST" \
   'frontend access tests must assert selected target subject propagation through UI flow'
+require 'terminal \{session\.terminalReceipt\.reasonCode' "$ACCESS" \
+  'frontend session details must render daemon terminal_receipt reason'
+require 'terminalEventSequence' "$ACCESS" \
+  'frontend session details must render daemon terminal receipt event sequence'
+require 'projects remote desktop terminal receipts from daemon session views' "$PROTOCOL_TEST" \
+  'frontend protocol tests must cover daemon terminal_receipt projection'
+require 'remoteDesktopSessionTerminal\(view\)' "$PROTOCOL_TEST" \
+  'frontend protocol tests must prove terminal receipt marks a terminal RemoteApp session'
 
 printf 'check-remoteapp-frontend-invocation-boundary: ok\n'

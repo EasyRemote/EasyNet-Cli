@@ -202,6 +202,12 @@ Current frontend lifecycle evidence:
   to view-only now appears with the effective mode and blocked reason such as
   `input_injection_unavailable`. This closes an operator-observability seam; it
   does not turn blocked input into successful pointer/keyboard injection.
+- Frontend protocol/store/UI code now parses and renders daemon-projected
+  RemoteApp `terminal_receipt`. After `end_session`, the store retains the
+  closed session view with its terminal receipt while clearing `sessionToken`.
+  This gives users and E2E checks a deterministic product terminal fact instead
+  of making the closed state vanish as `session=null`; it remains separate from
+  canonical Axon Invocation receipts.
 - Daemon session views now also project target-tracker input loss into
   `input_readiness.blocked_reason=target_input_not_ready`. This keeps the
   public session view aligned with the actual input execution path, which

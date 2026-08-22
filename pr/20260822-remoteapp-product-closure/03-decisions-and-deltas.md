@@ -346,6 +346,34 @@ Product effect:
 - This does not claim product-level input injection completion; real OS
   pointer/keyboard E2E and latency evidence remain required.
 
+## 2026-08-22 — Frontend must preserve RemoteApp terminal receipts
+
+Decision:
+
+- A RemoteApp session terminal fact is product lifecycle state, not an Axon
+  Invocation receipt.
+- The frontend must not erase that fact by replacing a successful
+  `end_session` response with `session=null`.
+
+Implementation delta:
+
+- `RemoteDesktopView` now carries the parsed daemon `terminal_receipt`
+  projection.
+- `rdEnd` retains a closed terminal view, clears `sessionToken`, and marks the
+  local attachment false.
+- Session details render the terminal reason and event sequence.
+- The frontend boundary checker and mutation self-test reject missing terminal
+  receipt projection, missing UI coverage, and regressions back to
+  `session=null`.
+
+Product effect:
+
+- Users and E2E harnesses can distinguish a known terminal session from a
+  missing session after local transport teardown.
+- This closes a frontend lifecycle observability seam only. Session resume,
+  reconnect, consent-revoke termination E2E, and crash/restart recovery remain
+  required before product completion.
+
 ## 2026-08-22 — Target tracker input loss must block session input readiness
 
 Decision:

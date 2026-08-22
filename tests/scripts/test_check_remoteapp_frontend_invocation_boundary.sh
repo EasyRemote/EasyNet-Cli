@@ -57,7 +57,16 @@ function requireRemoteDesktopSessionSubject(ability: string, subjectURA: string 
 TS
 
 cat >"$FRONTEND_SRC/store/media-channel-store.ts" <<'TS'
-import { remoteDesktopInputFrameAllowed } from '@/lib/api/remote-desktop-protocol'
+import { remoteDesktopInputFrameAllowed, remoteDesktopSessionTerminal } from '@/lib/api/remote-desktop-protocol'
+
+function guardTerminalRemoteDesktopSessionPatch(prev: Entry, patch: Partial<Entry>): Partial<Entry> {
+  const current = prev.session
+  const next = patch.session
+  if (current && next && remoteDesktopSessionTerminal(current) && !remoteDesktopSessionTerminal(next)) {
+    return { ...patch, session: current, attached: false }
+  }
+  return patch
+}
 
 type RemoteDesktopSessionInputIntent = {
   inputControlRequested: boolean
@@ -175,6 +184,16 @@ export const actions = {
     })
     return result
   },
+  rdEnd: async (key: string) => {
+    const session = entries[key]?.session
+    if (!session) return
+    if (remoteDesktopSessionTerminal(session)) return
+    const result = await invokeRemoteDesktopEndSessionWithRetry()
+    const view = projectRemoteDesktopView(result, session.sessionToken)
+    patchEntry(key, {
+      session: view ? { ...view, sessionToken: undefined } : null,
+    })
+  },
 }
 
 function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | 'detached') {
@@ -264,6 +283,9 @@ export function DeviceMediaAccess() {
   const screenResource = screenResources.find((resource) => resource.resource_ura === selectedScreenURA)
   const session = entry.session
   const inputReadinessDetails = session ? remoteDesktopInputReadinessLabel(session) : undefined
+  const terminalReceiptDetails = session?.terminalReceipt
+    ? `terminal {session.terminalReceipt.reasonCode ?? session.terminalReceipt.receiptType} #${session.terminalReceipt.terminalEventSequence}`
+    : undefined
   if (selectedScreenURA && !screenResources.some((resource) => resource.resource_ura === selectedScreenURA)) {
     setSelectedScreenURA(undefined)
   }
@@ -274,7 +296,7 @@ export function DeviceMediaAccess() {
       onStalled={reportStalled}
     />
   )
-  return remoteTargetReady && screenResource ? <div>{inputReadinessDetails}</div> : null
+  return remoteTargetReady && screenResource ? <div>{inputReadinessDetails}{terminalReceiptDetails}</div> : null
 }
 
 function remoteDesktopInputReadinessLabel(view: RemoteDesktopView) {
@@ -319,12 +341,22 @@ export type RemoteDesktopInputReadiness = {
   keyboardEnabled: boolean
 }
 
+export type RemoteDesktopTerminalReceipt = {
+  receiptType: string
+  sessionId: string
+  reasonCode?: string
+  terminalEventSequence?: number
+}
+
 type RemoteDesktopView = {
   productionBlockedReason?: string
   latestTargetDiagnostic?: { frontendAction?: string }
   targetTracking?: { inputEnabled?: boolean }
   inputPolicy: string
   inputReadiness?: RemoteDesktopInputReadiness
+  terminalReceipt?: RemoteDesktopTerminalReceipt
+  state?: string
+  sessionId?: string
 }
 
 export function remoteDesktopViewFromResult(result: Record<string, unknown> | undefined) {
@@ -336,6 +368,7 @@ export function remoteDesktopViewFromResult(result: Record<string, unknown> | un
     targetTracking: remoteDesktopTargetTrackingFromValue(objectField(result, 'target_tracking')),
     inputPolicy: 'view-only',
     inputReadiness,
+    terminalReceipt: remoteDesktopTerminalReceiptFromResult(result),
   }
 }
 
@@ -353,6 +386,23 @@ function remoteDesktopInputReadinessFromResult(
     pointerEnabled: value.pointer_enabled === true,
     keyboardEnabled: value.keyboard_enabled === true,
   }
+}
+
+function remoteDesktopTerminalReceiptFromResult(
+  result: Record<string, unknown> | undefined,
+): RemoteDesktopTerminalReceipt | undefined {
+  const value = objectField(result, 'terminal_receipt')
+  if (!value) return undefined
+  return {
+    receiptType: stringField(value, 'receipt_type'),
+    sessionId: stringField(value, 'session_id'),
+    reasonCode: stringField(value, 'reason_code'),
+    terminalEventSequence: numberField(value, 'terminal_event_sequence'),
+  }
+}
+
+export function remoteDesktopSessionTerminal(view: RemoteDesktopView | null | undefined): boolean {
+  return view?.state === 'closed' || view?.terminalReceipt?.sessionId === view?.sessionId
 }
 
 function remoteDesktopTargetDiagnosticFromValue(value: Record<string, unknown> | undefined) {
@@ -425,6 +475,21 @@ it('prefers runtime input readiness over legacy input policy for input gating', 
   expect(blocked.inputReadiness).toBeDefined()
   expect(blocked.inputReadiness).toMatchObject({ interactiveReady: false })
   expect(remoteDesktopInputFrameAllowed(blocked, { type: 'pointer' })).toBe(false)
+})
+
+it('projects remote desktop terminal receipts from daemon session views', () => {
+  const view = remoteDesktopViewFromResult({
+    session_id: 'rd-1',
+    state: 'closed',
+    terminal_receipt: {
+      receipt_type: 'remoteapp.session.terminal.v1',
+      session_id: 'rd-1',
+      reason_code: 'caller_ended',
+      terminal_event_sequence: 9,
+    },
+  })
+  expect(view.terminalReceipt).toMatchObject({ sessionId: 'rd-1' })
+  expect(remoteDesktopSessionTerminal(view)).toBe(true)
 })
 TS
 
@@ -553,6 +618,10 @@ it('runs the remote desktop UI flow from target picker through session end', asy
 
 it('surfaces daemon remote desktop input readiness in session details', async () => {
   expect(screen.getByText('input interactive->view_only · input_injection_unavailable')).toBeInTheDocument()
+})
+
+it('surfaces daemon remote desktop terminal receipts in session details', async () => {
+  expect(screen.getByText('terminal caller_ended #9')).toBeInTheDocument()
 })
 TSX
 
@@ -766,6 +835,42 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
 fi
 perl -0pi -e "s/  const value = objectField\\(result, 'input_policy'\\)/  const value = objectField(result, 'input_readiness')/" \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+
+perl -0pi -e "s/    terminalReceipt: remoteDesktopTerminalReceiptFromResult\\(result\\),\\n//" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing daemon terminal_receipt session projection" >&2
+  exit 1
+fi
+perl -0pi -e "s/    inputReadiness,\\n/    inputReadiness,\\n    terminalReceipt: remoteDesktopTerminalReceiptFromResult(result),\\n/" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+
+perl -0pi -e "s/session: view \\? \\{ \\.\\.\\.view, sessionToken: undefined \\} : null/session: null/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted end_session clearing terminal session view" >&2
+  exit 1
+fi
+perl -0pi -e "s/session: null/session: view ? { ...view, sessionToken: undefined } : null/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/\\nfunction guardTerminalRemoteDesktopSessionPatch[\\s\\S]*?\\n}\\n\\ntype RemoteDesktopSessionInputIntent/\\ntype RemoteDesktopSessionInputIntent/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing terminal session stale async guard" >&2
+  exit 1
+fi
+perl -0pi -e "s/import \\{ remoteDesktopInputFrameAllowed, remoteDesktopSessionTerminal \\} from '@\\/lib\\/api\\/remote-desktop-protocol'\\n\\n/import { remoteDesktopInputFrameAllowed, remoteDesktopSessionTerminal } from '@\\/lib\\/api\\/remote-desktop-protocol'\\n\\nfunction guardTerminalRemoteDesktopSessionPatch(prev: Entry, patch: Partial<Entry>): Partial<Entry> {\\n  const current = prev.session\\n  const next = patch.session\\n  if (current \\&\\& next \\&\\& remoteDesktopSessionTerminal(current) \\&\\& !remoteDesktopSessionTerminal(next)) {\\n    return { ...patch, session: current, attached: false }\\n  }\\n  return patch\\n}\\n\\n/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/surfaces daemon remote desktop terminal receipts in session details/surfaces only closed remote desktop state/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing terminal receipt details test" >&2
+  exit 1
+fi
+perl -0pi -e "s/surfaces only closed remote desktop state/surfaces daemon remote desktop terminal receipts in session details/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
 
 perl -0pi -e 's/    if \(view\.inputReadiness\.interactiveReady !== true\) return false/    if (false) return false/' \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
