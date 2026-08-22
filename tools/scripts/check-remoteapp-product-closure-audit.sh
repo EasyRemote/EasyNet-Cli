@@ -7,6 +7,7 @@ AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
 FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -44,6 +45,7 @@ reject() {
 [[ -f "$MATRIX" ]] || fail "missing RemoteApp product readiness matrix"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
 [[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
@@ -144,6 +146,8 @@ require 'does not mean RemoteApp is product-complete' "$AUDIT" \
   'audit must distinguish boundary gates from product completion'
 require 'Application/window selection and stable capture across macOS/Windows/Linux' "$AUDIT" \
   'audit must cover cross-platform application/window/display capture'
+require 'remoteapp-cross-platform-capture-e2e\.sh' "$AUDIT" \
+  'audit must record the cross-platform capture evidence verifier'
 require 'Mouse/keyboard input injection is controllable' "$AUDIT" \
   'audit must cover product input injection'
 require 'Audio/video codec, frame rate, bitrate adaptation' "$AUDIT" \
@@ -205,8 +209,12 @@ require 'host-remoteapp-session-resume-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the host session resume E2E harness'
 require 'waits past the original lease' "$PLAN" \
   'plan evidence audit must record session resume original-lease survival evidence'
-require 'Cross-platform capture implementation/evidence for Windows and Linux' "$PLAN" \
+require 'Cross-platform capture implementation/evidence using' "$PLAN" \
   'plan evidence audit must list missing Windows/Linux evidence'
+require 'remoteapp-cross-platform-capture-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the cross-platform capture verifier'
+require 'Windows/Linux capture or explicit product unsupported state' "$PLAN" \
+  'plan evidence audit must preserve Windows/Linux capture or unsupported requirement'
 require 'Frontend full lifecycle E2E' "$PLAN" \
   'plan evidence audit must list frontend full lifecycle E2E as missing'
 require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
@@ -234,6 +242,36 @@ require 'service_owner_projection_failed' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must classify current Service owner projection failures'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
+require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require real capture matrix proof mode'
+require 'component_mock.*False|component_mock.*false' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must reject component mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require real backend/runtime evidence'
+require 'macos must pass display/window/application capture' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require macOS live capture pass'
+require 'explicit_product_unsupported' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must allow only explicit product unsupported state'
+require 'show_unsupported' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require visible unsupported UX state'
+require 'first_display_capture_started' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must inspect first-display fallback evidence'
+require 'display_fallback_used' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must reject display fallback for scoped targets'
+require 'remote_desktop\.create_session' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must inspect create_session evidence'
+require 'remote_desktop\.attach' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must inspect attach evidence'
+require 'remote_desktop\.watch_events' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must inspect watch_events evidence'
+require 'remote_desktop\.end_session' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must inspect end_session evidence'
+require 'frames_rendered' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must inspect rendered frame evidence'
+require 'terminal_receipt' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must inspect terminal receipt evidence'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must reject product completion claims'
 require 'real_network_fallback_matrix' "$NETWORK_FALLBACK" \
   'network fallback verifier must require real network fallback proof mode'
 require 'component_mock.*False|component_mock.*false' "$NETWORK_FALLBACK" \

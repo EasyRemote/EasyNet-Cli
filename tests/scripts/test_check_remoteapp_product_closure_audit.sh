@@ -20,6 +20,7 @@ mkdir -p \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -61,6 +62,33 @@ fi
 grep -q "cross-device smoke must preserve product non-claims" /tmp/check-remoteapp-product-closure-cross-device-gate.out || \
   fail "expected cross-device smoke non-claim failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
+perl -0pi -e 's#real_cross_platform_capture_matrix#source_only_capture_matrix#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-proof-mode.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without real capture proof mode"
+fi
+grep -q "cross-platform capture verifier must require real capture matrix proof mode" /tmp/check-remoteapp-product-closure-capture-proof-mode.out || \
+  fail "expected cross-platform capture proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
+perl -0pi -e 's#macos must pass display/window/application capture#macos may report unsupported capture#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-macos.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without macOS pass requirement"
+fi
+grep -q "cross-platform capture verifier must require macOS live capture pass" /tmp/check-remoteapp-product-closure-capture-macos.out || \
+  fail "expected macOS capture pass requirement failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
+perl -0pi -e 's#first_display_capture_started#display_capture_started#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-fallback.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without first-display fallback evidence"
+fi
+grep -q "cross-platform capture verifier must inspect first-display fallback evidence" /tmp/check-remoteapp-product-closure-capture-fallback.out || \
+  fail "expected first-display fallback evidence failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 
 perl -0pi -e 's#real_network_fallback_matrix#route_model_source_check#g' \
   "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"

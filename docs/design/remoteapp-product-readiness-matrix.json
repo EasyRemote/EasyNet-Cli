@@ -3,7 +3,7 @@
   "product": "RemoteApp interactive desktop",
   "status": "incomplete",
   "product_complete": false,
-  "updated_at": "2026-08-22",
+  "updated_at": "2026-08-23",
   "architecture_invariants": [
     "User Principal is the caller/accountability root, not an Agent.",
     "Device is the execution substrate and key custodian, not the public callee.",
@@ -23,15 +23,21 @@
         "host decoded-frame harnesses",
         "non-macOS app/window target observation fails closed",
         "frontend session details surface daemon target loss reason and recovery action",
-        "frontend action row executes daemon-guided refresh_targets recovery by refetching target inventory"
+        "frontend action row executes daemon-guided refresh_targets recovery by refetching target inventory",
+        "remoteapp-cross-platform-capture-e2e.sh verifier for real macOS/Windows/Linux capture or explicit unsupported artifacts"
       ],
       "required_evidence_before_product_complete": [
+        "live remoteapp-cross-platform-capture-e2e.sh artifact",
         "real macOS host E2E for display/window/application capture",
         "real Windows host E2E or explicit product unsupported state",
-        "real Linux host E2E or explicit product unsupported state"
+        "real Linux host E2E or explicit product unsupported state",
+        "no display fallback for window/application targets",
+        "rendered frames for every passing capture scenario",
+        "visible terminal receipt for every passing capture scenario"
       ],
       "non_claims": [
-        "source contracts do not prove real cross-platform capture"
+        "source contracts do not prove real cross-platform capture",
+        "the cross-platform capture verifier self-test does not prove live host capture"
       ]
     },
     {

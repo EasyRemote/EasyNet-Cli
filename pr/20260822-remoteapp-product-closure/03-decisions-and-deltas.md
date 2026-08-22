@@ -987,3 +987,37 @@ Product effect:
   artifact.
 - This still does not prove product completion; live direct/STUN/TURN/EasyNet
   relay artifacts against real backend/runtime infrastructure remain required.
+
+## 2026-08-23 — Cross-platform capture needs live host artifact verification
+
+Decision:
+
+- macOS ScreenCaptureKit code and non-macOS fail-closed behavior are not enough
+  to claim product-level application/window capture across platforms.
+- The product gate needs a live capture artifact that separates real capture,
+  explicit product unsupported state, and invalid display fallback.
+
+Implementation delta:
+
+- Added `tools/scripts/remoteapp-cross-platform-capture-e2e.sh`.
+- The verifier accepts `--evidence-json` or `--runner-cmd` only in explicit
+  `--run` mode and emits bounded JSON/Markdown reports.
+- Evidence must state `proof_mode=real_cross_platform_capture_matrix`,
+  `component_mock=false`, `real_backend_runtime=true`, and
+  `product_complete_claim=false`.
+- macOS must pass display/window/application capture with exact target binding,
+  rendered frames, public RemoteApp session abilities, selected Resource URA
+  subject binding, and visible terminal receipts.
+- Windows/Linux must either pass those scenarios or report
+  `explicit_product_unsupported` with `show_unsupported=true`, no capture
+  session, no rendered frames, and no first-display fallback.
+- Product-closure gates now require this verifier and reject missing platform
+  coverage, unsupported macOS capture, or display fallback for window/app
+  capture.
+
+Product effect:
+
+- The repository now has a precise contract for the missing cross-platform
+  capture artifact.
+- This still does not prove product completion; live macOS/Windows/Linux host
+  artifacts remain required.

@@ -105,6 +105,15 @@ Current frontend lifecycle evidence:
   selecting a committed application window set should not widen to unrelated
   same-app windows that appear after session creation. It remains macOS-local
   source/gate evidence, not cross-platform or real churn E2E completion.
+- `tools/scripts/remoteapp-cross-platform-capture-e2e.sh` now provides the
+  cross-platform capture evidence verifier. It accepts evidence from real
+  macOS/Windows/Linux host runners, requires macOS display/window/application
+  capture to pass with rendered frames and exact target binding, allows Windows
+  and Linux to pass capture or report explicit product unsupported state, and
+  rejects window/application display fallback, source-only proof, missing public
+  RemoteApp session abilities, missing selected Resource URA subject binding,
+  and missing visible terminal receipts. Self-test validates only the contract;
+  a live platform artifact remains required.
 - `tools/scripts/remoteapp-cross-device-product-smoke.sh` now provides a
   separate cross-device product smoke entrypoint. With `--run`, it composes
   the existing Docker two-node EasyRemote CLI routing E2E and Docker synthetic
@@ -365,7 +374,9 @@ Current frontend lifecycle evidence:
 
 Missing or insufficient product evidence:
 
-- Cross-platform capture implementation/evidence for Windows and Linux.
+- Cross-platform capture implementation/evidence using
+  `remoteapp-cross-platform-capture-e2e.sh`: macOS display/window/application
+  live pass plus Windows/Linux capture or explicit product unsupported state.
 - Real input injection E2E for pointer/keyboard.
   Current source/product-path progress: frontend input sending now rejects
   missing or stale pointer `target_geometry_revision` before WebRTC
