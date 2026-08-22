@@ -121,26 +121,23 @@ Current frontend lifecycle evidence:
   and synthetic stream/bidi carrier coverage separately, and keeps real OS
   capture, pointer/keyboard injection, host audio, NAT/STUN/TURN relay
   deployment, and frontend rendering as non-claims.
-- Latest local cross-device `--run` evidence:
+- Historical local cross-device `--run` evidence:
   `target/e2e/remoteapp-cross-device-product-smoke/20260822-044924-manual/report.md`
   failed at `cross-device-routing` before synthetic media/bidi could run. The
   provider joined and was visible as an online federated device, but the caller
   device repeatedly failed the user-scoped Service owner projection prelude for
   `easynet:///r/hub/service/alice.pages`: Hub rejected
   `federation.advertise_abilities` with `accepted_count=0, expected_count=5`.
-  This is now the first concrete cross-device product seam to fix before
-  RemoteApp-specific remote target inventory/media evidence can be trusted.
-- 2026-08-22 follow-up diagnosis: that failure is a Hub owner-projection
-  read-model conflict, not an authority rejection. The Hub stores one selected
-  projection per `owner_ura`; when two devices for the same user publish
-  `service/<user>.pages` with the same generation/revision but different
-  host/digest, the second write is a `rejected_conflict`. That Service surface
-  must remain on the already-selected host, but the caller Device session must
-  not reconnect/backoff or appear offline because RemoteApp device-native
-  abilities are independent SystemAgent descriptors. The fix is to expose the
-  Hub projection upsert `outcome` and let the user-scoped Service prelude
-  degrade only on read-model rejection while keeping device-native and
-  hosted-agent projections strict.
+  This was the first concrete cross-device product seam blocking RemoteApp-
+  specific remote target inventory/media evidence.
+- 2026-08-22 follow-up diagnosis: that failure was a Hub owner-projection
+  read-model conflict, not an authority rejection. The read model then stored
+  one selected projection per `owner_ura`; when two devices for the same user
+  published `service/<user>.pages` with the same generation/revision but
+  different host/digest, the second write was a `rejected_conflict`. That
+  diagnosis led to the Service owner multihost fix below. Device-native
+  RemoteApp abilities remained independent SystemAgent descriptors and must not
+  be taken offline by a user Service projection conflict.
 - RemoteApp session/device capability views now project host audio as an
   explicit unsupported product state (`host_audio_not_implemented`). This
   prevents video readiness from being treated as full audio/video readiness;
@@ -150,7 +147,15 @@ Current frontend lifecycle evidence:
   metadata contract. This is required for high-frequency RemoteApp/EasyRemote
   media streams, but it does not prove real host audio/video capture or network
   adaptation.
-- 2026-08-22 verification after the Service projection fix:
+- 2026-08-23 Service owner multihost projection fix:
+  the Hub read model now stores Service owner projections per
+  `(owner_ura, host_device_ura)` placement while keeping Service out of
+  Agent/SystemAgent directory listings. `namespace.resolve` selects a live
+  host Device row for Service-owned ability execution. Regression evidence:
+  `service_owner_projection_is_fenced_per_host_device`,
+  `service_owner_projection_selects_live_host_from_multihost_rows`,
+  `service_owner_projection`, and `handle_advertise_abilities`.
+- 2026-08-22/23 verification after the Service projection fix:
   response/unit/script gates passed, but an actual
   `remoteapp-cross-device-product-smoke.sh --run` attempt did not produce
   authoritative product evidence. The child routing script blocked in

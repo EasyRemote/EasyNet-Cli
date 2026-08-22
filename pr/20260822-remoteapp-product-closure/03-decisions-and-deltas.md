@@ -112,10 +112,10 @@ Product effect:
 Decision:
 
 - `service/<user>.pages` remains a user-scoped Service owner projection.
-- The Hub read model currently selects one live projection row per
-  `owner_ura`.
+- The Hub read model must not collapse all Service host placements into one
+  owner-only row.
 - Equal generation/revision projection conflicts are read-model selection
-  outcomes, not authority failures.
+  outcomes for single-owner rows, not authority failures.
 - Device-native RemoteApp abilities remain SystemAgent-owned and must not be
   taken offline by a non-selected user Service projection.
 
@@ -124,16 +124,19 @@ Implementation delta:
 - `federation.advertise_abilities` responses now carry an optional projection
   upsert `outcome`.
 - Strict projection callers still require `ack=true` and exact `count`.
-- User-scoped Service owner prelude degrades only when the admitted write is a
-  read-model rejection such as `ignored_stale` or `rejected_conflict`.
+- Service owner projections are now fenced per `(owner_ura, host_device_ura)`;
+  user-scoped Service abilities can be published by multiple paired host
+  Devices without false same-owner conflicts.
+- Service route resolution selects a live host Device row while keeping the
+  Service as callee/owner and keeping Service rows out of Agent/SystemAgent
+  directory listing.
 - Admission, signer delegation, descriptor integrity, transport errors, and
   acknowledged count mismatches still fail closed.
 
 Product effect:
 
-- Cross-device RemoteApp smoke should no longer report the caller Device as
-  offline merely because another host already owns the selected Pages Service
-  projection.
+- Cross-device RemoteApp smoke should no longer fail at the historical
+  `accepted_count=0, expected_count=5` Pages Service projection conflict.
 - This does not claim product completion for real OS capture, input injection,
   audio/video, NAT/relay, or frontend end-to-end RemoteApp lifecycle.
 

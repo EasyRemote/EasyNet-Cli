@@ -256,6 +256,8 @@
       "current_evidence": [
         "remoteapp-cross-device-product-smoke.sh composes Docker two-node routing",
         "synthetic media/bidi carrier gate",
+        "Service owner multihost projection regression coverage prevents same-user multi-device Pages projection conflicts",
+        "latest live cross-device smoke attempt failed before child E2Es with docker info timed out after 3s",
         "host-local decoded-frame scripts cover local capture/render decode"
       ],
       "required_evidence_before_product_complete": [

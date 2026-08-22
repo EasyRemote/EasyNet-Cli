@@ -186,8 +186,12 @@ require 'governed Hub routing, cross-device ability visibility/invocation' "$AUD
   'audit must scope cross-device smoke to routing and synthetic media evidence'
 require 'does not prove real' "$AUDIT" \
   'audit must reject cross-device smoke as real OS capture proof'
-require 'accepted_count=0, expected_count=5' "$AUDIT" \
-  'audit must record the current cross-device service owner projection failure'
+require 'Service owner multihost read-model conflict' "$AUDIT" \
+  'audit must record the historical cross-device service owner projection diagnosis'
+require 'service_owner_projection_is_fenced_per_host_device' "$AUDIT" \
+  'audit must record the Service multihost projection regression evidence'
+require 'docker info timed out after 3s' "$AUDIT" \
+  'audit must record the latest live cross-device smoke environment failure'
 require 'source-contract checker, unit test, local provider' "$AUDIT" \
   'audit must name weak evidence classes'
 require 'benchmark, or SPEC statement is insufficient' "$AUDIT" \
@@ -253,10 +257,14 @@ require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the Browser/Tauri lifecycle verifier'
 require 'remoteapp-cross-device-product-smoke.sh' "$PLAN" \
   'plan evidence audit must record the cross-device smoke gate'
-require 'failed at `cross-device-routing`' "$PLAN" \
-  'plan evidence audit must record the latest cross-device smoke failure'
+require 'Historical local cross-device `--run` evidence' "$PLAN" \
+  'plan evidence audit must classify the Service projection failure as historical evidence'
 require 'accepted_count=0, expected_count=5' "$PLAN" \
-  'plan evidence audit must preserve the service owner projection failure evidence'
+  'plan evidence audit must preserve the historical service owner projection failure evidence'
+require 'service_owner_projection_selects_live_host_from_multihost_rows' "$PLAN" \
+  'plan evidence audit must record the live-host Service route regression evidence'
+require 'docker info timed out after 3s' "$PLAN" \
+  'plan evidence audit must preserve the latest structured cross-device environment failure'
 require 'real OS' "$PLAN" \
   'plan evidence audit must preserve real OS non-claims'
 require 'NAT/STUN/TURN relay' "$PLAN" \
@@ -271,7 +279,7 @@ require 'docker-media-bidi-e2e.sh' "$CROSS_DEVICE_SMOKE" \
 require 'write_report "skipped"' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must not default to false pass evidence'
 require 'service_owner_projection_failed' "$CROSS_DEVICE_SMOKE" \
-  'cross-device smoke must classify current Service owner projection failures'
+  'cross-device smoke must retain diagnostics for legacy Service owner projection failures'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
 require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \

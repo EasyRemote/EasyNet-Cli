@@ -152,11 +152,16 @@ narrow: governed Hub routing, cross-device ability visibility/invocation, and
 synthetic stream/bidi carrier receipt chains. It explicitly does not prove real
 OS window/application capture, input injection, host audio, NAT/TURN deployment,
 or frontend browser rendering.
-The latest local cross-device run failed at the two-node routing step: the
-provider became visible as an online federated device, but the caller's
-user-scoped `service/alice.pages` owner projection was rejected by the Hub with
-`accepted_count=0, expected_count=5`. That failure is upstream of RemoteApp
-target inventory/media and keeps cross-device product readiness partial.
+Historical local cross-device evidence previously failed at the two-node
+routing step because the caller's user-scoped `service/alice.pages` owner
+projection was rejected by the Hub with `accepted_count=0, expected_count=5`.
+That was diagnosed as a Service owner multihost read-model conflict and is now
+covered by `service_owner_projection_is_fenced_per_host_device`,
+`service_owner_projection_selects_live_host_from_multihost_rows`, and
+`handle_advertise_abilities` regression coverage. The latest attempted live
+cross-device product smoke still did not produce authoritative product evidence.
+Current structured environment reason: `docker info timed out after 3s`.
+Cross-device product readiness therefore remains partial.
 They do not prove every operating system, network topology, input mode, codec
 path, and frontend lifecycle is product-ready.
 
