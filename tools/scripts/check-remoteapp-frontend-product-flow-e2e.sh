@@ -49,6 +49,18 @@ require 'npx tsc --noEmit' "$HARNESS" \
   'product-flow harness must run frontend TypeScript checks'
 require 'npm test -- src/components/easynet/DeviceMediaAccess\.test\.tsx' "$HARNESS" \
   'product-flow harness must run DeviceMediaAccess RemoteApp UI flow coverage'
+require 'run_daemon_readiness_preflight' "$HARNESS" \
+  'product-flow harness must run an explicit daemon readiness preflight'
+require 'run_step daemon-readiness-preflight run_daemon_readiness_preflight' "$HARNESS" \
+  'product-flow harness must execute daemon readiness as a named product-flow step'
+require 'runtime status --json' "$HARNESS" \
+  'product-flow daemon readiness preflight must inspect easynet runtime status'
+require 'daemon\.control_accepting is not true' "$HARNESS" \
+  'product-flow daemon readiness preflight must require daemon control readiness'
+require 'daemon\.invocation_accepting is not true' "$HARNESS" \
+  'product-flow daemon readiness preflight must require daemon invocation readiness'
+require 'connection\.failure=' "$HARNESS" \
+  'product-flow daemon readiness preflight must report connection failure codes'
 require 'host-remoteapp-permission-subject-e2e\.sh' "$HARNESS" \
   'product-flow harness must invoke host permission subject E2E'
 require '--require-screen-capture-granted' "$HARNESS" \
@@ -69,6 +81,16 @@ require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E' "$HARNESS" \
   'product-flow harness must require an explicit run gate'
 require 'write_json_report "skipped"' "$HARNESS" \
   'product-flow harness must write a skipped report instead of pretending product evidence exists'
+require 'write_json_report "failed" "step \$name failed"' "$HARNESS" \
+  'product-flow harness must write a top-level failed report when a product-flow step fails'
+require '"failed_step"' "$HARNESS" \
+  'product-flow harness report must identify the failed step'
+require '"steps": steps' "$HARNESS" \
+  'product-flow harness report must aggregate step results'
+require '"step_order": step_order' "$HARNESS" \
+  'product-flow harness report must preserve execution-order step semantics'
+require '"stderr_excerpt"' "$HARNESS" \
+  'product-flow harness report must preserve bounded stderr excerpts for failure triage'
 require 'does not claim product completion' "$HARNESS" \
   'product-flow harness must explicitly avoid product-complete claims'
 

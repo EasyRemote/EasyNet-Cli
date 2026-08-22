@@ -35,10 +35,20 @@ Current frontend lifecycle evidence:
   watch_events subscription and the recovery-event consumption contract.
 - `tools/scripts/frontend-remoteapp-product-flow-e2e.sh` now provides the
   combined frontend/host product-flow harness entrypoint: frontend typecheck,
-  `DeviceMediaAccess` UI flow, host permission-subject preflight, target
-  picker freshness, decoded-frame WebRTC, and view-only input safety. An
-  explicit --run report remains required before treating it as environment
-  evidence; the default skipped report only proves the harness contract exists.
+  `DeviceMediaAccess` UI flow, explicit daemon readiness preflight, host
+  permission-subject preflight, target picker freshness, decoded-frame WebRTC,
+  and view-only input safety. An explicit --run report remains required before
+  treating it as environment evidence; the default skipped report only proves
+  the harness contract exists.
+- 2026-08-22 local `--run` attempt reached frontend typecheck and
+  `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
+  execution because daemon readiness was false:
+  `runtime_status=projection_present_process_missing`,
+  `daemon.control_accepting=false`, `daemon.invocation_accepting=false`,
+  `daemon.pid_alive=false`, and connection failure
+  `START_FAILED_CREDENTIAL_VERIFY: Hub credential verification is unavailable`.
+  This is environment evidence against product completion, not a RemoteApp
+  pass.
 
 Missing or insufficient product evidence:
 

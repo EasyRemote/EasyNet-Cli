@@ -49,6 +49,18 @@ CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
 
 cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step daemon-readiness-preflight run_daemon_readiness_preflight/# daemon readiness preflight removed/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without daemon readiness preflight step"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
 perl -0pi -e 's/host-remoteapp-decoded-frame-e2e\.sh/host-remoteapp-untyped-frame-e2e.sh/g' \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
@@ -67,6 +79,18 @@ if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
   fail "checker accepted product-flow harness without strict permission preflight"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/write_json_report "failed" "step \$name failed"/echo "step failed without top-level report"/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without top-level failed report"
 fi
 mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"

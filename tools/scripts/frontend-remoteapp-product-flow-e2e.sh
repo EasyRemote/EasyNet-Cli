@@ -38,14 +38,18 @@ Environment:
   EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E=1
                         Equivalent to --run.
   EASYNET_FRONTEND_ROOT Path to EasyNet/Frontend. Defaults to ../EasyNet/Frontend.
+  EASYNET_REMOTEAPP_EASYNET_BIN
+                        Optional easynet binary override for daemon preflight
+                        and delegated host E2E harnesses.
 
 The --run path performs:
   1. Frontend TypeScript check.
   2. Frontend DeviceMediaAccess RemoteApp UI flow test.
-  3. Host permission subject preflight with screen-capture permission granted.
-  4. Host target picker freshness with a sentinel fixture.
-  5. Host decoded-frame WebRTC E2E for window/application targets.
-  6. Host view-only input safety for app/window targets.
+  3. Daemon readiness preflight for control + invocation endpoints.
+  4. Host permission subject preflight with screen-capture permission granted.
+  5. Host target picker freshness with a sentinel fixture.
+  6. Host decoded-frame WebRTC E2E for window/application targets.
+  7. Host view-only input safety for app/window targets.
 
 This harness still does not claim product completion by itself; it produces one
 bounded E2E evidence bundle for the frontend + daemon + host RemoteApp flow.
@@ -82,14 +86,58 @@ status = sys.argv[2]
 reason = sys.argv[3]
 target_kind = sys.argv[4]
 out_dir.mkdir(parents=True, exist_ok=True)
+steps = []
+failed_step = None
+failed_step_stderr = None
+step_order = [
+    "frontend-typecheck",
+    "frontend-remoteapp-ui-flow",
+    "daemon-readiness-preflight",
+    "host-permission-subject",
+    "host-target-picker-freshness",
+    "host-decoded-frame-window",
+    "host-decoded-frame-application",
+    "host-view-only-input-window",
+    "host-view-only-input-application",
+]
+result_paths = {path.parent.name: path for path in out_dir.glob("*/result.json")}
+ordered_result_paths = [
+    result_paths.pop(name)
+    for name in step_order
+    if name in result_paths
+]
+ordered_result_paths.extend(path for _, path in sorted(result_paths.items()))
+for result_path in ordered_result_paths:
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive report path
+        result = {
+            "name": result_path.parent.name,
+            "status": "invalid",
+            "error": f"invalid result json: {exc}",
+        }
+    stderr_path = result_path.parent / "stderr.txt"
+    stderr_excerpt = ""
+    if stderr_path.exists():
+        stderr_excerpt = stderr_path.read_text(encoding="utf-8", errors="replace")[:4000]
+    result["stderr_excerpt"] = stderr_excerpt
+    steps.append(result)
+    if failed_step is None and result.get("status") != "passed":
+        failed_step = result.get("name") or result_path.parent.name
+        failed_step_stderr = stderr_excerpt
 report = {
     "script": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
     "status": status,
     "reason": reason,
     "target_kind": target_kind,
+    "step_order": step_order,
+    "failed_step": failed_step,
+    "failed_step_stderr": failed_step_stderr,
+    "steps": steps,
     "evidence_contract": [
         "frontend TypeScript check",
         "DeviceMediaAccess RemoteApp UI flow",
+        "daemon readiness preflight",
         "host permission subject preflight",
         "host target picker freshness",
         "host decoded-frame WebRTC",
@@ -101,7 +149,8 @@ report = {
     "# Frontend RemoteApp Product Flow E2E\n\n"
     f"- Status: `{status}`\n"
     f"- Target kind: `{target_kind}`\n"
-    f"- Reason: `{reason}`\n",
+    f"- Reason: `{reason}`\n"
+    f"- Failed step: `{failed_step or ''}`\n",
     encoding="utf-8",
 )
 PY
@@ -120,6 +169,7 @@ run_step() {
   printf '{"status":"failed","name":"%s"}\n' "$name" >"$step_dir/result.json"
   echo "[frontend-remoteapp-product-flow-e2e] FAIL: $name" >&2
   cat "$step_dir/stderr.txt" >&2 || true
+  write_json_report "failed" "step $name failed"
   return 1
 }
 
@@ -129,6 +179,79 @@ run_frontend_tsc() {
 
 run_frontend_ui_flow() {
   (cd "$FRONTEND_ROOT" && npm test -- src/components/easynet/DeviceMediaAccess.test.tsx)
+}
+
+run_with_timeout() {
+  local timeout_sec="$1"
+  shift
+  python3 - "$timeout_sec" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout_sec = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    completed = subprocess.run(cmd, timeout=timeout_sec)
+except subprocess.TimeoutExpired:
+    print(
+        f"command timed out after {timeout_sec:g}s: {' '.join(cmd)}",
+        file=sys.stderr,
+    )
+    raise SystemExit(124)
+raise SystemExit(completed.returncode)
+PY
+}
+
+run_easynet() {
+  local timeout_sec="${EASYNET_REMOTEAPP_EASYNET_COMMAND_TIMEOUT_SEC:-45}"
+  if [[ -n "${EASYNET_REMOTEAPP_EASYNET_BIN:-}" ]]; then
+    run_with_timeout "$timeout_sec" "$EASYNET_REMOTEAPP_EASYNET_BIN" "$@"
+  elif [[ -x "$REPO_ROOT/target/debug/easynet" ]]; then
+    run_with_timeout "$timeout_sec" "$REPO_ROOT/target/debug/easynet" "$@"
+  else
+    run_with_timeout "$timeout_sec" cargo run --quiet --bin easynet -- "$@"
+  fi
+}
+
+run_daemon_readiness_preflight() {
+  local step_dir="$OUT_DIR/daemon-readiness-preflight"
+  local status_json="$step_dir/runtime-status.json"
+  mkdir -p "$step_dir"
+  run_easynet runtime status --json >"$status_json"
+  python3 - "$status_json" <<'PY'
+import json
+import pathlib
+import sys
+
+status_path = pathlib.Path(sys.argv[1])
+status = json.loads(status_path.read_text(encoding="utf-8"))
+daemon = status.get("daemon") if isinstance(status, dict) else None
+connection = status.get("connection") if isinstance(status, dict) else None
+runtime_status = status.get("runtime_status") if isinstance(status, dict) else None
+errors = []
+if not isinstance(daemon, dict):
+    errors.append("runtime status did not include daemon object")
+else:
+    if daemon.get("control_accepting") is not True:
+        errors.append("daemon.control_accepting is not true")
+    if daemon.get("invocation_accepting") is not True:
+        errors.append("daemon.invocation_accepting is not true")
+    if daemon.get("pid_alive") is not True:
+        errors.append("daemon.pid_alive is not true")
+if isinstance(connection, dict):
+    failure = connection.get("failure")
+    if isinstance(failure, dict):
+        errors.append(
+            "connection.failure="
+            f"{failure.get('code')}: {failure.get('message')}"
+        )
+if errors:
+    print(f"runtime_status={runtime_status}", file=sys.stderr)
+    for error in errors:
+        print(error, file=sys.stderr)
+    raise SystemExit(1)
+print("daemon readiness preflight ok")
+PY
 }
 
 run_decoded_frame_kind() {
@@ -154,6 +277,8 @@ if [[ "$SELF_TEST" -eq 1 ]]; then
   bash -n "$0"
   grep -q 'DeviceMediaAccess.test.tsx' "$0"
   grep -q 'npx tsc --noEmit' "$0"
+  grep -q 'run_daemon_readiness_preflight' "$0"
+  grep -q 'daemon.invocation_accepting is not true' "$0"
   grep -q 'host-remoteapp-permission-subject-e2e.sh' "$0"
   grep -q -- '--require-screen-capture-granted' "$0"
   grep -q 'host-remoteapp-target-picker-freshness-e2e.sh' "$0"
@@ -174,12 +299,17 @@ if [[ "$RUN" != "1" ]]; then
 fi
 
 [[ -d "$FRONTEND_ROOT" ]] || {
-  echo "[frontend-remoteapp-product-flow-e2e] missing frontend root: $FRONTEND_ROOT" >&2
+  mkdir -p "$OUT_DIR/frontend-root"
+  printf '[frontend-remoteapp-product-flow-e2e] missing frontend root: %s\n' "$FRONTEND_ROOT" >"$OUT_DIR/frontend-root/stderr.txt"
+  printf '{"status":"failed","name":"frontend-root"}\n' >"$OUT_DIR/frontend-root/result.json"
+  write_json_report "failed" "missing frontend root"
+  cat "$OUT_DIR/frontend-root/stderr.txt" >&2
   exit 1
 }
 
 run_step frontend-typecheck run_frontend_tsc
 run_step frontend-remoteapp-ui-flow run_frontend_ui_flow
+run_step daemon-readiness-preflight run_daemon_readiness_preflight
 run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR/host-permission-subject"
 run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture --target-kind window --out-dir "$OUT_DIR/host-target-picker-freshness"
 
