@@ -10,6 +10,7 @@ CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
 MEDIA_ADAPTATION="$ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+MULTI_WINDOW_TRACKING="$ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
 FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -50,6 +51,7 @@ reject() {
 [[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
 [[ -f "$INPUT_INJECTION" ]] || fail "missing RemoteApp input injection verifier"
 [[ -f "$MEDIA_ADAPTATION" ]] || fail "missing RemoteApp media adaptation evidence verifier"
+[[ -f "$MULTI_WINDOW_TRACKING" ]] || fail "missing RemoteApp multi-window tracking evidence verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
 [[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
@@ -162,6 +164,8 @@ require 'remoteapp-media-adaptation-e2e\.sh' "$AUDIT" \
   'audit must record the media adaptation evidence verifier'
 require 'Multi-window/multi-application independent tracking' "$AUDIT" \
   'audit must cover multi-window/application tracking as execution effect'
+require 'remoteapp-multi-window-tracking-e2e\.sh' "$AUDIT" \
+  'audit must record the multi-window tracking evidence verifier'
 require 'Disconnect/reconnect, session resume, consent revoke, cancel, timeout' "$AUDIT" \
   'audit must cover recovery and lifecycle closure'
 require 'NAT/relay/WebRTC/direct fallback network paths' "$AUDIT" \
@@ -231,6 +235,10 @@ require 'Audio/video media adaptation E2E' "$PLAN" \
   'plan evidence audit must list missing live audio/video media evidence'
 require 'remoteapp-media-adaptation-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the media adaptation verifier'
+require 'Multi-window tracking E2E' "$PLAN" \
+  'plan evidence audit must list missing live multi-window tracking evidence'
+require 'remoteapp-multi-window-tracking-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the multi-window tracking verifier'
 require 'Frontend full lifecycle E2E' "$PLAN" \
   'plan evidence audit must list frontend full lifecycle E2E as missing'
 require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
@@ -370,6 +378,58 @@ require 'terminal_receipt' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must reject product completion claims'
+require 'real_multi_window_tracking_matrix' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require real tracking proof mode'
+require 'component_mock.*False|component_mock.*false' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject component mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require real backend/runtime evidence'
+require 'independent_window_streams' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require independent stream scenario'
+require 'geometry_churn' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require geometry churn scenario'
+require 'application_window_set_churn' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require application window-set churn scenario'
+require 'target_loss_rebind' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require target loss/rebind scenario'
+require 'multi_display_application' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require multi-display application scenario'
+require 'frames_interleaved must be false' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject interleaved streams'
+require 'TARGET_MOVED' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect target move events'
+require 'TARGET_RESIZED' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect target resize events'
+require 'PENDING_MEDIA_REBIND' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect pending media rebind events'
+require 'TARGET_REBOUND' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect target rebound events'
+require 'TARGET_LOST' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect target loss events'
+require 'TARGET_REBIND_FAILED' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect target rebind failure events'
+require 'first_display_capture_started' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect first-display fallback evidence'
+require 'display_fallback_used' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject display fallback for application churn'
+require 'MultiAppSurface' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect MultiAppSurface state'
+require 'explicit_product_unsupported' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require explicit unsupported state'
+require 'unsupported multi-display app must not start capture session' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject unsupported capture start'
+require 'remote_desktop\.create_session' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect create_session evidence'
+require 'remote_desktop\.attach' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect attach evidence'
+require 'remote_desktop\.watch_events' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect watch_events evidence'
+require 'remote_desktop\.end_session' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect end_session evidence'
+require 'terminal_receipt' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must inspect terminal receipt evidence'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject product completion claims'
 require 'real_network_fallback_matrix' "$NETWORK_FALLBACK" \
   'network fallback verifier must require real network fallback proof mode'
 require 'component_mock.*False|component_mock.*false' "$NETWORK_FALLBACK" \

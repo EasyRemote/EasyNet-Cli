@@ -23,6 +23,7 @@ cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -154,6 +155,42 @@ fi
 grep -q "media adaptation verifier must reject unbounded queue evidence" /tmp/check-remoteapp-product-closure-media-queue.out || \
   fail "expected media adaptation bounded-queue failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#real_multi_window_tracking_matrix#source_only_tracking_matrix#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-proof-mode.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without real tracking proof mode"
+fi
+grep -q "multi-window tracking verifier must require real tracking proof mode" /tmp/check-remoteapp-product-closure-tracking-proof-mode.out || \
+  fail "expected multi-window tracking proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
+perl -0pi -e 's#frames_interleaved must be false#frames_interleaved may be true#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-interleaved.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without stream isolation"
+fi
+grep -q "multi-window tracking verifier must reject interleaved streams" /tmp/check-remoteapp-product-closure-tracking-interleaved.out || \
+  fail "expected multi-window tracking stream-isolation failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
+perl -0pi -e 's#PENDING_MEDIA_REBIND#PENDING_SOURCE_REFRESH#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-rebind.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without pending media rebind evidence"
+fi
+grep -q "multi-window tracking verifier must inspect pending media rebind events" /tmp/check-remoteapp-product-closure-tracking-rebind.out || \
+  fail "expected multi-window tracking rebind failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
+perl -0pi -e 's#unsupported multi-display app must not start capture session#unsupported multi-display app may start fallback capture#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-unsupported.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without unsupported capture-start rejection"
+fi
+grep -q "multi-window tracking verifier must reject unsupported capture start" /tmp/check-remoteapp-product-closure-tracking-unsupported.out || \
+  fail "expected multi-window tracking unsupported capture failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 
 perl -0pi -e 's#real_network_fallback_matrix#route_model_source_check#g' \
   "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"

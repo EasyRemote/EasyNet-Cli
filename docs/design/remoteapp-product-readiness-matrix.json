@@ -129,14 +129,25 @@
         "same-display application window-set rebind",
         "application capture passes uncommitted same-app same-display windows as ScreenCaptureKit exceptingWindows",
         "frontend session details surface target tracking recovery state instead of opaque failure",
-        "frontend exposes a Refresh targets CTA for target tracking recovery instead of leaving lost targets as a dead end"
+        "frontend exposes a Refresh targets CTA for target tracking recovery instead of leaving lost targets as a dead end",
+        "remoteapp-multi-window-tracking-e2e.sh verifier for real independent app/window tracking artifacts"
       ],
       "required_evidence_before_product_complete": [
+        "live remoteapp-multi-window-tracking-e2e.sh artifact",
+        "independent concurrent window streams",
+        "distinct Resource URAs, session ids, stream ids, media source epochs, and frame source ids",
+        "non-interleaved frames for independently tracked streams",
+        "move/resize geometry churn with increasing target_geometry_revision",
+        "same-display application window-set churn with pending media rebind and TARGET_REBOUND",
+        "target loss with bounded rebind or explicit rebind failure",
         "multi-display MultiAppSurface implementation or explicit product unsupported report",
-        "real app/window churn E2E with independent tracked streams"
+        "selected Resource URA session subjects",
+        "visible terminal receipt"
       ],
       "non_claims": [
-        "data structures alone do not prove independent tracking execution"
+        "data structures alone do not prove independent tracking execution",
+        "target tracker unit tests do not prove real stream isolation",
+        "the multi-window tracking verifier self-test does not prove live app/window churn behavior"
       ]
     },
     {

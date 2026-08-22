@@ -1103,3 +1103,46 @@ Product effect:
   media artifact.
 - This still does not prove product completion; live media artifacts remain
   required.
+
+## 2026-08-23 — Multi-window tracking needs live stream-isolation evidence
+
+Decision:
+
+- Target tracker state machines, same-display application window-set rebind,
+  and ScreenCaptureKit `exceptingWindows` are necessary but insufficient for
+  product readiness.
+- Product evidence must prove the execution effect: independent live streams
+  stay bound to their selected Resource URAs while windows move, resize,
+  disappear, rebind, or remain explicitly unsupported.
+
+Implementation delta:
+
+- Added `tools/scripts/remoteapp-multi-window-tracking-e2e.sh`.
+- The verifier accepts `--evidence-json` or `--runner-cmd` only in explicit
+  `--run` mode and emits bounded JSON/Markdown reports.
+- Evidence must state `proof_mode=real_multi_window_tracking_matrix`,
+  `component_mock=false`, `real_backend_runtime=true`, and
+  `product_complete_claim=false`.
+- Required scenarios are `independent_window_streams`, `geometry_churn`,
+  `application_window_set_churn`, `target_loss_rebind`, and
+  `multi_display_application`.
+- Independent stream evidence must show at least two concurrent windows with
+  distinct Resource URAs, session ids, stream ids, media source epochs, frame
+  source ids, rendered frames, exact target binding, and `frames_interleaved=false`.
+- Geometry churn must include ordered `TARGET_MOVED` and `TARGET_RESIZED`
+  events with increasing `target_geometry_revision`.
+- Application churn must include same-display window-set expansion or
+  contraction, `PENDING_MEDIA_REBIND`, `TARGET_REBOUND`, increased binding
+  epoch, rendered frames after rebind, and no first-display/display fallback.
+- Target loss evidence must include `TARGET_LOST` and either
+  `TARGET_REBIND_FAILED` with actionable recovery or `TARGET_REBOUND` with
+  rendered frames after rebind.
+- Multi-display application evidence must either pass with `MultiAppSurface`
+  or report `explicit_product_unsupported` without starting a capture session.
+
+Product effect:
+
+- The repository now has a precise contract for the missing real app/window
+  churn and stream-isolation artifact.
+- This still does not prove product completion; live tracking artifacts remain
+  required.

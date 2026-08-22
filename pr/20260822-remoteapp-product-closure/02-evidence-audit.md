@@ -248,6 +248,18 @@ Current frontend lifecycle evidence:
   session abilities, selected Resource URA subject binding, and visible
   terminal receipts. Self-test validates only the contract; a live media
   artifact remains required.
+- `tools/scripts/remoteapp-multi-window-tracking-e2e.sh` now provides the
+  multi-window tracking evidence verifier. It accepts evidence from real host
+  churn runners and requires independent concurrent window streams with
+  distinct Resource URAs, session ids, stream ids, media source epochs, and
+  frame source ids; non-interleaved frames; ordered move/resize geometry churn
+  with increasing target geometry revisions; same-display application
+  window-set churn with pending media rebind and `TARGET_REBOUND`; target loss
+  with bounded rebind or explicit rebind failure; multi-display application
+  pass through `MultiAppSurface` or explicit product unsupported state without
+  capture start; public RemoteApp session abilities; selected Resource URA
+  subject binding; and visible terminal receipts. Self-test validates only the
+  contract; a live tracking artifact remains required.
 - The RemoteApp share picker now exposes a non-prompting `Check permissions`
   action before `create_session`. It invokes `remote_desktop.permission_status`
   without a target `subjectURA` and displays Screen Recording plus
@@ -412,7 +424,12 @@ Missing or insufficient product evidence:
   daemon `audio` and `production_readiness.audio_*` fields, and session details
   show `audio blocked · host_audio_not_implemented`. This is product
   transparency, not host-audio implementation evidence.
-- Multi-display application capture or explicit product unsupported flow.
+- Multi-window tracking E2E using
+  `remoteapp-multi-window-tracking-e2e.sh` with a live artifact proving
+  independent concurrent window streams, non-interleaved frames, move/resize
+  geometry revisions, same-display application window-set rebind, target loss
+  rebind/failure behavior, multi-display application pass or explicit product
+  unsupported state, and terminal receipts.
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
 - Real direct/STUN/TURN/EasyNet relay reachability matrix using
   `remoteapp-network-fallback-e2e.sh` with a live artifact.
