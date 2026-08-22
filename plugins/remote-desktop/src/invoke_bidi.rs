@@ -136,31 +136,36 @@ fn handle_parsed_bidi_input_frame_with_policy(
     let kind = frame.kind().as_policy_key();
     let outcome = apply_input_frame_with_effective_policy(input_policy, frame);
     if outcome.applied {
-        json!({
-            "type": "input_applied",
-            "input_type": kind,
-            "action": frame.action(),
-        })
+        return attach_input_frame_telemetry(
+            json!({
+                "type": "input_applied",
+                "input_type": kind,
+                "action": frame.action(),
+            }),
+            frame,
+        );
+    }
+    let reason = outcome.reason.unwrap_or("input_injection_failed");
+    let code = if reason == "input_policy_denied" {
+        "input_disabled"
     } else {
-        let reason = outcome.reason.unwrap_or("input_injection_failed");
-        let code = if reason == "input_policy_denied" {
-            "input_disabled"
-        } else {
-            reason
-        };
-        let message = if unsupported_input_channel_reason(kind) == Some(reason) {
-            "clipboard and file-drop frames require dedicated remote desktop abilities"
-        } else {
-            "interactive input is disabled by this remote desktop session policy"
-        };
+        reason
+    };
+    let message = if unsupported_input_channel_reason(kind) == Some(reason) {
+        "clipboard and file-drop frames require dedicated remote desktop abilities"
+    } else {
+        "interactive input is disabled by this remote desktop session policy"
+    };
+    attach_input_frame_telemetry(
         json!({
             "type": "warn",
             "code": code,
             "input_type": kind,
             "action": frame.action(),
             "message": message,
-        })
-    }
+        }),
+        frame,
+    )
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame_for_session(
@@ -180,15 +185,31 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame_for_se
         InputTransportGuard::DiagnosticPreview,
         input_policy,
     ) else {
-        return json!({
-            "type": "warn",
-            "code": "target_input_not_ready",
-            "input_type": kind,
-            "action": frame.action(),
-            "message": "interactive input is disabled because the target is not ready for this diagnostic preview session",
-        });
+        return attach_input_frame_telemetry(
+            json!({
+                "type": "warn",
+                "code": "target_input_not_ready",
+                "input_type": kind,
+                "action": frame.action(),
+                "message": "interactive input is disabled because the target is not ready for this diagnostic preview session",
+            }),
+            &frame,
+        );
     };
     handle_parsed_bidi_input_frame_with_policy(&effective_input_policy, &frame)
+}
+
+fn attach_input_frame_telemetry(mut payload: Value, frame: &RemoteDesktopInputFrame) -> Value {
+    let Some(map) = payload.as_object_mut() else {
+        return payload;
+    };
+    if let Some(client_sent_at_ms) = frame.client_sent_at_ms() {
+        map.insert("client_sent_at_ms".to_string(), json!(client_sent_at_ms));
+    }
+    if let Some(client_sequence) = frame.client_sequence() {
+        map.insert("client_sequence".to_string(), json!(client_sequence));
+    }
+    payload
 }
 
 async fn capture_bidi_frame(
@@ -703,12 +724,21 @@ mod tests {
     fn diagnostic_bidi_input_respects_session_policy() {
         let response = handle_bidi_input_frame(
             &json!({"pointer_enabled": false}),
-            json!({"type": "pointer", "action": "move", "x": 10, "y": 20}),
+            json!({
+                "type": "pointer",
+                "action": "move",
+                "x": 10,
+                "y": 20,
+                "sent_at_ms": 1_787_331_000_123_u64,
+                "client_sequence": 9_u64,
+            }),
         );
 
         assert_eq!(response["type"], json!("warn"));
         assert_eq!(response["code"], json!("input_disabled"));
         assert_eq!(response["input_type"], json!("pointer"));
+        assert_eq!(response["client_sent_at_ms"], json!(1_787_331_000_123_u64));
+        assert_eq!(response["client_sequence"], json!(9_u64));
     }
 
     #[test]
@@ -780,12 +810,21 @@ mod tests {
             &session_store,
             "rd-bidi-target-lost",
             &input_policy,
-            json!({"type": "pointer", "action": "move", "x": 10, "y": 20}),
+            json!({
+                "type": "pointer",
+                "action": "move",
+                "x": 10,
+                "y": 20,
+                "sent_at_ms": 1_787_331_000_456_u64,
+                "client_sequence": 10_u64,
+            }),
         );
 
         assert_eq!(response["type"], json!("warn"));
         assert_eq!(response["code"], json!("target_input_not_ready"));
         assert_eq!(response["input_type"], json!("pointer"));
+        assert_eq!(response["client_sent_at_ms"], json!(1_787_331_000_456_u64));
+        assert_eq!(response["client_sequence"], json!(10_u64));
     }
 
     #[test]

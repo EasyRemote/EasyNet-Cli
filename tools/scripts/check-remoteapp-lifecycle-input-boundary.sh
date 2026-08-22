@@ -1069,12 +1069,22 @@ require 'handle_parsed_bidi_input_frame_with_policy\(&effective_input_policy' "$
   'diagnostic bidi input path must apply parsed input frames against refreshed policy'
 require 'apply_input_frame_with_effective_policy\(input_policy, frame\)' "$INVOKE_BIDI" \
   'diagnostic bidi input path must use the typed policy-enforced input application boundary'
+require 'attach_input_frame_telemetry' "$INVOKE_BIDI" \
+  'diagnostic bidi input responses must preserve frontend input telemetry for probe correlation'
+require 'frame\.client_sent_at_ms\(\)' "$INVOKE_BIDI" \
+  'diagnostic bidi input responses must project client send timestamps when present'
+require 'frame\.client_sequence\(\)' "$INVOKE_BIDI" \
+  'diagnostic bidi input responses must project client sequence telemetry when present'
 reject 'input_policy_reject_reason' "$INVOKE_BIDI" \
   'diagnostic bidi path must not duplicate input policy checks outside the typed effective policy'
 require 'diagnostic_bidi_view_only_input_reports_scope_unsupported' "$INVOKE_BIDI" \
   'E2E-11 must test bidi view-only input_scope_unsupported reporting'
 require 'diagnostic_bidi_input_rechecks_session_target_snapshot' "$INVOKE_BIDI" \
   'diagnostic bidi path must fail closed after session target loss'
+require 'diagnostic_bidi_input_respects_session_policy' "$INVOKE_BIDI" \
+  'diagnostic bidi tests must cover telemetry projection on policy rejection'
+require 'client_sequence' "$INVOKE_BIDI" \
+  'diagnostic bidi tests must assert client sequence projection'
 require 'maps_window_relative_pointer_to_global_screen_point' "$INPUT" \
   'E2E-11 must test window pointer mapping remains view-only'
 require 'maps_application_pointer_through_primary_window_bounds' "$INPUT" \

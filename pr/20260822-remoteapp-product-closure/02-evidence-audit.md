@@ -308,6 +308,10 @@ Current frontend lifecycle evidence:
   validates and projects `client_sequence` with applied/rejected input events.
   This closes an input delay/observability seam; it does not prove real
   pointer/keyboard OS injection E2E.
+- Diagnostic InvokeBidi input responses now also preserve
+  `client_sent_at_ms` and `client_sequence`, including `target_input_not_ready`
+  responses after target tracking disables input. This keeps probe evidence
+  correlated with frontend frames without adding a second input API.
 
 Missing or insufficient product evidence:
 

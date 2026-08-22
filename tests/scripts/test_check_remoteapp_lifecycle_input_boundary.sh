@@ -1421,6 +1421,11 @@ fn handle_bidi_input_frame() {
     apply_input_frame_with_effective_policy(input_policy, frame);
 }
 
+fn attach_input_frame_telemetry(frame: RemoteDesktopInputFrame) {
+    let _ = frame.client_sent_at_ms();
+    let _ = frame.client_sequence();
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1428,6 +1433,11 @@ mod tests {
 
     #[test]
     fn diagnostic_bidi_input_rechecks_session_target_snapshot() {}
+
+    #[test]
+    fn diagnostic_bidi_input_respects_session_policy() {
+        assert_eq!(response["client_sequence"], json!(9_u64));
+    }
 }
 RS
 

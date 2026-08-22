@@ -729,3 +729,35 @@ Product effect:
 - Host-side event logs can correlate browser send order and timestamp with
   daemon applied/rejected decisions. This improves latency/loss diagnosis, but
   still does not prove successful cross-platform OS input injection.
+
+## 2026-08-23 — Diagnostic bidi input must preserve client telemetry
+
+Decision:
+
+- Diagnostic InvokeBidi input exists to probe RemoteApp session/input behavior
+  without defining a separate product input API. It must therefore use the same
+  parser and effective-policy object as the production WebRTC data channel.
+- Probe correlation still needs the browser's `client_sequence` and
+  `sent_at_ms` metadata. Dropping those fields from diagnostic applied/warn
+  responses makes it impossible to correlate a probe frame with daemon policy
+  rejection or target readiness.
+- The telemetry is observational only; session authority, target binding,
+  transport epoch, and input readiness remain daemon-owned.
+
+Implementation delta:
+
+- Diagnostic bidi input responses now project `client_sent_at_ms` and
+  `client_sequence` when present.
+- `target_input_not_ready` diagnostic responses also preserve telemetry, so
+  window/application target loss can be correlated with the exact client input
+  frame.
+- Lifecycle/input boundary gates now require diagnostic bidi telemetry
+  projection alongside production data-channel telemetry.
+
+Product effect:
+
+- Host probes can correlate diagnostic input requests with daemon policy and
+  target-readiness decisions instead of observing generic warnings detached
+  from the client frame.
+- This improves executable evidence quality for input safety and recovery, but
+  still does not prove successful real OS pointer/keyboard injection.
