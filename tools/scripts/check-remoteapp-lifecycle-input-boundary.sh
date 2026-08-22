@@ -1003,12 +1003,22 @@ require_multiline 'm/struct PointerInputFrame \{[\s\S]*sent_at_ms: Option<u64>/s
   'daemon pointer input frame schema must accept frontend client send timestamps'
 require_multiline 'm/struct KeyInputFrame \{[\s\S]*sent_at_ms: Option<u64>/s' "$INPUT" \
   'daemon key input frame schema must accept frontend client send timestamps'
+require_multiline 'm/struct PointerInputFrame \{[\s\S]*client_sequence: Option<u64>/s' "$INPUT" \
+  'daemon pointer input frame schema must accept frontend client input sequence telemetry'
+require_multiline 'm/struct KeyInputFrame \{[\s\S]*client_sequence: Option<u64>/s' "$INPUT" \
+  'daemon key input frame schema must accept frontend client input sequence telemetry'
 require 'fn client_sent_at_ms\(&self\) -> Option<u64>' "$INPUT" \
   'daemon input frame schema must expose client send timestamps for input observability'
+require 'fn client_sequence\(&self\) -> Option<u64>' "$INPUT" \
+  'daemon input frame schema must expose client input sequence telemetry for input observability'
 require 'validate_client_sent_at_ms' "$INPUT" \
   'daemon input frame validation must bound client send timestamps'
 require 'MAX_CLIENT_SENT_AT_MS' "$INPUT" \
   'daemon input timestamp bound must be explicit and centrally named'
+require 'validate_client_sequence' "$INPUT" \
+  'daemon input frame validation must bound client input sequence telemetry'
+require 'MAX_CLIENT_SEQUENCE' "$INPUT" \
+  'daemon input sequence bound must be explicit and centrally named'
 require 'fn apply_scope\(&mut self, input_scope: InputScope\)' "$INPUT" \
   'input policy must centralize scope-based disablement on the typed effective policy'
 require 'fn reject_reason\(' "$INPUT" \
@@ -1041,6 +1051,8 @@ require 'input_frame_applied_payload' "$INPUT" \
   'WebRTC input applied events must use a centralized payload builder'
 require 'client_sent_at_ms' "$INPUT" \
   'WebRTC input events must preserve frontend client send timestamp evidence when present'
+require 'client_sequence' "$INPUT" \
+  'WebRTC input events must preserve frontend client input sequence evidence when present'
 require 'BTreeMap<InputRejectSignature, PendingInputReject>' "$INPUT" \
   'input rejection coalescing must aggregate by signature instead of a single pending rejection'
 require 'input_frame_applied_payload_preserves_client_timestamp' "$INPUT" \

@@ -1039,10 +1039,12 @@ fn unsupported_input_channel_types_value() {}
 struct PointerInputFrame {
     target_geometry_revision: Option<u64>,
     sent_at_ms: Option<u64>,
+    client_sequence: Option<u64>,
 }
 
 struct KeyInputFrame {
     sent_at_ms: Option<u64>,
+    client_sequence: Option<u64>,
 }
 
 struct RemoteDesktopInputPolicy;
@@ -1120,15 +1122,22 @@ fn reject_unsupported_input_channel_frame() {}
 fn validate_input_frame() {
     reject_unsupported_input_channel_frame(frame)?;
     validate_client_sent_at_ms(sent_at_ms)?;
+    validate_client_sequence(client_sequence)?;
 }
 
 const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
+const MAX_CLIENT_SEQUENCE: u64 = 9_007_199_254_740_991;
 
 fn validate_client_sent_at_ms() {}
+fn validate_client_sequence() {}
 
 impl RemoteDesktopInputFrame {
     fn client_sent_at_ms(&self) -> Option<u64> {
         Some(sent_at_ms)
+    }
+
+    fn client_sequence(&self) -> Option<u64> {
+        Some(client_sequence)
     }
 }
 
@@ -1151,10 +1160,12 @@ fn record_rejection() {
         rejected_count,
     )
     .client_sent_at_ms(frame.client_sent_at_ms());
+    .client_sequence(frame.client_sequence());
 }
 
 fn input_frame_applied_payload() {
     let _ = client_sent_at_ms;
+    let _ = client_sequence;
 }
 
 struct InputRejectSignature;

@@ -59,6 +59,8 @@ TS
 cat >"$FRONTEND_SRC/store/media-channel-store.ts" <<'TS'
 import { remoteDesktopInputFrameAllowed, remoteDesktopSessionTerminal } from '@/lib/api/remote-desktop-protocol'
 
+const REMOTE_DESKTOP_INPUT_MAX_BUFFERED_BYTES = 64 * 1024
+
 function guardTerminalRemoteDesktopSessionPatch(prev: Entry, patch: Partial<Entry>): Partial<Entry> {
   const current = prev.session
   const next = patch.session
@@ -257,9 +259,23 @@ export const actions = {
   rdSendInput: (key, frame) => {
     const session = entries[key]?.session
     if (!session || !remoteDesktopInputFrameAllowed(session, frame)) return false
-    const channel = refsFor(key).inputChannel
+    const refs = refsFor(key)
+    const channel = refs.inputChannel
     if (!channel || channel.readyState !== 'open') return false
-    channel.send(JSON.stringify({ ...frame, sent_at_ms: Date.now() }))
+    if (channel.bufferedAmount > REMOTE_DESKTOP_INPUT_MAX_BUFFERED_BYTES) {
+      patchEntry(key, {
+        webrtcStatus: `input backpressure: ${channel.bufferedAmount} bytes buffered; dropping stale RemoteApp input`,
+      })
+      return false
+    }
+    refs.remoteDesktopInputSequence = refs.remoteDesktopInputSequence >= Number.MAX_SAFE_INTEGER - 1
+      ? 1
+      : refs.remoteDesktopInputSequence + 1
+    channel.send(JSON.stringify({
+      ...frame,
+      client_sequence: refs.remoteDesktopInputSequence,
+      sent_at_ms: Date.now(),
+    }))
     return true
   },
   rdRequestPermission: async (key: string) => {
@@ -705,6 +721,15 @@ it('checks RemoteApp host permissions without target-scoped subject', async () =
   })
   expect(entry.webrtcStatus).toContain('Accessibility input permission is not granted')
   expect(entry.error).toBeUndefined()
+})
+
+it('fails closed instead of queueing RemoteApp input behind RTC data-channel backpressure', async () => {
+  expect(store.rdSendInput(key, { type: 'pointer', action: 'move', target_geometry_revision: 7 })).toBe(false)
+  expect(entry.webrtcStatus).toContain('input backpressure')
+})
+
+it('includes RemoteApp input client sequence telemetry', async () => {
+  expect(JSON.parse(inputChannel.sent[0])).toMatchObject({ client_sequence: 1 })
 })
 
 it('preserves and rebinds remote desktop sessions across device offline resume', async () => {

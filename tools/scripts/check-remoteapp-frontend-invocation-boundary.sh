@@ -211,6 +211,20 @@ require_multiline 'm/startWebRtc\(key, view, \{ endSessionOnTransportFailure: fa
   'frontend RemoteApp offline resume must preserve the daemon session when a rebind transport attempt fails'
 require 'remote desktop transport failed; session preserved for reconnect' "$STORE" \
   'frontend failed resume transport must surface that the daemon session remains reusable'
+require 'REMOTE_DESKTOP_INPUT_MAX_BUFFERED_BYTES' "$STORE" \
+  'frontend RemoteApp input must use an explicit RTC data-channel backpressure bound'
+require 'channel\.bufferedAmount > REMOTE_DESKTOP_INPUT_MAX_BUFFERED_BYTES' "$STORE" \
+  'frontend RemoteApp input must fail closed when RTC data-channel backlog exceeds the bound'
+require 'remoteDesktopInputSequence' "$STORE" \
+  'frontend RemoteApp input frames must carry monotonic client sequence telemetry'
+require 'client_sequence: refs\.remoteDesktopInputSequence' "$STORE" \
+  'frontend RemoteApp input send must attach the client sequence to the data-channel frame'
+require 'input backpressure' "$STORE" \
+  'frontend RemoteApp input backpressure must be user-visible instead of silently queueing stale frames'
+require 'fails closed instead of queueing RemoteApp input behind RTC data-channel backpressure' "$STORE_TEST" \
+  'frontend tests must cover RemoteApp input backpressure fail-closed behavior'
+require 'client_sequence: 1' "$STORE_TEST" \
+  'frontend tests must prove RemoteApp data-channel frames include client sequence telemetry'
 reject_multiline 'm/online === false[\s\S]{0,240}rdEnd\(channelKey\)/s' "$ACCESS" \
   'frontend DeviceMediaAccess must not end RemoteApp sessions from device presence loss'
 

@@ -25,6 +25,7 @@ use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapsh
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
 const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
+const MAX_CLIENT_SEQUENCE: u64 = 9_007_199_254_740_991;
 const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
 const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;
 pub(in crate::daemon::plugins::remote_desktop) const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] =
@@ -94,6 +95,14 @@ impl RemoteDesktopInputFrame {
             Self::Clipboard(_) | Self::FileDrop(_) => None,
         }
     }
+
+    pub fn client_sequence(&self) -> Option<u64> {
+        match self {
+            Self::Pointer(frame) => frame.client_sequence,
+            Self::Key(frame) => frame.client_sequence,
+            Self::Clipboard(_) | Self::FileDrop(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,6 +135,8 @@ pub struct PointerInputFrame {
     pub delta_y: Option<f64>,
     #[serde(default)]
     pub sent_at_ms: Option<u64>,
+    #[serde(default)]
+    pub client_sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -143,6 +154,8 @@ pub struct KeyInputFrame {
     pub repeat: bool,
     #[serde(default)]
     pub sent_at_ms: Option<u64>,
+    #[serde(default)]
+    pub client_sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -560,6 +573,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 };
                 let kind = frame.kind().as_policy_key();
                 let client_sent_at_ms = frame.client_sent_at_ms();
+                let client_sequence = frame.client_sequence();
                 let Some(effective_input_policy) = current_session_effective_input_policy(
                     &sessions,
                     &session_id,
@@ -575,7 +589,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         InputRejectSample::new("target_input_not_ready", rejected_count)
                             .kind(kind)
                             .action(frame.action())
-                            .client_sent_at_ms(client_sent_at_ms),
+                            .client_sent_at_ms(client_sent_at_ms)
+                            .client_sequence(client_sequence),
                     );
                     continue;
                 };
@@ -601,6 +616,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                                 accepted_count,
                                 rejected_count,
                                 client_sent_at_ms,
+                                client_sequence,
                             ),
                         );
                     }
@@ -617,7 +633,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         )
                         .kind(kind)
                         .action(frame.action())
-                        .client_sent_at_ms(client_sent_at_ms),
+                        .client_sent_at_ms(client_sent_at_ms)
+                        .client_sequence(client_sequence),
                     );
                 }
             }
@@ -740,6 +757,7 @@ struct InputRejectSample {
     message: Option<String>,
     rejected_count: u64,
     client_sent_at_ms: Option<u64>,
+    client_sequence: Option<u64>,
 }
 
 impl InputRejectSample {
@@ -753,6 +771,7 @@ impl InputRejectSample {
             message: None,
             rejected_count,
             client_sent_at_ms: None,
+            client_sequence: None,
         }
     }
 
@@ -775,6 +794,11 @@ impl InputRejectSample {
         self.client_sent_at_ms = client_sent_at_ms;
         self
     }
+
+    fn client_sequence(mut self, client_sequence: Option<u64>) -> Self {
+        self.client_sequence = client_sequence;
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -782,6 +806,7 @@ struct PendingInputReject {
     signature: InputRejectSignature,
     latest_message: Option<String>,
     latest_client_sent_at_ms: Option<u64>,
+    latest_client_sequence: Option<u64>,
     first_rejected_count: u64,
     last_rejected_count: u64,
     observed_total: u64,
@@ -795,6 +820,7 @@ impl PendingInputReject {
             signature: sample.signature,
             latest_message: sample.message,
             latest_client_sent_at_ms: sample.client_sent_at_ms,
+            latest_client_sequence: sample.client_sequence,
             first_rejected_count: sample.rejected_count,
             last_rejected_count: sample.rejected_count,
             observed_total: 0,
@@ -806,6 +832,7 @@ impl PendingInputReject {
     fn observe(&mut self, sample: InputRejectSample) {
         self.latest_message = sample.message;
         self.latest_client_sent_at_ms = sample.client_sent_at_ms;
+        self.latest_client_sequence = sample.client_sequence;
         self.last_rejected_count = sample.rejected_count;
         self.observed_total = self.observed_total.saturating_add(1);
     }
@@ -823,6 +850,7 @@ impl PendingInputReject {
             payload.insert("message".to_string(), json!(message));
         }
         insert_client_sent_at_ms(&mut payload, self.latest_client_sent_at_ms);
+        insert_client_sequence(&mut payload, self.latest_client_sequence);
         payload.insert(
             "rejected_count".to_string(),
             json!(self.last_rejected_count),
@@ -877,6 +905,7 @@ fn input_frame_applied_payload(
     accepted_count: u64,
     rejected_count: u64,
     client_sent_at_ms: Option<u64>,
+    client_sequence: Option<u64>,
 ) -> Value {
     let mut payload = Map::new();
     payload.insert("kind".to_string(), json!(kind));
@@ -884,12 +913,19 @@ fn input_frame_applied_payload(
     payload.insert("accepted_count".to_string(), json!(accepted_count));
     payload.insert("rejected_count".to_string(), json!(rejected_count));
     insert_client_sent_at_ms(&mut payload, client_sent_at_ms);
+    insert_client_sequence(&mut payload, client_sequence);
     Value::Object(payload)
 }
 
 fn insert_client_sent_at_ms(payload: &mut Map<String, Value>, client_sent_at_ms: Option<u64>) {
     if let Some(client_sent_at_ms) = client_sent_at_ms {
         payload.insert("client_sent_at_ms".to_string(), json!(client_sent_at_ms));
+    }
+}
+
+fn insert_client_sequence(payload: &mut Map<String, Value>, client_sequence: Option<u64>) {
+    if let Some(client_sequence) = client_sequence {
+        payload.insert("client_sequence".to_string(), json!(client_sequence));
     }
 }
 
@@ -1132,6 +1168,7 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
                 anyhow::bail!("pointer wheel deltas must be finite")
             }
             validate_client_sent_at_ms(pointer.sent_at_ms)?;
+            validate_client_sequence(pointer.client_sequence)?;
         }
         RemoteDesktopInputFrame::Key(key) => {
             match key.action.as_str() {
@@ -1142,8 +1179,16 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
                 anyhow::bail!("key input frame must include key or code")
             }
             validate_client_sent_at_ms(key.sent_at_ms)?;
+            validate_client_sequence(key.client_sequence)?;
         }
         RemoteDesktopInputFrame::Clipboard(_) | RemoteDesktopInputFrame::FileDrop(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_client_sequence(client_sequence: Option<u64>) -> anyhow::Result<()> {
+    if client_sequence.is_some_and(|value| value == 0 || value > MAX_CLIENT_SEQUENCE) {
+        anyhow::bail!("client_sequence must be a non-zero JavaScript-safe integer")
     }
     Ok(())
 }
@@ -1503,11 +1548,12 @@ mod tests {
     #[test]
     fn parses_pointer_input_frame() {
         let frame = parse_input_frame(
-            r#"{"type":"pointer","action":"move","x":10,"y":20,"normalized_x":0.5,"normalized_y":0.25,"sent_at_ms":1787331000123}"#,
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"normalized_x":0.5,"normalized_y":0.25,"sent_at_ms":1787331000123,"client_sequence":42}"#,
         )
         .unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Pointer);
         assert_eq!(frame.client_sent_at_ms(), Some(1_787_331_000_123));
+        assert_eq!(frame.client_sequence(), Some(42));
     }
 
     #[test]
@@ -1522,7 +1568,8 @@ mod tests {
                     InputRejectSample::new("input_policy_denied", rejected_count)
                         .kind("pointer")
                         .action("move")
-                        .client_sent_at_ms(Some(1_787_331_000_000 + rejected_count)),
+                        .client_sent_at_ms(Some(1_787_331_000_000 + rejected_count))
+                        .client_sequence(Some(rejected_count)),
                 ),
             );
         }
@@ -1568,6 +1615,10 @@ mod tests {
             emitted.last().unwrap()["client_sent_at_ms"],
             json!(1_787_331_000_000 + REJECT_STORM)
         );
+        assert_eq!(
+            emitted.last().unwrap()["client_sequence"],
+            json!(REJECT_STORM)
+        );
         assert!(
             emitted.last().unwrap()["suppressed_since_last_event"]
                 .as_u64()
@@ -1579,13 +1630,15 @@ mod tests {
 
     #[test]
     fn input_frame_applied_payload_preserves_client_timestamp() {
-        let payload = input_frame_applied_payload("pointer", "move", 1, 0, Some(1_787_331_000_123));
+        let payload =
+            input_frame_applied_payload("pointer", "move", 1, 0, Some(1_787_331_000_123), Some(7));
 
         assert_eq!(payload["kind"], json!("pointer"));
         assert_eq!(payload["action"], json!("move"));
         assert_eq!(payload["accepted_count"], json!(1));
         assert_eq!(payload["rejected_count"], json!(0));
         assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_123_u64));
+        assert_eq!(payload["client_sequence"], json!(7));
     }
 
     #[test]
@@ -1692,11 +1745,12 @@ mod tests {
     #[test]
     fn parses_key_input_frame() {
         let frame = parse_input_frame(
-            r#"{"type":"key","action":"down","code":"KeyA","sent_at_ms":1787331000456}"#,
+            r#"{"type":"key","action":"down","code":"KeyA","sent_at_ms":1787331000456,"client_sequence":43}"#,
         )
         .unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Key);
         assert_eq!(frame.client_sent_at_ms(), Some(1_787_331_000_456));
+        assert_eq!(frame.client_sequence(), Some(43));
     }
 
     #[test]
@@ -1707,6 +1761,23 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("JavaScript-safe millisecond timestamp"));
+    }
+
+    #[test]
+    fn rejects_client_sequence_outside_javascript_safe_integer_range_or_zero() {
+        let too_large = parse_input_frame(
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"client_sequence":9007199254740992}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(too_large.contains("client_sequence must be a non-zero JavaScript-safe integer"));
+
+        let zero = parse_input_frame(
+            r#"{"type":"key","action":"down","code":"KeyA","client_sequence":0}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(zero.contains("client_sequence must be a non-zero JavaScript-safe integer"));
     }
 
     #[test]

@@ -303,6 +303,11 @@ Current frontend lifecycle evidence:
   installed SDK consumers can verify the raw-stream extension contract. It
   does not prove codec negotiation, host audio, relay behavior, or
   cross-device RemoteApp media readiness.
+- RemoteApp input sends now have a browser-side RTC data-channel backpressure
+  bound and monotonic `client_sequence` telemetry. The remote-desktop plugin
+  validates and projects `client_sequence` with applied/rejected input events.
+  This closes an input delay/observability seam; it does not prove real
+  pointer/keyboard OS injection E2E.
 
 Missing or insufficient product evidence:
 

@@ -694,3 +694,38 @@ Product effect:
   frontend metadata.
 - This is a required precondition for trustworthy input latency E2E, but it
   does not itself prove successful low-latency OS injection.
+
+## 2026-08-23 — RemoteApp input send must be bounded and sequenced
+
+Decision:
+
+- High-rate pointer input is product data-plane traffic. The browser must not
+  keep enqueueing stale frames into a backed-up RTC data channel because that
+  converts remote control into delayed control.
+- The sequence is frontend telemetry only. It does not replace daemon session
+  authority, transport epoch checks, target geometry revision checks, or Axon
+  receipts.
+- The daemon plugin must parse and project the sequence because host-side
+  applied/rejected events are the authoritative place to diagnose whether a
+  browser-sent frame reached input policy and OS injection.
+
+Implementation delta:
+
+- Frontend `rdSendInput` now refuses sends when `RTCDataChannel.bufferedAmount`
+  exceeds the explicit RemoteApp input bound.
+- Accepted frontend input frames carry monotonic `client_sequence` and
+  `sent_at_ms`.
+- The remote-desktop plugin accepts optional `client_sequence` on pointer/key
+  frames, validates it as a non-zero JavaScript-safe integer, and includes it
+  in applied/rejected input events.
+- Frontend and lifecycle boundary gates now pin the backpressure and sequence
+  contract.
+
+Product effect:
+
+- A congested RemoteApp input channel now fails closed with visible
+  backpressure state instead of silently accumulating stale mouse/keyboard
+  input.
+- Host-side event logs can correlate browser send order and timestamp with
+  daemon applied/rejected decisions. This improves latency/loss diagnosis, but
+  still does not prove successful cross-platform OS input injection.
