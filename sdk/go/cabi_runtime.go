@@ -35,8 +35,10 @@ typedef int32_t (*runtime_invocation_handle_free_fn)(uint64_t handle, uint64_t i
 typedef int32_t (*runtime_prepared_invocation_free_fn)(uint64_t prepared_id);
 typedef int32_t (*runtime_signed_invocation_free_fn)(uint64_t signed_id);
 typedef void (*runtime_stream_callback_fn)(void *user_data, const char *chunk_json);
+typedef void (*runtime_stream_v8_callback_fn)(void *user_data, const char *metadata_json, const uint8_t *payload, size_t payload_len);
 typedef void (*runtime_bidi_callback_fn)(void *user_data, const char *frame_json);
 typedef int32_t (*runtime_invocation_stream_open_fn)(uint64_t handle, const char *invocation_json, runtime_stream_callback_fn on_chunk, void *user_data, uint64_t *out_stream_id);
+typedef int32_t (*runtime_invocation_stream_open_v8_fn)(uint64_t handle, const char *invocation_json, runtime_stream_v8_callback_fn on_chunk, void *user_data, uint64_t *out_stream_id);
 typedef int32_t (*runtime_invocation_stream_cancel_fn)(uint64_t handle, uint64_t stream_id);
 typedef int32_t (*runtime_invocation_stream_close_fn)(uint64_t handle, uint64_t stream_id);
 typedef int32_t (*runtime_invocation_bidi_open_fn)(uint64_t handle, const char *invocation_json, runtime_bidi_callback_fn on_frame, void *user_data, uint64_t *out_bidi_id);
@@ -46,6 +48,7 @@ typedef int32_t (*runtime_invocation_bidi_close_fn)(uint64_t handle, uint64_t bi
 typedef int32_t (*runtime_invocation_bidi_cancel_fn)(uint64_t handle, uint64_t bidi_id);
 
 extern void easynetGoStreamCallback(void *user_data, const char *chunk_json);
+extern void easynetGoStreamV8Callback(void *user_data, const char *metadata_json, const uint8_t *payload, size_t payload_len);
 extern void easynetGoBidiCallback(void *user_data, const char *frame_json);
 
 static uint32_t runtime_cabi_call_abi_version(void *fn) {
@@ -156,6 +159,10 @@ static int32_t runtime_cabi_call_stream_open(void *fn, uint64_t handle, const ch
 	return ((runtime_invocation_stream_open_fn)fn)(handle, invocation_json, easynetGoStreamCallback, user_data, out_stream_id);
 }
 
+static int32_t runtime_cabi_call_stream_open_v8(void *fn, uint64_t handle, const char *invocation_json, void *user_data, uint64_t *out_stream_id) {
+	return ((runtime_invocation_stream_open_v8_fn)fn)(handle, invocation_json, easynetGoStreamV8Callback, user_data, out_stream_id);
+}
+
 static int32_t runtime_cabi_call_stream_cancel(void *fn, uint64_t handle, uint64_t stream_id) {
 	return ((runtime_invocation_stream_cancel_fn)fn)(handle, stream_id);
 }
@@ -227,6 +234,7 @@ type cabiRuntimeSymbols struct {
 	preparedFree          unsafe.Pointer
 	signedFree            unsafe.Pointer
 	streamOpen            unsafe.Pointer
+	streamOpenV8          unsafe.Pointer
 	streamCancel          unsafe.Pointer
 	streamClose           unsafe.Pointer
 	bidiOpen              unsafe.Pointer
@@ -746,15 +754,23 @@ func (t *cabiRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 	if err != nil {
 		return nil, nil, err
 	}
-	inbox := newCABICallbackInbox(MaxStreamBufferedEvents)
+	rawStream := t.symbols.streamOpenV8 != nil
+	inbox := newCABICallbackInbox(MaxStreamBufferedEvents, rawStream)
 	registration, err := registerCABICallbackInbox(inbox)
 	if err != nil {
 		return nil, nil, err
 	}
 	var out C.uint64_t
-	code := int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
-		return C.runtime_cabi_call_stream_open(t.symbols.streamOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
-	}))
+	var code int32
+	if rawStream {
+		code = int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
+			return C.runtime_cabi_call_stream_open_v8(t.symbols.streamOpenV8, C.uint64_t(handle), cDraft, registration.userData, &out)
+		}))
+	} else {
+		code = int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
+			return C.runtime_cabi_call_stream_open(t.symbols.streamOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
+		}))
+	}
 	if code != 0 {
 		releaseCABICallbackInbox(registration)
 		return nil, nil, t.lastErrorOrCode(code, "C ABI invocation stream open failed")
@@ -769,6 +785,7 @@ func (t *cabiRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 		streamID:     streamID,
 		registration: registration,
 		inbox:        inbox,
+		rawStream:    rawStream,
 		nextRecvSeq:  1,
 	}
 	t.mu.Lock()
@@ -1075,6 +1092,7 @@ type cabiStreamTransport struct {
 	streamID     uint64
 	registration *cabiCallbackRegistration
 	inbox        *cabiCallbackInbox
+	rawStream    bool
 	nextRecvSeq  uint64
 	closed       bool
 	cancelSent   bool
@@ -1082,17 +1100,29 @@ type cabiStreamTransport struct {
 }
 
 func (s *cabiStreamTransport) Recv(ctx context.Context) ([]byte, error) {
-	if ctx == nil {
-		return nil, invalidRuntimeClient("context is required")
-	}
-	if s == nil || s.inbox == nil {
-		return nil, invalidRuntimeClient("C ABI stream transport is not initialized")
-	}
-	raw, err := s.inbox.recv(ctx)
+	packet, err := s.RecvRaw(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return projectCABIOrderedEvent(raw, s.allocateSequence, true, true)
+	return cabiRawStreamPacketJSON(packet)
+}
+
+func (s *cabiStreamTransport) RawStreamEnabled() bool {
+	return s != nil && s.rawStream
+}
+
+func (s *cabiStreamTransport) RecvRaw(ctx context.Context) (rawStreamPacket, error) {
+	if ctx == nil {
+		return rawStreamPacket{}, invalidRuntimeClient("context is required")
+	}
+	if s == nil || s.inbox == nil {
+		return rawStreamPacket{}, invalidRuntimeClient("C ABI stream transport is not initialized")
+	}
+	packet, err := s.inbox.recv(ctx)
+	if err != nil {
+		return rawStreamPacket{}, err
+	}
+	return projectCABIOrderedPacket(packet, s.allocateSequence, true, true)
 }
 
 func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
@@ -1298,11 +1328,11 @@ func (b *cabiBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 	if b == nil || b.inbox == nil {
 		return nil, invalidRuntimeClient("C ABI bidi transport is not initialized")
 	}
-	raw, err := b.inbox.recv(ctx)
+	packet, err := b.inbox.recv(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return projectCABIOrderedEvent(raw, b.allocateSequence, false, false)
+	return projectCABIOrderedEvent(packet.metadataJSON, b.allocateSequence, false, false)
 }
 
 func (b *cabiBidiTransport) CloseSend(ctx context.Context) ([]byte, error) {
@@ -1450,9 +1480,17 @@ func (b *cabiBidiTransport) allocateSequence(observed *uint64) uint64 {
 }
 
 func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, useObservedSequence bool, includeState bool) ([]byte, error) {
+	packet, err := projectCABIOrderedPacket(cabiJSONCallbackPacket(raw), allocateSequence, useObservedSequence, includeState)
+	if err != nil {
+		return nil, err
+	}
+	return cabiRawStreamPacketJSON(packet)
+}
+
+func projectCABIOrderedPacket(packet cabiCallbackPacket, allocateSequence func(*uint64) uint64, useObservedSequence bool, includeState bool) (rawStreamPacket, error) {
 	var event map[string]any
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return raw, nil
+	if err := json.Unmarshal(packet.metadataJSON, &event); err != nil {
+		return rawStreamPacket{metadataJSON: append([]byte(nil), packet.metadataJSON...), payload: append([]byte(nil), packet.payload...)}, nil
 	}
 	var observed *uint64
 	if useObservedSequence {
@@ -1482,9 +1520,28 @@ func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, 
 	delete(event, "pts")
 	projected, err := json.Marshal(event)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode projected C ABI callback frame: %v", err), err)
+		return rawStreamPacket{}, invalidRuntimePayload(fmt.Sprintf("encode projected C ABI callback frame: %v", err), err)
 	}
-	return projected, nil
+	return rawStreamPacket{
+		metadataJSON: projected,
+		payload:      append([]byte(nil), packet.payload...),
+	}, nil
+}
+
+func cabiRawStreamPacketJSON(packet rawStreamPacket) ([]byte, error) {
+	if len(packet.payload) == 0 {
+		return append([]byte(nil), packet.metadataJSON...), nil
+	}
+	var event map[string]any
+	if err := json.Unmarshal(packet.metadataJSON, &event); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode projected C ABI callback frame: %v", err), err)
+	}
+	event["payload_base64"] = base64.StdEncoding.EncodeToString(packet.payload)
+	contentType, _ := event["payload_content_type"].(string)
+	if strings.Contains(strings.ToLower(contentType), "json") && json.Valid(packet.payload) {
+		event["payload_json"] = json.RawMessage(packet.payload)
+	}
+	return json.Marshal(event)
 }
 
 func cabiPositiveJSONInteger(value any) (uint64, bool) {
@@ -1601,6 +1658,7 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		}
 		*binding.out = ptr
 	}
+	symbols.streamOpenV8 = optionalCABISymbol(library, "runtime_invocation_stream_open_v8")
 	return symbols, nil
 }
 
@@ -1946,52 +2004,70 @@ func preparedKeyFromMap(decoded map[string]any) (string, error) {
 
 type cabiCallbackInbox struct {
 	mu               sync.Mutex
-	ch               chan []byte
+	ch               chan cabiCallbackPacket
+	rawStream        bool
 	closed           bool
-	failure          []byte
+	failure          *cabiCallbackPacket
 	failureDelivered bool
 }
 
-func newCABICallbackInbox(maxItems int) *cabiCallbackInbox {
+type cabiCallbackPacket struct {
+	metadataJSON []byte
+	payload      []byte
+}
+
+func cabiJSONCallbackPacket(raw []byte) cabiCallbackPacket {
+	return cabiCallbackPacket{metadataJSON: append([]byte(nil), raw...)}
+}
+
+func cabiRawCallbackPacket(metadataJSON []byte, payload []byte) cabiCallbackPacket {
+	return cabiCallbackPacket{
+		metadataJSON: append([]byte(nil), metadataJSON...),
+		payload:      append([]byte(nil), payload...),
+	}
+}
+
+func newCABICallbackInbox(maxItems int, rawStream ...bool) *cabiCallbackInbox {
 	if maxItems <= 0 {
 		maxItems = 1
 	}
-	return &cabiCallbackInbox{ch: make(chan []byte, maxItems)}
+	enabled := len(rawStream) > 0 && rawStream[0]
+	return &cabiCallbackInbox{ch: make(chan cabiCallbackPacket, maxItems), rawStream: enabled}
 }
 
-func (i *cabiCallbackInbox) push(raw []byte) {
+func (i *cabiCallbackInbox) push(packet cabiCallbackPacket) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.closed {
 		return
 	}
-	copied := append([]byte(nil), raw...)
 	select {
-	case i.ch <- copied:
+	case i.ch <- cabiRawCallbackPacket(packet.metadataJSON, packet.payload):
 	default:
-		i.failure = cabiCallbackBackpressureFailure()
+		failure := cabiJSONCallbackPacket(cabiCallbackBackpressureFailure())
+		i.failure = &failure
 		i.closed = true
 		close(i.ch)
 	}
 }
 
-func (i *cabiCallbackInbox) recv(ctx context.Context) ([]byte, error) {
+func (i *cabiCallbackInbox) recv(ctx context.Context) (cabiCallbackPacket, error) {
 	i.mu.Lock()
 	if i.failure != nil && !i.failureDelivered {
 		i.failureDelivered = true
-		failure := append([]byte(nil), i.failure...)
+		failure := cabiRawCallbackPacket(i.failure.metadataJSON, i.failure.payload)
 		i.mu.Unlock()
 		return failure, nil
 	}
 	i.mu.Unlock()
 	select {
-	case raw, ok := <-i.ch:
+	case packet, ok := <-i.ch:
 		if ok {
-			return raw, nil
+			return cabiRawCallbackPacket(packet.metadataJSON, packet.payload), nil
 		}
-		return nil, invalidRuntimeClient("C ABI callback inbox is closed")
+		return cabiCallbackPacket{}, invalidRuntimeClient("C ABI callback inbox is closed")
 	case <-ctx.Done():
-		return nil, cabiContextError(ctx)
+		return cabiCallbackPacket{}, cabiContextError(ctx)
 	}
 }
 
@@ -2059,11 +2135,28 @@ func releaseCABICallbackInbox(registration *cabiCallbackRegistration) {
 }
 
 func pushCABICallbackPayload(token uintptr, raw []byte) {
+	pushCABICallbackPacket(token, cabiJSONCallbackPacket(raw))
+}
+
+func pushCABICallbackRawPayload(token uintptr, metadataJSON []byte, payload []byte) {
+	pushCABICallbackPacket(token, cabiRawCallbackPacket(metadataJSON, payload))
+}
+
+func closeCABICallbackInbox(token uintptr) {
 	cabiCallbackRegistry.Lock()
 	inbox := cabiCallbackRegistry.inbox[token]
 	cabiCallbackRegistry.Unlock()
 	if inbox != nil {
-		inbox.push(raw)
+		inbox.close()
+	}
+}
+
+func pushCABICallbackPacket(token uintptr, packet cabiCallbackPacket) {
+	cabiCallbackRegistry.Lock()
+	inbox := cabiCallbackRegistry.inbox[token]
+	cabiCallbackRegistry.Unlock()
+	if inbox != nil {
+		inbox.push(packet)
 	}
 }
 

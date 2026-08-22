@@ -18,17 +18,6 @@ const BACKPRESSURE_CANONICAL_CODE: &str = "ADMISSION_DENIED";
 const BACKPRESSURE_RETRY: &str = "after_backoff";
 const CALLBACK_QUEUE_OVERFLOW: &str = "callback_queue_overflow";
 
-pub(crate) fn stream_callback_backpressure_event(sequence: u64, queue_capacity: usize) -> Value {
-    json!({
-        "kind": "error",
-        "state": "Failed",
-        "sequence": sequence,
-        "terminal": false,
-        "transport_terminal": true,
-        "error": runtime_backpressure_error("stream", sequence, queue_capacity),
-    })
-}
-
 pub(crate) fn bidi_callback_backpressure_frame(sequence: u64, queue_capacity: usize) -> Value {
     json!({
         "ok": false,
@@ -61,29 +50,6 @@ fn runtime_backpressure_error(stage: &str, sequence: u64, queue_capacity: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stream_backpressure_event_is_transport_terminal_not_runtime_terminal() {
-        let event = stream_callback_backpressure_event(7, 64);
-
-        assert!(event.get("ok").is_none());
-        assert!(event.get("code").is_none());
-        assert!(event.get("message").is_none());
-        assert_eq!(event["kind"], "error");
-        assert_eq!(event["state"], "Failed");
-        assert_eq!(event["sequence"], 7);
-        assert_eq!(event["terminal"], false);
-        assert_eq!(event["transport_terminal"], true);
-        assert_eq!(event["error"]["code"], "ADMISSION_DENIED");
-        assert_eq!(event["error"]["wire_code"], "RESOURCE_EXHAUSTED");
-        assert_eq!(event["error"]["stage"], "stream");
-        assert_eq!(event["error"]["retry"], "after_backoff");
-        assert_eq!(
-            event["error"]["details"]["reason"],
-            "callback_queue_overflow"
-        );
-        assert_eq!(event["error"]["details"]["queue_capacity"], 64);
-    }
 
     #[test]
     fn bidi_backpressure_frame_is_transport_terminal_not_runtime_terminal() {

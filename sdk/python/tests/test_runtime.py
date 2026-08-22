@@ -1685,6 +1685,26 @@ class RuntimeTests(unittest.TestCase):
             },
         )
 
+    def test_prepare_and_open_stream_signs_stateless_material(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        signer = signer_with_signature(
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        stream = client.prepare_and_open_stream(complete_draft(), signer)
+        terminal = stream.next()
+        stream.close()
+
+        self.assertTrue(terminal.terminal)
+        self.assertEqual(transport.seen_options, {"material_only": True})
+        assert transport.seen_draft is not None
+        signature = transport.seen_draft["caller_signature"]
+        self.assertEqual(signature["key_id_hint"], "signer-alice-key-1")
+
     def test_prepare_and_sign_returns_inspectable_signed_envelope(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)

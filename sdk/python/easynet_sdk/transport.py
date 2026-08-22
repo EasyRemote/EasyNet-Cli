@@ -186,6 +186,21 @@ class RuntimeInvocationTransport:
             handle = runtime.invoke_stream(_coerce_draft(invocation))
         return RuntimeFrameStream(handle)
 
+    def stream_signed(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        *,
+        signer: Signer,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> "RuntimeFrameStream":
+        """Statelessly sign and open one server-stream Invocation."""
+
+        with self._acquire_runtime_use() as runtime:
+            handle = runtime.prepare_and_open_stream(
+                _coerce_draft(invocation), signer, options
+            )
+        return RuntimeFrameStream(handle)
+
     def bidi(
         self,
         invocation: Mapping[str, object] | InvocationDraft,
@@ -382,6 +397,19 @@ class InvocationResultAdapter:
         self, invocation: Mapping[str, object] | InvocationDraft
     ) -> "RuntimeFrameStream":
         return self.transport.stream(invocation)
+
+    def stream_signed(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        *,
+        signer: Signer,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> "RuntimeFrameStream":
+        return self.transport.stream_signed(
+            invocation,
+            signer=signer,
+            options=options,
+        )
 
     def bidi(
         self,
@@ -1016,6 +1044,8 @@ class StreamValue:
     """One SDK-projected stream item."""
 
     value: Any
+    content_type: str = "application/json"
+    payload: bytes = b""
 
 
 class StreamValueAdapter:
@@ -1043,7 +1073,15 @@ class StreamValueAdapter:
                 if stream_error is not None:
                     raise _remote_wire_error(stream_error)
                 if value is not self._NO_VALUE:
-                    yield StreamValue(value)
+                    content_type = str(
+                        frame.get("payload_content_type") or "application/json"
+                    )
+                    payload = frame.get("payload_bytes")
+                    yield StreamValue(
+                        value,
+                        content_type=content_type,
+                        payload=payload if isinstance(payload, bytes) else b"",
+                    )
                 if frame.get("terminal") is True:
                     return
         finally:
@@ -1084,8 +1122,27 @@ class StreamValueAdapter:
             frame.get("terminal") is True
             and frame.get("payload_json") is None
             and not frame.get("payload_base64")
+            and not frame.get("payload_bytes")
         ):
             return self._NO_VALUE
+        payload = frame.get("payload_bytes")
+        content_type = str(frame.get("payload_content_type") or "")
+        if isinstance(payload, bytes):
+            if "json" in content_type.lower():
+                if not payload:
+                    return self._NO_VALUE
+                try:
+                    return json.loads(payload)
+                except Exception as exc:
+                    raise SDKError(
+                        code=ErrorCode.INVALID_ARGUMENT,
+                        stage="stream",
+                        retry=RetryHint.NEVER,
+                        retryable=False,
+                        message=f"decode raw JSON stream payload: {exc}",
+                        cause=exc,
+                    ) from exc
+            return payload
         encoded = frame.get("payload_base64")
         if "payload_json" in frame and (
             frame.get("payload_json") is not None
@@ -1413,6 +1470,7 @@ def _stream_event_dict(event: StreamEvent) -> dict[str, object]:
         "terminal": event.terminal,
         "payload_content_type": event.payload_content_type,
         "payload_base64": event.payload_base64,
+        "payload_bytes": event.payload_bytes,
         "payload_json": event.payload_json,
         "error": event.error,
     }

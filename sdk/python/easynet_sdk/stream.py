@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from dataclasses import dataclass, field
@@ -29,11 +30,19 @@ class StreamState(StrEnum):
     FAILED = "Failed"
 
 
+@dataclass(frozen=True)
+class RawStreamPacket:
+    """Provider packet with canonical metadata separated from raw payload bytes."""
+
+    metadata_json: bytes
+    payload: bytes
+
+
 @runtime_checkable
 class StreamTransport(Protocol):
     """Concrete stream frame transport supplied by the integration layer."""
 
-    def recv(self, timeout: float | None = None) -> bytes: ...
+    def recv(self, timeout: float | None = None) -> bytes | RawStreamPacket: ...
 
     def cancel(self, reason: str) -> bytes: ...
 
@@ -51,6 +60,7 @@ class StreamEvent:
     transport_terminal: bool = False
     payload_content_type: str = ""
     payload_base64: str = ""
+    payload_bytes: bytes = b""
     payload_json: Any = None
     elapsed_ms: int = 0
     error: Any = None
@@ -82,9 +92,7 @@ class StreamEvent:
             "admission_receipt",
             "terminal_receipt",
         )
-        reject_retired_top_level_receipt_alias(
-            decoded, "stream event", stage="stream"
-        )
+        reject_retired_top_level_receipt_alias(decoded, "stream event", stage="stream")
         kind = _optional_string(decoded.get("kind"), "kind")
         if not kind:
             raise _invalid_stream("stream event kind is required")
@@ -113,6 +121,10 @@ class StreamEvent:
                 or "stream receipt verification failed",
                 "retryable": False,
             }
+        payload_base64 = (
+            _optional_string(decoded.get("payload_base64"), "payload_base64") or ""
+        )
+        payload_bytes = _payload_base64_bytes(payload_base64)
         return cls(
             sequence=_required_positive_int(decoded, "sequence"),
             kind=kind,
@@ -123,10 +135,8 @@ class StreamEvent:
                 decoded.get("payload_content_type"), "payload_content_type"
             )
             or "",
-            payload_base64=_optional_string(
-                decoded.get("payload_base64"), "payload_base64"
-            )
-            or "",
+            payload_base64=payload_base64,
+            payload_bytes=payload_bytes,
             payload_json=decoded.get("payload_json"),
             elapsed_ms=_optional_non_negative_int(
                 decoded.get("elapsed_ms"), "elapsed_ms"
@@ -136,6 +146,39 @@ class StreamEvent:
             terminal_receipt=decoded.get("terminal_receipt"),
         )
 
+    @classmethod
+    def from_raw_packet(cls, packet: RawStreamPacket) -> "StreamEvent":
+        if not isinstance(packet.metadata_json, bytes):
+            raise _invalid_stream("raw stream packet metadata_json must be bytes")
+        if not isinstance(packet.payload, bytes):
+            raise _invalid_stream("raw stream packet payload must be bytes")
+        event = cls.from_json(packet.metadata_json)
+        if event.payload_base64 or event.payload_json is not None:
+            raise _invalid_stream(
+                "raw stream packet metadata must not duplicate payload fields"
+            )
+        payload_json: Any = None
+        if packet.payload and "json" in event.payload_content_type.lower():
+            try:
+                payload_json = json.loads(packet.payload.decode("utf-8"))
+            except Exception as exc:
+                raise _invalid_stream(
+                    f"decode raw JSON stream payload: {exc}", exc
+                ) from exc
+        return cls(
+            sequence=event.sequence,
+            kind=event.kind,
+            state=event.state,
+            terminal=event.terminal,
+            transport_terminal=event.transport_terminal,
+            payload_content_type=event.payload_content_type,
+            payload_bytes=packet.payload,
+            payload_json=payload_json,
+            elapsed_ms=event.elapsed_ms,
+            error=event.error,
+            admission_receipt=event.admission_receipt,
+            terminal_receipt=event.terminal_receipt,
+        )
 
 @dataclass(frozen=True)
 class StreamTerminalEvent:
@@ -327,7 +370,11 @@ class StreamHandle:
                     self._set_runtime_state_locked(StreamState.FAILED)
             raise _transport_error("stream recv transport failed", exc) from exc
         try:
-            event = StreamEvent.from_json(raw)
+            event = (
+                StreamEvent.from_raw_packet(raw)
+                if isinstance(raw, RawStreamPacket)
+                else StreamEvent.from_json(raw)
+            )
         except SDKError:
             with self._lock:
                 self._receiving = False
@@ -530,6 +577,17 @@ def _optional_bool(value: object, field_name: str) -> Optional[bool]:
     if not isinstance(value, bool):
         raise _invalid_stream(f"{field_name} must be a boolean or null")
     return value
+
+
+def _payload_base64_bytes(payload_base64: str) -> bytes:
+    if not payload_base64:
+        return b""
+    try:
+        return base64.b64decode(payload_base64, validate=True)
+    except Exception as exc:
+        raise _invalid_stream(
+            f"payload_base64 must be canonical base64: {exc}", exc
+        ) from exc
 
 
 def _stream_terminal_event_type(event: StreamEvent) -> str:

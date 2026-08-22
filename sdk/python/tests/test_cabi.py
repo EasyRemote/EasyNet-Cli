@@ -152,7 +152,7 @@ class CABIEventProjectionTests(unittest.TestCase):
 class FakeRawCABI:
     """Strict generic C ABI fake: product-specific symbol lookups cannot succeed."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, stream_v8: bool = False) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
         self.callback_buffers: list[ctypes.Array[ctypes.c_char]] = []
         self.last_error_json = b"null"
@@ -167,6 +167,7 @@ class FakeRawCABI:
         self.stream_closes: list[int] = []
         self.stream_cancels: list[int] = []
         self.stream_callbacks: dict[int, tuple[object, object]] = {}
+        self.stream_v8_opens = 0
         self.bidi_sends: list[dict[str, object]] = []
         self.bidi_close_sends: list[int] = []
         self.bidi_closes: list[int] = []
@@ -231,6 +232,10 @@ class FakeRawCABI:
         )
         self.runtime_signed_invocation_free = FakeSymbol(self._signed_invocation_free)
         self.runtime_invocation_stream_open = FakeSymbol(self._invocation_stream_open)
+        if stream_v8:
+            self.runtime_invocation_stream_open_v8 = FakeSymbol(
+                self._invocation_stream_open_v8
+            )
         self.runtime_invocation_stream_cancel = FakeSymbol(
             self._invocation_stream_cancel
         )
@@ -521,6 +526,23 @@ class FakeRawCABI:
         self.callback_buffers.append(buffer)
         callback(user_data, ctypes.c_void_p(ctypes.addressof(buffer)))
 
+    def _v8_callback(self, callback, user_data, metadata: bytes, payload: bytes) -> None:
+        metadata_buffer = ctypes.create_string_buffer(metadata)
+        payload_buffer = ctypes.create_string_buffer(payload) if payload else None
+        self.callback_buffers.append(metadata_buffer)
+        if payload_buffer is not None:
+            self.callback_buffers.append(payload_buffer)
+        callback(
+            user_data,
+            ctypes.c_void_p(ctypes.addressof(metadata_buffer)),
+            (
+                ctypes.c_void_p(ctypes.addressof(payload_buffer))
+                if payload_buffer is not None
+                else ctypes.c_void_p()
+            ),
+            len(payload),
+        )
+
     def _invocation_stream_open(
         self, handle, invocation_json, callback, user_data, out_stream_id
     ) -> int:
@@ -547,8 +569,26 @@ class FakeRawCABI:
                 callback,
                 user_data,
                 b'{"sequence":1,"kind":"data","state":"Open",'
-                b'"terminal":false,"payload_json":{"provider":"cabi"}}',
+                b'"terminal":false,"payload_content_type":"application/json",'
+                b'"payload_base64":"eyJwcm92aWRlciI6ImNhYmkifQ==",'
+                b'"payload_json":{"provider":"cabi"}}',
             )
+        return 0
+
+    def _invocation_stream_open_v8(
+        self, handle, invocation_json, callback, user_data, out_stream_id
+    ) -> int:
+        _ = handle, invocation_json
+        self.stream_v8_opens += 1
+        out_stream_id._obj.value = 4001
+        self.stream_callbacks[4001] = (callback, user_data)
+        self._v8_callback(
+            callback,
+            user_data,
+            b'{"sequence":1,"kind":"data","state":"Open",'
+            b'"terminal":false,"payload_content_type":"application/json"}',
+            b'{"provider":"cabi"}',
+        )
         return 0
 
     def _invocation_stream_cancel(self, handle, stream_id) -> int:
@@ -1115,8 +1155,31 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertFalse(stream_provider.terminal)
         self.assertEqual(stream_provider.payload_json, {"provider": "cabi"})
+        self.assertEqual(stream_provider.payload_bytes, b'{"provider":"cabi"}')
+        self.assertEqual(
+            stream_provider.payload_base64,
+            "eyJwcm92aWRlciI6ImNhYmkifQ==",
+        )
         self.assertLess(stream_provider.sequence, stream_terminal.sequence)
         self.assertIsNotNone(stream_terminal.terminal_receipt)
+
+    def test_cabi_provider_uses_v8_raw_stream_when_available(self) -> None:
+        raw = FakeRawCABI(stream_v8=True)
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_stream(complete_draft())
+        try:
+            event = stream.next()
+        finally:
+            stream.close()
+
+        self.assertEqual(raw.stream_v8_opens, 1)
+        self.assertEqual(event.payload_base64, "")
+        self.assertEqual(event.payload_bytes, b'{"provider":"cabi"}')
+        self.assertEqual(event.payload_json, {"provider": "cabi"})
 
     def test_cabi_provider_preserves_stream_order_and_single_terminal(self) -> None:
         _, stream_provider, _, stream_terminal, stream = (

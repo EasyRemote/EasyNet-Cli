@@ -19,7 +19,6 @@ from easynet_sdk import (
     ManagedSigningPeerRegistration,
     ManagedSigningStatus,
     SDKError,
-    SignerHandle,
     SignerPolicy,
     SigningMaterial,
 )
@@ -387,26 +386,15 @@ class ManagedSigningTests(unittest.TestCase):
             self.assertEqual(signer.key_id, key_id)
             self.assertEqual(signer.signing_public_key(), public_key)
             self.assertEqual(signer.sign_canonical(canonical), signature)
-            handle = SignerHandle(
-                profile="signing",
-                signer_id="signer-managed-key-provider",
-                owner_ura=subject_ura,
-                key_id=key_id,
-                algorithm="ed25519",
-                policy={
-                    "mode": "provider_managed_signing",
-                    "usage": "invocation.sign",
-                    "signer_id": "signer-managed-key-provider",
-                    "policy_ref": policy_ref,
-                    "inventory_owner_ura": subject_ura,
-                    "key_state": "active",
-                },
-                metadata={
-                    "source": "provider_key_inventory",
-                    "policy_ref": policy_ref,
-                    "public_key_base64": _b64(public_key),
-                },
-            )
+            invocation_signer = signer.invocation_signer()
+            self.assertIs(invocation_signer.provider, signer)
+            handle = invocation_signer.handle
+            self.assertEqual(handle.profile, "signing")
+            self.assertEqual(handle.signer_id, "signer-managed-key-provider")
+            self.assertEqual(handle.owner_ura, subject_ura)
+            self.assertEqual(handle.key_id, key_id)
+            self.assertEqual(handle.policy["policy_ref"], policy_ref)
+            self.assertEqual(handle.metadata["public_key_base64"], _b64(public_key))
             material = SigningMaterial(
                 canonical_bytes_base64=_b64(canonical),
                 args_digest_hex="00" * 32,

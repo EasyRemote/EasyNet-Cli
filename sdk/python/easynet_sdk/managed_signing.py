@@ -23,7 +23,7 @@ from .providers.runtime.key_service import (
 from .errors import ErrorCode, RetryHint, SDKError
 from .signer_handle import SignerHandle, signer_handle_provenance_error
 from .invocation import InvocationSignature
-from .signing import SignatureProvider, SigningMaterial
+from .signing import SignatureProvider, Signer, SigningMaterial
 
 DEFAULT_MANAGED_SIGNING_PAGE_SIZE = 16
 MAX_MANAGED_SIGNING_PAGE_SIZE = 16
@@ -463,6 +463,44 @@ class ManagedSigner(SignatureProvider):
 
     def signing_public_key(self) -> bytes:
         return self.public_key
+
+    def invocation_signer(self) -> Signer:
+        """Project this managed key into the canonical Invocation signer."""
+
+        if self.key.status is not ManagedSigningStatus.ACTIVE:
+            raise _policy_error("only active managed signing keys can sign")
+        subject_ura = self.key.bound_subject_ura
+        policy_ref = self.key.signer_policy_ref
+        if subject_ura is None or policy_ref is None:
+            raise _policy_error(
+                "managed signer requires a bound subject and signer policy"
+            )
+        signer_id = f"signer-{self.key.key_id}"
+        return Signer(
+            handle=SignerHandle(
+                profile="signing",
+                signer_id=signer_id,
+                owner_ura=subject_ura,
+                key_id=self.key.key_id,
+                algorithm="ed25519",
+                policy={
+                    "mode": "provider_managed_signing",
+                    "usage": "invocation.sign",
+                    "signer_id": signer_id,
+                    "policy_ref": policy_ref,
+                    "inventory_owner_ura": subject_ura,
+                    "key_state": "active",
+                },
+                metadata={
+                    "source": "provider_key_inventory",
+                    "policy_ref": policy_ref,
+                    "public_key_base64": base64.b64encode(self.public_key).decode(
+                        "ascii"
+                    ),
+                },
+            ),
+            provider=self,
+        )
 
     def sign_canonical(self, canonical_bytes: bytes) -> bytes:
         if self.key.status != ManagedSigningStatus.ACTIVE:

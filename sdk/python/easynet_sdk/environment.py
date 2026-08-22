@@ -20,9 +20,14 @@ from .runtime_lifecycle import RuntimeLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
 from .axon_addressing import AddressingClient
+from .managed_signing import ManagedSigningClient
 from .runtime import RuntimeClient
 from .runtime_ability import RuntimeAbilityClient
-from .runtime_authority import LocalRuntimeAuthorityProvider
+from .runtime_authority import (
+    USER_RUNTIME_SIGNING_PURPOSE,
+    LocalRuntimeAuthorityProvider,
+)
+from .signing import Signer
 from .runtime_environment import (
     RuntimeIdentityProjection,
     read_paired_runtime_identity_projection,
@@ -297,15 +302,33 @@ class SdkEnvironment:
     def invocation_transport_direct(
         self, options: ConnectOptions | None = None
     ) -> RuntimeInvocationTransport:
-        """Open the JSON-friendly Runtime Invocation facade over direct UDS."""
+        """Open direct UDS dispatch with local C ABI prepare/signing support."""
 
         self._require_open()
+        from . import _cabi
+        from .providers.runtime.direct import DirectRuntimeConnector
+
+        resolved = self._connect_options(_connect_options_or_default(options))
+        addressing = _canonical_addressing_client()
+        handle_transport = _cabi.open_cabi_runtime_transport(
+            control_path=resolved.control_path,
+            library_path=self.library_path,
+        )
+        connector = DirectRuntimeConnector(
+            control_path=resolved.control_path,
+            handle_transport=handle_transport,
+            identity=addressing,
+            close_identity=True,
+            close_handle_transport=True,
+        )
+        connection = RuntimeConnection(connector)
+        try:
+            connection.connect(resolved)
+        except BaseException:
+            connector.close()
+            raise
         return self._track(
-            RuntimeInvocationTransport.connect_direct(
-                control_path=self.resolved_control_path(),
-                library_path=self.library_path,
-                options=self._connect_options(_connect_options_or_default(options)),
-            )
+            RuntimeInvocationTransport(connection.runtime_client(), connection)
         )
 
     def ability_invocation_client(self) -> AbilityInvocationClient:
@@ -333,6 +356,18 @@ class SdkEnvironment:
             addressing,
             key_service_path=str(self.runtime_state_root() / "keyring.sock"),
         )
+
+    def local_runtime_invocation_signer(self, caller_ura: str) -> Signer:
+        """Resolve the daemon-custodied active signer for a local caller."""
+
+        self._require_open()
+        managed = ManagedSigningClient(
+            socket_path=str(self.runtime_state_root() / "keyring.sock")
+        ).active_signer_for_subject(
+            caller_ura,
+            purpose=USER_RUNTIME_SIGNING_PURPOSE,
+        )
+        return managed.invocation_signer()
 
     def health_client(self) -> HealthClient:
         """Open a health facade for the configured control path."""

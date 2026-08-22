@@ -137002,7 +137002,7 @@
       "shape_evidence": [
         {
           "item": "ManagedSigner",
-          "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+          "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
         },
         {
           "item": "ManagedSigningClient",
@@ -137039,6 +137039,10 @@
         {
           "item": "ManagedSigningStatus",
           "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+        },
+        {
+          "item": "ManagedSigner.invocation_signer",
+          "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
         },
         {
           "item": "ManagedSigner.key",
@@ -137285,7 +137289,7 @@
           "items": [
             {
               "item": "ManagedSigner",
-              "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+              "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
             },
             {
               "item": "ManagedSigningClient",
@@ -137322,6 +137326,10 @@
             {
               "item": "ManagedSigningStatus",
               "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+            },
+            {
+              "item": "ManagedSigner.invocation_signer",
+              "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
             },
             {
               "item": "ManagedSigner.key",
@@ -137568,7 +137576,7 @@
           "items": [
             {
               "item": "ManagedSigner",
-              "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+              "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
             },
             {
               "item": "ManagedSigningClient",
@@ -137605,6 +137613,10 @@
             {
               "item": "ManagedSigningStatus",
               "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+            },
+            {
+              "item": "ManagedSigner.invocation_signer",
+              "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
             },
             {
               "item": "ManagedSigner.key",
@@ -137851,7 +137863,7 @@
           "items": [
             {
               "item": "ManagedSigner",
-              "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+              "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
             },
             {
               "item": "ManagedSigningClient",
@@ -137888,6 +137900,10 @@
             {
               "item": "ManagedSigningStatus",
               "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+            },
+            {
+              "item": "ManagedSigner.invocation_signer",
+              "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
             },
             {
               "item": "ManagedSigner.key",
@@ -138134,7 +138150,7 @@
           "items": [
             {
               "item": "ManagedSigner",
-              "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+              "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
             },
             {
               "item": "ManagedSigningClient",
@@ -138171,6 +138187,10 @@
             {
               "item": "ManagedSigningStatus",
               "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+            },
+            {
+              "item": "ManagedSigner.invocation_signer",
+              "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
             },
             {
               "item": "ManagedSigner.key",
@@ -138417,7 +138437,7 @@
           "items": [
             {
               "item": "ManagedSigner",
-              "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+              "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
             },
             {
               "item": "ManagedSigningClient",
@@ -138454,6 +138474,10 @@
             {
               "item": "ManagedSigningStatus",
               "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+            },
+            {
+              "item": "ManagedSigner.invocation_signer",
+              "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
             },
             {
               "item": "ManagedSigner.key",
@@ -138700,7 +138724,7 @@
           "items": [
             {
               "item": "ManagedSigner",
-              "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+              "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
             },
             {
               "item": "ManagedSigningClient",
@@ -138737,6 +138761,10 @@
             {
               "item": "ManagedSigningStatus",
               "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+            },
+            {
+              "item": "ManagedSigner.invocation_signer",
+              "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
             },
             {
               "item": "ManagedSigner.key",
@@ -138983,7 +139011,7 @@
           "items": [
             {
               "item": "ManagedSigner",
-              "sha256": "ba3b15ee244c6e3dee5956f3b7deba1aae1313f16592b3dd988dfdfe7c76a84f"
+              "sha256": "a6f7be5492efc1ba0329382a717b0c9181f675081a84a4160f195163a4c69afc"
             },
             {
               "item": "ManagedSigningClient",
@@ -139020,6 +139048,10 @@
             {
               "item": "ManagedSigningStatus",
               "sha256": "3be89113e01993b6f8add97c312226df8781e9b764fc08b363ba533da7e960d5"
+            },
+            {
+              "item": "ManagedSigner.invocation_signer",
+              "sha256": "4d11de03d7ec7d59899fdf5fd97b291d60df1ae28008269e7d531e639f3b9675"
             },
             {
               "item": "ManagedSigner.key",
@@ -141211,7 +141243,7 @@
         },
         {
           "item": "RuntimeInvocationTransport",
-          "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+          "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
         },
         {
           "item": "RuntimeIpcVersionRange",
@@ -141338,6 +141370,10 @@
           "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
         },
         {
+          "item": "RuntimeInvocationTransport.stream_signed",
+          "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
+        },
+        {
           "item": "RuntimeIpcVersionRange.max",
           "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
         },
@@ -141398,7 +141434,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -141523,6 +141559,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -141585,7 +141625,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -141710,6 +141750,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -141772,7 +141816,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -141897,6 +141941,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -141959,7 +142007,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -142084,6 +142132,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -142146,7 +142198,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -142271,6 +142323,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -142333,7 +142389,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -142458,6 +142514,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -142520,7 +142580,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -142645,6 +142705,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -142707,7 +142771,7 @@
             },
             {
               "item": "RuntimeInvocationTransport",
-              "sha256": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671"
+              "sha256": "e72bc7a3c0a4836070bbd5375efa750fc7e07cfe8ad147b33f1e5cae6f75fe6a"
             },
             {
               "item": "RuntimeIpcVersionRange",
@@ -142832,6 +142896,10 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeInvocationTransport.stream_signed",
+              "sha256": "1f31b0cc88bd09bf043453458cd5168c02a0f5e553b763b15cadd96bb0bec3b5"
             },
             {
               "item": "RuntimeIpcVersionRange.max",
@@ -151303,7 +151371,7 @@
         },
         {
           "item": "Signer",
-          "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+          "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
         },
         {
           "item": "SignerPolicy",
@@ -151591,11 +151659,15 @@
         },
         {
           "item": "Signer.sign",
-          "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+          "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+        },
+        {
+          "item": "Signer.sign_material",
+          "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
         },
         {
           "item": "Signer.sign_with_signature",
-          "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+          "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
         },
         {
           "item": "SignerPolicy.expires_at_unix_ms",
@@ -151706,7 +151778,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -151994,11 +152066,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -152109,7 +152185,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -152397,11 +152473,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -152512,7 +152592,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -152800,11 +152880,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -152915,7 +152999,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -153203,11 +153287,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -153318,7 +153406,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -153606,11 +153694,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -153721,7 +153813,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -154009,11 +154101,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -154124,7 +154220,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -154412,11 +154508,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -154527,7 +154627,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
+              "sha256": "bfe478072998d36a3360d2b5a522cbe554bf46e5789b22a75b79ab26c6b98203"
             },
             {
               "item": "SignerPolicy",
@@ -154815,11 +154915,15 @@
             },
             {
               "item": "Signer.sign",
-              "sha256": "2b58042dfdde35612602919ac6c063dbdda5bd2878509d0c3dcb5f6a0f17ea5d"
+              "sha256": "c9bfa00c78006143e6ab56bc050a7922ac38747f3caf5d0f1a453f05756edd72"
+            },
+            {
+              "item": "Signer.sign_material",
+              "sha256": "5952029fa233b2d3dc811cd9e19bf35f3ca31a1cbe4586be8d357969ef8fbddd"
             },
             {
               "item": "Signer.sign_with_signature",
-              "sha256": "17715a671d2d1c1701c7f439ace919404be4d9e92ab4137ff0b78ba476283f82"
+              "sha256": "44a9558d571ff33d71feb05a0ba6695484c9097d8072a11c844d58a0b3d744ec"
             },
             {
               "item": "SignerPolicy.expires_at_unix_ms",
@@ -196384,7 +196488,7 @@
       "shape_evidence": [
         {
           "item": "SdkEnvironment",
-          "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
+          "sha256": "3bf80c147ce3f5f8f74cadc7d1f8d38c71bd7a25dbe4fd325a9389c47e8a0a22"
         },
         {
           "item": "default_environment",
@@ -196428,7 +196532,7 @@
         },
         {
           "item": "SdkEnvironment.invocation_transport_direct",
-          "sha256": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a"
+          "sha256": "7a2fc37746640000ac41f18ddea3ab2a294e61b538b1092073ef3971c599b016"
         },
         {
           "item": "SdkEnvironment.library_path",
@@ -196437,6 +196541,10 @@
         {
           "item": "SdkEnvironment.local_runtime_authority_provider",
           "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+        },
+        {
+          "item": "SdkEnvironment.local_runtime_invocation_signer",
+          "sha256": "aaed5e03cecf28a5a05f267462227f147268839dd16f9f5fcb4d56fd205d9f27"
         },
         {
           "item": "SdkEnvironment.native_runtime",
@@ -196487,7 +196595,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
+              "sha256": "3bf80c147ce3f5f8f74cadc7d1f8d38c71bd7a25dbe4fd325a9389c47e8a0a22"
             },
             {
               "item": "default_environment",
@@ -196531,7 +196639,7 @@
             },
             {
               "item": "SdkEnvironment.invocation_transport_direct",
-              "sha256": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a"
+              "sha256": "7a2fc37746640000ac41f18ddea3ab2a294e61b538b1092073ef3971c599b016"
             },
             {
               "item": "SdkEnvironment.library_path",
@@ -196540,6 +196648,10 @@
             {
               "item": "SdkEnvironment.local_runtime_authority_provider",
               "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
+              "item": "SdkEnvironment.local_runtime_invocation_signer",
+              "sha256": "aaed5e03cecf28a5a05f267462227f147268839dd16f9f5fcb4d56fd205d9f27"
             },
             {
               "item": "SdkEnvironment.native_runtime",
@@ -196590,7 +196702,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
+              "sha256": "3bf80c147ce3f5f8f74cadc7d1f8d38c71bd7a25dbe4fd325a9389c47e8a0a22"
             },
             {
               "item": "default_environment",
@@ -196634,7 +196746,7 @@
             },
             {
               "item": "SdkEnvironment.invocation_transport_direct",
-              "sha256": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a"
+              "sha256": "7a2fc37746640000ac41f18ddea3ab2a294e61b538b1092073ef3971c599b016"
             },
             {
               "item": "SdkEnvironment.library_path",
@@ -196643,6 +196755,10 @@
             {
               "item": "SdkEnvironment.local_runtime_authority_provider",
               "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
+              "item": "SdkEnvironment.local_runtime_invocation_signer",
+              "sha256": "aaed5e03cecf28a5a05f267462227f147268839dd16f9f5fcb4d56fd205d9f27"
             },
             {
               "item": "SdkEnvironment.native_runtime",
@@ -196693,7 +196809,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
+              "sha256": "3bf80c147ce3f5f8f74cadc7d1f8d38c71bd7a25dbe4fd325a9389c47e8a0a22"
             },
             {
               "item": "default_environment",
@@ -196737,7 +196853,7 @@
             },
             {
               "item": "SdkEnvironment.invocation_transport_direct",
-              "sha256": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a"
+              "sha256": "7a2fc37746640000ac41f18ddea3ab2a294e61b538b1092073ef3971c599b016"
             },
             {
               "item": "SdkEnvironment.library_path",
@@ -196746,6 +196862,10 @@
             {
               "item": "SdkEnvironment.local_runtime_authority_provider",
               "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
+              "item": "SdkEnvironment.local_runtime_invocation_signer",
+              "sha256": "aaed5e03cecf28a5a05f267462227f147268839dd16f9f5fcb4d56fd205d9f27"
             },
             {
               "item": "SdkEnvironment.native_runtime",
@@ -196796,7 +196916,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
+              "sha256": "3bf80c147ce3f5f8f74cadc7d1f8d38c71bd7a25dbe4fd325a9389c47e8a0a22"
             },
             {
               "item": "default_environment",
@@ -196840,7 +196960,7 @@
             },
             {
               "item": "SdkEnvironment.invocation_transport_direct",
-              "sha256": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a"
+              "sha256": "7a2fc37746640000ac41f18ddea3ab2a294e61b538b1092073ef3971c599b016"
             },
             {
               "item": "SdkEnvironment.library_path",
@@ -196849,6 +196969,10 @@
             {
               "item": "SdkEnvironment.local_runtime_authority_provider",
               "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
+              "item": "SdkEnvironment.local_runtime_invocation_signer",
+              "sha256": "aaed5e03cecf28a5a05f267462227f147268839dd16f9f5fcb4d56fd205d9f27"
             },
             {
               "item": "SdkEnvironment.native_runtime",
@@ -196899,7 +197023,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
+              "sha256": "3bf80c147ce3f5f8f74cadc7d1f8d38c71bd7a25dbe4fd325a9389c47e8a0a22"
             },
             {
               "item": "default_environment",
@@ -196943,7 +197067,7 @@
             },
             {
               "item": "SdkEnvironment.invocation_transport_direct",
-              "sha256": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a"
+              "sha256": "7a2fc37746640000ac41f18ddea3ab2a294e61b538b1092073ef3971c599b016"
             },
             {
               "item": "SdkEnvironment.library_path",
@@ -196952,6 +197076,10 @@
             {
               "item": "SdkEnvironment.local_runtime_authority_provider",
               "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
+              "item": "SdkEnvironment.local_runtime_invocation_signer",
+              "sha256": "aaed5e03cecf28a5a05f267462227f147268839dd16f9f5fcb4d56fd205d9f27"
             },
             {
               "item": "SdkEnvironment.native_runtime",
@@ -197002,7 +197130,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
+              "sha256": "3bf80c147ce3f5f8f74cadc7d1f8d38c71bd7a25dbe4fd325a9389c47e8a0a22"
             },
             {
               "item": "default_environment",
@@ -197046,7 +197174,7 @@
             },
             {
               "item": "SdkEnvironment.invocation_transport_direct",
-              "sha256": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a"
+              "sha256": "7a2fc37746640000ac41f18ddea3ab2a294e61b538b1092073ef3971c599b016"
             },
             {
               "item": "SdkEnvironment.library_path",
@@ -197055,6 +197183,10 @@
             {
               "item": "SdkEnvironment.local_runtime_authority_provider",
               "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
+              "item": "SdkEnvironment.local_runtime_invocation_signer",
+              "sha256": "aaed5e03cecf28a5a05f267462227f147268839dd16f9f5fcb4d56fd205d9f27"
             },
             {
               "item": "SdkEnvironment.native_runtime",
@@ -225303,6 +225435,10 @@
           "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
         },
         {
+          "item": "NewStreamEventFromRawPacket",
+          "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+        },
+        {
           "item": "NewStreamHandleFromJSON",
           "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
         },
@@ -225425,6 +225561,10 @@
         {
           "item": "StreamEvent.PayloadBase64",
           "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+        },
+        {
+          "item": "StreamEvent.PayloadBytes",
+          "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
         },
         {
           "item": "StreamEvent.PayloadContentType",
@@ -225566,6 +225706,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -225688,6 +225832,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -225829,6 +225977,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -225951,6 +226103,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -226092,6 +226248,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -226214,6 +226374,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -226355,6 +226519,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -226477,6 +226645,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -226618,6 +226790,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -226740,6 +226916,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -226881,6 +227061,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -227003,6 +227187,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -227144,6 +227332,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -227266,6 +227458,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -227407,6 +227603,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -227529,6 +227729,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -227670,6 +227874,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -227792,6 +228000,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -227933,6 +228145,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -228055,6 +228271,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -228196,6 +228416,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -228318,6 +228542,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -228459,6 +228687,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -228581,6 +228813,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -228722,6 +228958,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -228844,6 +229084,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -228985,6 +229229,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -229107,6 +229355,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -229248,6 +229500,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -229370,6 +229626,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -229511,6 +229771,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -229633,6 +229897,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -229774,6 +230042,10 @@
               "sha256": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a"
             },
             {
+              "item": "NewStreamEventFromRawPacket",
+              "sha256": "c7bf92a477316579fbcb0f8e1461067c38a54acd404dfcc2aef269fb7694cd6a"
+            },
+            {
               "item": "NewStreamHandleFromJSON",
               "sha256": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644"
             },
@@ -229896,6 +230168,10 @@
             {
               "item": "StreamEvent.PayloadBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "StreamEvent.PayloadBytes",
+              "sha256": "f64563ffbc47e6ebc00f1e13edee2685ad85d8238f79369df1fad8892b14968e"
             },
             {
               "item": "StreamEvent.PayloadContentType",
@@ -230047,7 +230323,7 @@
         },
         {
           "item": "HostStreamExec",
-          "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+          "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
         },
         {
           "item": "RuntimeFrameStream",
@@ -230059,11 +230335,11 @@
         },
         {
           "item": "StreamEvent",
-          "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+          "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
         },
         {
           "item": "StreamHandle",
-          "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+          "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
         },
         {
           "item": "StreamState",
@@ -230075,15 +230351,15 @@
         },
         {
           "item": "StreamTransport",
-          "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+          "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
         },
         {
           "item": "StreamValue",
-          "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+          "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
         },
         {
           "item": "StreamValueAdapter",
-          "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+          "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
         },
         {
           "item": "FrameStream.close",
@@ -230102,8 +230378,12 @@
           "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
         },
         {
+          "item": "HostStreamExec.protocol",
+          "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+        },
+        {
           "item": "HostStreamExec.to_mapping",
-          "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+          "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
         },
         {
           "item": "RuntimeAbilityClient.open_stream",
@@ -230162,12 +230442,20 @@
           "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
         },
         {
+          "item": "StreamEvent.from_raw_packet",
+          "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+        },
+        {
           "item": "StreamEvent.kind",
           "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
         },
         {
           "item": "StreamEvent.payload_base64",
           "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+        },
+        {
+          "item": "StreamEvent.payload_bytes",
+          "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
         },
         {
           "item": "StreamEvent.payload_content_type",
@@ -230215,7 +230503,7 @@
         },
         {
           "item": "StreamHandle.next",
-          "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+          "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
         },
         {
           "item": "StreamHandle.runtime_state",
@@ -230307,7 +230595,15 @@
         },
         {
           "item": "StreamTransport.recv",
-          "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+          "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+        },
+        {
+          "item": "StreamValue.content_type",
+          "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+        },
+        {
+          "item": "StreamValue.payload",
+          "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
         },
         {
           "item": "StreamValue.value",
@@ -230330,7 +230626,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -230342,11 +230638,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -230358,15 +230654,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -230385,8 +230681,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -230445,12 +230745,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -230498,7 +230806,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -230590,7 +230898,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -230613,7 +230929,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -230625,11 +230941,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -230641,15 +230957,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -230668,8 +230984,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -230728,12 +231048,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -230781,7 +231109,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -230873,7 +231201,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -230896,7 +231232,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -230908,11 +231244,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -230924,15 +231260,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -230951,8 +231287,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -231011,12 +231351,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -231064,7 +231412,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -231156,7 +231504,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -231179,7 +231535,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -231191,11 +231547,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -231207,15 +231563,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -231234,8 +231590,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -231294,12 +231654,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -231347,7 +231715,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -231439,7 +231807,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -231462,7 +231838,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -231474,11 +231850,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -231490,15 +231866,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -231517,8 +231893,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -231577,12 +231957,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -231630,7 +232018,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -231722,7 +232110,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -231745,7 +232141,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -231757,11 +232153,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -231773,15 +232169,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -231800,8 +232196,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -231860,12 +232260,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -231913,7 +232321,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -232005,7 +232413,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -232028,7 +232444,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -232040,11 +232456,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -232056,15 +232472,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -232083,8 +232499,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -232143,12 +232563,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -232196,7 +232624,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -232288,7 +232716,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -232311,7 +232747,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -232323,11 +232759,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -232339,15 +232775,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -232366,8 +232802,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -232426,12 +232866,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -232479,7 +232927,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -232571,7 +233019,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -232594,7 +233050,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -232606,11 +233062,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -232622,15 +233078,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -232649,8 +233105,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -232709,12 +233169,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -232762,7 +233230,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -232854,7 +233322,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -232877,7 +233353,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -232889,11 +233365,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -232905,15 +233381,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -232932,8 +233408,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -232992,12 +233472,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -233045,7 +233533,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -233137,7 +233625,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -233160,7 +233656,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -233172,11 +233668,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -233188,15 +233684,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -233215,8 +233711,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -233275,12 +233775,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -233328,7 +233836,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -233420,7 +233928,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -233443,7 +233959,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -233455,11 +233971,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -233471,15 +233987,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -233498,8 +234014,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -233558,12 +234078,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -233611,7 +234139,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -233703,7 +234231,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -233726,7 +234262,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -233738,11 +234274,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -233754,15 +234290,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -233781,8 +234317,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -233841,12 +234381,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -233894,7 +234442,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -233986,7 +234534,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -234009,7 +234565,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -234021,11 +234577,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -234037,15 +234593,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -234064,8 +234620,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -234124,12 +234684,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -234177,7 +234745,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -234269,7 +234837,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -234292,7 +234868,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -234304,11 +234880,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -234320,15 +234896,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -234347,8 +234923,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -234407,12 +234987,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -234460,7 +235048,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -234552,7 +235140,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -234575,7 +235171,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -234587,11 +235183,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -234603,15 +235199,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -234630,8 +235226,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -234690,12 +235290,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -234743,7 +235351,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -234835,7 +235443,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -234858,7 +235474,7 @@
             },
             {
               "item": "HostStreamExec",
-              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+              "sha256": "4f4bc36b3d7f20bad3f223866f333c74e5d1d5657ab183d94570453c853a1604"
             },
             {
               "item": "RuntimeFrameStream",
@@ -234870,11 +235486,11 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "12f5e4a6d3d456f0814a9c01b3e2b4d9532e062bf30bffaa0f5cf26a862e6b8d"
+              "sha256": "20d6b50106aa153238376cdc3134cdab28120272fb026af4abea2607bd5338be"
             },
             {
               "item": "StreamHandle",
-              "sha256": "1f03506d21ab64a218945073c7ec0e345a8c3294bfafd3667123a404c291be1b"
+              "sha256": "813b059cdaacea2574dab9172e4313b144d2904a85b0e845a29b3979aaa3a92a"
             },
             {
               "item": "StreamState",
@@ -234886,15 +235502,15 @@
             },
             {
               "item": "StreamTransport",
-              "sha256": "27aabc20f48b341696ad75fd55a30da22b11e73d1a4759669993cfb0e8c8680d"
+              "sha256": "530b5309f80ddcbccde8ede9969f9246a141c3d28ed3b988a84739d2b742e90a"
             },
             {
               "item": "StreamValue",
-              "sha256": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85"
+              "sha256": "8cd8d9b6cf7f2515aa9c857634d5741d88728c8b01f2f418c977b512709e5bc4"
             },
             {
               "item": "StreamValueAdapter",
-              "sha256": "1d1b8a2d1658e4f6d8bea2534b29a5dcfab4e52a52cb378247faae2cd2e42d02"
+              "sha256": "844d88b2e168c09c5a664f968a9f3c652214b1466a465cefb56251e6e53b9f1c"
             },
             {
               "item": "FrameStream.close",
@@ -234913,8 +235529,12 @@
               "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
             },
             {
+              "item": "HostStreamExec.protocol",
+              "sha256": "f743ceadf7227f40894112b263ba466aab4c22c7fe94cfcc7ccc9d447a8fb97a"
+            },
+            {
               "item": "HostStreamExec.to_mapping",
-              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
+              "sha256": "9914b3fadbce873ce69c756aa7d421345108040919b5adee79f1d2f10ba25040"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -234973,12 +235593,20 @@
               "sha256": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87"
             },
             {
+              "item": "StreamEvent.from_raw_packet",
+              "sha256": "6428dff8feaf51c5ece6e6db0f435e1cfc377743ded4735109865e31e196c59e"
+            },
+            {
               "item": "StreamEvent.kind",
               "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
             },
             {
               "item": "StreamEvent.payload_base64",
               "sha256": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f"
+            },
+            {
+              "item": "StreamEvent.payload_bytes",
+              "sha256": "4a47662fbb7e7c72a9739520b3a56aaae30a2ba027c94daa2c6c7fd4142a5c25"
             },
             {
               "item": "StreamEvent.payload_content_type",
@@ -235026,7 +235654,7 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "52984cb944d07be1e78c53fe1efda0386838a5fa5931af0bbbc43d918117bff1"
+              "sha256": "a250e280b86c5542625c9ce52765da423454b0efefbad19b39f8c5b4241b72b2"
             },
             {
               "item": "StreamHandle.runtime_state",
@@ -235118,7 +235746,15 @@
             },
             {
               "item": "StreamTransport.recv",
-              "sha256": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a"
+              "sha256": "3d51acb9d6f54330be0d50517e0a866c04433c6165a98284ce3465517358e437"
+            },
+            {
+              "item": "StreamValue.content_type",
+              "sha256": "18d0ceda29ca56877f661bf176ee4c3b8da8d590f4eb9de9afd9c6471dd4ce2c"
+            },
+            {
+              "item": "StreamValue.payload",
+              "sha256": "86870ab8c80833a9e564e130d4f889f4384e0e6edee94409099a6b8ffc9a6083"
             },
             {
               "item": "StreamValue.value",
@@ -289044,7 +289680,7 @@
         },
         {
           "item": "InvocationResultAdapter",
-          "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+          "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
         },
         {
           "item": "RuntimeAbilityClient",
@@ -289056,7 +289692,7 @@
         },
         {
           "item": "RuntimeClient",
-          "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+          "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
         },
         {
           "item": "RuntimeTransport",
@@ -289299,6 +289935,10 @@
           "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
         },
         {
+          "item": "InvocationResultAdapter.stream_signed",
+          "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+        },
+        {
           "item": "InvocationResultAdapter.transport",
           "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
         },
@@ -289381,6 +290021,10 @@
         {
           "item": "RuntimeClient.open_signed_stream",
           "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+        },
+        {
+          "item": "RuntimeClient.prepare_and_open_stream",
+          "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
         },
         {
           "item": "RuntimeClient.recover",
@@ -289483,7 +290127,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -289495,7 +290139,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -289738,6 +290382,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -289820,6 +290468,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -289922,7 +290574,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -289934,7 +290586,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -290177,6 +290829,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -290259,6 +290915,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -290361,7 +291021,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -290373,7 +291033,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -290616,6 +291276,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -290698,6 +291362,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -290800,7 +291468,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -290812,7 +291480,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -291055,6 +291723,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -291137,6 +291809,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -291239,7 +291915,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -291251,7 +291927,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -291494,6 +292170,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -291576,6 +292256,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -291678,7 +292362,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -291690,7 +292374,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -291933,6 +292617,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -292015,6 +292703,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -292117,7 +292809,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -292129,7 +292821,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -292372,6 +293064,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -292454,6 +293150,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -292556,7 +293256,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -292568,7 +293268,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -292811,6 +293511,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -292893,6 +293597,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -292995,7 +293703,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -293007,7 +293715,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -293250,6 +293958,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -293332,6 +294044,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -293434,7 +294150,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -293446,7 +294162,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -293689,6 +294405,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -293771,6 +294491,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -293873,7 +294597,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -293885,7 +294609,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -294128,6 +294852,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -294210,6 +294938,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -294312,7 +295044,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -294324,7 +295056,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -294567,6 +295299,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -294649,6 +295385,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",
@@ -294751,7 +295491,7 @@
             },
             {
               "item": "InvocationResultAdapter",
-              "sha256": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7"
+              "sha256": "8fb5105d8e3322d1408cebb37e16985fac8d0f832964503d3d6e057981c5dd6b"
             },
             {
               "item": "RuntimeAbilityClient",
@@ -294763,7 +295503,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
+              "sha256": "8a07680e9183a247aab600dbda7b7c8370ac4e52f59ba72a13b110dc876f3940"
             },
             {
               "item": "RuntimeTransport",
@@ -295006,6 +295746,10 @@
               "sha256": "5c0eb31962bded9ab48227b9c140d0a221e7de98cf8a7e2b765ee8815ede618a"
             },
             {
+              "item": "InvocationResultAdapter.stream_signed",
+              "sha256": "fd152a652e712bf9fb94aeaff76306bcc3abd50dff679125f9951e7fd8c53e7a"
+            },
+            {
               "item": "InvocationResultAdapter.transport",
               "sha256": "66356fd8615fffda2eb876aba174df3340cc9e63983e7eb3727faf67655ea729"
             },
@@ -295088,6 +295832,10 @@
             {
               "item": "RuntimeClient.open_signed_stream",
               "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
+            },
+            {
+              "item": "RuntimeClient.prepare_and_open_stream",
+              "sha256": "0fe03ccf84153228c4518254a90a096826bcbf3debbf6840c0d4957903025b86"
             },
             {
               "item": "RuntimeClient.recover",

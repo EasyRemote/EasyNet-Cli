@@ -1269,6 +1269,20 @@ class RuntimeClient:
             raise _transport_error("open signed stream transport failed", exc) from exc
         return StreamHandle.from_json(stream_transport, open_json)
 
+    def prepare_and_open_stream(
+        self,
+        draft: InvocationDraft,
+        signer: Signer,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> StreamHandle:
+        """Statelessly sign one draft and open its direct server stream."""
+
+        if signer is None:
+            raise _invalid_runtime("signer is required")
+        material = self.prepare_signing_material(draft, options)
+        signature = signer.sign_material(material)
+        return self.invoke_stream(replace(draft, caller_signature=signature))
+
     def open_bidi(
         self,
         draft: InvocationDraft,

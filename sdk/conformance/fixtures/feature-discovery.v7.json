@@ -1,5 +1,11 @@
 {
   "abi_version": 7,
+  "abi_extensions": {
+    "v8": {
+      "stream_raw_payload": true,
+      "symbol": "runtime_invocation_stream_open_v8"
+    }
+  },
   "sdk_version": "0.139.14",
   "profiles": {
     "runtime_core": "provider-backed"
@@ -13,6 +19,7 @@
     "runtime_health": true,
     "runtime_diagnostics": true,
     "prepare_sign_submit": true,
+    "stream_raw_payload_v8": true,
     "typed_error_json": true
   },
   "axon_pb": true

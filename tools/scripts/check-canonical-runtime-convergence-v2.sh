@@ -598,12 +598,18 @@ if legacy in production:
 
 required = {
     "struct CallbackFrameProjection": "projection_value_object_missing",
+    "struct VerifiedStreamCallbackFrame": "stream_projection_value_object_missing",
+    "enum StreamCallbackDelivery": "stream_delivery_value_object_missing",
+    "StreamCallbackDelivery::Json": "stream_json_delivery_missing",
+    "StreamCallbackDelivery::V8": "stream_v8_delivery_missing",
     "enum CallbackFrameLifecycle": "projection_lifecycle_state_missing",
     "CallbackFrameLifecycle::StopAfterFrame": "stop_after_frame_state_missing",
     "fn should_stop_after_frame(&self) -> bool": "terminal_accessor_missing",
     "fn into_json_bytes(self) -> Vec<u8>": "json_serialization_boundary_missing",
+    "fn into_delivery(": "stream_delivery_boundary_missing",
     "projection.should_stop_after_frame()": "reader_terminal_accessor_missing",
     "callback_frame_projection_lifecycle_is_not_inferred_from_json_shape": "json_independence_test_missing",
+    "stream_v8_delivery_preserves_raw_payload_without_json_projection": "v8_raw_stream_test_missing",
 }
 for needle, label in required.items():
     if needle not in text:
@@ -618,7 +624,10 @@ for fn_name in ("run_stream_reader", "run_bidi_down_reader"):
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_terminal_lookup")
     if "projection.should_stop_after_frame()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_typed_terminal_missing")
-    if "projection.into_json_bytes()" not in body:
+    if fn_name == "run_stream_reader":
+        if "projection.into_delivery(encoding)" not in body:
+            raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_delivery_boundary_missing")
+    elif "projection.into_json_bytes()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_boundary_missing")
 PY
 }
@@ -8154,16 +8163,12 @@ for retired in ("ok", "message"):
 if '"kind": "error"' not in ffi_receipt_error or '"stage": "receipt_verification"' not in ffi_receipt_error:
     raise SystemExit("ffi_stream_receipt_error_missing_canonical_error")
 ffi_backpressure = read(ffi_backpressure_path)
-ffi_stream_backpressure = section(
-    ffi_backpressure,
-    r"fn stream_callback_backpressure_event\((?P<body>.*?)\n\}",
-    "ffi_stream_backpressure_projection",
-)
-for retired in ('"ok"', '"code"', '"message"'):
-    if retired in ffi_stream_backpressure:
-        raise SystemExit(f"ffi_stream_backpressure_leaks_retired_top_level:{retired}")
-if '"error": runtime_backpressure_error("stream", sequence, queue_capacity)' not in ffi_stream_backpressure:
-    raise SystemExit("ffi_stream_backpressure_missing_canonical_error")
+if "stream_callback_backpressure_event" in ffi_backpressure:
+    raise SystemExit("ffi_stream_backpressure_synthetic_terminal_not_retired")
+if "bounded_stream_callback_queue_applies_lossless_backpressure" not in ffi:
+    raise SystemExit("ffi_stream_backpressure_lossless_queue_test_missing")
+if "Server-stream delivery is lossless" not in ffi or "tx.send(delivery).await" not in ffi:
+    raise SystemExit("ffi_stream_backpressure_lossless_await_missing")
 py_tests = read(py_test_path)
 for required in (
     "test_direct_runtime_unary_rejects_unsupported_invocation_state",

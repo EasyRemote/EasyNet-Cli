@@ -55,7 +55,9 @@ invoke_pb2_grpc: Any = _invoke_pb2_grpc
 types_pb2: Any = _types_pb2
 
 DESCRIPTOR_REF = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
-ABILITY_URA = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
+ABILITY_URA = (
+    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
+)
 ABILITY_PUBLIC_NAME = "observe.health"
 DEVICE_SUBJECT_URA = "easynet:///r/example/device/dev-a"
 CALLEE_URA = "easynet:///r/example/agent/device.dev-a.runtime-health"
@@ -816,7 +818,9 @@ class DirectRuntimeTests(unittest.TestCase):
         tuple_projection = cast(dict[str, object], result["tuple"])
         self.assertEqual(tuple_projection, draft.to_json_dict())
 
-    def test_direct_runtime_causal_context_rejects_retired_dag_proof_alias(self) -> None:
+    def test_direct_runtime_causal_context_rejects_retired_dag_proof_alias(
+        self,
+    ) -> None:
         canonical = _axon_causal_context(
             {
                 "form": "merkle",
@@ -1111,6 +1115,55 @@ class DirectRuntimeTests(unittest.TestCase):
             request.envelope.caller.ura,
             "easynet:///r/example/agent/alice.sdk",
         )
+
+    def test_direct_transport_projects_binary_stream_payload_bytes_from_base64(
+        self,
+    ) -> None:
+        payload = bytes(range(256)) * 4
+        servicer = RecordingInvocationServicer()
+        servicer.stream_chunks = [
+            invoke_pb2.InvokeStreamChunk(
+                invocation_id="inv-media",
+                state=types_pb2.INVOCATION_STATE_RUNNING,
+                payload=payload,
+                content_type="video/h264",
+                sequence=0,
+                terminal=False,
+                admission_receipt=_admission_receipt("inv-media"),
+            ),
+            invoke_pb2.InvokeStreamChunk(
+                invocation_id="inv-media",
+                state=types_pb2.INVOCATION_STATE_COMPLETED,
+                content_type="application/json",
+                sequence=1,
+                terminal=True,
+                terminal_receipt=_canonical_receipt(
+                    index=1,
+                    invocation_id="inv-media",
+                    receipt_type="completed",
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    cleanup_complete=True,
+                ),
+            ),
+        ]
+        with _fake_daemon(servicer) as endpoint:
+            transport = RuntimeInvocationTransport.connect_direct(
+                options=ConnectOptions(endpoint=endpoint, dial_timeout_ms=1000),
+                identity=_identity(),
+            )
+            try:
+                stream = transport.stream(_signed_draft())
+                frame = stream.recv(timeout=1)
+                terminal = stream.recv(timeout=1)
+                stream.close()
+            finally:
+                transport.close()
+
+        self.assertEqual(frame["payload_content_type"], "video/h264")
+        self.assertEqual(frame["payload_bytes"], payload)
+        self.assertEqual(frame["payload_base64"], base64.b64encode(payload).decode("ascii"))
+        self.assertIsNone(frame["payload_json"])
+        self.assertTrue(terminal["terminal"])
 
     def test_direct_transport_projects_zero_based_stream_sequence(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -1921,10 +1974,12 @@ class DirectRuntimeTests(unittest.TestCase):
                 stream, _ = transport.open_stream(
                     _signed_draft().to_json().encode("utf-8")
                 )
-                event = json.loads(stream.recv(timeout=1).decode("utf-8"))
+                packet = stream.recv(timeout=1)
             finally:
                 transport.close()
 
+        self.assertIsInstance(packet, bytes)
+        event = json.loads(packet.decode("utf-8"))
         receipt = cast(dict[str, object], event["admission_receipt"])
         self.assertEqual(receipt["receipt_type"], "admitted")
         _assert_complete_receipt_projection(self, receipt)
@@ -2028,6 +2083,8 @@ class DirectRuntimeTests(unittest.TestCase):
             finally:
                 transport.close()
 
+        self.assertIsInstance(raw_first, bytes)
+        self.assertIsInstance(raw_terminal, bytes)
         first = json.loads(raw_first.decode("utf-8"))
         self.assertFalse(first["terminal"])
         self.assertEqual(first["state"], "Running")
@@ -2059,11 +2116,13 @@ class DirectRuntimeTests(unittest.TestCase):
                 retry_stream, _ = transport.open_stream(
                     _signed_draft().to_json().encode("utf-8")
                 )
-                retry_event = json.loads(retry_stream.recv(timeout=1).decode("utf-8"))
+                retry_packet = retry_stream.recv(timeout=1)
                 retry_stream.close()
             finally:
                 transport.close()
 
+        self.assertIsInstance(retry_packet, bytes)
+        retry_event = json.loads(retry_packet.decode("utf-8"))
         self.assertTrue(is_code(raised.exception, ErrorCode.TIMEOUT))
         self.assertEqual(raised.exception.stage, "direct_runtime")
         self.assertEqual(

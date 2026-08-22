@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
 from .runtime import InvocationControlCapability
+from .stream import RawStreamPacket
 
 EXPECTED_ABI_VERSION = 7
 RUNTIME_OK = 0
@@ -64,6 +65,13 @@ _CABI_ERROR_METADATA: dict[int, tuple[ErrorCode, str, RetryHint, str]] = {
 }
 
 _StreamCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+_StreamV8Callback = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+)
 _BidiCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 _CALLBACK_REGISTRY_LOCK = threading.Lock()
 _CALLBACK_INBOXES: dict[int, "_CallbackInbox"] = {}
@@ -75,6 +83,7 @@ class RuntimeCABILibrary:
 
     def __init__(self, raw: Any) -> None:
         self._raw = raw
+        self.stream_v8_available = False
         self._bind_symbols()
 
     @classmethod
@@ -337,6 +346,22 @@ class RuntimeCABILibrary:
         self._raise_for_code(code)
         return int(out_stream_id.value)
 
+    def invocation_stream_open_v8(
+        self, handle: int, invocation_json: bytes, callback_token: int
+    ) -> int:
+        out_stream_id = ctypes.c_uint64(0)
+        code = int(
+            self._raw.runtime_invocation_stream_open_v8(
+                ctypes.c_uint64(handle),
+                ctypes.c_char_p(invocation_json),
+                _STREAM_V8_CALLBACK_HANDLE,
+                ctypes.c_void_p(callback_token),
+                ctypes.byref(out_stream_id),
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_stream_id.value)
+
     def invocation_stream_cancel(self, handle: int, stream_id: int) -> None:
         code = int(
             self._raw.runtime_invocation_stream_cancel(
@@ -558,6 +583,17 @@ class RuntimeCABILibrary:
             ctypes.POINTER(ctypes.c_uint64),
         ]
         self._raw.runtime_invocation_stream_open.restype = ctypes.c_int32
+        stream_v8 = getattr(self._raw, "runtime_invocation_stream_open_v8", None)
+        if stream_v8 is not None:
+            stream_v8.argtypes = [
+                ctypes.c_uint64,
+                ctypes.c_char_p,
+                _StreamV8Callback,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            stream_v8.restype = ctypes.c_int32
+            self.stream_v8_available = True
         self._raw.runtime_invocation_stream_cancel.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
@@ -951,12 +987,20 @@ class CABIRuntimeTransport:
         return self.lib.governance_read(self._require_open(), draft_json)
 
     def open_stream(self, draft_json: bytes) -> tuple[Any, bytes]:
-        inbox = _CallbackInbox(MAX_CABI_CALLBACK_QUEUE)
+        inbox = _CallbackInbox(
+            MAX_CABI_CALLBACK_QUEUE,
+            raw_stream=self.lib.stream_v8_available,
+        )
         token = _register_callback_inbox(inbox)
         try:
-            stream_id = self.lib.invocation_stream_open(
-                self._require_open(), draft_json, token
-            )
+            if self.lib.stream_v8_available:
+                stream_id = self.lib.invocation_stream_open_v8(
+                    self._require_open(), draft_json, token
+                )
+            else:
+                stream_id = self.lib.invocation_stream_open(
+                    self._require_open(), draft_json, token
+                )
             if stream_id <= 0:
                 raise SDKError(
                     code=ErrorCode.INVALID_HANDLE,
@@ -1278,7 +1322,7 @@ class _CABIStreamTransport:
     _cancel_sent: bool = False
     _next_sequence: int = 1
 
-    def recv(self, timeout: float | None = None) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes | RawStreamPacket:
         if self._terminal_action_done:
             raise _closed_error("stream transport is closed")
         return _project_cabi_ordered_event(
@@ -1493,12 +1537,21 @@ class _CABIBidiTransport:
 
 
 def _project_cabi_ordered_event(
-    raw: bytes,
+    raw: bytes | RawStreamPacket,
     allocate_sequence: Callable[[int | None], int],
     *,
     use_observed_sequence: bool,
     include_state: bool = True,
-) -> bytes:
+) -> bytes | RawStreamPacket:
+    if isinstance(raw, RawStreamPacket):
+        metadata = _project_cabi_ordered_event(
+            raw.metadata_json,
+            allocate_sequence,
+            use_observed_sequence=use_observed_sequence,
+            include_state=include_state,
+        )
+        assert isinstance(metadata, bytes)
+        return RawStreamPacket(metadata, raw.payload)
     try:
         event = _json_object(raw, "C ABI callback frame")
     except SDKError:
@@ -1551,26 +1604,30 @@ def _axon_invocation_state_name(state: int) -> str:
 @dataclass
 class _CallbackInbox:
     max_items: int
-    _queue: queue_module.Queue[bytes | None] = field(init=False)
+    raw_stream: bool = False
+    _queue: queue_module.Queue[bytes | RawStreamPacket | None] = field(init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _closed: bool = False
-    _failure: bytes | None = None
+    _failure: bytes | RawStreamPacket | None = None
     _failure_delivered: bool = False
 
     def __post_init__(self) -> None:
         self._queue = queue_module.Queue(maxsize=self.max_items)
 
-    def push(self, raw: bytes) -> None:
+    def push(self, raw: bytes | RawStreamPacket) -> None:
         with self._lock:
             if self._closed:
                 return
             try:
                 self._queue.put_nowait(raw)
             except queue_module.Full:
-                self._failure = _callback_backpressure_failure()
+                failure = _callback_backpressure_failure()
+                self._failure = (
+                    RawStreamPacket(failure, b"") if self.raw_stream else failure
+                )
                 self._closed = True
 
-    def recv(self, timeout: float | None = None) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes | RawStreamPacket:
         with self._lock:
             if self._failure is not None and not self._failure_delivered:
                 self._failure_delivered = True
@@ -1644,7 +1701,35 @@ def _callback_inbox(token: int) -> _CallbackInbox | None:
 
 
 def _stream_callback(user_data: int | None, chunk_json: int | None) -> None:
+    if user_data and not chunk_json:
+        inbox = _callback_inbox(int(user_data))
+        if inbox is not None:
+            inbox.close()
+        return
     _push_callback_payload(user_data, chunk_json)
+
+
+def _stream_v8_callback(
+    user_data: int | None,
+    metadata_json: int | None,
+    payload: int | None,
+    payload_len: int,
+) -> None:
+    try:
+        if not user_data:
+            return
+        inbox = _callback_inbox(int(user_data))
+        if inbox is None:
+            return
+        if not metadata_json:
+            inbox.close()
+            return
+        payload_bytes = (
+            ctypes.string_at(payload, payload_len) if payload and payload_len else b""
+        )
+        inbox.push(RawStreamPacket(ctypes.string_at(metadata_json), payload_bytes))
+    except BaseException:
+        return
 
 
 def _bidi_callback(user_data: int | None, frame_json: int | None) -> None:
@@ -1664,6 +1749,7 @@ def _push_callback_payload(user_data: int | None, raw_ptr: int | None) -> None:
 
 
 _STREAM_CALLBACK_HANDLE = _StreamCallback(_stream_callback)
+_STREAM_V8_CALLBACK_HANDLE = _StreamV8Callback(_stream_v8_callback)
 _BIDI_CALLBACK_HANDLE = _BidiCallback(_bidi_callback)
 
 

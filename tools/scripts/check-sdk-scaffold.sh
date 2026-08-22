@@ -14,6 +14,7 @@ required=(
   PROJECT_STRUCTURE.md
   include/easynet_cli.h
   include/easynet_cli.exports.v7
+  include/easynet_cli.exports.v8
   tools/sdk-conformance-runner/Cargo.toml
   tools/sdk-conformance-runner/src/main.rs
   sdk/README.md
@@ -190,11 +191,16 @@ text = open(sys.argv[1], encoding='utf-8').read()
 print('\n'.join(sorted(set(re.findall(r'\b(runtime_[A-Za-z0-9_]+)\s*\(', text)))))
 PY
 )"
-export_symbols="$(LC_ALL=C sort -u "$ROOT/include/easynet_cli.exports.v7")"
-[[ "$header_symbols" == "$export_symbols" ]] || fail "C header and v7 export allowlist differ"
-[[ "$(printf '%s\n' "$export_symbols" | grep -c '^runtime_')" -eq 56 ]] || fail "generic C ABI v7 must contain exactly 56 runtime symbols"
-[[ "$(printf '%s\n' "$export_symbols" | grep -c '^easynet_')" -eq 0 ]] || fail "generic C ABI v7 must not contain easynet-prefixed symbols"
-if printf '%s\n' "$export_symbols" | rg -q '_(admin|directory|identity|mission|publication|receipt|surface|compatibility|host_binding|events|wrapper|companion)_'; then
+v7_symbols="$(LC_ALL=C sort -u "$ROOT/include/easynet_cli.exports.v7")"
+v8_symbols="$(LC_ALL=C sort -u "$ROOT/include/easynet_cli.exports.v8")"
+[[ "$header_symbols" == "$v8_symbols" ]] || fail "C header and v8 export allowlist differ"
+[[ "$(printf '%s\n' "$v7_symbols" | grep -c '^runtime_')" -eq 56 ]] || fail "generic C ABI v7 must contain exactly 56 runtime symbols"
+[[ "$(printf '%s\n' "$v8_symbols" | grep -c '^runtime_')" -eq 57 ]] || fail "generic C ABI v8 must contain exactly 57 runtime symbols"
+[[ "$(comm -23 "$ROOT/include/easynet_cli.exports.v7" "$ROOT/include/easynet_cli.exports.v8")" == "" ]] || fail "generic C ABI v8 must include every v7 symbol"
+[[ "$(comm -13 "$ROOT/include/easynet_cli.exports.v7" "$ROOT/include/easynet_cli.exports.v8")" == "runtime_invocation_stream_open_v8" ]] || fail "generic C ABI v8 must add only runtime_invocation_stream_open_v8"
+[[ "$(printf '%s\n' "$v7_symbols" | grep -c '^easynet_')" -eq 0 ]] || fail "generic C ABI v7 must not contain easynet-prefixed symbols"
+[[ "$(printf '%s\n' "$v8_symbols" | grep -c '^easynet_')" -eq 0 ]] || fail "generic C ABI v8 must not contain easynet-prefixed symbols"
+if printf '%s\n' "$v8_symbols" | rg -q '_(admin|directory|identity|mission|publication|receipt|surface|compatibility|host_binding|events|wrapper|companion)_'; then
   fail "product-domain symbol leaked into C ABI v7"
 fi
 

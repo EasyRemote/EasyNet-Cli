@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,16 @@ type StreamTransport interface {
 	Recv(ctx context.Context) ([]byte, error)
 	Cancel(ctx context.Context, reason string) ([]byte, error)
 	Close(ctx context.Context) error
+}
+
+type rawStreamPacket struct {
+	metadataJSON []byte
+	payload      []byte
+}
+
+type streamRawTransport interface {
+	RawStreamEnabled() bool
+	RecvRaw(ctx context.Context) (rawStreamPacket, error)
 }
 
 // StreamTransportFunc adapts functions into a StreamTransport.
@@ -83,6 +94,7 @@ type StreamEvent struct {
 	transportTerminal    bool
 	payloadContentType   string
 	payloadBase64        string
+	payloadBytes         []byte
 	payloadJSON          json.RawMessage
 	elapsedMS            int64
 	errorJSON            json.RawMessage
@@ -249,7 +261,21 @@ func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
 	transport := s.transport
 	s.mu.Unlock()
 
-	raw, err := transport.Recv(ctx)
+	var event StreamEvent
+	var err error
+	if rawTransport, ok := transport.(streamRawTransport); ok && rawTransport.RawStreamEnabled() {
+		var packet rawStreamPacket
+		packet, err = rawTransport.RecvRaw(ctx)
+		if err == nil {
+			event, err = NewStreamEventFromRawPacket(packet)
+		}
+	} else {
+		var raw []byte
+		raw, err = transport.Recv(ctx)
+		if err == nil {
+			event, err = NewStreamEventFromJSON(raw)
+		}
+	}
 	if err != nil {
 		s.mu.Lock()
 		s.receiving = false
@@ -263,7 +289,6 @@ func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
 		}
 		return StreamEvent{}, transportRuntimeError("stream recv transport failed", err)
 	}
-	event, err := NewStreamEventFromJSON(raw)
 	s.mu.Lock()
 	s.receiving = false
 	if err != nil {
@@ -463,7 +488,14 @@ func (e StreamEvent) PayloadContentType() string {
 }
 
 func (e StreamEvent) PayloadBase64() string {
+	if e.payloadBase64 == "" && len(e.payloadBytes) != 0 {
+		return base64.StdEncoding.EncodeToString(e.payloadBytes)
+	}
 	return e.payloadBase64
+}
+
+func (e StreamEvent) PayloadBytes() []byte {
+	return append([]byte(nil), e.payloadBytes...)
 }
 
 func (e StreamEvent) PayloadJSON() json.RawMessage {
@@ -620,6 +652,10 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	if !isValidStreamEventKind(dto.Kind) {
 		return StreamEvent{}, invalidRuntimePayload(fmt.Sprintf("unsupported stream event kind: %s", dto.Kind), nil)
 	}
+	payloadBytes, err := streamPayloadBase64Bytes(dto.PayloadBase64)
+	if err != nil {
+		return StreamEvent{}, err
+	}
 	return StreamEvent{
 		sequence:             dto.Sequence,
 		kind:                 dto.Kind,
@@ -628,12 +664,74 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		transportTerminal:    dto.TransportTerminal,
 		payloadContentType:   dto.PayloadContentType,
 		payloadBase64:        dto.PayloadBase64,
+		payloadBytes:         payloadBytes,
 		payloadJSON:          append(json.RawMessage(nil), dto.PayloadJSON...),
 		elapsedMS:            dto.ElapsedMS,
 		errorJSON:            append(json.RawMessage(nil), dto.Error...),
 		admissionReceiptJSON: append(json.RawMessage(nil), dto.AdmissionReceipt...),
 		terminalReceiptJSON:  append(json.RawMessage(nil), dto.TerminalReceipt...),
 	}, nil
+}
+
+func NewStreamEventFromRawPacket(packet rawStreamPacket) (StreamEvent, error) {
+	event, err := NewStreamEventFromJSON(packet.metadataJSON)
+	if err != nil {
+		return StreamEvent{}, err
+	}
+	if event.payloadBase64 != "" || len(event.payloadJSON) != 0 {
+		return StreamEvent{}, invalidRuntimePayload("raw stream packet metadata must not duplicate payload fields", nil)
+	}
+	var payloadJSON json.RawMessage
+	if len(packet.payload) != 0 && stringsContainsFold(event.payloadContentType, "json") {
+		if !json.Valid(packet.payload) {
+			return StreamEvent{}, invalidRuntimePayload("decode raw JSON stream payload", nil)
+		}
+		payloadJSON = append(json.RawMessage(nil), packet.payload...)
+	}
+	event.payloadBytes = append([]byte(nil), packet.payload...)
+	event.payloadJSON = payloadJSON
+	return event, nil
+}
+
+func streamPayloadBase64Bytes(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode payload_base64: %v", err), err)
+	}
+	return decoded, nil
+}
+
+func stringsContainsFold(value string, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	if len(value) < len(needle) {
+		return false
+	}
+	for start := 0; start+len(needle) <= len(value); start++ {
+		match := true
+		for offset := range needle {
+			a := value[start+offset]
+			b := needle[offset]
+			if 'A' <= a && a <= 'Z' {
+				a += 'a' - 'A'
+			}
+			if 'A' <= b && b <= 'Z' {
+				b += 'a' - 'A'
+			}
+			if a != b {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidStreamEventKind(kind string) bool {

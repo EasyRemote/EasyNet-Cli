@@ -8,6 +8,7 @@
  * to language SDKs and are intentionally absent from this header.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -15,6 +16,7 @@ extern "C" {
 #endif
 
 #define RUNTIME_ABI_VERSION 7u
+#define RUNTIME_ABI_V8_EXTENSION_VERSION 8u
 
 #define RUNTIME_OK 0
 #define ERR_GENERIC 1
@@ -51,6 +53,13 @@ typedef uint64_t RuntimeInvocationHandleId;
 typedef void (*RuntimeInvocationStreamCallback)(
     void *user_data,
     const char *chunk_json
+);
+
+typedef void (*RuntimeInvocationStreamV8Callback)(
+    void *user_data,
+    const char *metadata_json,
+    const uint8_t *payload,
+    size_t payload_len
 );
 
 typedef void (*RuntimeInvocationBidiCallback)(
@@ -256,6 +265,13 @@ int32_t runtime_invocation_stream_open(
     RuntimeHandle handle,
     const char *invocation_json,
     RuntimeInvocationStreamCallback on_chunk,
+    void *user_data,
+    RuntimeInvocationStreamId *out_stream_id
+);
+int32_t runtime_invocation_stream_open_v8(
+    RuntimeHandle handle,
+    const char *invocation_json,
+    RuntimeInvocationStreamV8Callback on_chunk,
     void *user_data,
     RuntimeInvocationStreamId *out_stream_id
 );

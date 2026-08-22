@@ -4,9 +4,25 @@
   "title": "FeatureDiscovery",
   "type": "object",
   "additionalProperties": false,
-  "required": ["abi_version", "sdk_version", "profiles", "symbols", "axon_pb"],
+  "required": ["abi_version", "abi_extensions", "sdk_version", "profiles", "symbols", "axon_pb"],
   "properties": {
     "abi_version": {"type": "integer", "minimum": 0},
+    "abi_extensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v8"],
+      "properties": {
+        "v8": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stream_raw_payload", "symbol"],
+          "properties": {
+            "stream_raw_payload": {"type": "boolean"},
+            "symbol": {"const": "runtime_invocation_stream_open_v8"}
+          }
+        }
+      }
+    },
     "sdk_version": {"type": "string", "minLength": 1},
     "profiles": {
       "type": "object",
@@ -26,6 +42,7 @@
         "invocation_builder_handles",
         "invocation_handle_observation",
         "stream_bidi_lifecycle",
+        "stream_raw_payload_v8",
         "runtime_health",
         "runtime_diagnostics",
         "prepare_sign_submit"
@@ -37,6 +54,7 @@
         "invocation_builder_handles": {"type": "boolean"},
         "invocation_handle_observation": {"type": "boolean"},
         "stream_bidi_lifecycle": {"type": "boolean"},
+        "stream_raw_payload_v8": {"type": "boolean"},
         "runtime_health": {"type": "boolean"},
         "runtime_diagnostics": {"type": "boolean"},
         "prepare_sign_submit": {"type": "boolean"}

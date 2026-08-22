@@ -36,7 +36,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 mod backpressure;
 
 #[cfg(feature = "axon-pb")]
-use self::backpressure::{bidi_callback_backpressure_frame, stream_callback_backpressure_event};
+use self::backpressure::bidi_callback_backpressure_frame;
 #[cfg(feature = "axon-pb")]
 use crate::daemon::ability::AbilityCatalogQuery;
 #[cfg(feature = "axon-pb")]
@@ -104,6 +104,50 @@ pub type InvocationHandleId = u64;
 /// only unambiguous EOF signal for a queue-backed consumer.
 pub type InvocationStreamCallback =
     unsafe extern "C" fn(user_data: *mut c_void, chunk_json: *const c_char);
+
+/// ABI v8 stream callback. `metadata_json` carries the same canonical
+/// lifecycle/receipt/error state machine as the v7 JSON callback, while
+/// `payload` carries the exact stream bytes without base64 projection.
+/// EOF is one callback with all nullable pointers set to null and
+/// `payload_len == 0`.
+pub type InvocationStreamV8Callback = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    metadata_json: *const c_char,
+    payload: *const u8,
+    payload_len: usize,
+);
+
+#[derive(Clone, Copy)]
+enum InvocationStreamCallbackTarget {
+    Json(InvocationStreamCallback),
+    V8(InvocationStreamV8Callback),
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Clone, Copy)]
+enum StreamCallbackEncoding {
+    Json,
+    V8,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationStreamCallbackTarget {
+    fn encoding(self) -> StreamCallbackEncoding {
+        match self {
+            Self::Json(_) => StreamCallbackEncoding::Json,
+            Self::V8(_) => StreamCallbackEncoding::V8,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+enum StreamCallbackDelivery {
+    Json(Vec<u8>),
+    V8 {
+        metadata_json: Vec<u8>,
+        payload: Vec<u8>,
+    },
+}
 
 /// Callback invoked once per decoded `InvokeBidiDown` frame summary.
 ///
@@ -1362,10 +1406,63 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
 ) -> i32 {
+    let Some(on_chunk) = on_chunk else {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "runtime_invocation_stream_open: on_chunk callback is null",
+        );
+    };
+    runtime_invocation_stream_open_inner(
+        handle,
+        invocation_json,
+        InvocationStreamCallbackTarget::Json(on_chunk),
+        user_data,
+        out_stream_id,
+        "runtime_invocation_stream_open",
+    )
+}
+
+/// Open an ABI v8 raw-payload server stream.
+///
+/// This is a transport representation extension only: metadata JSON still
+/// carries sequence, lifecycle, receipts, terminal/error state and content
+/// type. Raw payload bytes never bypass Runtime Core stream validation.
+#[no_mangle]
+pub unsafe extern "C" fn runtime_invocation_stream_open_v8(
+    handle: RuntimeHandle,
+    invocation_json: *const c_char,
+    on_chunk: Option<InvocationStreamV8Callback>,
+    user_data: *mut c_void,
+    out_stream_id: *mut InvocationStreamId,
+) -> i32 {
+    let Some(on_chunk) = on_chunk else {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "runtime_invocation_stream_open_v8: on_chunk callback is null",
+        );
+    };
+    runtime_invocation_stream_open_inner(
+        handle,
+        invocation_json,
+        InvocationStreamCallbackTarget::V8(on_chunk),
+        user_data,
+        out_stream_id,
+        "runtime_invocation_stream_open_v8",
+    )
+}
+
+unsafe fn runtime_invocation_stream_open_inner(
+    handle: RuntimeHandle,
+    invocation_json: *const c_char,
+    callback: InvocationStreamCallbackTarget,
+    user_data: *mut c_void,
+    out_stream_id: *mut InvocationStreamId,
+    operation: &'static str,
+) -> i32 {
     if out_stream_id.is_null() {
         return record_invocation_error(
             ERR_NULL_POINTER,
-            "runtime_invocation_stream_open: out_stream_id pointer is null",
+            format!("{operation}: out_stream_id pointer is null"),
         );
     }
     unsafe { *out_stream_id = 0 };
@@ -1375,16 +1472,9 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
         None => {
             return record_invocation_error(
                 ERR_INVALID_HANDLE,
-                format!("runtime_invocation_stream_open: handle {handle} is not registered"),
+                format!("{operation}: handle {handle} is not registered"),
             );
         }
-    };
-
-    let Some(on_chunk) = on_chunk else {
-        return record_invocation_error(
-            ERR_NULL_POINTER,
-            "runtime_invocation_stream_open: on_chunk callback is null",
-        );
     };
 
     let raw = match read_cstr(invocation_json) {
@@ -1392,26 +1482,34 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
         Err(StringError::Null) => {
             return record_invocation_error(
                 ERR_NULL_POINTER,
-                "runtime_invocation_stream_open: invocation_json pointer is null",
+                format!("{operation}: invocation_json pointer is null"),
             );
         }
         Err(StringError::NotUtf8) => {
             return record_invocation_error(
                 ERR_INVALID_UTF8,
-                "runtime_invocation_stream_open: invocation_json is not valid UTF-8",
+                format!("{operation}: invocation_json is not valid UTF-8"),
             );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = (session, raw, on_chunk, user_data);
-        record_invocation_feature_disabled("runtime_invocation_stream_open")
+        let _ = (session, raw, callback, user_data);
+        record_invocation_feature_disabled(operation)
     }
 
     #[cfg(feature = "axon-pb")]
     {
-        stream_open_with_axon_pb(handle, session, raw, on_chunk, user_data, out_stream_id)
+        stream_open_with_axon_pb(
+            handle,
+            session,
+            raw,
+            callback,
+            user_data,
+            out_stream_id,
+            operation,
+        )
     }
 }
 
@@ -3357,46 +3455,38 @@ fn stream_open_with_axon_pb(
     handle: RuntimeHandle,
     session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
     raw: &str,
-    on_chunk: InvocationStreamCallback,
+    callback: InvocationStreamCallbackTarget,
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
+    operation: &'static str,
 ) -> i32 {
     let registration = match session.resource_registration_guard(handle) {
         Ok(registration) => registration,
         Err(_) => {
             return record_invocation_error(
                 ERR_INVALID_HANDLE,
-                format!("runtime_invocation_stream_open: handle {handle} is closing or released"),
+                format!("{operation}: handle {handle} is closing or released"),
             );
         }
     };
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
-            return record_invocation_error(
-                ERR_INVALID_ARG,
-                format!("runtime_invocation_stream_open: {err}"),
-            );
+            return record_invocation_error(ERR_INVALID_ARG, format!("{operation}: {err}"));
         }
     };
 
     let invocation = match spec.into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
-            return record_invocation_error(
-                ERR_INVALID_ARG,
-                format!("runtime_invocation_stream_open: {err}"),
-            );
+            return record_invocation_error(ERR_INVALID_ARG, format!("{operation}: {err}"));
         }
     };
 
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            return record_invocation_error(
-                ERR_GENERIC,
-                format!("runtime_invocation_stream_open: {err}"),
-            );
+            return record_invocation_error(ERR_GENERIC, format!("{operation}: {err}"));
         }
     };
 
@@ -3418,18 +3508,19 @@ fn stream_open_with_axon_pb(
         ))
     }) {
         Ok(opened) => opened,
-        Err(err) => return ffi_daemon_error("runtime_invocation_stream_open", err),
+        Err(err) => return ffi_daemon_error(operation, err),
     };
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(STREAM_CALLBACK_QUEUE_CAPACITY);
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<StreamCallbackDelivery>(STREAM_CALLBACK_QUEUE_CAPACITY);
     let callback_user_data = CallbackUserData(user_data);
     let dispatcher = std::thread::Builder::new()
         .name("easynet-inv-stream-callback".to_string())
-        .spawn(move || dispatch_stream_callbacks(rx, on_chunk, callback_user_data));
+        .spawn(move || dispatch_stream_callbacks(rx, callback, callback_user_data));
     if let Err(err) = dispatcher {
         return record_invocation_error(
             ERR_GENERIC,
-            format!("runtime_invocation_stream_open: spawn callback dispatcher failed: {err}"),
+            format!("{operation}: spawn callback dispatcher failed: {err}"),
         );
     }
 
@@ -3446,6 +3537,7 @@ fn stream_open_with_axon_pb(
         stream,
         cancel,
         tx,
+        callback.encoding(),
     ));
     drop(registration);
 
@@ -5288,18 +5380,42 @@ fn ffi_status_code_to_error(code: tonic::Code) -> i32 {
 
 #[cfg(feature = "axon-pb")]
 fn dispatch_stream_callbacks(
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    on_chunk: InvocationStreamCallback,
+    mut rx: tokio::sync::mpsc::Receiver<StreamCallbackDelivery>,
+    callback: InvocationStreamCallbackTarget,
     user_data: CallbackUserData,
 ) {
     let raw_user_data = user_data.raw();
-    while let Some(json_bytes) = rx.blocking_recv() {
-        let cstr = match std::ffi::CString::new(json_bytes) {
-            Ok(cstr) => cstr,
-            Err(_) => continue,
-        };
-        unsafe {
-            on_chunk(raw_user_data, cstr.as_ptr());
+    while let Some(delivery) = rx.blocking_recv() {
+        match (callback, delivery) {
+            (
+                InvocationStreamCallbackTarget::Json(on_chunk),
+                StreamCallbackDelivery::Json(json),
+            ) => {
+                let cstr = match std::ffi::CString::new(json) {
+                    Ok(cstr) => cstr,
+                    Err(_) => continue,
+                };
+                unsafe { on_chunk(raw_user_data, cstr.as_ptr()) };
+            }
+            (
+                InvocationStreamCallbackTarget::V8(on_chunk),
+                StreamCallbackDelivery::V8 {
+                    metadata_json,
+                    payload,
+                },
+            ) => {
+                let metadata = match std::ffi::CString::new(metadata_json) {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                let payload_ptr = if payload.is_empty() {
+                    std::ptr::null()
+                } else {
+                    payload.as_ptr()
+                };
+                unsafe { on_chunk(raw_user_data, metadata.as_ptr(), payload_ptr, payload.len()) };
+            }
+            _ => continue,
         }
     }
     // End-of-stream signal: the daemon stream closed (terminal frame
@@ -5309,7 +5425,14 @@ fn dispatch_stream_callbacks(
     // frame that will never arrive. Bindings treat a null chunk as
     // "stream finished", never as a data frame.
     unsafe {
-        on_chunk(raw_user_data, std::ptr::null());
+        match callback {
+            InvocationStreamCallbackTarget::Json(on_chunk) => {
+                on_chunk(raw_user_data, std::ptr::null())
+            }
+            InvocationStreamCallbackTarget::V8(on_chunk) => {
+                on_chunk(raw_user_data, std::ptr::null(), std::ptr::null(), 0)
+            }
+        }
     }
 }
 
@@ -5337,7 +5460,8 @@ async fn run_stream_reader(
     endpoint: PathBuf,
     mut stream: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeStreamChunk>,
     cancel: tokio_util::sync::CancellationToken,
-    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    tx: tokio::sync::mpsc::Sender<StreamCallbackDelivery>,
+    encoding: StreamCallbackEncoding,
 ) {
     let mut next_error_sequence = 1;
     let mut receipt_verifier = InboundReceiptCheckpointVerifier::for_daemon_endpoint(endpoint);
@@ -5352,31 +5476,42 @@ async fn run_stream_reader(
                         Ok(projection) => projection,
                         Err(message) => {
                             let _ = tx
-                                .send(
-                                    stream_receipt_verification_error_json(sequence, message)
-                                        .to_string()
-                                        .into_bytes(),
-                                )
+                                .send(stream_callback_error_delivery(
+                                    encoding,
+                                    stream_receipt_verification_error_json(sequence, message),
+                                ))
                                 .await;
                             break;
                         }
                     };
                     let terminal = projection.should_stop_after_frame();
-                    let bytes = projection.into_json_bytes();
-                    let sent = send_callback_frame_or_backpressure(
-                        &tx,
-                        bytes,
-                        stream_callback_backpressure_event(sequence, STREAM_CALLBACK_QUEUE_CAPACITY),
-                    )
-                    .await;
-                    if !sent || terminal {
+                    let delivery = match projection.into_delivery(encoding) {
+                        Ok(delivery) => delivery,
+                        Err(message) => {
+                            let _ = tx
+                                .send(stream_callback_error_delivery(
+                                    encoding,
+                                    stream_receipt_verification_error_json(sequence, message),
+                                ))
+                                .await;
+                            break;
+                        }
+                    };
+                    // Server-stream delivery is lossless. Awaiting this bounded
+                    // channel propagates consumer pressure through tonic instead
+                    // of replacing data with a synthetic overflow terminal.
+                    if tx.send(delivery).await.is_err() || terminal {
                         break;
                     }
                 }
                 Ok(None) => break,
                 Err(status) => {
-                    let bytes = stream_status_error_json(status, next_error_sequence).to_string().into_bytes();
-                    let _ = tx.send(bytes).await;
+                    let _ = tx
+                        .send(stream_callback_error_delivery(
+                            encoding,
+                            stream_status_error_json(status, next_error_sequence),
+                        ))
+                        .await;
                     break;
                 }
             }
@@ -5384,6 +5519,21 @@ async fn run_stream_reader(
     }
     if let Some(stream) = get_stream(stream_id) {
         stream.mark_reader_finished();
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn stream_callback_error_delivery(
+    encoding: StreamCallbackEncoding,
+    metadata: serde_json::Value,
+) -> StreamCallbackDelivery {
+    let metadata_json = metadata.to_string().into_bytes();
+    match encoding {
+        StreamCallbackEncoding::Json => StreamCallbackDelivery::Json(metadata_json),
+        StreamCallbackEncoding::V8 => StreamCallbackDelivery::V8 {
+            metadata_json,
+            payload: Vec::new(),
+        },
     }
 }
 
@@ -5461,22 +5611,6 @@ async fn run_bidi_down_reader(
         }
     }
     let _ = remove_bidi(bidi_id);
-}
-
-#[cfg(feature = "axon-pb")]
-async fn send_callback_frame_or_backpressure(
-    tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
-    bytes: Vec<u8>,
-    backpressure: serde_json::Value,
-) -> bool {
-    match tx.try_send(bytes) {
-        Ok(()) => true,
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            let _ = tx.send(backpressure.to_string().into_bytes()).await;
-            false
-        }
-    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -7039,6 +7173,15 @@ struct CallbackFrameProjection {
 
 #[cfg(feature = "axon-pb")]
 #[derive(Clone, Debug)]
+struct VerifiedStreamCallbackFrame {
+    metadata: serde_json::Value,
+    payload: Vec<u8>,
+    payload_json: serde_json::Value,
+    lifecycle: CallbackFrameLifecycle,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Clone, Debug)]
 struct CallbackFrameProjectionError {
     kind: &'static str,
     message: String,
@@ -7102,14 +7245,82 @@ impl CallbackFrameProjection {
 }
 
 #[cfg(feature = "axon-pb")]
+impl VerifiedStreamCallbackFrame {
+    fn new(
+        metadata: serde_json::Value,
+        payload: Vec<u8>,
+        payload_json: serde_json::Value,
+        lifecycle: CallbackFrameLifecycle,
+    ) -> Self {
+        Self {
+            metadata,
+            payload,
+            payload_json,
+            lifecycle,
+        }
+    }
+
+    fn should_stop_after_frame(&self) -> bool {
+        self.lifecycle == CallbackFrameLifecycle::StopAfterFrame
+    }
+
+    #[cfg(test)]
+    fn json(&self) -> serde_json::Value {
+        let mut metadata = self.metadata.clone();
+        Self::add_json_payload_projection(&mut metadata, &self.payload, &self.payload_json)
+            .expect("stream test metadata must be an object");
+        metadata
+    }
+
+    fn into_delivery(
+        self,
+        encoding: StreamCallbackEncoding,
+    ) -> Result<StreamCallbackDelivery, String> {
+        match encoding {
+            StreamCallbackEncoding::Json => {
+                let mut metadata = self.metadata;
+                Self::add_json_payload_projection(
+                    &mut metadata,
+                    &self.payload,
+                    &self.payload_json,
+                )?;
+                Ok(StreamCallbackDelivery::Json(
+                    metadata.to_string().into_bytes(),
+                ))
+            }
+            StreamCallbackEncoding::V8 => Ok(StreamCallbackDelivery::V8 {
+                metadata_json: self.metadata.to_string().into_bytes(),
+                payload: self.payload,
+            }),
+        }
+    }
+
+    fn add_json_payload_projection(
+        metadata: &mut serde_json::Value,
+        payload: &[u8],
+        payload_json: &serde_json::Value,
+    ) -> Result<(), String> {
+        use base64::Engine;
+        let object = metadata
+            .as_object_mut()
+            .ok_or_else(|| "stream callback metadata is not an object".to_string())?;
+        object.insert(
+            "payload_base64".to_string(),
+            serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(payload)),
+        );
+        object.insert("payload_json".to_string(), payload_json.clone());
+        Ok(())
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 fn stream_chunk_json(
     verifier: &mut InboundReceiptCheckpointVerifier,
     chunk: axon_sdk::pb::axon::v1::InvokeStreamChunk,
-) -> Result<CallbackFrameProjection, String> {
-    use base64::Engine;
-    let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.payload);
+) -> Result<VerifiedStreamCallbackFrame, String> {
     let payload_json =
-        runtime_json_projection(&chunk.payload, &chunk.content_type, "payload_json")?;
+        runtime_json_projection(&chunk.payload, &chunk.content_type, "payload_json")?
+            .unwrap_or(serde_json::Value::Null);
     let admission_receipt = chunk
         .admission_receipt
         .map(|receipt| verifier.verify_admission(receipt))
@@ -7138,7 +7349,7 @@ fn stream_chunk_json(
         "data"
     };
     let sequence = sdk_callback_event_sequence(chunk.sequence);
-    Ok(CallbackFrameProjection::new(
+    Ok(VerifiedStreamCallbackFrame::new(
         serde_json::json!({
             "kind": kind,
             "state": chunk.state,
@@ -7147,12 +7358,12 @@ fn stream_chunk_json(
             "transport_terminal": error.is_some() && !proven_terminal,
             "elapsed_ms": chunk.elapsed_ms,
             "payload_content_type": chunk.content_type,
-            "payload_base64": payload_base64,
-            "payload_json": payload_json,
             "admission_receipt": admission_receipt,
             "terminal_receipt": terminal_receipt,
             "error": error,
         }),
+        chunk.payload,
+        payload_json,
         lifecycle,
     ))
 }
@@ -12928,6 +13139,56 @@ mod tests {
     }
 
     #[test]
+    fn stream_delivery_preserves_non_json_payload_as_base64_projection() {
+        let payload = vec![0_u8, 255, 1, 2, 3];
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-raw-1".to_string(),
+            state: 4,
+            payload: payload.clone(),
+            content_type: "video/h264".to_string(),
+            sequence: 0,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let projection =
+            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let metadata = projection.json();
+        assert_eq!(metadata["payload_content_type"], "video/h264");
+        assert_eq!(metadata["payload_base64"], "AP8BAgM=");
+        assert!(metadata["payload_json"].is_null());
+    }
+
+    #[test]
+    fn stream_v8_delivery_preserves_raw_payload_without_json_projection() {
+        let payload = vec![0_u8, 255, 1, 2, 3];
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-raw-v8".to_string(),
+            state: 4,
+            payload: payload.clone(),
+            content_type: "video/h264".to_string(),
+            sequence: 0,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let projection =
+            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let StreamCallbackDelivery::V8 {
+            metadata_json,
+            payload: projected,
+        } = projection
+            .into_delivery(StreamCallbackEncoding::V8)
+            .unwrap()
+        else {
+            panic!("expected v8 raw stream delivery")
+        };
+        let metadata: serde_json::Value = serde_json::from_slice(&metadata_json).unwrap();
+        assert_eq!(projected, payload);
+        assert_eq!(metadata["payload_content_type"], "video/h264");
+        assert!(metadata.get("payload_base64").is_none());
+        assert!(metadata.get("payload_json").is_none());
+    }
+
+    #[test]
     fn stream_chunk_json_projects_proto_zero_sequence_to_sdk_first_event() {
         let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
             invocation_id: "inv-1".to_string(),
@@ -13017,7 +13278,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_callback_enqueue_reports_transport_terminal_backpressure_when_full() {
+    fn bounded_stream_callback_queue_applies_lossless_backpressure() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -13025,38 +13286,17 @@ mod tests {
 
         rt.block_on(async {
             let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-            tx.try_send(br#"{"sequence":1,"kind":"data"}"#.to_vec())
-                .unwrap();
+            tx.try_send(b"first".to_vec()).unwrap();
 
-            let sender = tokio::spawn(async move {
-                send_callback_frame_or_backpressure(
-                    &tx,
-                    br#"{"sequence":2,"kind":"data"}"#.to_vec(),
-                    stream_callback_backpressure_event(2, 1),
-                )
-                .await
-            });
+            let sender = tokio::spawn(async move { tx.send(b"second".to_vec()).await });
             tokio::task::yield_now().await;
+            assert!(!sender.is_finished());
 
-            assert_eq!(
-                rx.recv().await.unwrap(),
-                br#"{"sequence":1,"kind":"data"}"#.to_vec()
-            );
-            assert!(!sender.await.unwrap());
-            let value =
-                serde_json::from_slice::<serde_json::Value>(&rx.recv().await.unwrap()).unwrap();
-            assert_eq!(value["kind"], "error");
-            assert_eq!(value["sequence"], 2);
-            assert_eq!(value["terminal"], false);
-            assert_eq!(value["transport_terminal"], true);
-            assert!(value.get("ok").is_none());
-            assert!(value.get("code").is_none());
-            assert!(value.get("message").is_none());
-            assert_eq!(
-                value["error"]["details"]["reason"],
-                "callback_queue_overflow"
-            );
-            assert_eq!(value["error"]["details"]["queue_capacity"], 1);
+            let first = rx.recv().await.unwrap();
+            assert_eq!(first, b"first");
+            assert!(sender.await.unwrap().is_ok());
+            let second = rx.recv().await.unwrap();
+            assert_eq!(second, b"second");
         });
     }
 

@@ -645,9 +645,33 @@ func TestCABIRuntimeProviderDispatchesStreamBeforeTerminal(t *testing.T) {
 		string(observation.provider.PayloadJSON()) != `{"step":1}` {
 		t.Fatalf("stream provider dispatch was not observable: %#v", observation.provider)
 	}
+	if string(observation.provider.PayloadBytes()) != `{"step":1}` {
+		t.Fatalf("stream provider did not preserve v8 raw payload bytes: %q", observation.provider.PayloadBytes())
+	}
 	if observation.terminal.Sequence() <= observation.provider.Sequence() ||
 		len(observation.terminal.TerminalReceiptJSON()) == 0 {
 		t.Fatalf("stream terminal did not follow provider dispatch: %#v", observation.terminal)
+	}
+}
+
+func TestCABIRuntimeProviderFallsBackToV7StreamOpen(t *testing.T) {
+	client := openFakeCABIRuntimeV7(t)
+	stream, err := client.InvokeStream(context.Background(), completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	event, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("stream event: %v", err)
+	}
+	if string(event.PayloadJSON()) != `{"step":1}` {
+		t.Fatalf("v7 fallback payload_json = %s", event.PayloadJSON())
+	}
+	if len(event.PayloadBytes()) != 0 {
+		t.Fatalf("v7 fallback unexpectedly produced raw payload bytes: %q", event.PayloadBytes())
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("stream close: %v", err)
 	}
 }
 
@@ -1008,7 +1032,17 @@ func TestCABIRuntimeProviderRejectsMissingBidiFrameZero(t *testing.T) {
 
 func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
 	t.Helper()
-	transport, err := openCABIRuntimeLifecycleTransport(buildFakeCABIStreamLibrary(t))
+	return openFakeCABIRuntimeWithLibrary(t, buildFakeCABIStreamLibrary(t))
+}
+
+func openFakeCABIRuntimeV7(t *testing.T) *RuntimeClient {
+	t.Helper()
+	return openFakeCABIRuntimeWithLibrary(t, buildFakeCABIStreamLibraryV7(t))
+}
+
+func openFakeCABIRuntimeWithLibrary(t *testing.T, library string) *RuntimeClient {
+	t.Helper()
+	transport, err := openCABIRuntimeLifecycleTransport(library)
 	if err != nil {
 		t.Fatalf("openCABIRuntimeLifecycleTransport: %v", err)
 	}
@@ -1137,6 +1171,14 @@ func assertCABIBackpressureError(t *testing.T, raw json.RawMessage) {
 }
 
 func buildFakeCABIStreamLibrary(t *testing.T) string {
+	return buildFakeCABIStreamLibraryFromSource(t, fakeCABIStreamSource+fakeCABIStreamV8Extension)
+}
+
+func buildFakeCABIStreamLibraryV7(t *testing.T) string {
+	return buildFakeCABIStreamLibraryFromSource(t, fakeCABIStreamSource)
+}
+
+func buildFakeCABIStreamLibraryFromSource(t *testing.T, sourceText string) string {
 	t.Helper()
 	cc, err := exec.LookPath("cc")
 	if err != nil {
@@ -1150,7 +1192,7 @@ func buildFakeCABIStreamLibrary(t *testing.T) string {
 		output = filepath.Join(dir, "libeasynet_cli.dylib")
 		args = []string{"-dynamiclib", "-o", output, source}
 	}
-	if err := os.WriteFile(source, []byte(fakeCABIStreamSource), 0o600); err != nil {
+	if err := os.WriteFile(source, []byte(sourceText), 0o600); err != nil {
 		t.Fatalf("write fake C ABI source: %v", err)
 	}
 	cmd := exec.Command(cc, args...)
@@ -1167,9 +1209,11 @@ const fakeCABIStreamSource = `
 #include <string.h>
 
 typedef void (*stream_callback_t)(void *user_data, const char *chunk_json);
+typedef void (*stream_v8_callback_t)(void *user_data, const char *metadata_json, const uint8_t *payload, size_t payload_len);
 typedef void (*bidi_callback_t)(void *user_data, const char *frame_json);
 
 static stream_callback_t active_stream_callback = 0;
+static stream_v8_callback_t active_stream_v8_callback = 0;
 static void *active_stream_user_data = 0;
 static int active_stream_cancel_calls = 0;
 static bidi_callback_t active_bidi_callback = 0;
@@ -1306,11 +1350,15 @@ int32_t runtime_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
 	if (stream_id == 404 && active_stream_callback != 0) {
 		active_stream_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}");
 	}
+	if (stream_id == 404 && active_stream_v8_callback != 0) {
+		active_stream_v8_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}", 0, 0);
+	}
 	return stream_id == 404 ? 0 : 4;
 }
 int32_t runtime_invocation_stream_close(uint64_t handle, uint64_t stream_id) {
 	(void)handle;
 	active_stream_callback = 0;
+	active_stream_v8_callback = 0;
 	active_stream_user_data = 0;
 	return stream_id == 404 ? 0 : 4;
 }
@@ -1354,5 +1402,27 @@ int32_t runtime_invocation_bidi_cancel(uint64_t handle, uint64_t bidi_id) {
 		active_bidi_callback(active_bidi_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"stream_id\":1,\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}");
 	}
 	return bidi_id == 505 ? 0 : 4;
+}
+`
+
+const fakeCABIStreamV8Extension = `
+int32_t runtime_invocation_stream_open_v8(uint64_t handle, const char *invocation_json, stream_v8_callback_t on_chunk, void *user_data, uint64_t *out_stream_id) {
+	(void)handle;
+	*out_stream_id = 404;
+	active_stream_callback = 0;
+	active_stream_v8_callback = on_chunk;
+	active_stream_user_data = user_data;
+	active_stream_cancel_calls = 0;
+	if (strstr(invocation_json, "conformance_backpressure") != 0) {
+		char event[160];
+		for (int sequence = 1; sequence <= 1025; sequence++) {
+			snprintf(event, sizeof(event), "{\"sequence\":%d,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false}", sequence);
+			on_chunk(user_data, event, 0, 0);
+		}
+	} else {
+		const char *payload = "{\"step\":1}";
+		on_chunk(user_data, "{\"sequence\":1,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"payload_content_type\":\"application/json\"}", (const uint8_t *)payload, strlen(payload));
+	}
+	return 0;
 }
 `

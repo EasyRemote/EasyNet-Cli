@@ -823,7 +823,9 @@ def _cancel_stream_iterator(iterator: Any) -> None:
 
 def _stream_chunk_terminal(chunk: Any) -> bool:
     return (
-        bool(chunk.terminal) or _state_name(chunk.state, "direct_runtime.stream") in _TERMINAL_INVOCATION_STATES
+        bool(chunk.terminal)
+        or _state_name(chunk.state, "direct_runtime.stream")
+        in _TERMINAL_INVOCATION_STATES
     )
 
 
@@ -1260,7 +1262,11 @@ class _UnaryOutcomeCheckpoints:
         terminal_state: str,
         has_proof_error: bool,
     ) -> bool:
-        if terminal_state != "Failed" or not response.HasField("error") or has_proof_error:
+        if (
+            terminal_state != "Failed"
+            or not response.HasField("error")
+            or has_proof_error
+        ):
             return False
         _error_stage(response.error.stage)
         return int(response.error.stage) in _PRE_ADMISSION_ERROR_STAGES
@@ -1500,7 +1506,8 @@ def _bidi_down_is_internal_admission(frame: Any) -> bool:
 def _bidi_receipt_terminal(receipt: Any) -> bool:
     return (
         bool(receipt.cleanup_complete)
-        or _state_name(receipt.state, "direct_runtime.bidi") in _TERMINAL_INVOCATION_STATES
+        or _state_name(receipt.state, "direct_runtime.bidi")
+        in _TERMINAL_INVOCATION_STATES
     )
 
 
@@ -1810,7 +1817,9 @@ def _receipt_ref_projection(receipt: Any) -> dict[str, object]:
 def _receipt_id(receipt: Any) -> str:
     invocation_id = receipt.invocation_id.strip()
     if not invocation_id or "/" in invocation_id:
-        raise _receipt_protocol_error("invocation_id must be owner-local for receipt id")
+        raise _receipt_protocol_error(
+            "invocation_id must be owner-local for receipt id"
+        )
     return f"{invocation_id}:{int(receipt.index)}"
 
 
@@ -1818,7 +1827,9 @@ def _receipt_ura(receipt: Any) -> str:
     realm = _realm_from_principal_ura(receipt.callee_binding.ura, "callee_binding.ura")
     invocation_id = receipt.invocation_id.strip()
     if "/" in invocation_id:
-        raise _receipt_protocol_error("invocation_id must be owner-local for receipt URA")
+        raise _receipt_protocol_error(
+            "invocation_id must be owner-local for receipt URA"
+        )
     return (
         f"{CANONICAL_URA_REALM_PREFIX}{realm}/resource/runtime/invocation/"
         f"{invocation_id}/receipt/{int(receipt.index)}"
@@ -2337,7 +2348,10 @@ def _close_identity_projector(
 def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
     code = error.code()
     message = error.details() or str(error)
-    if _canonical_error_code_from_message_prefix(message) == ErrorCode.DESCRIPTOR_OWNER_OFFLINE:
+    if (
+        _canonical_error_code_from_message_prefix(message)
+        == ErrorCode.DESCRIPTOR_OWNER_OFFLINE
+    ):
         return _direct_error(
             "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
             code=ErrorCode.DESCRIPTOR_OWNER_OFFLINE,

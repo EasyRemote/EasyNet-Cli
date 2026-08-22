@@ -61,6 +61,14 @@ func requireCABISymbol(library unsafe.Pointer, symbol string) (unsafe.Pointer, e
 	return ptr, nil
 }
 
+func optionalCABISymbol(library unsafe.Pointer, symbol string) unsafe.Pointer {
+	cSymbol := C.CString(symbol)
+	C.dlerror()
+	ptr := C.dlsym(library, cSymbol)
+	C.free(unsafe.Pointer(cSymbol))
+	return ptr
+}
+
 func cabiLibraryCandidates(path string) []string {
 	if path != "" {
 		return []string{path}
