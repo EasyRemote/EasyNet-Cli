@@ -165,10 +165,16 @@ require 'iceServers: view\.webrtcIceServers' "$FRONTEND_STORE" \
   'frontend WebRTC startup must use session-projected ICE servers'
 reject 'iceServers: \[\]' "$FRONTEND_STORE" \
   'frontend RemoteApp WebRTC startup must not hard-code an empty ICE server list'
+require 'frame\.target_geometry_revision !== expectedRevision' "$FRONTEND_PROTOCOL" \
+  'frontend RemoteApp input gating must reject stale or missing pointer target geometry revisions before send'
 require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
   'frontend store tests must prove RTCPeerConnection receives session-projected ICE servers'
 require 'turn:turn\.example\.test:3478\?transport=udp' "$FRONTEND_STORE_TEST" \
   'frontend store test must cover TURN relay ICE server config, not only host/direct mode'
+require 'fails closed before sending stale RemoteApp pointer geometry revisions' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove stale pointer target geometry revisions do not reach the data channel'
+require 'target_geometry_revision: 6' "$FRONTEND_STORE_TEST" \
+  'frontend stale pointer test must use an explicit stale geometry revision'
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
   'product readiness audit must mention the product-flow E2E harness'

@@ -47,6 +47,7 @@
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
         "window/application sessions remain view_only until target-scoped keyboard/pointer dispatch is safe",
         "pointer input frames carry target_geometry_revision when target-local geometry exists and the daemon rejects stale revisions before OS injection",
+        "frontend input gate rejects missing or stale pointer target_geometry_revision before WebRTC data-channel send",
         "session input_readiness reports target_input_not_ready when target tracking disables input"
       ],
       "required_evidence_before_product_complete": [

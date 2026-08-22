@@ -255,6 +255,10 @@ Missing or insufficient product evidence:
 
 - Cross-platform capture implementation/evidence for Windows and Linux.
 - Real input injection E2E for pointer/keyboard.
+  Current source/product-path progress: frontend input sending now rejects
+  missing or stale pointer `target_geometry_revision` before WebRTC
+  data-channel send, while daemon stale-revision rejection remains the
+  authoritative execution boundary.
 - Audio path and codec/adaptation soak reports.
 - Multi-display application capture or explicit product unsupported flow.
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
