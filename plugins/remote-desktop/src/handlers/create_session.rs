@@ -127,6 +127,7 @@ mod tests {
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, reset_store, seed_display, test_lock, test_plugin, with_consent_ticket,
+        with_input_control_consent_ticket,
     };
 
     #[test]
@@ -214,6 +215,74 @@ mod tests {
             response["latest_target_diagnostic"]["status"],
             json!("resolved")
         );
+    }
+
+    #[test]
+    fn create_session_uses_explicit_input_control_consent_for_display_interactive_scope() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-input-consent-display");
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+        let response = handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            with_input_control_consent_ticket(
+                &plugin,
+                &env,
+                json!({
+                    "session_id": "rd-input-consent-display",
+                    "mode": "interactive",
+                    "input_policy": {
+                        "keyboard_enabled": true,
+                        "pointer_enabled": true
+                    }
+                }),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            response["consent"]["grant_scope"]["input_control"],
+            json!(true)
+        );
+        assert_eq!(
+            response["input_policy"]["input_scope"],
+            json!("display_global")
+        );
+        assert_eq!(response["input_policy"]["keyboard_enabled"], json!(true));
+        assert_eq!(response["input_policy"]["pointer_enabled"], json!(true));
+        assert_eq!(
+            response["scope_audit"]["input_scope_reason"],
+            json!("input_control_granted")
+        );
+        if crate::daemon::plugins::remote_desktop::input::input_injection_available() {
+            assert_eq!(
+                response["input_readiness"]["effective_mode"],
+                json!("interactive")
+            );
+            assert_eq!(
+                response["input_readiness"]["interactive_ready"],
+                json!(true)
+            );
+            assert_eq!(response["input_readiness"]["blocked_reason"], Value::Null);
+        } else {
+            assert_eq!(
+                response["input_readiness"]["effective_mode"],
+                json!("view_only")
+            );
+            assert_eq!(
+                response["input_readiness"]["interactive_ready"],
+                json!(false)
+            );
+            assert_eq!(
+                response["input_readiness"]["blocked_reason"],
+                json!("input_injection_unavailable")
+            );
+        }
     }
 
     #[test]

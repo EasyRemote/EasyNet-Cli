@@ -40,7 +40,9 @@
         "pointer/key frames are policy-gated",
         "clipboard/file-drop are unsupported",
         "session view projects requested/effective input readiness and blocked reason",
-        "frontend input sender consumes daemon input_readiness and fails closed before sending pointer/key frames"
+        "frontend input sender consumes daemon input_readiness and fails closed before sending pointer/key frames",
+        "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
+        "window/application sessions remain view_only until target-scoped keyboard/pointer dispatch is safe"
       ],
       "required_evidence_before_product_complete": [
         "focus validation E2E",

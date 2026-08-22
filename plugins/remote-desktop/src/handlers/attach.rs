@@ -112,9 +112,7 @@ mod tests {
         RemoteDesktopSession, RemoteDesktopSessionInit, RemoteDesktopState,
     };
     use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
-    use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver,
-    };
+    use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, seed_display, test_consent_causal_context, test_lock, test_plugin,

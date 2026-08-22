@@ -39,13 +39,21 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         }
         .into());
     }
-    let issued = plugin
-        .consent_registry()
-        .issue(env.caller(), &entry.resource_ura, intent)?;
+    let input_control = optional_bool(&args, "input_control", ABILITY_GRANT_CONSENT)?;
+    let issued = plugin.consent_registry().issue_with_grants(
+        env.caller(),
+        &entry.resource_ura,
+        intent,
+        input_control,
+    )?;
     Ok(json!({
         "consent": "granted",
         "intent": intent,
         "policy": "local_user_consent",
+        "grant_scope": {
+            "media": true,
+            "input_control": input_control,
+        },
         "approval_actor_ura": env.caller(),
         "subject_ura": entry.resource_ura,
         "subject_type": entry.kind.as_str(),
@@ -53,4 +61,16 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         "consent_ticket": issued.ticket,
         "consent_expires_at_ms": issued.expires_at_ms,
     }))
+}
+
+fn optional_bool(args: &Value, key: &'static str, ability: &'static str) -> anyhow::Result<bool> {
+    match args.get(key) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(RemoteDesktopError::InvalidArgument {
+            ability,
+            detail: format!("{key} must be a boolean"),
+        }
+        .into()),
+    }
 }

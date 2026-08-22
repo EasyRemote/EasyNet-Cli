@@ -35,6 +35,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentAuthor
     pub(in crate::daemon::plugins::remote_desktop) consent_id: String,
     pub(in crate::daemon::plugins::remote_desktop) caller_ura: String,
     pub(in crate::daemon::plugins::remote_desktop) subject_ura: String,
+    pub(in crate::daemon::plugins::remote_desktop) input_control_granted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +63,7 @@ struct PendingConsent {
     caller_ura: String,
     subject_ura: String,
     intent: String,
+    input_control_granted: bool,
     expires_at_ms: u64,
 }
 
@@ -79,11 +81,22 @@ impl RemoteDesktopConsentRegistry {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn issue(
         &self,
         caller_ura: &str,
         subject_ura: &str,
         intent: &str,
+    ) -> Result<IssuedConsentTicket, ConsentTicketError> {
+        self.issue_with_grants(caller_ura, subject_ura, intent, false)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn issue_with_grants(
+        &self,
+        caller_ura: &str,
+        subject_ura: &str,
+        intent: &str,
+        input_control_granted: bool,
     ) -> Result<IssuedConsentTicket, ConsentTicketError> {
         let now = now_ms();
         let mut pending = self.pending();
@@ -99,6 +112,7 @@ impl RemoteDesktopConsentRegistry {
                 caller_ura: caller_ura.to_string(),
                 subject_ura: subject_ura.to_string(),
                 intent: intent.to_string(),
+                input_control_granted,
                 expires_at_ms,
             },
         );
@@ -133,6 +147,7 @@ impl RemoteDesktopConsentRegistry {
             consent_id: hex::encode(Sha256::digest(ticket.as_bytes())),
             caller_ura: grant.caller_ura,
             subject_ura: grant.subject_ura,
+            input_control_granted: grant.input_control_granted,
         })
     }
 
@@ -169,6 +184,19 @@ mod tests {
             Err(ConsentTicketError::Invalid),
             "a mismatched attempt consumes the capability and fails closed"
         );
+    }
+
+    #[test]
+    fn consent_ticket_preserves_explicit_input_control_grant() {
+        let registry = RemoteDesktopConsentRegistry::new(2);
+        let issued = registry
+            .issue_with_grants("caller", "resource", CONSENT_INTENT, true)
+            .unwrap();
+        let authorization = registry
+            .consume(&issued.ticket, "caller", "resource", CONSENT_INTENT)
+            .unwrap();
+
+        assert!(authorization.input_control_granted);
     }
 
     #[test]

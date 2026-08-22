@@ -925,8 +925,8 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
-        AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetResolver,
-        ResourceEntryTargetResolver, TargetGeometry, TargetResolutionError,
+        AppWindowSetProof, RemoteAppTargetBinding, ResourceEntryTargetResolver, TargetGeometry,
+        TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
         observe_bound_session_target_once, sample_host_target_observations,

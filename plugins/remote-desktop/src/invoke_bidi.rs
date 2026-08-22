@@ -532,9 +532,7 @@ mod tests {
     use tokio::sync::broadcast;
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
-    use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver,
-    };
+    use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
 
     #[derive(Debug)]
     struct CountingScreenBackend {

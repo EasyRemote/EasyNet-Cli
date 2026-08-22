@@ -122,7 +122,7 @@ fn input_readiness_view(
     let interactive_ready = requested_interactive && any_input_enabled && blocked_reason.is_null();
     json!({
         "requested_mode": session.mode(),
-        "effective_mode": if any_input_enabled { "interactive" } else { "view_only" },
+        "effective_mode": if interactive_ready { "interactive" } else { "view_only" },
         "interactive_ready": interactive_ready,
         "blocked_reason": blocked_reason,
         "input_scope": input_policy.input_scope().as_str(),
@@ -187,7 +187,7 @@ mod tests {
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetGeometry,
+        ResourceEntryTargetResolver, TargetGeometry,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::{

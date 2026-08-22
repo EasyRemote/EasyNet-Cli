@@ -57,6 +57,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentGrant 
     approval_actor_ura: String,
     consent_id: String,
     subject_ura: String,
+    input_control_granted: bool,
     approval_receipt: RemoteDesktopConsentReceipt,
 }
 
@@ -84,6 +85,7 @@ impl RemoteDesktopConsentGrant {
                 approval_actor_ura: authorization.caller_ura,
                 consent_id: authorization.consent_id,
                 subject_ura: authorization.subject_ura,
+                input_control_granted: authorization.input_control_granted,
                 approval_receipt,
             });
         }
@@ -102,6 +104,7 @@ impl RemoteDesktopConsentGrant {
             approval_actor_ura: env.caller().to_string(),
             consent_id: "test-consent".to_string(),
             subject_ura: env.subject().to_string(),
+            input_control_granted: false,
             approval_receipt: first_receipt_from_causal_context(
                 "test.ability",
                 env.causal_context(),
@@ -117,12 +120,20 @@ impl RemoteDesktopConsentGrant {
         &self.approval_receipt
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) const fn permits_input_control(&self) -> bool {
+        self.input_control_granted
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "policy": self.policy,
             "approval_actor_ura": self.approval_actor_ura,
             "consent_id": self.consent_id,
             "subject_ura": self.subject_ura,
+            "grant_scope": {
+                "media": true,
+                "input_control": self.input_control_granted,
+            },
             "approval_receipt": self.approval_receipt.to_value(),
         })
     }
@@ -215,6 +226,7 @@ mod tests {
             consent_id: "test-consent".to_string(),
             caller_ura: env.caller().to_string(),
             subject_ura: env.subject().to_string(),
+            input_control_granted: false,
         }
     }
 

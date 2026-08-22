@@ -140,3 +140,40 @@ Product effect:
   consistently at the browser input-sending boundary.
 - This closes a frontend/runtime seam only. It does not implement focus-safe
   OS pointer/keyboard injection or provide latency/product E2E evidence.
+
+## 2026-08-22 — Input control consent must be explicit and scope-bound
+
+Decision:
+
+- Remote desktop media/session consent is not sufficient authority for
+  pointer, wheel, or keyboard control.
+- Display-global input can be enabled only when the consumed local consent
+  ticket explicitly carries `input_control=true`.
+- Window/application input remains view-only until a target-scoped
+  focus/activation validator can prove keyboard and pointer dispatch target the
+  selected surface.
+
+Implementation delta:
+
+- `remote_desktop.grant_consent` accepts optional `input_control`.
+- The consent registry persists `input_control_granted` in the one-use ticket
+  and projects it into the consumed authorization.
+- Session consent stores and audits the input-control grant scope.
+- `create_session` passes the consumed grant scope into target binding
+  resolution.
+- Display targets with explicit input-control consent may resolve
+  `display_global` input scope; media-only display consent still resolves
+  `view_only`.
+- Session readiness reports `effective_mode=interactive` only when runtime
+  input is actually ready; missing OS accessibility/input permission remains
+  `input_injection_unavailable`.
+- `check-remoteapp-input-consent-boundary.sh` pins this full source contract.
+
+Product effect:
+
+- The product now has a correct authority gate for display-level interactive
+  input instead of treating all interactive requests as permanently view-only.
+- This still does not prove product-level input injection. Required remaining
+  evidence: macOS Accessibility permission E2E, pointer/wheel/key application
+  E2E, latency measurements, target epoch checks on the execution path, and a
+  separate safe design for window/application focus-scoped input.

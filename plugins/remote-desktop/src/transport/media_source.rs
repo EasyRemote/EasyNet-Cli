@@ -161,8 +161,8 @@ mod tests {
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::media::XCAP_OPENH264_WEBRTC_BACKEND;
     use crate::daemon::plugins::remote_desktop::target::{
-        AppWindowSetProof, RemoteAppTargetResolver, ResolvedCaptureTargetProof,
-        ResourceEntryTargetResolver, TargetResolutionError,
+        AppWindowSetProof, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
+        TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 

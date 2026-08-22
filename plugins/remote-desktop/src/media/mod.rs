@@ -531,9 +531,7 @@ fn non_empty_metadata_str(entry: &ResourceEntry, key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry};
-    use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver,
-    };
+    use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
     use serde_json::json;
 

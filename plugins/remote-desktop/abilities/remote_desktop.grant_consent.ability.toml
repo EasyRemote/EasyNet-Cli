@@ -26,3 +26,6 @@ additionalProperties = false
 [input_schema.properties.intent]
 type = "string"
 enum = ["remote_desktop_session"]
+
+[input_schema.properties.input_control]
+type = "boolean"

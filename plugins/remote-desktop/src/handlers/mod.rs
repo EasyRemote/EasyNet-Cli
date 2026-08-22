@@ -180,6 +180,8 @@ mod tests {
         .expect("grant_consent accepts selected target as envelope subject");
         assert_eq!(consent["subject_ura"], json!(ura));
         assert_eq!(consent["subject_type"], json!("display"));
+        assert_eq!(consent["grant_scope"]["media"], json!(true));
+        assert_eq!(consent["grant_scope"]["input_control"], json!(false));
         let consent_ticket = consent["consent_ticket"]
             .as_str()
             .expect("grant_consent returns a local consent ticket");
@@ -205,6 +207,30 @@ mod tests {
             created.get("subject").is_none(),
             "remote desktop lifecycle responses must not teach clients to pass subject in args"
         );
+    }
+
+    #[test]
+    fn grant_consent_projects_explicit_input_control_scope() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-input-control-consent");
+        resources::save(&file).unwrap();
+
+        let consent = grant_consent::handle(
+            Arc::clone(&plugin),
+            env_for(&ura),
+            json!({
+                "intent": CONSENT_INTENT,
+                "input_control": true
+            }),
+        )
+        .expect("grant_consent accepts explicit input control");
+
+        assert_eq!(consent["grant_scope"]["media"], json!(true));
+        assert_eq!(consent["grant_scope"]["input_control"], json!(true));
     }
 
     #[test]

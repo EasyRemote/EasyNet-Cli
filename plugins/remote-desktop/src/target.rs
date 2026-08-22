@@ -9,8 +9,8 @@
 // - ResourceEntry is the resource-inventory DTO and Invocation subject.
 // - RemoteAppTargetBinding is the session-owned execution boundary consumed by
 //   media, input, lifecycle tracking, and audit projection.
-// - Platform/native lookup belongs behind RemoteAppTargetResolver or explicit
-//   Rebinding, never in transport handlers.
+// - Platform/native lookup belongs behind ResourceEntryTargetResolver or
+//   explicit Rebinding, never in transport handlers.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
@@ -121,6 +121,7 @@ const ALL_INPUT_SCOPES: &[InputScope] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputScopeReason {
     RequestedViewOnly,
+    InputControlGranted,
     InputConsentRequired,
     TargetScopedInputUnsafe,
 }
@@ -129,6 +130,7 @@ impl InputScopeReason {
     const fn as_str(self) -> &'static str {
         match self {
             Self::RequestedViewOnly => "requested_view_only",
+            Self::InputControlGranted => "input_control_granted",
             Self::InputConsentRequired => "input_consent_required",
             Self::TargetScopedInputUnsafe => "target_scoped_keyboard_pointer_dispatch_unsafe",
         }
@@ -1362,16 +1364,6 @@ impl RemoteAppTargetBinding {
     }
 }
 
-pub(in crate::daemon::plugins::remote_desktop) trait RemoteAppTargetResolver {
-    fn resolve_for_session(
-        &self,
-        ability: &'static str,
-        entry: &ResourceEntry,
-        requested_mode: &str,
-        consent_epoch: u64,
-    ) -> Result<RemoteAppTargetBinding, RemoteAppTargetError>;
-}
-
 pub(in crate::daemon::plugins::remote_desktop) fn verify_target_binding_for_session(
     ability: &'static str,
     binding: &RemoteAppTargetBinding,
@@ -1437,118 +1429,146 @@ mod platform_live_resolution {
 #[derive(Debug, Default, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct ResourceEntryTargetResolver;
 
-impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
-    fn resolve_for_session(
+impl ResourceEntryTargetResolver {
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn resolve_for_session(
         &self,
         ability: &'static str,
         entry: &ResourceEntry,
         requested_mode: &str,
         consent_epoch: u64,
     ) -> Result<RemoteAppTargetBinding, RemoteAppTargetError> {
-        crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore::assert_current_thread_unlocked(
-            "remote_desktop.target.resolve_for_session",
-        );
-        if entry.binding != ResourceBinding::LocalDevice {
-            return Err(RemoteAppTargetError::new(
-                ability,
-                TargetResolutionError::UnsupportedCaptureScope,
-                format!(
-                    "remote desktop target {} is not locally bound",
-                    entry.resource_ura
-                ),
-            ));
-        }
-        validate_owner_agent_ura(ability, entry)?;
-        let target_kind = RemoteDesktopTargetKind::try_from(entry.kind).map_err(|error| {
-            RemoteAppTargetError::new(ability, error.reason(), error.to_string())
-        })?;
-        validate_resource_inventory_state(ability, entry, target_kind)?;
-        let capture_scope = capture_scope_for_kind(target_kind);
-        let input_scope_decision = input_scope_for_request(target_kind, requested_mode);
-        let input_scope = input_scope_decision.scope();
-        let display_id = display_id(entry);
-        validate_required_identity(ability, entry, target_kind, display_id)?;
-        let platform = metadata_string(entry, "platform").unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                "macos".to_string()
-            } else {
-                "unknown".to_string()
-            }
-        });
-        let discovery_backend =
-            metadata_string(entry, "backend").unwrap_or_else(|| "resource_registry".to_string());
-        let capture_backend = capture_backend_for_entry(&platform, entry, target_kind);
-        let geometry = match target_kind {
-            RemoteDesktopTargetKind::Application => {
-                TargetGeometry::from_metadata(entry, Some("primary"))
-            }
-            _ => TargetGeometry::from_metadata(entry, None),
-        };
-        let native_locator = NativeTargetLocator {
-            platform: platform.clone(),
-            discovery_backend,
-            capture_backend: capture_backend.clone(),
-            primary_display: metadata_bool(entry, "primary_display"),
-            display_id,
-            window_id: metadata_u64(entry, "window_id"),
-            pid: metadata_i64(entry, "pid").or_else(|| metadata_i64(entry, "primary_pid")),
-            app_identity: metadata_string(entry, "app_identity"),
-            bundle_id: metadata_string(entry, "bundle_id"),
-            app_name: metadata_string(entry, "app_name"),
-            title: metadata_string(entry, "title"),
-        };
-        let resolved_identity = TargetIdentity::from_entry(entry, display_id);
-        let app_window_set = AppWindowSetProof::from_entry(entry, display_id);
-        let binding_id = mint_binding_id(entry, &native_locator);
-        let target_identity_epoch = metadata_u64(entry, "lifecycle_epoch")
-            .or_else(|| metadata_u64(entry, "target_identity_epoch"))
-            .unwrap_or(1);
-        let target_geometry_revision = metadata_u64(entry, "geometry_revision").unwrap_or(1);
-        let media_source_epoch = 1;
-        let scope_audit = ScopeAudit {
-            requested_target_kind: target_kind,
-            effective_target_kind: target_kind,
-            capture_scope,
-            input_scope,
-            input_scope_reason: input_scope_decision.reason(),
-            scope_widened: false,
-            display_fallback_used: false,
-        };
-        let diagnostic = json!({
-            "status": "resolved",
-            "reason": Value::Null,
-            "requested_identity": requested_identity_projection(entry),
-            "resolved_identity": resolved_identity.to_value(),
-            "match_strategy": match_strategy_for_kind(target_kind),
-            "capture_backend": capture_backend,
-            "target_model": target_kind.target_model(),
-            "display_fallback_used": false,
-            "frontend_action": Value::Null,
-        });
-        Ok(RemoteAppTargetBinding {
-            subject_ura: entry.resource_ura.clone(),
-            subject_display_name: entry.display_name.clone(),
-            target_kind,
-            binding_id,
-            binding_epoch: 1,
-            target_identity_epoch,
-            target_geometry_revision,
-            media_source_epoch,
-            consent_epoch,
-            platform,
-            backend: capture_backend,
-            capture_scope,
-            input_scope,
-            native_locator,
-            resolved_identity,
-            app_window_set,
-            geometry,
-            scope_audit,
-            diagnostic,
-            diagnostic_capture_subject: DiagnosticCaptureSubject::from_entry(entry),
-            capture_proof: None,
-        })
+        resolve_resource_entry_for_session(ability, entry, requested_mode, consent_epoch, false)
     }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn resolve_for_session_with_input_consent(
+        &self,
+        ability: &'static str,
+        entry: &ResourceEntry,
+        requested_mode: &str,
+        consent_epoch: u64,
+        input_control_granted: bool,
+    ) -> Result<RemoteAppTargetBinding, RemoteAppTargetError> {
+        resolve_resource_entry_for_session(
+            ability,
+            entry,
+            requested_mode,
+            consent_epoch,
+            input_control_granted,
+        )
+    }
+}
+
+fn resolve_resource_entry_for_session(
+    ability: &'static str,
+    entry: &ResourceEntry,
+    requested_mode: &str,
+    consent_epoch: u64,
+    input_control_granted: bool,
+) -> Result<RemoteAppTargetBinding, RemoteAppTargetError> {
+    crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore::assert_current_thread_unlocked(
+        "remote_desktop.target.resolve_for_session",
+    );
+    if entry.binding != ResourceBinding::LocalDevice {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::UnsupportedCaptureScope,
+            format!(
+                "remote desktop target {} is not locally bound",
+                entry.resource_ura
+            ),
+        ));
+    }
+    validate_owner_agent_ura(ability, entry)?;
+    let target_kind = RemoteDesktopTargetKind::try_from(entry.kind)
+        .map_err(|error| RemoteAppTargetError::new(ability, error.reason(), error.to_string()))?;
+    validate_resource_inventory_state(ability, entry, target_kind)?;
+    let capture_scope = capture_scope_for_kind(target_kind);
+    let input_scope_decision =
+        input_scope_for_request(target_kind, requested_mode, input_control_granted);
+    let input_scope = input_scope_decision.scope();
+    let display_id = display_id(entry);
+    validate_required_identity(ability, entry, target_kind, display_id)?;
+    let platform = metadata_string(entry, "platform").unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            "macos".to_string()
+        } else {
+            "unknown".to_string()
+        }
+    });
+    let discovery_backend =
+        metadata_string(entry, "backend").unwrap_or_else(|| "resource_registry".to_string());
+    let capture_backend = capture_backend_for_entry(&platform, entry, target_kind);
+    let geometry = match target_kind {
+        RemoteDesktopTargetKind::Application => {
+            TargetGeometry::from_metadata(entry, Some("primary"))
+        }
+        _ => TargetGeometry::from_metadata(entry, None),
+    };
+    let native_locator = NativeTargetLocator {
+        platform: platform.clone(),
+        discovery_backend,
+        capture_backend: capture_backend.clone(),
+        primary_display: metadata_bool(entry, "primary_display"),
+        display_id,
+        window_id: metadata_u64(entry, "window_id"),
+        pid: metadata_i64(entry, "pid").or_else(|| metadata_i64(entry, "primary_pid")),
+        app_identity: metadata_string(entry, "app_identity"),
+        bundle_id: metadata_string(entry, "bundle_id"),
+        app_name: metadata_string(entry, "app_name"),
+        title: metadata_string(entry, "title"),
+    };
+    let resolved_identity = TargetIdentity::from_entry(entry, display_id);
+    let app_window_set = AppWindowSetProof::from_entry(entry, display_id);
+    let binding_id = mint_binding_id(entry, &native_locator);
+    let target_identity_epoch = metadata_u64(entry, "lifecycle_epoch")
+        .or_else(|| metadata_u64(entry, "target_identity_epoch"))
+        .unwrap_or(1);
+    let target_geometry_revision = metadata_u64(entry, "geometry_revision").unwrap_or(1);
+    let media_source_epoch = 1;
+    let scope_audit = ScopeAudit {
+        requested_target_kind: target_kind,
+        effective_target_kind: target_kind,
+        capture_scope,
+        input_scope,
+        input_scope_reason: input_scope_decision.reason(),
+        scope_widened: false,
+        display_fallback_used: false,
+    };
+    let diagnostic = json!({
+        "status": "resolved",
+        "reason": Value::Null,
+        "requested_identity": requested_identity_projection(entry),
+        "resolved_identity": resolved_identity.to_value(),
+        "match_strategy": match_strategy_for_kind(target_kind),
+        "capture_backend": capture_backend,
+        "target_model": target_kind.target_model(),
+        "display_fallback_used": false,
+        "frontend_action": Value::Null,
+    });
+    Ok(RemoteAppTargetBinding {
+        subject_ura: entry.resource_ura.clone(),
+        subject_display_name: entry.display_name.clone(),
+        target_kind,
+        binding_id,
+        binding_epoch: 1,
+        target_identity_epoch,
+        target_geometry_revision,
+        media_source_epoch,
+        consent_epoch,
+        platform,
+        backend: capture_backend,
+        capture_scope,
+        input_scope,
+        native_locator,
+        resolved_identity,
+        app_window_set,
+        geometry,
+        scope_audit,
+        diagnostic,
+        diagnostic_capture_subject: DiagnosticCaptureSubject::from_entry(entry),
+        capture_proof: None,
+    })
 }
 
 fn validate_owner_agent_ura(
@@ -1746,16 +1766,27 @@ fn capture_scope_for_kind(target_kind: RemoteDesktopTargetKind) -> CaptureScope 
 fn input_scope_for_request(
     target_kind: RemoteDesktopTargetKind,
     requested_mode: &str,
+    input_control_granted: bool,
 ) -> InputScopeDecision {
     if requested_mode != "interactive" {
         return InputScopeDecision::new(InputScope::ViewOnly, InputScopeReason::RequestedViewOnly);
     }
     match target_kind {
-        // Capture/session consent does not authorize keyboard or pointer input.
-        // Until a separate EasyNet input-consent authority is available, even
-        // display sessions requested as interactive remain view-only.
         RemoteDesktopTargetKind::Display => {
-            InputScopeDecision::new(InputScope::ViewOnly, InputScopeReason::InputConsentRequired)
+            if input_control_granted {
+                InputScopeDecision::new(
+                    InputScope::DisplayGlobal,
+                    InputScopeReason::InputControlGranted,
+                )
+            } else {
+                // Capture/session consent does not authorize keyboard or
+                // pointer input. Display-global input requires an explicit
+                // input-control grant in the consumed consent ticket.
+                InputScopeDecision::new(
+                    InputScope::ViewOnly,
+                    InputScopeReason::InputConsentRequired,
+                )
+            }
         }
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
             // macOS target-scoped keyboard/pointer dispatch is unsafe until the
@@ -1985,6 +2016,24 @@ mod tests {
                 1,
             )
             .expect("display identity must resolve")
+    }
+
+    fn interactive_display_binding_with_input_consent() -> RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Display,
+                    live_metadata(json!({
+                        "display_id": 1,
+                        "target_identity_epoch": 9,
+                    })),
+                ),
+                "interactive",
+                1,
+                true,
+            )
+            .expect("display identity must resolve with explicit input consent")
     }
 
     #[test]
@@ -2901,6 +2950,24 @@ mod tests {
         assert_eq!(
             binding.target_bound_event_payload()["input_scope_reason"],
             json!("input_consent_required")
+        );
+    }
+
+    #[test]
+    fn display_interactive_with_input_consent_projects_display_global_scope() {
+        let binding = interactive_display_binding_with_input_consent();
+        assert_eq!(binding.to_value()["input_scope"], json!("display_global"));
+        assert_eq!(
+            binding.to_value()["input_scope_reason"],
+            json!("input_control_granted")
+        );
+        assert_eq!(
+            binding.scope_audit_value()["input_scope_reason"],
+            json!("input_control_granted")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["input_scope_reason"],
+            json!("input_control_granted")
         );
     }
 }

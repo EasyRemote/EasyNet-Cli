@@ -331,7 +331,7 @@ mod tests {
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
+        ResourceEntryTargetResolver, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 

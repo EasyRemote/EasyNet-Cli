@@ -28,7 +28,7 @@ use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::target::{
     verify_target_binding_for_session, RemoteAppTargetBinding, RemoteAppTargetError,
-    RemoteAppTargetResolver, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
+    ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,12 +155,18 @@ impl RemoteDesktopSessionCreationWorkflow {
         verifier: &dyn RemoteAppTargetBindingVerifier,
     ) -> anyhow::Result<Self> {
         self.ensure_state(RemoteDesktopSessionCreationState::ResolvingTarget)?;
-        let mut target_binding = ResourceEntryTargetResolver.resolve_for_session(
-            ABILITY_CREATE_SESSION,
-            &self.entry,
-            &self.mode,
-            1,
-        )?;
+        let input_control_granted = self
+            .consent
+            .as_ref()
+            .is_some_and(RemoteDesktopConsentGrant::permits_input_control);
+        let mut target_binding = ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                ABILITY_CREATE_SESSION,
+                &self.entry,
+                &self.mode,
+                1,
+                input_control_granted,
+            )?;
         let capture_proof = verifier.verify_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
         target_binding.commit_capture_proof(ABILITY_CREATE_SESSION, capture_proof)?;
         self.target_binding = Some(target_binding);

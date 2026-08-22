@@ -961,8 +961,8 @@ require 'fn input_readiness_view\(' "$VIEW" \
   'session view must centralize requested/effective input readiness projection'
 require '"requested_mode": session\.mode\(\)' "$VIEW" \
   'input readiness must expose the caller requested mode'
-require '"effective_mode": if any_input_enabled \{ "interactive" \} else \{ "view_only" \}' "$VIEW" \
-  'input readiness must expose effective interactive capability separately from requested mode'
+require '"effective_mode": if interactive_ready \{ "interactive" \} else \{ "view_only" \}' "$VIEW" \
+  'input readiness must expose effective interactive capability separately from requested mode and OS permission readiness'
 require '"interactive_ready": interactive_ready' "$VIEW" \
   'input readiness must expose whether interactive input is actually ready'
 require '"blocked_reason": blocked_reason' "$VIEW" \

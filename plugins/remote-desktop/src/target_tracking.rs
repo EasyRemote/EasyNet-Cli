@@ -1532,8 +1532,7 @@ mod tests {
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
-        AppWindowSetProof, RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetGeometry,
-        TargetResolutionError,
+        AppWindowSetProof, ResourceEntryTargetResolver, TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         RemoteAppTargetBindingStateMachine, TargetObservation, TargetVisibilityState,

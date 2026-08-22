@@ -963,7 +963,7 @@ fn input_readiness_view(session: &RemoteDesktopSession, input_policy: &Effective
     let interactive_ready = false;
     json!({
         "requested_mode": session.mode(),
-        "effective_mode": if any_input_enabled { "interactive" } else { "view_only" },
+        "effective_mode": if interactive_ready { "interactive" } else { "view_only" },
         "interactive_ready": interactive_ready,
         "blocked_reason": blocked_reason,
         "input_scope": input_policy.input_scope().as_str(),

@@ -155,6 +155,15 @@ Current frontend lifecycle evidence:
   before transport send. This closes the UI gating seam for requested
   interactive sessions that are correctly downgraded to view-only, while still
   leaving real OS input injection product evidence incomplete.
+- RemoteApp consent now separates media/session consent from input-control
+  consent. `grant_consent` may mint an explicit `input_control` scoped ticket;
+  `create_session` consumes that scope before target binding resolution. Only
+  display targets with explicit input-control consent can project
+  `display_global` input scope. Window/application targets remain view-only
+  because target-scoped keyboard/pointer dispatch still lacks the required
+  focus/activation proof. Missing macOS Accessibility permission still reports
+  `input_injection_unavailable` in `input_readiness`, so this is a consent and
+  policy closure, not successful input-injection E2E evidence.
 
 Missing or insufficient product evidence:
 

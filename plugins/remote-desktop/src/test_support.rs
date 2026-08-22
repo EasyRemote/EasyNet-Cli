@@ -24,8 +24,8 @@ use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsen
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::daemon::plugins::remote_desktop::target::{
-    AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteAppTargetResolver,
-    RemoteDesktopTargetKind, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
+    AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
+    ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
 };
 use crate::daemon::plugins::PluginRuntimeLimits;
 
@@ -68,12 +68,30 @@ pub(in crate::daemon::plugins::remote_desktop) fn with_consent_ticket(
     env: &EnvelopeContext,
     mut args: serde_json::Value,
 ) -> serde_json::Value {
+    with_consent_ticket_grants(plugin, env, args, false)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn with_input_control_consent_ticket(
+    plugin: &RemoteDesktopPlugin,
+    env: &EnvelopeContext,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    with_consent_ticket_grants(plugin, env, args, true)
+}
+
+fn with_consent_ticket_grants(
+    plugin: &RemoteDesktopPlugin,
+    env: &EnvelopeContext,
+    mut args: serde_json::Value,
+    input_control_granted: bool,
+) -> serde_json::Value {
     let issued = plugin
         .consent_registry()
-        .issue(
+        .issue_with_grants(
             env.caller(),
             env.subject(),
             crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT,
+            input_control_granted,
         )
         .expect("test consent ticket issues");
     args.as_object_mut()
