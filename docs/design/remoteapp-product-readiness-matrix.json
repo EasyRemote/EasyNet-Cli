@@ -75,6 +75,7 @@
         "queue/drop boundary tests",
         "session/device capability view explicitly reports host_audio_not_implemented",
         "frontend session details surface host_audio_not_implemented from daemon audio readiness projection",
+        "frontend session details surface media bitrate, FPS, drops, and backpressure from daemon/browser media stats",
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",
         "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract"
       ],

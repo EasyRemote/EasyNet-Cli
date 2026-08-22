@@ -232,6 +232,12 @@ Current frontend lifecycle evidence:
   NAT/relay gap visible instead of letting `webrtc ready` imply production
   network readiness. This is route observability evidence, not real
   direct/STUN/TURN/EasyNet relay deployment evidence.
+- Frontend session details now render a compact media quality summary from
+  daemon/browser `mediaStats`: bitrate, outbound FPS, aggregate drops, and RTP
+  sender backpressure appear as status such as
+  `media 18000kbps · 52.5fps · drops 15 · backpressure 3`. This makes adaptive
+  bitrate/drop behavior visible to operators; it does not prove real codec
+  negotiation, host audio, soak, or degraded-network E2E.
 - Frontend protocol/store/UI code now parses and renders daemon-projected
   RemoteApp `terminal_receipt`. After `end_session`, the store retains the
   closed session view with its terminal receipt while clearing `sessionToken`.

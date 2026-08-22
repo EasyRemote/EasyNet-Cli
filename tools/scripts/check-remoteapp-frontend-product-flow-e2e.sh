@@ -189,6 +189,12 @@ require 'audioReady: readiness\.audio_ready === true' "$FRONTEND_PROTOCOL" \
   'frontend production readiness must parse audio readiness separately from video readiness'
 require 'host_audio_not_implemented' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove session details surface the host-audio unsupported blocker'
+require 'remoteDesktopMediaQualityLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render a media quality summary from session stats'
+require 'rtpSenderBackpressureDrops' "$FRONTEND_UI" \
+  'frontend media quality summary must account for RTP sender backpressure drops'
+require 'media 18000kbps · 52\.5fps · drops 15 · backpressure 3' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove media bitrate, FPS, drops, and backpressure are visible in session details'
 require 'remoteDesktopTargetStatusLabel' "$FRONTEND_UI" \
   'frontend RemoteApp UI must render daemon-projected target recovery state in session details'
 require 'remoteDesktopTargetRecoveryMessage' "$FRONTEND_UI" \
@@ -222,6 +228,8 @@ require 'target recovery' "$AUDIT" \
   'product readiness audit must record frontend target recovery projection evidence'
 require 'route state' "$AUDIT" \
   'product readiness audit must record frontend route-state visibility evidence'
+require 'media quality' "$AUDIT" \
+  'product readiness audit must record frontend media-quality visibility evidence'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
@@ -239,5 +247,7 @@ require 'Refresh targets' "$PLAN" \
   'product closure plan must record the executable target recovery CTA evidence'
 require 'route host_only · no NAT/relay' "$PLAN" \
   'product closure plan must record route-state UI evidence'
+require 'media 18000kbps · 52\.5fps · drops 15 · backpressure 3' "$PLAN" \
+  'product closure plan must record media-quality summary UI evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'
