@@ -193,6 +193,20 @@ require 'host-remoteapp-decoded-frame-e2e\.sh' "$HARNESS" \
   'product-flow harness must invoke decoded-frame WebRTC E2E'
 require 'host-remoteapp-view-only-input-safety-e2e\.sh' "$HARNESS" \
   'product-flow harness must invoke view-only input safety E2E'
+require 'ability list --format json' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must resolve public RemoteApp Ability URAs from the catalogue'
+require 'ATTACH_ABILITY_URA' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must invoke remote_desktop.attach through a full Ability URA'
+require 'ATTACH_CAUSAL_CONTEXT_JSON' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must build explicit attach causal context from session approval receipt'
+require 'approval_receipt' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must chain attach to the session approval receipt'
+require '--causal-context-json "\$ATTACH_CAUSAL_CONTEXT_JSON"' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must pass approval receipt causal context to ability bidi'
+reject 'ability bidi remote_desktop\.attach' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must not pass a short ability name to ability bidi'
+reject '--causal-root' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must not open remote_desktop.attach as a root invocation'
 require '--sentinel-fixture' "$HARNESS" \
   'product-flow harness must use sentinel fixtures for app/window evidence'
 require '--pre-media-resource-refresh' "$HARNESS" \

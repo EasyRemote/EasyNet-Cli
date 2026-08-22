@@ -347,6 +347,12 @@ impl EffectiveRemoteDesktopInputPolicy {
         self.input_scope
     }
 
+    fn rejects_keyboard_pointer_by_view_only_scope(&self) -> bool {
+        self.input_scope == InputScope::ViewOnly
+            && self.reject_reason("key") == Some("input_scope_unsupported")
+            && self.reject_reason("pointer") == Some("input_scope_unsupported")
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("keyboard_enabled".to_string(), json!(self.keyboard_enabled));
@@ -998,6 +1004,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_effective_inpu
     if session.is_terminal() {
         return None;
     }
+    let snapshot = session.target_snapshot();
+    let input_scope = session.target_binding().input_scope();
+    let effective_policy = base_policy.for_current_target(snapshot, input_scope);
     match transport_guard {
         InputTransportGuard::DirectWebRtc(epoch) => {
             if session.transport_epoch() != Some(epoch.value()) {
@@ -1005,17 +1014,18 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_effective_inpu
             }
         }
         InputTransportGuard::DiagnosticPreview => {
-            if !session.preview_attached() {
+            if !session.preview_attached()
+                && !effective_policy.rejects_keyboard_pointer_by_view_only_scope()
+            {
                 return None;
             }
         }
     }
-    let snapshot = session.target_snapshot();
-    let input_scope = session.target_binding().input_scope();
-    if !snapshot.input_enabled() {
+    if !snapshot.input_enabled() && !effective_policy.rejects_keyboard_pointer_by_view_only_scope()
+    {
         return None;
     }
-    Some(base_policy.for_current_target(snapshot, input_scope))
+    Some(effective_policy)
 }
 
 fn pointer_target_from_snapshot(snapshot: &TargetTrackerSnapshot) -> Option<PointerTargetGeometry> {

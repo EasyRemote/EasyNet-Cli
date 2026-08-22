@@ -265,6 +265,30 @@ fi
 mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 
+cp "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
+  "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good"
+perl -0pi -e 's/run_easynet ability bidi "\$ATTACH_ABILITY_URA"/run_easynet ability bidi remote_desktop.attach/g' \
+  "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted view-only input harness using a short attach ability name"
+fi
+mv "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good" \
+  "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+
+cp "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
+  "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good"
+perl -0pi -e 's/--causal-context-json "\$ATTACH_CAUSAL_CONTEXT_JSON"/--causal-root/g' \
+  "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted view-only input harness opening attach as a root invocation"
+fi
+mv "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good" \
+  "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+
 cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"
 perl -0pi -e 's/runs the remote desktop UI flow from target picker through session end/runs a local mocked card render/g' \

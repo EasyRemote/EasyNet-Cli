@@ -18,6 +18,8 @@ use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED,
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::input::{
     apply_input_frame_with_effective_policy, current_session_effective_input_policy,
     parse_input_frame, unsupported_input_channel_reason, EffectiveRemoteDesktopInputPolicy,
@@ -757,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_bidi_input_rechecks_session_target_snapshot() {
+    fn diagnostic_bidi_view_only_target_loss_preserves_scope_unsupported() {
         let session_store = Arc::new(RemoteDesktopSessionStore::new());
         install_h264_preview_session_for_test(&session_store, "rd-bidi-target-lost");
         session_store.with_sessions(|sessions| {
@@ -821,10 +823,93 @@ mod tests {
         );
 
         assert_eq!(response["type"], json!("warn"));
-        assert_eq!(response["code"], json!("target_input_not_ready"));
+        assert_eq!(response["code"], json!("input_scope_unsupported"));
         assert_eq!(response["input_type"], json!("pointer"));
         assert_eq!(response["client_sent_at_ms"], json!(1_787_331_000_456_u64));
         assert_eq!(response["client_sequence"], json!(10_u64));
+    }
+
+    #[test]
+    fn diagnostic_bidi_display_global_target_loss_reports_not_ready() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/device.01/streams/display.interactive"
+                .to_string(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+            kind: ResourceType::Display,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "display:macos:cgdisplay:1".to_string(),
+            display_name: "Interactive Display".to_string(),
+            metadata: json!({
+                "display_id": 1,
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+            }),
+            first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let target_binding = ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                ABILITY_ATTACH_SESSION,
+                &entry,
+                "interactive",
+                1,
+                true,
+            )
+            .expect("interactive display binding resolves with input consent");
+        let requested_policy = RemoteDesktopInputPolicy::new(true, true);
+        let input_policy =
+            EffectiveRemoteDesktopInputPolicy::for_binding(&requested_policy, &target_binding);
+        assert_eq!(input_policy.input_scope().as_str(), "display_global");
+
+        let session_store = Arc::new(RemoteDesktopSessionStore::new());
+        let mut init = crate::daemon::plugins::remote_desktop::test_support::test_session_init(
+            "rd-bidi-display-target-lost",
+            &entry.resource_ura,
+            vec![TRANSPORT_INVOKE_BIDI.to_string()],
+        );
+        init.mode = "interactive".to_string();
+        init.target_binding = target_binding;
+        init.input_policy = requested_policy;
+        let (stop_tx, _stop_rx) = watch::channel(false);
+        let mut session =
+            crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession::new(init);
+        session.attach_preview_transport(stop_tx);
+        session_store.with_sessions(|sessions| {
+            sessions.insert("rd-bidi-display-target-lost".to_string(), session);
+        });
+        session_store.with_sessions(|sessions| {
+            let session = sessions.get_mut("rd-bidi-display-target-lost").unwrap();
+            assert!(session
+                .record_target_observation(
+                    crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation::Lost {
+                        reason: crate::daemon::plugins::remote_desktop::target::TargetResolutionError::TargetNotFound,
+                        detail: "display disconnected".into(),
+                        observed_at_ms: 1_002,
+                    },
+                )
+                .is_none());
+        });
+
+        let response = handle_bidi_input_frame_for_session(
+            &session_store,
+            "rd-bidi-display-target-lost",
+            &input_policy,
+            json!({
+                "type": "pointer",
+                "action": "move",
+                "x": 10,
+                "y": 20,
+                "sent_at_ms": 1_787_331_000_789_u64,
+                "client_sequence": 11_u64,
+            }),
+        );
+
+        assert_eq!(response["type"], json!("warn"));
+        assert_eq!(response["code"], json!("target_input_not_ready"));
+        assert_eq!(response["input_type"], json!("pointer"));
+        assert_eq!(response["client_sent_at_ms"], json!(1_787_331_000_789_u64));
+        assert_eq!(response["client_sequence"], json!(11_u64));
     }
 
     #[test]
