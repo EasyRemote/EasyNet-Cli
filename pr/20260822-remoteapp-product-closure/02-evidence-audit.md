@@ -216,6 +216,13 @@ Current frontend lifecycle evidence:
   window/application are unsupported, and Windows display/window/application are
   unsupported until native backends exist. This is explicit unsupported product
   state, not cross-platform capture completion.
+- RemoteApp device capability projection now exposes
+  `metadata.input_control_support` for macOS, Linux, and Windows. macOS display
+  input follows runtime Accessibility/input-injection permission, macOS
+  window/application input remains unsupported until target-scoped dispatch is
+  safe, and Linux/Windows input injection is unsupported until native backends
+  exist. This is explicit unsupported product state, not successful OS input
+  injection evidence.
 - RemoteApp session views now expose `input_readiness` as a single
   machine-readable projection for requested mode, effective mode,
   `interactive_ready`, input scope, and blocked reason. This improves frontend

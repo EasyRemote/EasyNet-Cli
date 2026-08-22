@@ -1005,6 +1005,8 @@ fn device_capabilities_view() {
     };
     let diagnostic_target_subjects = XCAP_OPENH264_WEBRTC_BACKEND.supported_subjects_value();
     let platform_support = platform_support_view(production_ready, &production_backend);
+    let input_available = input_injection_available();
+    let input_control_support = input_control_support_view(input_available);
     json!({
         "unsupported_input_types": unsupported_input_channel_types_value(),
         "unsupported_capabilities": [
@@ -1031,6 +1033,7 @@ fn device_capabilities_view() {
                 json!(production_backend.unavailable_reason().unwrap_or("production_backend_not_ready"))
             },
             "platform_support": platform_support,
+            "input_control_support": input_control_support,
             "capture_target_models": [
                 "display_surface",
                 "window_surface",
@@ -1038,6 +1041,30 @@ fn device_capabilities_view() {
             ],
             "reason": "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
         },
+    });
+}
+
+fn input_control_support_view(input_available: bool) {
+    json!({
+        "requires_input_control_consent": true,
+        "input_transport": "webrtc_data_channel",
+        "platforms": {
+            "macos": {
+                "display": {"status": "available", "scope": "display_global"},
+                "window": {"status": "unsupported", "reason": "target_scoped_keyboard_pointer_dispatch_unsafe"},
+                "application": {"status": "unsupported", "reason": "target_scoped_keyboard_pointer_dispatch_unsafe"}
+            },
+            "linux": {
+                "display": {"status": "unsupported", "reason": "linux_input_injection_backend_not_implemented"},
+                "window": {"status": "unsupported", "reason": "linux_input_injection_backend_not_implemented"},
+                "application": {"status": "unsupported", "reason": "linux_input_injection_backend_not_implemented"}
+            },
+            "windows": {
+                "display": {"status": "unsupported", "reason": "windows_input_injection_backend_not_implemented"},
+                "window": {"status": "unsupported", "reason": "windows_input_injection_backend_not_implemented"},
+                "application": {"status": "unsupported", "reason": "windows_input_injection_backend_not_implemented"}
+            }
+        }
     });
 }
 
@@ -1068,6 +1095,9 @@ mod tests {
 
     #[test]
     fn device_capabilities_project_cross_platform_support_matrix() {}
+
+    #[test]
+    fn device_capabilities_project_input_control_support_matrix() {}
 }
 RS
 
@@ -2807,9 +2837,19 @@ perl -0pi -e 's/"platform_support": platform_support,//' \
 run_fail 'device capabilities must expose product-visible platform support matrix'
 
 write_fixture
+perl -0pi -e 's/"input_control_support": input_control_support,//' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose product-visible input control support matrix'
+
+write_fixture
 perl -0pi -e 's/platform_support_view\(production_ready, &production_backend\)/platform_support_view(false, &production_backend)/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must derive platform support from runtime production readiness'
+
+write_fixture
+perl -0pi -e 's/input_control_support_view\(input_available\)/input_control_support_view(true)/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must derive input control support from runtime input permission'
 
 write_fixture
 perl -0pi -e 's/linux_app_window_native_backend_not_implemented/linux_capture_available/g' \
@@ -2825,6 +2865,26 @@ write_fixture
 perl -0pi -e 's/"diagnostic_only"/"production_ready"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must distinguish Linux display diagnostic-only support from production capture'
+
+write_fixture
+perl -0pi -e 's/"requires_input_control_consent": true/"requires_input_control_consent": false/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose explicit input-control consent requirement'
+
+write_fixture
+perl -0pi -e 's/target_scoped_keyboard_pointer_dispatch_unsafe/target_scoped_input_available/g' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must keep macOS window/application input unsupported until target-scoped dispatch is safe'
+
+write_fixture
+perl -0pi -e 's/linux_input_injection_backend_not_implemented/linux_input_available/g' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must mark Linux input injection unsupported'
+
+write_fixture
+perl -0pi -e 's/windows_input_injection_backend_not_implemented/windows_input_available/g' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must mark Windows input injection unsupported'
 
 write_fixture
 perl -0pi -e 's/"display_scoped_application_window_set"/"application"/' \
@@ -2845,6 +2905,11 @@ write_fixture
 perl -0pi -e 's/device_capabilities_project_cross_platform_support_matrix/device_capabilities_hide_cross_platform_support_matrix/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capability tests must prove the cross-platform support matrix is projected'
+
+write_fixture
+perl -0pi -e 's/device_capabilities_project_input_control_support_matrix/device_capabilities_hide_input_control_support_matrix/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capability tests must prove the input control support matrix is projected'
 
 write_fixture
 perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value\(\),/"unsupported_input_types": json!(["clipboard"]),/' \

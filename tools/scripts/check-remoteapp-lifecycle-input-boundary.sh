@@ -1135,14 +1135,26 @@ require '"production_target_subjects_source"' "$VIEW_DEVICE" \
   'device capabilities must expose the source backend for production target subjects'
 require '"platform_support": platform_support' "$VIEW_DEVICE" \
   'device capabilities must expose product-visible platform support matrix'
+require '"input_control_support": input_control_support' "$VIEW_DEVICE" \
+  'device capabilities must expose product-visible input control support matrix'
 require 'platform_support_view\(production_ready, &production_backend\)' "$VIEW_DEVICE" \
   'device capabilities must derive platform support from runtime production readiness'
+require 'input_control_support_view\(input_available\)' "$VIEW_DEVICE" \
+  'device capabilities must derive input control support from runtime input permission'
 require '"linux_app_window_native_backend_not_implemented"' "$VIEW_DEVICE" \
   'device capabilities must mark Linux app/window capture unsupported'
 require '"windows_native_backend_not_implemented"' "$VIEW_DEVICE" \
   'device capabilities must mark Windows capture unsupported'
 require '"diagnostic_only"' "$VIEW_DEVICE" \
   'device capabilities must distinguish Linux display diagnostic-only support from production capture'
+require '"requires_input_control_consent": true' "$VIEW_DEVICE" \
+  'device capabilities must expose explicit input-control consent requirement'
+require '"target_scoped_keyboard_pointer_dispatch_unsafe"' "$VIEW_DEVICE" \
+  'device capabilities must keep macOS window/application input unsupported until target-scoped dispatch is safe'
+require '"linux_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \
+  'device capabilities must mark Linux input injection unsupported'
+require '"windows_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \
+  'device capabilities must mark Windows input injection unsupported'
 require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
   'device capabilities must expose the application target model instead of flattening applications to display capture'
 require 'display/window/application target capture' "$VIEW_DEVICE" \
@@ -1153,5 +1165,7 @@ require 'device_capabilities_project_native_target_subject_matrix' "$VIEW_DEVICE
   'device capability tests must prove the native target subject matrix is projected'
 require 'device_capabilities_project_cross_platform_support_matrix' "$VIEW_DEVICE" \
   'device capability tests must prove the cross-platform support matrix is projected'
+require 'device_capabilities_project_input_control_support_matrix' "$VIEW_DEVICE" \
+  'device capability tests must prove the input control support matrix is projected'
 
 printf 'check-remoteapp-lifecycle-input-boundary: ok\n'

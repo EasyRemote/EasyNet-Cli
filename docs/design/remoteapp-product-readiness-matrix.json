@@ -68,6 +68,7 @@
         "remote_desktop.request_permission contract and frontend status expose Accessibility/input-injection permission alongside Screen Recording",
         "frontend exposes Request permission recovery when daemon input_readiness reports input_injection_unavailable",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate current-session input policy implementation test",
+        "device capability projection exposes input_control_support for macOS/Linux/Windows with macOS display tied to runtime permission and non-display/non-macOS input unsupported",
         "remoteapp-input-injection-e2e.sh verifier for real pointer/keyboard input injection artifacts"
       ],
       "required_evidence_before_product_complete": [

@@ -28,6 +28,12 @@ const PLATFORM_REASON_LINUX_DISPLAY_DIAGNOSTIC_ONLY: &str = "linux_display_diagn
 const PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED: &str =
     "linux_app_window_native_backend_not_implemented";
 const PLATFORM_REASON_WINDOWS_UNSUPPORTED: &str = "windows_native_backend_not_implemented";
+const INPUT_REASON_MACOS_PERMISSION_GRANTED: &str = "macos_accessibility_permission_granted";
+const INPUT_REASON_MACOS_PERMISSION_DENIED: &str = "macos_accessibility_permission_denied";
+const INPUT_REASON_TARGET_SCOPED_UNSUPPORTED: &str =
+    "target_scoped_keyboard_pointer_dispatch_unsafe";
+const INPUT_REASON_LINUX_UNSUPPORTED: &str = "linux_input_injection_backend_not_implemented";
+const INPUT_REASON_WINDOWS_UNSUPPORTED: &str = "windows_input_injection_backend_not_implemented";
 
 /// Build media quality targets from create-session video constraints.
 pub(in crate::daemon::plugins::remote_desktop) fn quality_targets(video: &Value) -> Value {
@@ -145,6 +151,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "current builtin backend is capped by xcap macOS recorder; 144Hz requires the ScreenCaptureKit/VideoToolbox plugin backend"
     };
     let platform_support = platform_support_view(production_ready, &production_backend);
+    let input_available = input_injection_available();
+    let input_control_support = input_control_support_view(input_available);
     json!({
         "capture_backends": capture_backends,
         "media_sdk": sdk_contract_view(),
@@ -153,7 +161,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "codec_profiles": codec_profiles,
         "audio": audio.clone(),
         "hardware_cursor": false,
-        "input_injection": input_injection_available(),
+        "input_injection": input_available,
         "data_channel_input": true,
         "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
         "supported_input_events": ["pointer.move", "pointer.down", "pointer.up", "key.down", "key.up"],
@@ -218,6 +226,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
                     .unwrap_or("production_backend_not_ready"))
             },
             "platform_support": platform_support,
+            "input_control_support": input_control_support,
             "capture_target_models": capture_target_models,
             "display_capture_source": display_capture_source,
             "display_capture_api": display_capture_api,
@@ -225,6 +234,52 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             "next_required_backend": MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
             "reason": reason,
         }
+    })
+}
+
+fn input_support(status: &str, reason: &str, scope: Value) -> Value {
+    json!({
+        "status": status,
+        "reason": reason,
+        "scope": scope,
+    })
+}
+
+fn input_control_support_view(input_available: bool) -> Value {
+    let macos_display_status = if input_available {
+        "available"
+    } else {
+        "permission_denied"
+    };
+    let macos_display_reason = if input_available {
+        INPUT_REASON_MACOS_PERMISSION_GRANTED
+    } else {
+        INPUT_REASON_MACOS_PERMISSION_DENIED
+    };
+
+    json!({
+        "schema_version": 1,
+        "current_host_os": std::env::consts::OS,
+        "requires_input_control_consent": true,
+        "input_transport": "webrtc_data_channel",
+        "platforms": {
+            "macos": {
+                "display": input_support(macos_display_status, macos_display_reason, json!("display_global")),
+                "window": input_support("unsupported", INPUT_REASON_TARGET_SCOPED_UNSUPPORTED, Value::Null),
+                "application": input_support("unsupported", INPUT_REASON_TARGET_SCOPED_UNSUPPORTED, Value::Null),
+            },
+            "linux": {
+                "display": input_support("unsupported", INPUT_REASON_LINUX_UNSUPPORTED, Value::Null),
+                "window": input_support("unsupported", INPUT_REASON_LINUX_UNSUPPORTED, Value::Null),
+                "application": input_support("unsupported", INPUT_REASON_LINUX_UNSUPPORTED, Value::Null),
+            },
+            "windows": {
+                "display": input_support("unsupported", INPUT_REASON_WINDOWS_UNSUPPORTED, Value::Null),
+                "window": input_support("unsupported", INPUT_REASON_WINDOWS_UNSUPPORTED, Value::Null),
+                "application": input_support("unsupported", INPUT_REASON_WINDOWS_UNSUPPORTED, Value::Null),
+            },
+        },
+        "non_claim": "input support metadata does not replace live OS input injection E2E evidence",
     })
 }
 
@@ -469,5 +524,56 @@ mod tests {
         assert!(platform_support["non_claim"]
             .as_str()
             .is_some_and(|message| message.contains("live cross-platform capture E2E")));
+    }
+
+    #[test]
+    fn device_capabilities_project_input_control_support_matrix() {
+        let capabilities = device_capabilities_view();
+        let input_support = &capabilities["metadata"]["input_control_support"];
+
+        assert_eq!(input_support["schema_version"], json!(1));
+        assert_eq!(input_support["requires_input_control_consent"], json!(true));
+        assert_eq!(
+            input_support["input_transport"],
+            json!("webrtc_data_channel")
+        );
+        if capabilities["input_injection"] == json!(true) {
+            assert_eq!(
+                input_support["platforms"]["macos"]["display"]["status"],
+                json!("available")
+            );
+            assert_eq!(
+                input_support["platforms"]["macos"]["display"]["scope"],
+                json!("display_global")
+            );
+        } else {
+            assert_eq!(
+                input_support["platforms"]["macos"]["display"]["status"],
+                json!("permission_denied")
+            );
+            assert_eq!(
+                input_support["platforms"]["macos"]["display"]["reason"],
+                json!("macos_accessibility_permission_denied")
+            );
+        }
+        assert_eq!(
+            input_support["platforms"]["macos"]["window"]["status"],
+            json!("unsupported")
+        );
+        assert_eq!(
+            input_support["platforms"]["macos"]["application"]["reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(
+            input_support["platforms"]["linux"]["display"]["reason"],
+            json!("linux_input_injection_backend_not_implemented")
+        );
+        assert_eq!(
+            input_support["platforms"]["windows"]["application"]["status"],
+            json!("unsupported")
+        );
+        assert!(input_support["non_claim"]
+            .as_str()
+            .is_some_and(|message| message.contains("live OS input injection E2E")));
     }
 }
