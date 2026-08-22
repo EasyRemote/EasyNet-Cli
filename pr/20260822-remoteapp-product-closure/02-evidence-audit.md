@@ -312,6 +312,13 @@ Current frontend lifecycle evidence:
   `client_sent_at_ms` and `client_sequence`, including `target_input_not_ready`
   responses after target tracking disables input. This keeps probe evidence
   correlated with frontend frames without adding a second input API.
+- Host view-only input safety E2E now opens public
+  `remote_desktop.attach` through `easynet ability bidi`, sends pointer/key
+  frames with `sent_at_ms` and `client_sequence`, and requires
+  `input_scope_unsupported` warnings that echo `client_sent_at_ms` and
+  `client_sequence`. This proves the public diagnostic Bidi input path matches
+  the app/window view-only policy instead of relying only on session-view
+  policy projection.
 
 Missing or insufficient product evidence:
 

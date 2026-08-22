@@ -71,6 +71,30 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
   --self-test >/dev/null
 
+cp "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good"
+perl -0pi -e 's/run_easynet ability bidi remote_desktop\.attach/echo skipped remote desktop attach bidi probe/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted view-only input harness without public attach Bidi probe" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good"
+perl -0pi -e 's/"type": "input_applied"/"type": "input_application_unchecked"/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+perl -0pi -e 's/view-only diagnostic input probe must not apply pointer or key frames/view-only diagnostic input probe accepts applied frames/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted view-only input harness without applied-frame rejection guard" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
 perl -0pi -e 's/\$TIMESTAMP-\$TARGET_KIND-\$\$/\$TIMESTAMP/' \

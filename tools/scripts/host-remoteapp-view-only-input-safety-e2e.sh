@@ -86,8 +86,13 @@ SELECTED_RESOURCE_JSON="$OUT_DIR/selected-resource.json"
 SENTINEL_MANIFEST_JSON="$OUT_DIR/sentinel-manifest.json"
 CREATE_SESSION_JSON="$OUT_DIR/create-session.json"
 SHOW_SESSION_JSON="$OUT_DIR/show-session.json"
+ATTACH_BIDI_JSON="$OUT_DIR/attach-bidi-input-probe.json"
 SESSION_ID="rd-view-only-input-safety-e2e-$$"
 LEASE_TTL_MS=5000
+POINTER_CLIENT_SENT_AT_MS=1787331000123
+KEY_CLIENT_SENT_AT_MS=1787331000456
+POINTER_CLIENT_SEQUENCE=101
+KEY_CLIENT_SEQUENCE=102
 
 die() {
   echo "[FAIL] $*" >&2
@@ -170,6 +175,7 @@ scope_audit = get("create_session.session.scope_audit")
 input_policy = get("create_session.session.input_policy")
 input_plane_policy = get("create_session.session.input_plane.policy")
 expected_rejections = evidence.get("expected_input_rejections")
+attach_probe = evidence.get("diagnostic_input_probe")
 
 require(evidence.get("status") == "passed", "evidence.status must be passed")
 require(target_kind in {"window", "application"}, "target_kind must be window or application")
@@ -250,6 +256,56 @@ require(get("show_session.session.target_binding.input_scope_reason")
         == "target_scoped_keyboard_pointer_dispatch_unsafe",
         "show_session must preserve target-scoped input unsafe reason")
 
+require(isinstance(attach_probe, dict), "diagnostic_input_probe must be recorded")
+if isinstance(attach_probe, dict):
+    require(attach_probe.get("ability") == "remote_desktop.attach",
+            "diagnostic_input_probe ability must be remote_desktop.attach")
+    require(attach_probe.get("subject_ura") == resource_ura,
+            "diagnostic_input_probe subject must equal selected Resource URA")
+    require(attach_probe.get("exit_code") == 0,
+            "diagnostic_input_probe must succeed at the transport level")
+    require(attach_probe.get("input_transport") == "axon_invoke_bidi",
+            "diagnostic_input_probe must use Axon InvokeBidi")
+    frames = attach_probe.get("frames")
+    require(isinstance(frames, list), "diagnostic_input_probe.frames must be recorded")
+    if isinstance(frames, list):
+        applied = [
+            frame for frame in frames
+            if isinstance(frame, dict) and frame.get("type") == "input_applied"
+        ]
+        require(not applied,
+                "view-only diagnostic input probe must not apply pointer or key frames")
+
+        def find_rejection(input_type, sequence, sent_at_ms):
+            for frame in frames:
+                if not isinstance(frame, dict):
+                    continue
+                if frame.get("type") != "warn":
+                    continue
+                if frame.get("code") != "input_scope_unsupported":
+                    continue
+                if frame.get("input_type") != input_type:
+                    continue
+                if frame.get("client_sequence") != sequence:
+                    continue
+                if frame.get("client_sent_at_ms") != sent_at_ms:
+                    continue
+                return frame
+            return None
+
+        require(find_rejection(
+            "pointer",
+            attach_probe.get("pointer_client_sequence"),
+            attach_probe.get("pointer_client_sent_at_ms"),
+        ) is not None,
+                "pointer diagnostic rejection must preserve input_scope_unsupported telemetry")
+        require(find_rejection(
+            "key",
+            attach_probe.get("key_client_sequence"),
+            attach_probe.get("key_client_sent_at_ms"),
+        ) is not None,
+                "key diagnostic rejection must preserve input_scope_unsupported telemetry")
+
 report = {
     "status": "failed" if errors else "passed",
     "errors": errors,
@@ -260,6 +316,9 @@ report = {
     "effective_input_mode": get("create_session.session.scope_audit.input_mode"),
     "key_rejection": get("expected_input_rejections.key"),
     "pointer_rejection": get("expected_input_rejections.pointer"),
+    "diagnostic_input_transport": get("diagnostic_input_probe.input_transport"),
+    "diagnostic_pointer_sequence": get("diagnostic_input_probe.pointer_client_sequence"),
+    "diagnostic_key_sequence": get("diagnostic_input_probe.key_client_sequence"),
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -274,6 +333,9 @@ with open(md_path, "w", encoding="utf-8") as f:
     f.write(f"- Effective input mode: `{report['effective_input_mode']}`\n")
     f.write(f"- Key rejection: `{report['key_rejection']}`\n")
     f.write(f"- Pointer rejection: `{report['pointer_rejection']}`\n")
+    f.write(f"- Diagnostic input transport: `{report['diagnostic_input_transport']}`\n")
+    f.write(f"- Diagnostic pointer sequence: `{report['diagnostic_pointer_sequence']}`\n")
+    f.write(f"- Diagnostic key sequence: `{report['diagnostic_key_sequence']}`\n")
     f.write(f"- Evidence: `{evidence_path}`\n")
     if errors:
         f.write("\n## Errors\n")
@@ -374,6 +436,35 @@ evidence = {
         "key": "input_scope_unsupported",
         "pointer": "input_scope_unsupported",
         "evidence_source": "public_session_input_policy",
+    },
+    "diagnostic_input_probe": {
+        "ability": "remote_desktop.attach",
+        "subject_ura": subject,
+        "exit_code": 0,
+        "input_transport": "axon_invoke_bidi",
+        "pointer_client_sent_at_ms": 1787331000123,
+        "pointer_client_sequence": 101,
+        "key_client_sent_at_ms": 1787331000456,
+        "key_client_sequence": 102,
+        "frames": [
+            {
+                "type": "warn",
+                "code": "input_scope_unsupported",
+                "input_type": "pointer",
+                "action": "move",
+                "client_sent_at_ms": 1787331000123,
+                "client_sequence": 101,
+            },
+            {
+                "type": "warn",
+                "code": "input_scope_unsupported",
+                "input_type": "key",
+                "action": "down",
+                "client_sent_at_ms": 1787331000456,
+                "client_sequence": 102,
+            },
+            {"type": "closed", "reason": "preview_client_closed"},
+        ],
     },
 }
 path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -485,7 +576,76 @@ run_easynet ability show-remote-desktop-session \
   --session-json "$CREATE_SESSION_JSON" \
   --format json >"$SHOW_SESSION_JSON"
 
-python3 - "$EVIDENCE_JSON" "$TARGET_KIND" "$LEASE_TTL_MS" "$SENTINEL_MANIFEST_JSON" "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$CREATE_SESSION_JSON" "$SHOW_SESSION_JSON" <<'PY'
+SESSION_TOKEN="$(python3 - "$CREATE_SESSION_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    response = json.load(f)
+token = response.get("session", {}).get("session_token")
+if not isinstance(token, str) or not token:
+    raise SystemExit("create_session response missing session.session_token")
+print(token)
+PY
+)"
+BIDI_NONCE_HEX="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)"
+ATTACH_ARGS="$(python3 - "$SESSION_ID" "$SESSION_TOKEN" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "session_id": sys.argv[1],
+    "session_token": sys.argv[2],
+    "encoding": "jpeg_binary",
+    "fps": 1,
+    "resolution": "320x180",
+}, separators=(",", ":")))
+PY
+)"
+POINTER_INPUT="$(python3 - "$POINTER_CLIENT_SENT_AT_MS" "$POINTER_CLIENT_SEQUENCE" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "type": "pointer",
+    "action": "move",
+    "x": 10,
+    "y": 20,
+    "sent_at_ms": int(sys.argv[1]),
+    "client_sequence": int(sys.argv[2]),
+}, separators=(",", ":")))
+PY
+)"
+KEY_INPUT="$(python3 - "$KEY_CLIENT_SENT_AT_MS" "$KEY_CLIENT_SEQUENCE" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "type": "key",
+    "action": "down",
+    "code": "KeyA",
+    "sent_at_ms": int(sys.argv[1]),
+    "client_sequence": int(sys.argv[2]),
+}, separators=(",", ":")))
+PY
+)"
+
+run_easynet ability bidi remote_desktop.attach \
+  --subject "$SELECTED_RESOURCE_URA" \
+  --nonce-hex "$BIDI_NONCE_HEX" \
+  --causal-root \
+  --args "$ATTACH_ARGS" \
+  --input "$POINTER_INPUT" \
+  --input "$KEY_INPUT" \
+  --input '{"type":"close"}' \
+  --max-frames 16 \
+  --format json >"$ATTACH_BIDI_JSON"
+
+python3 - "$EVIDENCE_JSON" "$TARGET_KIND" "$LEASE_TTL_MS" "$SENTINEL_MANIFEST_JSON" "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$CREATE_SESSION_JSON" "$SHOW_SESSION_JSON" "$ATTACH_BIDI_JSON" "$POINTER_CLIENT_SENT_AT_MS" "$POINTER_CLIENT_SEQUENCE" "$KEY_CLIENT_SENT_AT_MS" "$KEY_CLIENT_SEQUENCE" <<'PY'
 import json
 import pathlib
 import sys
@@ -499,7 +659,12 @@ import sys
     selected_resource_path,
     create_session_path,
     show_session_path,
-) = sys.argv[1:9]
+    attach_bidi_path,
+    pointer_client_sent_at_ms,
+    pointer_client_sequence,
+    key_client_sent_at_ms,
+    key_client_sequence,
+) = sys.argv[1:14]
 
 def load(path):
     with open(path, encoding="utf-8") as f:
@@ -510,6 +675,9 @@ live_inventory = load(live_inventory_path)
 selected = load(selected_resource_path)
 create_response = load(create_session_path)
 show_response = load(show_session_path)
+attach_bidi_text = pathlib.Path(attach_bidi_path).read_text(encoding="utf-8")
+decoder = json.JSONDecoder()
+attach_frames, _ = decoder.raw_decode(attach_bidi_text.lstrip())
 create_session = create_response.get("session")
 invocation = create_response.get("invocation")
 if not isinstance(create_session, dict):
@@ -518,6 +686,8 @@ if not isinstance(invocation, dict):
     raise SystemExit("create-remote-desktop-session response missing verified invocation metadata")
 if not isinstance(show_response, dict):
     raise SystemExit("show-remote-desktop-session response missing session object")
+if not isinstance(attach_frames, list):
+    raise SystemExit("remote_desktop.attach bidi output must start with a JSON array")
 
 evidence = {
     "status": "passed",
@@ -553,6 +723,17 @@ evidence = {
         "key": "input_scope_unsupported",
         "pointer": "input_scope_unsupported",
         "evidence_source": "public_session_input_policy",
+    },
+    "diagnostic_input_probe": {
+        "ability": "remote_desktop.attach",
+        "subject_ura": selected.get("resource_ura"),
+        "exit_code": 0,
+        "input_transport": "axon_invoke_bidi",
+        "pointer_client_sent_at_ms": int(pointer_client_sent_at_ms),
+        "pointer_client_sequence": int(pointer_client_sequence),
+        "key_client_sent_at_ms": int(key_client_sent_at_ms),
+        "key_client_sequence": int(key_client_sequence),
+        "frames": attach_frames,
     },
 }
 pathlib.Path(evidence_path).write_text(

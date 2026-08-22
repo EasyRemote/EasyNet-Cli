@@ -761,3 +761,38 @@ Product effect:
   from the client frame.
 - This improves executable evidence quality for input safety and recovery, but
   still does not prove successful real OS pointer/keyboard injection.
+
+## 2026-08-23 — Host view-only input E2E must exercise public Bidi input
+
+Decision:
+
+- A session view that says `input_scope=view_only` is not enough product
+  evidence. The public input transport must also reject pointer/key frames
+  under the same policy.
+- The correct boundary for this host evidence is
+  `easynet ability bidi remote_desktop.attach` with explicit `subject`,
+  nonce, and causal root, not a private Rust helper.
+- Pointer/key probe frames must carry frontend-shaped `sent_at_ms` and
+  `client_sequence` so host E2E evidence can correlate browser input with
+  daemon rejection.
+
+Implementation delta:
+
+- `host-remoteapp-view-only-input-safety-e2e.sh` now opens the public
+  `remote_desktop.attach` InvokeBidi path after session creation and sends
+  pointer/key/close frames.
+- The harness validates that view-only app/window sessions do not emit
+  `input_applied` and that pointer/key warnings are
+  `input_scope_unsupported` with preserved `client_sent_at_ms` and
+  `client_sequence`.
+- The E2E acceptance checker now rejects host view-only input harnesses that
+  omit the public Bidi probe or the client telemetry checks.
+
+Product effect:
+
+- RemoteApp now has stronger executable evidence that app/window sessions fail
+  closed on the real diagnostic input transport while preserving correlation
+  metadata.
+- This still does not prove product-complete native input injection; the
+  remaining requirement is successful focus-safe OS pointer/keyboard injection
+  E2E with latency and permission evidence.

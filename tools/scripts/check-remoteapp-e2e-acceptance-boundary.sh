@@ -168,6 +168,14 @@ require 'input_plane\.policy|input_plane.*policy' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must verify the WebRTC input plane policy'
 require 'input_scope_unsupported' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must prove key/pointer rejection uses input_scope_unsupported'
+require 'ability bidi remote_desktop\.attach' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must exercise the public remote_desktop.attach InvokeBidi input path'
+require 'client_sequence' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must send and verify client sequence telemetry'
+require 'client_sent_at_ms' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must verify daemon-projected client send timestamp telemetry'
+require 'view-only diagnostic input probe must not apply pointer or key frames' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must reject applied input on view-only app/window sessions'
 require 'window\|application|window or application|window\\|application' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must cover the app/window target class'
 require 'create_session args must not carry subject identity' "$VIEW_ONLY_INPUT_SAFETY" \

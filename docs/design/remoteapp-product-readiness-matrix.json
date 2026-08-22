@@ -48,6 +48,7 @@
         "frontend input sender attaches monotonic client_sequence and sent_at_ms telemetry to accepted data-channel frames",
         "daemon pointer/key input frame schema accepts frontend sent_at_ms and client_sequence metadata and preserves client_sent_at_ms/client_sequence in input applied/rejected events",
         "diagnostic InvokeBidi input responses preserve client_sent_at_ms and client_sequence for probe correlation, including target_input_not_ready",
+        "host view-only input safety E2E opens public remote_desktop.attach InvokeBidi and requires app/window pointer/key diagnostic frames with client_sequence/client_sent_at_ms to reject as input_scope_unsupported",
         "frontend watch_events maps daemon input activation blocks and input frame rejections into visible RemoteApp status without closing media transport",
         "frontend session details separately surface input scope and pointer/keyboard enablement from daemon input_readiness",
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
