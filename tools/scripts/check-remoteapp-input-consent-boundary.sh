@@ -95,7 +95,13 @@ require 'display_interactive_downgrades_until_input_consent_exists' "$TARGET" \
 
 require 'effective_mode": if interactive_ready \{ "interactive" \} else \{ "view_only" \}' "$VIEW" \
   'session view must not report interactive effective mode until runtime input is truly ready'
+require 'session\.target_snapshot\(\)\.input_enabled\(\)' "$VIEW" \
+  'session view input_readiness must consume target tracker input_enabled state'
+require 'target_input_not_ready' "$VIEW" \
+  'session view must expose target tracker input-disabled state as target_input_not_ready'
 require 'input_injection_unavailable' "$VIEW" \
   'session view must expose OS input-permission blockage separately from consent scope'
+require 'session_view_blocks_input_readiness_when_target_tracking_disables_input' "$VIEW" \
+  'session view tests must prove target-tracker input loss blocks interactive readiness'
 
 printf 'check-remoteapp-input-consent-boundary: ok\n'

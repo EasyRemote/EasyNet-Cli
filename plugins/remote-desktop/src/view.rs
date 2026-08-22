@@ -110,6 +110,8 @@ fn input_readiness_view(
     let any_input_enabled = pointer_enabled || keyboard_enabled;
     let blocked_reason = if !requested_interactive {
         Value::Null
+    } else if !session.target_snapshot().input_enabled() {
+        json!("target_input_not_ready")
     } else if input_policy.input_scope().as_str() == "view_only" {
         json!(session.target_binding().input_scope_reason())
     } else if !input_injection_available() {
@@ -185,9 +187,10 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::target::{
-        ResourceEntryTargetResolver, TargetGeometry,
+        ResourceEntryTargetResolver, TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::{
@@ -332,5 +335,67 @@ mod tests {
             json!(768.0)
         );
         assert_eq!(view["input_plane"]["policy"], view["input_policy"]);
+    }
+
+    #[test]
+    fn session_view_blocks_input_readiness_when_target_tracking_disables_input() {
+        let subject = "easynet:///r/acme/resource/display.lost-input";
+        let entry = ResourceEntry {
+            resource_ura: subject.into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Display,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "display:macos:1".into(),
+            display_name: "Built-in Display".into(),
+            metadata: live_remote_target_metadata(json!({
+                "display_id": 1,
+                "primary_display": true,
+                "platform": "macos",
+                "backend": "macos_core_graphics",
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-view-target-input-not-ready",
+            subject,
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.input_policy = RemoteDesktopInputPolicy::new(true, true);
+        init.target_binding = ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                "remote_desktop.create_session",
+                &entry,
+                "interactive",
+                1,
+                true,
+            )
+            .expect("display binding resolves with input-control consent");
+        let mut session = RemoteDesktopSession::new(init);
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "display disappeared".into(),
+            observed_at_ms: 100,
+        });
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "display still missing".into(),
+            observed_at_ms: 200,
+        });
+
+        let view = serialize_session(&session);
+
+        assert_eq!(view["target_tracking"]["input_enabled"], json!(false));
+        assert_eq!(
+            view["input_readiness"]["blocked_reason"],
+            json!("target_input_not_ready")
+        );
+        assert_eq!(
+            view["input_readiness"]["effective_mode"],
+            json!("view_only")
+        );
+        assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
+        assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);
     }
 }

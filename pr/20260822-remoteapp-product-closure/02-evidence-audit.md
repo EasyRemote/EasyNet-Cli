@@ -180,6 +180,11 @@ Current frontend lifecycle evidence:
   to view-only now appears with the effective mode and blocked reason such as
   `input_injection_unavailable`. This closes an operator-observability seam; it
   does not turn blocked input into successful pointer/keyboard injection.
+- Daemon session views now also project target-tracker input loss into
+  `input_readiness.blocked_reason=target_input_not_ready`. This keeps the
+  public session view aligned with the actual input execution path, which
+  already rejects frames when the latest target snapshot has
+  `input_enabled=false`.
 
 Missing or insufficient product evidence:
 

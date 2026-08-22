@@ -239,6 +239,33 @@ Product effect:
 - This does not claim product-level input injection completion; real OS
   pointer/keyboard E2E and latency evidence remain required.
 
+## 2026-08-22 — Target tracker input loss must block session input readiness
+
+Decision:
+
+- Runtime `input_readiness` must reflect the same target-state predicate used
+  by input execution.
+- A session whose latest target snapshot has `input_enabled=false` must not
+  report `interactive_ready=true`, even if the requested mode, consent, and OS
+  input-injection permission would otherwise allow input.
+
+Implementation delta:
+
+- `input_readiness_view` now returns
+  `blocked_reason=target_input_not_ready` before OS input-permission checks
+  when `session.target_snapshot().input_enabled()` is false.
+- Added a daemon session-view regression for display interactive input-control
+  consent followed by target loss.
+- Extended the input-consent boundary gate and mutation self-test so this
+  target-state readiness dependency cannot be dropped.
+
+Product effect:
+
+- The public session view, frontend UI, and input data-channel execution path
+  now agree when target tracking disables input.
+- This is still a safety/projection closure only; successful low-latency
+  pointer/keyboard injection remains unproven.
+
 ## 2026-08-22 — Pointer input must reject stale target geometry
 
 Decision:

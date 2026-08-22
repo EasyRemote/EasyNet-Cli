@@ -101,8 +101,14 @@ fn display_interactive_downgrades_until_input_consent_exists() {}
 RS
 
 cat >"$REMOTE_ROOT/src/view.rs" <<'RS'
+fn session_view_blocks_input_readiness_when_target_tracking_disables_input() {}
+
 fn input_readiness_view() {
-    let blocked_reason = json!("input_injection_unavailable");
+    let blocked_reason = if !session.target_snapshot().input_enabled() {
+        json!("target_input_not_ready")
+    } else {
+        json!("input_injection_unavailable")
+    };
     json!({
         "effective_mode": if interactive_ready { "interactive" } else { "view_only" },
     });
@@ -152,6 +158,12 @@ perl -0pi -e 's/"effective_mode": if interactive_ready \{ "interactive" \} else 
   "$REMOTE_ROOT/src/view.rs"
 if CHECK_REMOTEAPP_INPUT_CONSENT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp input consent checker accepted unconditional interactive effective mode" >&2
+  exit 1
+fi
+perl -0pi -e 's/    let blocked_reason = if !session\.target_snapshot\(\)\.input_enabled\(\) \{\n        json!\("target_input_not_ready"\)\n    \} else \{\n        json!\("input_injection_unavailable"\)\n    \};/    let blocked_reason = json!("input_injection_unavailable");/s' \
+  "$REMOTE_ROOT/src/view.rs"
+if CHECK_REMOTEAPP_INPUT_CONSENT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp input consent checker accepted input readiness that ignores target tracker input_enabled" >&2
   exit 1
 fi
 
