@@ -129,6 +129,13 @@ Current frontend lifecycle evidence:
   view-only input safety for window and application targets. This is strong
   local product-flow evidence, not cross-platform/cross-device product
   completion evidence.
+- Current 2026-08-23 local product-flow evidence:
+  `target/e2e/frontend-remoteapp-product-flow/20260823-both-current-69931/report.md`
+  passed all bounded local steps on current HEAD with `target_kind=both`,
+  including decoded-frame WebRTC and view-only input safety for both window and
+  application targets. This strengthens local macOS frontend + daemon + host
+  evidence but does not prove cross-platform, cross-device, host-audio,
+  real-input-injection, NAT/relay, or Browser/Tauri product completion.
 - macOS ScreenCaptureKit application sessions now build the native
   `exceptingWindows` filter from same-application, same-display windows outside
   the committed `AppWindowSetProof`. This closes a concrete capture-scope seam:

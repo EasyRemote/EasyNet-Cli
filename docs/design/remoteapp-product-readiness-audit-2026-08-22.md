@@ -179,6 +179,19 @@ passed the bounded single-machine product-flow bundle after the local Hub was
 restarted with the paired `localhost` realm and the device connection-state
 projector preserved `hub_api_endpoint` across the
 `FRONTEND_CONNECTED` projection.
+Current 2026-08-23 local product-flow evidence,
+`target/e2e/frontend-remoteapp-product-flow/20260823-both-current-69931/report.md`,
+passed with `target_kind=both` on current HEAD. The report covers Hub API
+readiness, daemon control/invocation readiness, frontend typecheck,
+`DeviceMediaAccess` RemoteApp UI flow, host permission-subject preflight,
+target picker freshness, decoded-frame WebRTC for both window and application
+targets, and view-only input safety for both window and application targets.
+Application decoded-frame evidence showed `capture_scope=AppSurface`,
+`display_fallback_used=false`, rendered frames, selected Resource URA session
+subjects, and `host_audio_not_implemented` / host-only route non-claims.
+Application view-only input evidence preserved pointer/key
+`input_scope_unsupported` telemetry over public `remote_desktop.attach`
+InvokeBidi.
 Latest 2026-08-23 local Hub API readiness attempt,
 `target/e2e/hub-api-readiness/20260823-rich-failure-check-70909/report.md`,
 failed before RemoteApp product-flow execution:

@@ -27,6 +27,7 @@
         "check-remoteapp-main-crate-implementation-tests.sh runs main-crate app/window target observation and fail-closed implementation tests",
         "device capability projection advertises production_target_subjects only when the production gate is ready and keeps diagnostic_target_subjects display-only",
         "device capability projection exposes platform_support for macOS/Linux/Windows with Linux app/window and Windows capture explicitly unsupported",
+        "2026-08-23 local product-flow both report passed decoded-frame WebRTC for macOS window and application targets with selected Resource URA subjects and no display fallback",
         "remoteapp-cross-platform-capture-e2e.sh verifier for real macOS/Windows/Linux capture or explicit unsupported artifacts"
       ],
       "required_evidence_before_product_complete": [
@@ -58,6 +59,7 @@
         "daemon pointer/key input frame schema accepts frontend sent_at_ms and client_sequence metadata and preserves client_sent_at_ms/client_sequence in input applied/rejected events",
         "diagnostic InvokeBidi input responses preserve client_sent_at_ms and client_sequence for probe correlation, including target_input_not_ready",
         "host view-only input safety E2E opens public remote_desktop.attach InvokeBidi and requires app/window pointer/key diagnostic frames with client_sequence/client_sent_at_ms to reject as input_scope_unsupported",
+        "2026-08-23 local product-flow both report passed view-only input safety for macOS window and application targets over public remote_desktop.attach InvokeBidi",
         "frontend watch_events maps daemon input activation blocks and input frame rejections into visible RemoteApp status without closing media transport",
         "frontend session details separately surface input scope and pointer/keyboard enablement from daemon input_readiness",
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
@@ -243,6 +245,7 @@
         "frontend share picker exposes host-local remote_desktop.permission_status preflight before create_session",
         "frontend denied permission_status stays in the share picker with Request permission recovery instead of becoming a session-level error",
         "product-flow harness entrypoint",
+        "2026-08-23 local product-flow both report passed Hub API readiness, daemon readiness, frontend typecheck, DeviceMediaAccess UI flow, host target picker freshness, decoded-frame WebRTC, and view-only input safety for window and application targets",
         "frontend-remoteapp-browser-lifecycle-e2e.sh verifier for real Browser/Tauri lifecycle artifacts"
       ],
       "required_evidence_before_product_complete": [
