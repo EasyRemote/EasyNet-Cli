@@ -175,6 +175,12 @@ require 'route host_only · no NAT/relay' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove host-only RemoteApp routes are visible as not NAT/relay ready'
 require 'frame\.target_geometry_revision !== expectedRevision' "$FRONTEND_PROTOCOL" \
   'frontend RemoteApp input gating must reject stale or missing pointer target geometry revisions before send'
+require 'remoteDesktopInputScopeLabel\(session\)' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected input scope and pointer/keyboard enablement'
+require 'input scope display_global · pointer\+keyboard' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove display-global pointer/keyboard enablement is visible in session details'
+require 'input scope display_global · no controls' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove blocked input scope is visible as no controls'
 require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
   'frontend store tests must prove RTCPeerConnection receives session-projected ICE servers'
 require 'turn:turn\.example\.test:3478\?transport=udp' "$FRONTEND_STORE_TEST" \
@@ -244,6 +250,8 @@ require 'media quality' "$AUDIT" \
   'product readiness audit must record frontend media-quality visibility evidence'
 require 'Retry session' "$AUDIT" \
   'product readiness audit must record executable retry-session evidence'
+require 'input scope display_global' "$AUDIT" \
+  'product readiness audit must record input-scope visibility evidence'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
@@ -265,5 +273,7 @@ require 'media 18000kbps · 52\.5fps · drops 15 · backpressure 3' "$PLAN" \
   'product closure plan must record media-quality summary UI evidence'
 require 'Retry session' "$PLAN" \
   'product closure plan must record executable retry-session UI evidence'
+require 'input scope display_global' "$PLAN" \
+  'product closure plan must record input-scope visibility evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'

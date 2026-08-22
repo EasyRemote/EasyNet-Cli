@@ -46,6 +46,7 @@
         "frontend input sender consumes daemon input_readiness and fails closed before sending pointer/key frames",
         "daemon pointer/key input frame schema accepts frontend sent_at_ms metadata and preserves client_sent_at_ms in input applied/rejected events",
         "frontend watch_events maps daemon input activation blocks and input frame rejections into visible RemoteApp status without closing media transport",
+        "frontend session details separately surface input scope and pointer/keyboard enablement from daemon input_readiness",
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
         "window/application sessions remain view_only until target-scoped keyboard/pointer dispatch is safe",
         "pointer input frames carry target_geometry_revision when target-local geometry exists and the daemon rejects stale revisions before OS injection",

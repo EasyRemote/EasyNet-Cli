@@ -346,6 +346,33 @@ Product effect:
 - This does not claim product-level input injection completion; real OS
   pointer/keyboard E2E and latency evidence remain required.
 
+## 2026-08-22 — Input scope and concrete controls must be visible
+
+Decision:
+
+- Requested/effective input mode and concrete input controls are separate
+  product facts.
+- A session that only shows `input interactive` or `input interactive->view_only`
+  still hides whether pointer and keyboard are enabled and what daemon input
+  scope the session is using.
+
+Implementation delta:
+
+- Remote Desktop session details now render `input scope <scope> · <controls>`
+  from `RemoteDesktopView.inputReadiness`.
+- Component coverage proves both enabled controls
+  (`input scope display_global · pointer+keyboard`) and blocked controls
+  (`input scope display_global · no controls`).
+- The frontend product-flow gate rejects UI or test coverage that drops this
+  scope/control visibility.
+
+Product effect:
+
+- Operators can distinguish display-global interactive readiness from blocked
+  or non-control sessions without reading raw daemon JSON.
+- This is not an OS input injection completion claim; it keeps the input row
+  incomplete until successful focus-safe injection and latency evidence exists.
+
 ## 2026-08-22 — Frontend must preserve RemoteApp terminal receipts
 
 Decision:

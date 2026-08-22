@@ -164,6 +164,11 @@ Current frontend lifecycle evidence:
   and E2E diagnosability for the input-injection row, but the row remains
   incomplete until real focus-safe pointer/keyboard injection and latency
   evidence exists.
+- RemoteApp session details now separately render input scope and concrete
+  pointer/keyboard enablement, for example `input scope display_global ·
+  pointer+keyboard` or `input scope display_global · no controls`. This makes
+  daemon input authority visible to the user/operator, but it remains
+  observability evidence rather than proof of successful OS injection.
 - Frontend protocol projection now parses daemon `input_readiness` and input
   sending prefers that runtime readiness over legacy `input_policy`. If the
   daemon reports `interactive_ready=false`, pointer/key frames fail closed
