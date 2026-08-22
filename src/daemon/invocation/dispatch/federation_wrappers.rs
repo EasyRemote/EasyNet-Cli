@@ -2083,10 +2083,10 @@ mod tests {
     }
 
     #[test]
-    fn handle_advertise_abilities_reports_equal_revision_conflict_outcome() {
+    fn handle_advertise_abilities_reports_equal_revision_conflict_for_single_owner_row() {
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
-        let owner_ura = "easynet:///r/realm/service/alice.pages";
+        let owner_ura = "easynet:///r/realm/agent/alice.worker";
         let first = AdvertiseAbilitiesRequest {
             owner_ura: owner_ura.to_string(),
             host_device_ura: "easynet:///r/realm/device/provider".to_string(),
@@ -2097,7 +2097,7 @@ mod tests {
             purge_delivery: None,
             ability_summaries: vec![projection_summary(
                 owner_ura,
-                "easynet:///r/realm/ability/service.alice.pages.project_list",
+                "easynet:///r/realm/ability/alice.worker.project_list",
                 "pages",
                 "project_list",
             )],
@@ -2112,7 +2112,7 @@ mod tests {
             purge_delivery: None,
             ability_summaries: vec![projection_summary(
                 owner_ura,
-                "easynet:///r/realm/ability/service.alice.pages.project_create",
+                "easynet:///r/realm/ability/alice.worker.project_create",
                 "pages",
                 "project_create",
             )],
