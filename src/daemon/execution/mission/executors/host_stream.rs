@@ -36,20 +36,23 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 
+mod binary;
 mod contract;
 
+use self::binary::{BinaryHashState, BinaryHostFrame};
 use self::contract::{
     decode_host_frame, verify_terminal, HostFrame, HostStreamFailure, HostStreamFailureKind,
     HostStreamHashState,
 };
-use crate::daemon::ability::dispatch::StreamSource;
-use crate::daemon::ability::manifest::HostStreamExec;
+use crate::daemon::ability::dispatch::{StreamOutputFrame, StreamSource};
+use crate::daemon::ability::manifest::{HostStreamExec, HostStreamProtocol};
 
 /// Broadcast depth. Frames are small JSON values; a generous buffer
 /// absorbs a slow consumer without forcing the reader task to block on
 /// the socket. Lag (overflow) is surfaced by the runtime forwarder, not
 /// silently dropped.
 const FRAME_CHANNEL_DEPTH: usize = 256;
+const TYPED_FRAME_CHANNEL_DEPTH: usize = 8;
 
 /// Open a `host_stream` ability against its external warm host and
 /// return a live frame source.
@@ -62,6 +65,9 @@ pub fn run_host_stream(
     call_id: &str,
     caller: &str,
 ) -> anyhow::Result<StreamSource> {
+    if spec.protocol == HostStreamProtocol::BinaryV1 {
+        return run_binary_host_stream(spec, args, call_id, caller);
+    }
     let (tx, rx) = broadcast::channel::<Value>(FRAME_CHANNEL_DEPTH);
 
     let socket_path = spec.host_socket.clone();
@@ -103,6 +109,24 @@ pub fn run_host_stream_unary(
     let handle = tokio::runtime::Handle::try_current()
         .map_err(|err| anyhow::anyhow!("host_stream unary requires a Tokio runtime: {err}"))?;
     handle.block_on(async move {
+        if spec.protocol == HostStreamProtocol::BinaryV1 {
+            let mut frames = Vec::with_capacity(1);
+            let mut sink = BinaryHostStreamSink::Unary(&mut frames);
+            pump_binary_host_stream(&socket_path, &request, &mut sink)
+                .await
+                .map_err(|err| anyhow::anyhow!("host_stream unary failed: {}", err.message))?;
+            return match frames.len() {
+                1 => Ok(frames
+                    .pop()
+                    .expect("one frame was reported by the length check")),
+                0 => Err(anyhow::anyhow!(
+                    "host_stream unary completed without a result frame"
+                )),
+                count => Err(anyhow::anyhow!(
+                    "host_stream unary returned {count} result frames"
+                )),
+            };
+        }
         let mut frames = Vec::with_capacity(1);
         let mut sink = HostStreamSink::Unary(&mut frames);
         pump_host_stream(&socket_path, &request, &mut sink)
@@ -122,6 +146,32 @@ pub fn run_host_stream_unary(
     })
 }
 
+fn run_binary_host_stream(
+    spec: &HostStreamExec,
+    args: &Value,
+    call_id: &str,
+    caller: &str,
+) -> anyhow::Result<StreamSource> {
+    let (tx, rx) = tokio::sync::mpsc::channel(TYPED_FRAME_CHANNEL_DEPTH);
+    let socket_path = spec.host_socket.clone();
+    let request = host_stream_request(spec, args, call_id, caller);
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|err| anyhow::anyhow!("host_stream open requires a Tokio runtime: {err}"))?;
+    handle.spawn(async move {
+        let mut sink = BinaryHostStreamSink::Stream(&tx);
+        if let Err(error) = pump_binary_host_stream(&socket_path, &request, &mut sink).await {
+            let _ = tx
+                .send(Err(anyhow::anyhow!(
+                    "{}: {}",
+                    error.kind.as_str(),
+                    error.message
+                )))
+                .await;
+        }
+    });
+    Ok(StreamSource::TypedFinite(rx))
+}
+
 fn host_stream_request(spec: &HostStreamExec, args: &Value, call_id: &str, caller: &str) -> Value {
     json!({
         "request": {
@@ -136,6 +186,84 @@ fn host_stream_request(spec: &HostStreamExec, args: &Value, call_id: &str, calle
 enum HostStreamSink<'a> {
     Broadcast(&'a broadcast::Sender<Value>),
     Unary(&'a mut Vec<Value>),
+}
+
+enum BinaryHostStreamSink<'a> {
+    Stream(&'a tokio::sync::mpsc::Sender<anyhow::Result<StreamOutputFrame>>),
+    Unary(&'a mut Vec<Value>),
+}
+
+async fn pump_binary_host_stream(
+    socket_path: &str,
+    request: &Value,
+    sink: &mut BinaryHostStreamSink<'_>,
+) -> Result<(), HostStreamFailure> {
+    let stream = UnixStream::connect(socket_path).await.map_err(|error| {
+        HostStreamFailure::new(
+            HostStreamFailureKind::HostUnreachable,
+            format!("connect {socket_path}: {error}"),
+        )
+    })?;
+    let (mut read_half, mut write_half) = stream.into_split();
+    binary::write_request(&mut write_half, request).await?;
+
+    let mut rolling = BinaryHashState::new();
+    loop {
+        match binary::read_frame(&mut read_half).await? {
+            BinaryHostFrame::Item {
+                sequence,
+                content_type,
+                payload,
+            } => {
+                rolling.fold(sequence, &content_type, &payload)?;
+                match sink {
+                    BinaryHostStreamSink::Stream(tx) => {
+                        if tx
+                            .send(Ok(StreamOutputFrame::new(payload, content_type)))
+                            .await
+                            .is_err()
+                        {
+                            return Ok(());
+                        }
+                    }
+                    BinaryHostStreamSink::Unary(frames) => {
+                        if !frames.is_empty() {
+                            return Err(HostStreamFailure::new(
+                                HostStreamFailureKind::Protocol,
+                                "unary binary host_stream returned more than one result frame"
+                                    .to_string(),
+                            ));
+                        }
+                        if content_type != "application/json" {
+                            return Err(HostStreamFailure::new(
+                                HostStreamFailureKind::Protocol,
+                                format!(
+                                    "unary binary host_stream requires application/json result, got {content_type:?}"
+                                ),
+                            ));
+                        }
+                        let value = serde_json::from_slice(&payload).map_err(|error| {
+                            HostStreamFailure::new(
+                                HostStreamFailureKind::Protocol,
+                                format!("unary binary host result is not JSON: {error}"),
+                            )
+                        })?;
+                        frames.push(value);
+                    }
+                }
+            }
+            BinaryHostFrame::Terminal {
+                frames,
+                output_hash,
+            } => {
+                rolling.verify_terminal(frames, &output_hash)?;
+                return Ok(());
+            }
+            BinaryHostFrame::Error(error) => {
+                return Err(HostStreamFailure::from_host_error(&error));
+            }
+        }
+    }
 }
 
 /// Drive one host-stream session to a clean terminal, or return the

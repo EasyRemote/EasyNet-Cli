@@ -436,6 +436,9 @@ async fn first_stream_frame(source: StreamSource) -> Value {
                 .expect("viewport finite stream closed")
                 .expect("viewport finite stream error")
         }
+        StreamSource::TypedFinite(_) => {
+            panic!("browser viewport benchmark requires JSON stream frames")
+        }
     }
 }
 

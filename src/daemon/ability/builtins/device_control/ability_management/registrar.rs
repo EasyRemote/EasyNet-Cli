@@ -1887,6 +1887,7 @@ mod tests {
         .with_exec(AbilityExec::HostStream(HostStreamExec {
             host_socket: socket.to_string(),
             function: function.to_string(),
+            protocol: crate::daemon::ability::manifest::HostStreamProtocol::JsonLinesV1,
         }))
         .unwrap()
     }

@@ -603,6 +603,9 @@ mod tests {
                 frames.remove(0)
             }
             StreamSource::Finite(_) => panic!("mic.subscribe must not return a finite stream"),
+            StreamSource::TypedFinite(_) => {
+                panic!("mic.subscribe must not return a typed finite stream")
+            }
         };
         assert!(
             frame.get("samples_b64").is_some(),

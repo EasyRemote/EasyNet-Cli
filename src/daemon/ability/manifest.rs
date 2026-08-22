@@ -637,9 +637,8 @@ pub enum AbilityExec {
     /// CLI. It preserves the MCP `tools/call` response shape and
     /// avoids routing through shell or chat translation.
     Mcp(McpExec),
-    /// Invoke an external warm host over a framed Unix-socket transport.
-    /// The daemon opens `host_socket`, sends one request line, then reads
-    /// JSON frames until an explicit terminal. `admission_action` selects
+    /// Invoke an external warm host over a versioned Unix-socket transport.
+    /// `admission_action` selects
     /// the canonical call geometry: `invoke` requires exactly one result
     /// frame and `stream` preserves the complete server-stream. The wire
     /// protocol is the single source of truth in `HostStreamExec`'s doc
@@ -649,9 +648,9 @@ pub enum AbilityExec {
 
 /// Configuration for the `host_stream` executor.
 ///
-/// **Wire protocol (newline-delimited UTF-8 JSON over `host_socket`),
-/// the single source of truth for both the daemon executor and the
-/// external host:**
+/// `protocol` selects one exact wire contract. `json_lines_v1` is the original
+/// newline-delimited UTF-8 JSON contract below. `binary_v1` is the raw-payload
+/// contract decoded by the daemon-owned host-stream transport module.
 ///
 /// ```text
 /// daemon → host:  {"request":{"fn":"<function>","args":{...},"call_id":"<id>"}}
@@ -680,6 +679,17 @@ pub struct HostStreamExec {
     pub host_socket: String,
     /// The resident function name to invoke on the host.
     pub function: String,
+    /// Exact resident-host wire protocol.
+    #[serde(default)]
+    pub protocol: HostStreamProtocol,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostStreamProtocol {
+    #[default]
+    JsonLinesV1,
+    BinaryV1,
 }
 
 impl HostStreamExec {

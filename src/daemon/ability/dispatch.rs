@@ -594,6 +594,26 @@ pub enum StreamSource {
     Live(broadcast::Receiver<Value>),
     SnapshotThenLive(Vec<Value>, broadcast::Receiver<Value>),
     Finite(tokio::sync::mpsc::Receiver<anyhow::Result<Value>>),
+    /// Bounded, backpressured finite production of typed raw payloads. This is
+    /// the data-plane shape for media and other non-JSON frames; lifecycle and
+    /// terminal ownership remain with the Axon stream runtime.
+    TypedFinite(tokio::sync::mpsc::Receiver<anyhow::Result<StreamOutputFrame>>),
+}
+
+/// One non-terminal server-stream payload with its exact media type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamOutputFrame {
+    pub payload: Vec<u8>,
+    pub content_type: String,
+}
+
+impl StreamOutputFrame {
+    pub fn new(payload: impl Into<Vec<u8>>, content_type: impl Into<String>) -> Self {
+        Self {
+            payload: payload.into(),
+            content_type: content_type.into(),
+        }
+    }
 }
 
 impl From<Vec<Value>> for StreamSource {
@@ -626,6 +646,7 @@ impl StreamSource {
             StreamSource::Live(_) => Vec::new(),
             StreamSource::SnapshotThenLive(s, _) => s,
             StreamSource::Finite(_) => Vec::new(),
+            StreamSource::TypedFinite(_) => Vec::new(),
         }
     }
 }
@@ -1152,6 +1173,21 @@ async fn emit_stream_source(
                     ))
                 })?;
                 emit_json_progress(&ctx, frame).await?;
+            }
+        }
+        StreamSource::TypedFinite(mut rx) => {
+            while let Some(frame) = rx.recv().await {
+                let frame = frame.map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: typed finite stream producer failed: {err:#}"
+                    ))
+                })?;
+                if frame.content_type.trim().is_empty() {
+                    return Err(AxonError::invalid_argument(
+                        "local_runtime_adapter: typed stream frame content_type is empty",
+                    ));
+                }
+                ctx.emit_progress(frame.payload, frame.content_type).await?;
             }
         }
     }
