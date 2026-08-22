@@ -260,6 +260,10 @@ Missing or insufficient product evidence:
   data-channel send, while daemon stale-revision rejection remains the
   authoritative execution boundary.
 - Audio path and codec/adaptation soak reports.
+  Current source/product-path progress: frontend protocol projection now parses
+  daemon `audio` and `production_readiness.audio_*` fields, and session details
+  show `audio blocked · host_audio_not_implemented`. This is product
+  transparency, not host-audio implementation evidence.
 - Multi-display application capture or explicit product unsupported flow.
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
 - Real STUN/TURN/EasyNet relay reachability matrix.

@@ -175,6 +175,12 @@ require 'fails closed before sending stale RemoteApp pointer geometry revisions'
   'frontend store tests must prove stale pointer target geometry revisions do not reach the data channel'
 require 'target_geometry_revision: 6' "$FRONTEND_STORE_TEST" \
   'frontend stale pointer test must use an explicit stale geometry revision'
+require 'RemoteDesktopAudioSupport' "$FRONTEND_PROTOCOL" \
+  'frontend protocol projection must type daemon RemoteApp audio product state'
+require 'audioReady: readiness\.audio_ready === true' "$FRONTEND_PROTOCOL" \
+  'frontend production readiness must parse audio readiness separately from video readiness'
+require 'host_audio_not_implemented' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove session details surface the host-audio unsupported blocker'
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
   'product readiness audit must mention the product-flow E2E harness'
