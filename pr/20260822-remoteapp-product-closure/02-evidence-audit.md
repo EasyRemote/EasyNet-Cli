@@ -241,9 +241,17 @@ Current frontend lifecycle evidence:
 - Frontend protocol/store/UI code now parses and renders daemon-projected
   RemoteApp `terminal_receipt`. After `end_session`, the store retains the
   closed session view with its terminal receipt while clearing `sessionToken`.
+  Retained terminal receipts no longer block a later `create_session`; `rdCreate`
+  now blocks only non-terminal sessions.
   This gives users and E2E checks a deterministic product terminal fact instead
   of making the closed state vanish as `session=null`; it remains separate from
   canonical Axon Invocation receipts.
+- Frontend RemoteApp UI now exposes `Retry session` when daemon/watch-event
+  state recommends `retry_session`. The CTA composes existing lifecycle
+  abilities in order: `rdEnd`/`remote_desktop.end_session` first, then
+  `rdCreate`/`remote_desktop.create_session` for the selected target. Component
+  coverage proves this order. This closes the short retry UX seam; it does not
+  prove long-outage, crash/restart, revoke, cancel, or timeout E2E.
 - Permission revocation now terminates the daemon RemoteApp session with the
   stable `target_permission_revoked` reason and a RemoteApp
   `terminal_receipt`. The frontend closes local transport on the revoked-target

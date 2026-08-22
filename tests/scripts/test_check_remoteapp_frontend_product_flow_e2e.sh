@@ -232,6 +232,30 @@ fi
 mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
 
+cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx.good"
+perl -0pi -e 's/Retry session/Retry later/g' \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted frontend recovery without Retry session CTA"
+fi
+mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx.good" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx"
+
+cp "$SB/Frontend/src/store/media-channel-store.ts" \
+  "$SB/Frontend/src/store/media-channel-store.ts.good"
+perl -0pi -e 's/entry\.loading \|\| \(entry\.session && !remoteDesktopSessionTerminal\(entry\.session\)\)/entry.loading || entry.session/g' \
+  "$SB/Frontend/src/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted store that blocks create after terminal session"
+fi
+mv "$SB/Frontend/src/store/media-channel-store.ts.good" \
+  "$SB/Frontend/src/store/media-channel-store.ts"
+
 cp "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" \
   "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md.good"
 perl -0pi -e 's/RemoteApp interactive desktop product: incomplete/RemoteApp interactive desktop product: complete/g' \

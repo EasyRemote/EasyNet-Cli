@@ -122,6 +122,7 @@
         "permission revocation terminates the daemon session with a terminal_receipt and frontend terminal sync",
         "target loss and transport failure taxonomy",
         "frontend watch_events degraded/revoked recovery handling",
+        "frontend exposes Retry session for daemon retry_session guidance and allows create_session after retained terminal receipts",
         "frontend preserves non-terminal RemoteApp sessions across device-offline presence drops, validates with remote_desktop.show_session on resume, and rebinds WebRTC without ending the daemon session on failed rebind",
         "canonical SDK cancel/timeout semantics"
       ],
@@ -170,6 +171,7 @@
         "frontend permission-revoked recovery synchronizes daemon terminal_receipt through show_session",
         "frontend session details render daemon-projected target recovery status/reason/action",
         "frontend action row executes daemon-guided target refresh recovery",
+        "frontend action row executes daemon-guided retry_session recovery by ending then creating a session",
         "product-flow harness entrypoint"
       ],
       "required_evidence_before_product_complete": [

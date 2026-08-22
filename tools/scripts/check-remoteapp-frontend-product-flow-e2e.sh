@@ -217,6 +217,18 @@ require 'refreshRemoteTargets' "$FRONTEND_UI_TEST" \
   'frontend UI tests must bind the lost-target recovery button to a refresh callback'
 require 'toHaveBeenCalledTimes\(1\)' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove the Refresh targets CTA executes the recovery callback'
+require 'Retry session' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must expose an executable Retry session CTA for daemon retry_session guidance'
+require 'remoteDesktopRetrySessionRecommended' "$FRONTEND_UI" \
+  'frontend RemoteApp retry CTA must be gated by explicit retry-session state'
+require 'executes daemon-requested remote desktop retry through end then create' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session executes the recovery flow'
+require 'rdEnd\.mock\.invocationCallOrder\[0\].*rdCreate\.mock\.invocationCallOrder\[0\]' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session ends the current session before creating a new one'
+require 'entry\.loading \|\| \(entry\.session && !remoteDesktopSessionTerminal\(entry\.session\)\)' "$FRONTEND_STORE" \
+  'frontend store must allow create_session after a retained terminal session receipt'
+require 'allows creating a new remote desktop session after a terminal receipt is retained' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove terminal receipts do not block new create_session'
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
   'product readiness audit must mention the product-flow E2E harness'
@@ -230,6 +242,8 @@ require 'route state' "$AUDIT" \
   'product readiness audit must record frontend route-state visibility evidence'
 require 'media quality' "$AUDIT" \
   'product readiness audit must record frontend media-quality visibility evidence'
+require 'Retry session' "$AUDIT" \
+  'product readiness audit must record executable retry-session evidence'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
@@ -249,5 +263,7 @@ require 'route host_only · no NAT/relay' "$PLAN" \
   'product closure plan must record route-state UI evidence'
 require 'media 18000kbps · 52\.5fps · drops 15 · backpressure 3' "$PLAN" \
   'product closure plan must record media-quality summary UI evidence'
+require 'Retry session' "$PLAN" \
+  'product closure plan must record executable retry-session UI evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'
