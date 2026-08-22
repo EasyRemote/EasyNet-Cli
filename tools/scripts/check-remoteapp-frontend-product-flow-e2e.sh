@@ -33,6 +33,28 @@ reject() {
   fi
 }
 
+line_of() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  local line
+  line="$(rg -n -- "$pattern" "$path" | head -n 1 | cut -d: -f1 || true)"
+  [[ -n "$line" ]] || fail "$message"
+  printf '%s\n' "$line"
+}
+
+require_order() {
+  local before_pattern="$1"
+  local after_pattern="$2"
+  local path="$3"
+  local message="$4"
+  local before_line
+  local after_line
+  before_line="$(line_of "$before_pattern" "$path" "$message")"
+  after_line="$(line_of "$after_pattern" "$path" "$message")"
+  (( before_line < after_line )) || fail "$message"
+}
+
 [[ -f "$HARNESS" ]] || fail "missing frontend RemoteApp product-flow E2E harness"
 [[ -x "$HARNESS" ]] || fail "frontend RemoteApp product-flow E2E harness must be executable"
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
@@ -49,20 +71,22 @@ require 'npx tsc --noEmit' "$HARNESS" \
   'product-flow harness must run frontend TypeScript checks'
 require 'npm test -- src/components/easynet/DeviceMediaAccess\.test\.tsx' "$HARNESS" \
   'product-flow harness must run DeviceMediaAccess RemoteApp UI flow coverage'
-require 'run_daemon_readiness_preflight' "$HARNESS" \
-  'product-flow harness must run an explicit daemon readiness preflight'
-require 'run_step daemon-readiness-preflight run_daemon_readiness_preflight' "$HARNESS" \
-  'product-flow harness must execute daemon readiness as a named product-flow step'
+require 'run_product_runtime_readiness_preflight' "$HARNESS" \
+  'product-flow harness must run an explicit product runtime readiness preflight'
+require 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' "$HARNESS" \
+  'product-flow harness must execute runtime readiness before frontend and host evidence'
 require 'runtime status --json' "$HARNESS" \
-  'product-flow daemon readiness preflight must inspect easynet runtime status'
+  'product-flow runtime readiness preflight must inspect easynet runtime status'
 require 'daemon\.control_accepting is not true' "$HARNESS" \
-  'product-flow daemon readiness preflight must require daemon control readiness'
+  'product-flow runtime readiness preflight must require daemon control readiness'
 require 'daemon\.invocation_accepting is not true' "$HARNESS" \
-  'product-flow daemon readiness preflight must require daemon invocation readiness'
+  'product-flow runtime readiness preflight must require daemon invocation readiness'
 require 'connection\.failure=' "$HARNESS" \
-  'product-flow daemon readiness preflight must report connection failure codes'
+  'product-flow runtime readiness preflight must report connection failure codes'
 require 'hub_api_endpoint=' "$HARNESS" \
-  'product-flow daemon readiness preflight must report the Hub API endpoint used for credential verification'
+  'product-flow runtime readiness preflight must report the Hub API endpoint used for credential verification'
+require_order 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' 'run_step frontend-typecheck run_frontend_tsc' "$HARNESS" \
+  'product-flow report order must put runtime readiness before frontend checks'
 require 'host-remoteapp-permission-subject-e2e\.sh' "$HARNESS" \
   'product-flow harness must invoke host permission subject E2E'
 require '--require-screen-capture-granted' "$HARNESS" \

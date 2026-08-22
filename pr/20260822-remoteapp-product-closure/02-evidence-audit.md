@@ -34,12 +34,12 @@ Current frontend lifecycle evidence:
 - `check-remoteapp-frontend-invocation-boundary.sh` now gates both the
   watch_events subscription and the recovery-event consumption contract.
 - `tools/scripts/frontend-remoteapp-product-flow-e2e.sh` now provides the
-  combined frontend/host product-flow harness entrypoint: frontend typecheck,
-  `DeviceMediaAccess` UI flow, explicit daemon readiness preflight, host
-  permission-subject preflight, target picker freshness, decoded-frame WebRTC,
-  and view-only input safety. An explicit --run report remains required before
-  treating it as environment evidence; the default skipped report only proves
-  the harness contract exists.
+  combined frontend/host product-flow harness entrypoint: explicit product
+  runtime readiness preflight, frontend typecheck, `DeviceMediaAccess` UI flow,
+  host permission-subject preflight, target picker freshness, decoded-frame
+  WebRTC, and view-only input safety. An explicit --run report remains required
+  before treating it as environment evidence; the default skipped
+  report only proves the harness contract exists.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:
@@ -56,6 +56,15 @@ Current frontend lifecycle evidence:
   connections because the local Hub/Docker runtime is not running. RemoteApp
   product E2E must not proceed to host capture/media/input evidence until this
   upstream product readiness gate is green.
+- The product-flow harness now executes that upstream product runtime
+  readiness preflight before frontend and host evidence. This preserves the
+  product semantics: a failed Hub API / daemon invocation gate is the first
+  failure, not a later host permission or media-capture symptom.
+- Latest local `--run` after the order fix fails fast at
+  `product-runtime-readiness-preflight` only, with
+  `hub_api_endpoint=http://localhost:8080` and no frontend/host evidence steps
+  recorded. That is the correct current product evidence shape while the local
+  Hub API remains unavailable.
 
 Missing or insufficient product evidence:
 

@@ -43,9 +43,9 @@ Environment:
                         and delegated host E2E harnesses.
 
 The --run path performs:
-  1. Frontend TypeScript check.
-  2. Frontend DeviceMediaAccess RemoteApp UI flow test.
-  3. Daemon readiness preflight for control + invocation endpoints.
+  1. Product runtime readiness preflight for Hub API + daemon control/invocation.
+  2. Frontend TypeScript check.
+  3. Frontend DeviceMediaAccess RemoteApp UI flow test.
   4. Host permission subject preflight with screen-capture permission granted.
   5. Host target picker freshness with a sentinel fixture.
   6. Host decoded-frame WebRTC E2E for window/application targets.
@@ -90,9 +90,9 @@ steps = []
 failed_step = None
 failed_step_stderr = None
 step_order = [
+    "product-runtime-readiness-preflight",
     "frontend-typecheck",
     "frontend-remoteapp-ui-flow",
-    "daemon-readiness-preflight",
     "host-permission-subject",
     "host-target-picker-freshness",
     "host-decoded-frame-window",
@@ -137,7 +137,7 @@ report = {
     "evidence_contract": [
         "frontend TypeScript check",
         "DeviceMediaAccess RemoteApp UI flow",
-        "daemon readiness preflight",
+        "product runtime readiness preflight",
         "host permission subject preflight",
         "host target picker freshness",
         "host decoded-frame WebRTC",
@@ -213,8 +213,8 @@ run_easynet() {
   fi
 }
 
-run_daemon_readiness_preflight() {
-  local step_dir="$OUT_DIR/daemon-readiness-preflight"
+run_product_runtime_readiness_preflight() {
+  local step_dir="$OUT_DIR/product-runtime-readiness-preflight"
   local status_json="$step_dir/runtime-status.json"
   mkdir -p "$step_dir"
   run_easynet runtime status --json >"$status_json"
@@ -254,7 +254,7 @@ if errors:
     for error in errors:
         print(error, file=sys.stderr)
     raise SystemExit(1)
-print("daemon readiness preflight ok")
+print("product runtime readiness preflight ok")
 PY
 }
 
@@ -281,8 +281,9 @@ if [[ "$SELF_TEST" -eq 1 ]]; then
   bash -n "$0"
   grep -q 'DeviceMediaAccess.test.tsx' "$0"
   grep -q 'npx tsc --noEmit' "$0"
-  grep -q 'run_daemon_readiness_preflight' "$0"
+  grep -q 'run_product_runtime_readiness_preflight' "$0"
   grep -q 'daemon.invocation_accepting is not true' "$0"
+  grep -q 'product-runtime-readiness-preflight' "$0"
   grep -q 'host-remoteapp-permission-subject-e2e.sh' "$0"
   grep -q -- '--require-screen-capture-granted' "$0"
   grep -q 'host-remoteapp-target-picker-freshness-e2e.sh' "$0"
@@ -311,9 +312,9 @@ fi
   exit 1
 }
 
+run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight
 run_step frontend-typecheck run_frontend_tsc
 run_step frontend-remoteapp-ui-flow run_frontend_ui_flow
-run_step daemon-readiness-preflight run_daemon_readiness_preflight
 run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR/host-permission-subject"
 run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture --target-kind window --out-dir "$OUT_DIR/host-target-picker-freshness"
 

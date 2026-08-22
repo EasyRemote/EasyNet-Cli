@@ -49,12 +49,24 @@ CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
 
 cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
-perl -0pi -e 's/run_step daemon-readiness-preflight run_daemon_readiness_preflight/# daemon readiness preflight removed/g' \
+perl -0pi -e 's/run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight/# product runtime readiness preflight removed/g' \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
-  fail "checker accepted product-flow harness without daemon readiness preflight step"
+  fail "checker accepted product-flow harness without product runtime readiness preflight step"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight\nrun_step frontend-typecheck run_frontend_tsc/run_step frontend-typecheck run_frontend_tsc\nrun_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness that runs frontend before runtime readiness"
 fi
 mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
