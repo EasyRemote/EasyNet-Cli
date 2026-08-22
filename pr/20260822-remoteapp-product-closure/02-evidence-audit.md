@@ -149,6 +149,12 @@ Current frontend lifecycle evidence:
   and E2E diagnosability for the input-injection row, but the row remains
   incomplete until real focus-safe pointer/keyboard injection and latency
   evidence exists.
+- Frontend protocol projection now parses daemon `input_readiness` and input
+  sending prefers that runtime readiness over legacy `input_policy`. If the
+  daemon reports `interactive_ready=false`, pointer/key frames fail closed
+  before transport send. This closes the UI gating seam for requested
+  interactive sessions that are correctly downgraded to view-only, while still
+  leaving real OS input injection product evidence incomplete.
 
 Missing or insufficient product evidence:
 

@@ -259,6 +259,25 @@ TSX
 cat >"$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts" <<'TS'
 const productionGate = objectField(result, 'production_gate')
 const productionReadiness = remoteDesktopProductionReadinessFromResult(result)
+const inputReadiness = remoteDesktopInputReadinessFromResult(result)
+
+export type RemoteDesktopInputReadiness = {
+  requestedMode?: string
+  effectiveMode?: string
+  interactiveReady: boolean
+  blockedReason?: string
+  inputScope?: string
+  pointerEnabled: boolean
+  keyboardEnabled: boolean
+}
+
+type RemoteDesktopView = {
+  productionBlockedReason?: string
+  latestTargetDiagnostic?: { frontendAction?: string }
+  targetTracking?: { inputEnabled?: boolean }
+  inputPolicy: string
+  inputReadiness?: RemoteDesktopInputReadiness
+}
 
 export function remoteDesktopViewFromResult(result: Record<string, unknown> | undefined) {
   return {
@@ -267,6 +286,24 @@ export function remoteDesktopViewFromResult(result: Record<string, unknown> | un
     productionBlockedReason: productionReadiness?.blockedReason ?? stringField(productionGate, 'reason'),
     latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue(objectField(result, 'latest_target_diagnostic')),
     targetTracking: remoteDesktopTargetTrackingFromValue(objectField(result, 'target_tracking')),
+    inputPolicy: 'view-only',
+    inputReadiness,
+  }
+}
+
+function remoteDesktopInputReadinessFromResult(
+  result: Record<string, unknown> | undefined,
+): RemoteDesktopInputReadiness | undefined {
+  const value = objectField(result, 'input_readiness')
+  if (!value) return undefined
+  return {
+    requestedMode: stringField(value, 'requested_mode'),
+    effectiveMode: stringField(value, 'effective_mode'),
+    interactiveReady: value.interactive_ready === true,
+    blockedReason: stringField(value, 'blocked_reason'),
+    inputScope: stringField(value, 'input_scope'),
+    pointerEnabled: value.pointer_enabled === true,
+    keyboardEnabled: value.keyboard_enabled === true,
   }
 }
 
@@ -287,7 +324,15 @@ export function remoteDesktopTargetRecoveryMessage(view: RemoteDesktopView): str
 }
 
 export function remoteDesktopInputFrameAllowed(view: RemoteDesktopView, frame: Record<string, unknown>): boolean {
-  return view.targetTracking?.inputEnabled !== false && frame.type !== 'blocked'
+  if (view.targetTracking?.inputEnabled === false) return false
+  const frameType = typeof frame.type === 'string' ? frame.type : undefined
+  if (view.inputReadiness) {
+    if (view.inputReadiness.interactiveReady !== true) return false
+    if (frameType === 'pointer' || frameType === 'wheel') return view.inputReadiness.pointerEnabled === true
+    if (frameType === 'key' || frameType === 'keyboard') return view.inputReadiness.keyboardEnabled === true
+    return false
+  }
+  return frame.type !== 'blocked'
 }
 
 export function remoteDesktopProductionBlockedMessage(view: RemoteDesktopView): string {
@@ -316,6 +361,22 @@ it('gates frontend input frames on runtime target tracking and input policy', ()
   expect(remoteDesktopInputFrameAllowed({
     targetTracking: { inputEnabled: false },
   }, { type: 'pointer' })).toBe(false)
+})
+
+it('prefers runtime input readiness over legacy input policy for input gating', () => {
+  const blocked = {
+    targetTracking: { inputEnabled: true },
+    inputPolicy: 'keyboard+pointer',
+    inputReadiness: {
+      interactiveReady: false,
+      blockedReason: 'target_scoped_keyboard_pointer_dispatch_unsafe',
+      pointerEnabled: false,
+      keyboardEnabled: false,
+    },
+  }
+  expect(blocked.inputReadiness).toBeDefined()
+  expect(blocked.inputReadiness).toMatchObject({ interactiveReady: false })
+  expect(remoteDesktopInputFrameAllowed(blocked, { type: 'pointer' })).toBe(false)
 })
 TS
 
@@ -507,6 +568,33 @@ perl -0pi -e 's/if \(!session \|\| true\) return false/if (!session || remoteDes
   "$FRONTEND_SRC/store/media-channel-store.ts"
 perl -0pi -e 's/if \(!session \|\| remoteDesktopInputFrameAllowed\(session, frame\)\) return false/if (!session || !remoteDesktopInputFrameAllowed(session, frame)) return false/' \
   "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/    inputReadiness,\\n//" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing daemon input_readiness session projection" >&2
+  exit 1
+fi
+perl -0pi -e "s/    inputPolicy: 'view-only',/    inputPolicy: 'view-only',\\n    inputReadiness,/" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+
+perl -0pi -e "s/  const value = objectField\\(result, 'input_readiness'\\)/  const value = objectField(result, 'input_policy')/" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted input readiness parser that does not read daemon input_readiness" >&2
+  exit 1
+fi
+perl -0pi -e "s/  const value = objectField\\(result, 'input_policy'\\)/  const value = objectField(result, 'input_readiness')/" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+
+perl -0pi -e 's/    if \(view\.inputReadiness\.interactiveReady !== true\) return false/    if (false) return false/' \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted input readiness gating that does not fail closed" >&2
+  exit 1
+fi
+perl -0pi -e 's/    if \(false\) return false/    if (view.inputReadiness.interactiveReady !== true) return false/' \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 
 perl -0pi -e "s/    latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue\\(objectField\\(result, 'latest_target_diagnostic'\\)\\),\\n    targetTracking: remoteDesktopTargetTrackingFromValue\\(objectField\\(result, 'target_tracking'\\)\\),//" \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"

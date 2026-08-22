@@ -196,10 +196,28 @@ require 'frontendAction' "$PROTOCOL" \
   'frontend must expose target diagnostic frontend_action for recovery UI decisions'
 require 'inputEnabled' "$PROTOCOL" \
   'frontend must expose target tracking input_enabled so target loss cannot appear interactive'
+require 'RemoteDesktopInputReadiness' "$PROTOCOL" \
+  'frontend must model daemon-projected remote desktop input readiness'
+require 'inputReadiness\?: RemoteDesktopInputReadiness' "$PROTOCOL" \
+  'frontend session view must carry the daemon input_readiness projection'
+require 'remoteDesktopInputReadinessFromResult\(result\)' "$PROTOCOL" \
+  'frontend session projection must parse daemon input_readiness'
+require 'objectField\(result, '\''input_readiness'\''\)' "$PROTOCOL" \
+  'frontend input readiness parser must read the daemon input_readiness object'
+require 'interactiveReady: value\.interactive_ready === true' "$PROTOCOL" \
+  'frontend input readiness must expose daemon interactive_ready'
+require 'blockedReason: stringField\(value, '\''blocked_reason'\''\)' "$PROTOCOL" \
+  'frontend input readiness must expose daemon blocked_reason'
 require 'remoteDesktopInputFrameAllowed' "$PROTOCOL" \
   'frontend must derive remote desktop input eligibility from runtime target tracking and input policy'
 require 'remoteDesktopInputFrameAllowed' "$STORE" \
   'frontend store input sender must use the remote desktop input eligibility helper'
+require 'view\.inputReadiness\.interactiveReady !== true' "$PROTOCOL" \
+  'frontend input gating must fail closed when daemon input_readiness says interactive is not ready'
+require 'view\.inputReadiness\.pointerEnabled === true' "$PROTOCOL" \
+  'frontend pointer input gating must use daemon input_readiness pointer readiness when present'
+require 'view\.inputReadiness\.keyboardEnabled === true' "$PROTOCOL" \
+  'frontend keyboard input gating must use daemon input_readiness keyboard readiness when present'
 require_multiline 'm/rdSendInput:\s*\(key,\s*frame\)\s*=>\s*\{(?:(?!bindCanvas).)*remoteDesktopInputFrameAllowed\(session,\s*frame\)/s' "$STORE" \
   'frontend rdSendInput must check session target tracking/input policy before sending frames'
 require 'remoteDesktopTargetRecoveryMessage' "$PROTOCOL" \
@@ -225,6 +243,12 @@ require 'does not treat ordinary view-only input state as target recovery failur
   'frontend protocol tests must prove view-only input state is not misreported as target loss'
 require 'gates frontend input frames on runtime target tracking and input policy' "$PROTOCOL_TEST" \
   'frontend protocol tests must cover target-tracking and input-policy input gating'
+require 'prefers runtime input readiness over legacy input policy for input gating' "$PROTOCOL_TEST" \
+  'frontend protocol tests must prove daemon input_readiness overrides legacy input policy'
+require 'blocked\.inputReadiness' "$PROTOCOL_TEST" \
+  'frontend protocol tests must assert parsed blocked input readiness'
+require 'interactiveReady: false' "$PROTOCOL_TEST" \
+  'frontend protocol tests must cover non-ready interactive input readiness'
 require 'keeps base media controls available when remote desktop target refresh fails' "$ACCESS_TEST" \
   'frontend access tests must prove remote target failure does not disable base media'
 require 'runs the remote desktop UI flow from target picker through session end' "$ACCESS_TEST" \

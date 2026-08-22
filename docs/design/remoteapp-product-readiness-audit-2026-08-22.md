@@ -43,6 +43,9 @@ boundaries. The frontend invocation boundary also proves that the browser
 surface drives the picker-to-session-to-end UI path, starts
 `remote_desktop.watch_events` after negotiated WebRTC setup, and maps
 degraded/permission-revoked session events into recovery UI/transport state.
+It also proves the frontend session projection consumes daemon
+`input_readiness` and makes input sending fail closed from that runtime
+readiness when present, rather than relying only on legacy `input_policy`.
 The frontend product-flow script is a runnable product-flow harness entrypoint:
 with an explicit `--run`, it first verifies Hub API reachability, then product
 runtime readiness for daemon control/invocation, then composes frontend
@@ -74,7 +77,7 @@ path, and frontend lifecycle is product-ready.
 | Requirement | Current status | Evidence that exists | Evidence still required before product-complete |
 |---|---|---|---|
 | Application/window selection and stable capture across macOS/Windows/Linux | Partial | macOS ScreenCaptureKit target model and host decoded-frame harnesses; non-macOS app/window target observation fails closed | Real macOS, Windows, and Linux host E2E reports for display/window/application; Windows/Linux native capture plugins or explicit product unsupported state |
-| Mouse/keyboard input injection is controllable, low-latency, and permission-correct | Incomplete by design | App/window sessions downgrade to `view_only`; pointer/key frames are policy-gated; clipboard/file-drop are unsupported; session views now expose `input_readiness` with requested/effective mode, interactive readiness, and blocked reason | Focus validation, coordinate mapping, target epoch checks, OS permission checks, latency measurements, and successful input injection E2E |
+| Mouse/keyboard input injection is controllable, low-latency, and permission-correct | Incomplete by design | App/window sessions downgrade to `view_only`; pointer/key frames are policy-gated; clipboard/file-drop are unsupported; session views now expose `input_readiness` with requested/effective mode, interactive readiness, and blocked reason; frontend input sending consumes daemon `input_readiness` and fails closed before sending pointer/key frames | Focus validation, coordinate mapping, target epoch checks, OS permission checks, latency measurements, and successful input injection E2E |
 | Audio/video codec, frame rate, bitrate adaptation, and drop policy are product-ready | Partial | macOS H.264/WebRTC path, VideoToolbox descriptor, adaptive bitrate helper, queue/drop boundary tests | End-to-end codec negotiation reports, audio path, frame-rate/bitrate soak under load, degraded network/drop policy E2E |
 | Multi-window/multi-application independent tracking works as an execution effect | Partial | Target tracker state machine, move/resize/loss/rebind events, same-display application window-set rebind | Multi-display `MultiAppSurface` or explicit product unsupported report; real app/window churn E2E with independent tracked streams |
 | Disconnect/reconnect, session resume, consent revoke, cancel, timeout are complete | Partial | Lease monitor, refresh/end session, target loss and transport failure taxonomy, frontend watch_events recovery handling for degraded and permission-revoked sessions, canonical SDK cancel/timeout semantics | Session resume after transport loss, reconnect handoff, consent revoke termination E2E, cancel/timeout receipts, crash/restart recovery E2E |

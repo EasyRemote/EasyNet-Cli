@@ -111,3 +111,32 @@ Product effect:
   product correctly downgraded to view-only" from a truly interactive session.
 - This does not complete input injection; it makes the missing interactive
   capability explicit and machine-readable.
+
+## 2026-08-22 — Frontend input sending must consume runtime readiness
+
+Decision:
+
+- The browser must not independently infer interactive input eligibility from
+  legacy `input_policy` when the daemon already projects authoritative
+  `input_readiness`.
+- `input_policy` remains a compatibility projection for sessions that do not
+  expose the new readiness object, but new RemoteApp sessions should be gated
+  by runtime readiness first.
+
+Implementation delta:
+
+- Frontend session projection now parses daemon `input_readiness`.
+- `RemoteDesktopView` carries the parsed input readiness beside the legacy
+  input policy.
+- `remoteDesktopInputFrameAllowed` fails closed when
+  `interactive_ready=false`, and separately gates pointer/wheel and key/keyboard
+  frames from daemon `pointer_enabled` and `keyboard_enabled`.
+- The frontend boundary checker and its mutation tests now require the parser,
+  projection, fail-closed gating, and protocol test coverage.
+
+Product effect:
+
+- A session requested as interactive but downgraded to view-only is now blocked
+  consistently at the browser input-sending boundary.
+- This closes a frontend/runtime seam only. It does not implement focus-safe
+  OS pointer/keyboard injection or provide latency/product E2E evidence.

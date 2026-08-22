@@ -39,7 +39,8 @@
         "app/window sessions downgrade to view_only",
         "pointer/key frames are policy-gated",
         "clipboard/file-drop are unsupported",
-        "session view projects requested/effective input readiness and blocked reason"
+        "session view projects requested/effective input readiness and blocked reason",
+        "frontend input sender consumes daemon input_readiness and fails closed before sending pointer/key frames"
       ],
       "required_evidence_before_product_complete": [
         "focus validation E2E",
@@ -139,6 +140,7 @@
         "frontend subject boundary",
         "component coverage for picker to consent to create to WebRTC attach to watch_events to end",
         "target-scoped WebRTC lifecycle unit coverage",
+        "protocol projection coverage for daemon input_readiness driven input gating",
         "product-flow harness entrypoint"
       ],
       "required_evidence_before_product_complete": [
