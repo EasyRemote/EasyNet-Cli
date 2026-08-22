@@ -22,7 +22,8 @@
         "macOS ScreenCaptureKit application filter excludes uncommitted same-app same-display windows from committed window-set sessions",
         "host decoded-frame harnesses",
         "non-macOS app/window target observation fails closed",
-        "frontend session details surface daemon target loss reason and recovery action"
+        "frontend session details surface daemon target loss reason and recovery action",
+        "frontend action row executes daemon-guided refresh_targets recovery by refetching target inventory"
       ],
       "required_evidence_before_product_complete": [
         "real macOS host E2E for display/window/application capture",
@@ -97,7 +98,8 @@
         "move/resize/loss/rebind events",
         "same-display application window-set rebind",
         "application capture passes uncommitted same-app same-display windows as ScreenCaptureKit exceptingWindows",
-        "frontend session details surface target tracking recovery state instead of opaque failure"
+        "frontend session details surface target tracking recovery state instead of opaque failure",
+        "frontend exposes a Refresh targets CTA for target tracking recovery instead of leaving lost targets as a dead end"
       ],
       "required_evidence_before_product_complete": [
         "multi-display MultiAppSurface implementation or explicit product unsupported report",
@@ -165,6 +167,7 @@
         "frontend protocol/store/UI coverage for daemon terminal_receipt projection after end_session",
         "frontend permission-revoked recovery synchronizes daemon terminal_receipt through show_session",
         "frontend session details render daemon-projected target recovery status/reason/action",
+        "frontend action row executes daemon-guided target refresh recovery",
         "product-flow harness entrypoint"
       ],
       "required_evidence_before_product_complete": [

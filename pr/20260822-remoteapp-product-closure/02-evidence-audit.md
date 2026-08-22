@@ -221,6 +221,12 @@ Current frontend lifecycle evidence:
   `target lost · target_not_found · refresh_targets` instead of a generic
   RemoteApp failure. This closes an application/window observability seam; it
   does not prove real cross-platform capture or multi-window churn E2E.
+- The target recovery action is now executable in the frontend action row:
+  when daemon `latestTargetDiagnostic.frontendAction` is `refresh_targets`, the
+  UI exposes `Refresh targets` and refetches the target inventory through the
+  existing `resource.refresh_remote_targets` query path. This still requires the
+  user to end/create a new session when the daemon reports
+  `new_session_required`; it does not mutate session lifecycle in the browser.
 - Frontend protocol/store/UI code now parses and renders daemon-projected
   RemoteApp `terminal_receipt`. After `end_session`, the store retains the
   closed session view with its terminal receipt while clearing `sessionToken`.

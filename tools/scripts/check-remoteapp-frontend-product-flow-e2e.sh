@@ -191,10 +191,20 @@ require 'latestTargetDiagnostic' "$FRONTEND_UI" \
   'frontend RemoteApp target status must be derived from daemon latestTargetDiagnostic'
 require 'frontendAction' "$FRONTEND_UI" \
   'frontend RemoteApp target status must surface daemon frontendAction recovery guidance'
+require 'remoteDesktopTargetRecoveryAction' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must derive executable recovery actions from daemon target diagnostics'
+require 'onRefreshRemoteTargets' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must expose a refresh-targets action for daemon refresh_targets guidance'
+require 'Refresh targets' "$FRONTEND_UI" \
+  'frontend RemoteApp action row must offer a Refresh targets CTA for lost application/window targets'
 require 'surfaces daemon remote desktop target recovery state in session details' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove session details surface target recovery state'
 require 'target lost · target_not_found · refresh_targets' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove lost window/application targets expose reason and recovery action'
+require 'refreshRemoteTargets' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must bind the lost-target recovery button to a refresh callback'
+require 'toHaveBeenCalledTimes\(1\)' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove the Refresh targets CTA executes the recovery callback'
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
   'product readiness audit must mention the product-flow E2E harness'
@@ -217,5 +227,7 @@ require 'Frontend full lifecycle E2E across Browser/Tauri surfaces' "$PLAN" \
   'product closure plan must retain Browser/Tauri full lifecycle gap'
 require 'target lost · target_not_found · refresh_targets' "$PLAN" \
   'product closure plan must record the target recovery UI evidence'
+require 'Refresh targets' "$PLAN" \
+  'product closure plan must record the executable target recovery CTA evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'
