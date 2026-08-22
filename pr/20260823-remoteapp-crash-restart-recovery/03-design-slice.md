@@ -41,6 +41,9 @@ boundary.
 Stage 1 should not pretend media survived a daemon crash. On restart:
 
 - non-terminal sessions are restored as recoverable session rows;
+- non-terminal snapshots whose lease elapsed while the daemon was down are
+  settled through the session aggregate as `session_expired` terminal rows
+  during startup recovery;
 - media/input transports are marked not ready;
 - the same recovered `session_id` may start a new media generation when the
   client performs fresh signaling;
@@ -110,6 +113,9 @@ satisfy the stricter `daemon_restart_active_session` verifier scenario.
     receipt;
   - corrupt or mismatched snapshot rows are reported and skipped instead of
     aborting the whole startup recovery batch;
+  - snapshots whose lease already elapsed while the daemon was down are closed
+    synchronously at startup with a durable `session_expired` terminal receipt
+    and do not enter target monitoring;
   - recovered non-terminal sessions can leave the rehydrated `Suspended` phase
     and start a new media negotiation epoch without minting a replacement
     session id;

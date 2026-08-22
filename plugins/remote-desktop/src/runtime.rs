@@ -35,7 +35,7 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenS
 use crate::daemon::plugins::remote_desktop::config::RemoteDesktopRuntimeConfig;
 use crate::daemon::plugins::remote_desktop::consent_registry::RemoteDesktopConsentRegistry;
 use crate::daemon::plugins::remote_desktop::lease_monitor::RemoteDesktopLeaseMonitor;
-use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::daemon::plugins::remote_desktop::session_creation::{
     PlatformRemoteAppTargetBindingVerifier, RemoteAppTargetBindingVerifier,
 };
@@ -238,14 +238,27 @@ impl RemoteDesktopPlugin {
             return Ok(());
         }
         let mut restored = Vec::new();
+        let recovery_now_ms = now_ms();
         for snapshot in snapshots {
-            let session = RemoteDesktopSession::rehydrate(&snapshot)?;
+            let mut session = RemoteDesktopSession::rehydrate(&snapshot)?;
             let session_id = session.session_id().to_string();
             let lease_expires_at_ms = session.lease_expires_at_ms();
-            let terminal = session.is_terminal();
+            let mut terminal = session.is_terminal();
+            if !terminal && session.is_expired_at(recovery_now_ms) {
+                session.expire(recovery_now_ms);
+                terminal = true;
+            }
+            let recovery_snapshot = if terminal {
+                Some(RemoteDesktopRecoverySnapshot::from_session(&session)?)
+            } else {
+                None
+            };
             plugin.session_store().with_sessions(|sessions| {
                 sessions.insert(session_id.clone(), session);
             });
+            if let Some(recovery_snapshot) = recovery_snapshot {
+                plugin.persist_recovery_snapshot(&recovery_snapshot)?;
+            }
             if !terminal {
                 Self::schedule_session_lease(plugin, session_id.clone(), lease_expires_at_ms)?;
                 Self::track_session_target(plugin, session_id.clone())?;
@@ -284,6 +297,7 @@ mod tests {
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
     use crate::daemon::ability::dispatch::StreamSource;
     use crate::daemon::persistence::resources::{self, ResourcesFile};
+    use crate::daemon::plugins::remote_desktop::constants::REASON_SESSION_EXPIRED;
     use crate::daemon::plugins::remote_desktop::handlers::{
         end_session, show_session, watch_events,
     };
@@ -392,5 +406,104 @@ mod tests {
         .expect("end_session must close the rehydrated session row");
         assert_eq!(ended["state"], json!("closed"));
         assert_eq!(ended["end_reason"], json!("rehydrate_test_cleanup"));
+    }
+
+    #[test]
+    fn plugin_startup_expires_recovery_snapshot_that_lapsed_while_daemon_was_down() {
+        let _lock = test_lock();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let temp = tempfile::tempdir().expect("temp recovery dir");
+        let recovery = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
+        let source = RemoteDesktopPlugin::with_target_binding_verifier(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+        );
+        reset_store(&source);
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-startup-expired-display");
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+        let created = create_test_session(
+            Arc::clone(&source),
+            env.clone(),
+            json!({"session_id": "rd-startup-expired", "mode": "view_only"}),
+        )
+        .expect("source session creates");
+        let token = created["session_token"]
+            .as_str()
+            .expect("create_session returns token")
+            .to_string();
+        let snapshot = source
+            .session_store()
+            .with_sessions(|sessions| {
+                RemoteDesktopRecoverySnapshot::from_session(
+                    sessions
+                        .get("rd-startup-expired")
+                        .expect("source session exists"),
+                )
+            })
+            .expect("snapshot derives from source session");
+        let expired_snapshot = RemoteDesktopRecoverySnapshot::new(
+            snapshot.session_id().to_string(),
+            snapshot.session_token().to_string(),
+            snapshot.creator_caller_ura().to_string(),
+            snapshot.selected_resource_ura().to_string(),
+            snapshot.subject_display_name().to_string(),
+            snapshot.target_binding().clone(),
+            snapshot.consent().clone(),
+            snapshot.mode().to_string(),
+            snapshot.transport_preferences().to_vec(),
+            snapshot.video().clone(),
+            snapshot.input_policy().clone(),
+            1,
+            1,
+            1,
+            snapshot.lifecycle_state().to_string(),
+            snapshot.terminal_receipt(),
+            snapshot.events(),
+        )
+        .expect("expired snapshot remains schema-valid");
+        recovery
+            .save(&expired_snapshot)
+            .expect("expired snapshot saves");
+
+        let recovered = RemoteDesktopPlugin::with_recovery_store_for_test(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+            Arc::clone(&recovery),
+        );
+
+        let shown = show_session::handle(
+            Arc::clone(&recovered),
+            env,
+            json!({
+                "session_id": "rd-startup-expired",
+                "session_token": token,
+            }),
+        )
+        .expect("expired recovery row remains inspectable");
+        assert_eq!(shown["session_id"], json!("rd-startup-expired"));
+        assert_eq!(shown["state"], json!("closed"));
+        assert_eq!(shown["end_reason"], json!(REASON_SESSION_EXPIRED));
+        assert_eq!(
+            shown["terminal_receipt"]["reason_code"],
+            json!(REASON_SESSION_EXPIRED)
+        );
+        assert!(
+            recovered
+                .target_monitor_desired_sessions_for_test()
+                .is_empty(),
+            "expired recovery rows must not re-enter target monitoring"
+        );
+        let persisted = recovery
+            .load("rd-startup-expired")
+            .expect("load persisted terminal snapshot")
+            .expect("terminal snapshot exists");
+        assert!(
+            persisted.terminal_receipt().is_some(),
+            "startup expiry must be durable"
+        );
     }
 }

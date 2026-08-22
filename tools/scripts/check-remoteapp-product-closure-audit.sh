@@ -783,8 +783,14 @@ require 'ignored recovery snapshot' "$RUNTIME" \
   'RemoteApp runtime startup must report and skip corrupt recovery snapshots without failing the whole batch'
 require 'track_session_target\(plugin, session_id\.clone\(\)\)' "$RUNTIME" \
   'RemoteApp runtime startup must re-register rehydrated non-terminal sessions with target monitoring'
+require 'is_expired_at\(recovery_now_ms\)' "$RUNTIME" \
+  'RemoteApp runtime startup must synchronously settle recovery snapshots whose leases expired while the daemon was down'
+require 'session\.expire\(recovery_now_ms\)' "$RUNTIME" \
+  'RemoteApp runtime startup must project expired recovery rows through the session aggregate terminal path'
 require 'plugin_startup_rehydrates_recovery_snapshot_for_public_show_session' "$RUNTIME" \
   'RemoteApp runtime must have regression coverage for startup rehydrate show/watch/end behavior'
+require 'plugin_startup_expires_recovery_snapshot_that_lapsed_while_daemon_was_down' "$RUNTIME" \
+  'RemoteApp runtime must have regression coverage for startup recovery expiry settlement'
 require 'target_monitor_desired_sessions_for_test' "$RUNTIME" \
   'RemoteApp runtime regression must prove rehydrated sessions re-enter target monitoring'
 require 'desired: Mutex<HashSet<String>>' "$TARGET_MONITOR" \
