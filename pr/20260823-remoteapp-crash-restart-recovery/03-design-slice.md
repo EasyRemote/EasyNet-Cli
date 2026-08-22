@@ -52,6 +52,11 @@ Stage 2 can reattach watch/media transport and satisfy the stricter
 ## Acceptance evidence
 
 - Unit tests for snapshot round-trip and fail-closed corrupted snapshot loading.
+- Unit tests for startup batch isolation: one corrupt snapshot must be reported
+  and skipped without dropping valid recoverable rows.
+- Unix permission checks for daemon-local recovery state: the store directory is
+  private and snapshot files are private because snapshots include the
+  daemon-local session token required for post-restart control access.
 - A live runner that kills/restarts the daemon and verifies same-session public
   `show_session` recovery.
 - Later, a full `remoteapp-crash-restart-recovery-e2e.sh --run --runner-cmd ...`
@@ -82,6 +87,9 @@ Stage 2 can reattach watch/media transport and satisfy the stricter
 - Added unit coverage for:
   - valid snapshot round-trip;
   - corrupt snapshot fail-closed behavior;
+  - corrupt-row isolation during startup batch recovery;
+  - private Unix recovery directory/file permissions for session-token
+    snapshots;
   - path-unsafe session id rejection;
   - selected Resource URA validation.
 - Added handler regression coverage for:
@@ -95,6 +103,8 @@ Stage 2 can reattach watch/media transport and satisfy the stricter
   - recovered rows preserve `session_id`, selected Resource URA, caller,
     consent receipt, session token, target binding, event replay, and terminal
     receipt;
+  - corrupt or mismatched snapshot rows are reported and skipped instead of
+    aborting the whole startup recovery batch;
   - public `show_session`, `watch_events`, and `end_session` operate through the
     normal session access/lifecycle path after rehydration.
 

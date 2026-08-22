@@ -28,8 +28,13 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::fs::OpenOptions;
 use std::io;
+use std::io::Write as _;
 use std::path::PathBuf;
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -235,6 +240,56 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoveryStore
     root: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoveryLoadReport {
+    snapshots: Vec<RemoteDesktopRecoverySnapshot>,
+    rejected: Vec<RemoteDesktopRecoveryLoadRejection>,
+}
+
+impl RemoteDesktopRecoveryLoadReport {
+    pub(in crate::daemon::plugins::remote_desktop) fn new(
+        snapshots: Vec<RemoteDesktopRecoverySnapshot>,
+        rejected: Vec<RemoteDesktopRecoveryLoadRejection>,
+    ) -> Self {
+        Self {
+            snapshots,
+            rejected,
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn into_snapshots(
+        self,
+    ) -> Vec<RemoteDesktopRecoverySnapshot> {
+        self.snapshots
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn rejected(
+        &self,
+    ) -> &[RemoteDesktopRecoveryLoadRejection] {
+        &self.rejected
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoveryLoadRejection {
+    path: PathBuf,
+    reason: String,
+}
+
+impl RemoteDesktopRecoveryLoadRejection {
+    fn new(path: PathBuf, reason: String) -> Self {
+        Self { path, reason }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
 impl RemoteDesktopRecoveryStore {
     pub(in crate::daemon::plugins::remote_desktop) fn daemon_default() -> Self {
         Self { root: None }
@@ -249,12 +304,15 @@ impl RemoteDesktopRecoveryStore {
         snapshot: &RemoteDesktopRecoverySnapshot,
     ) -> anyhow::Result<PathBuf> {
         snapshot.validate()?;
-        fs::create_dir_all(self.root())?;
+        let root = self.root();
+        fs::create_dir_all(&root)?;
+        harden_recovery_dir(&root)?;
         let path = self.snapshot_path(snapshot.session_id())?;
         let tmp_path = path.with_extension("json.tmp");
         let body = serde_json::to_vec_pretty(snapshot)?;
-        fs::write(&tmp_path, body)?;
+        write_private_file(&tmp_path, &body)?;
         fs::rename(&tmp_path, &path)?;
+        harden_recovery_file(&path)?;
         Ok(path)
     }
 
@@ -276,27 +334,34 @@ impl RemoteDesktopRecoveryStore {
 
     pub(in crate::daemon::plugins::remote_desktop) fn load_all(
         &self,
-    ) -> anyhow::Result<Vec<RemoteDesktopRecoverySnapshot>> {
+    ) -> anyhow::Result<RemoteDesktopRecoveryLoadReport> {
         let root = self.root();
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Ok(RemoteDesktopRecoveryLoadReport::new(Vec::new(), Vec::new()));
+            }
             Err(err) => return Err(err.into()),
         };
         let mut snapshots = Vec::new();
+        let mut rejected = Vec::new();
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            let body = fs::read(&path)?;
-            let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_slice(&body)?;
-            snapshot.validate()?;
-            snapshots.push(snapshot);
+            match load_snapshot_path(&path) {
+                Ok(snapshot) => snapshots.push(snapshot),
+                Err(err) => rejected.push(RemoteDesktopRecoveryLoadRejection::new(
+                    path,
+                    err.to_string(),
+                )),
+            }
         }
         snapshots.sort_by(|left, right| left.session_id.cmp(&right.session_id));
-        Ok(snapshots)
+        rejected.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(RemoteDesktopRecoveryLoadReport::new(snapshots, rejected))
     }
 
     fn snapshot_path(&self, session_id: &str) -> anyhow::Result<PathBuf> {
@@ -309,6 +374,49 @@ impl RemoteDesktopRecoveryStore {
             .clone()
             .unwrap_or_else(|| config::state_dir().join("remote-desktop").join("sessions"))
     }
+}
+
+fn load_snapshot_path(path: &PathBuf) -> anyhow::Result<RemoteDesktopRecoverySnapshot> {
+    let body = fs::read(path)?;
+    let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_slice(&body)?;
+    snapshot.validate()?;
+    Ok(snapshot)
+}
+
+fn write_private_file(path: &PathBuf, body: &[u8]) -> anyhow::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(body)?;
+    file.sync_all()?;
+    harden_recovery_file(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_recovery_dir(path: &PathBuf) -> anyhow::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_recovery_dir(_path: &PathBuf) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_recovery_file(path: &PathBuf) -> anyhow::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_recovery_file(_path: &PathBuf) -> anyhow::Result<()> {
+    Ok(())
 }
 
 fn validate_session_id_for_path(session_id: &str) -> anyhow::Result<()> {
@@ -349,6 +457,9 @@ mod tests {
     use serde_json::json;
 
     use super::{RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn snapshot() -> RemoteDesktopRecoverySnapshot {
         RemoteDesktopRecoverySnapshot::new(
@@ -416,6 +527,49 @@ mod tests {
                 .contains("unsupported RemoteApp recovery snapshot schema"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn recovery_store_load_all_reports_corrupt_snapshots_without_dropping_valid_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let snapshot = snapshot();
+        store.save(&snapshot).expect("save valid snapshot");
+        std::fs::write(temp.path().join("rd-corrupt.json"), b"{not json")
+            .expect("write corrupt snapshot");
+
+        let report = store.load_all().expect("load batch recovery report");
+        assert_eq!(report.rejected().len(), 1);
+        assert!(report.rejected()[0].path().ends_with("rd-corrupt.json"));
+        assert!(
+            !report.rejected()[0].reason().trim().is_empty(),
+            "rejection reason must be observable"
+        );
+        let snapshots = report.into_snapshots();
+        assert_eq!(snapshots, vec![snapshot]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_store_saves_private_snapshot_permissions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let snapshot = snapshot();
+
+        let path = store.save(&snapshot).expect("save snapshot");
+        let dir_mode = std::fs::metadata(temp.path())
+            .expect("recovery dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(path)
+            .expect("snapshot metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
     }
 
     #[test]

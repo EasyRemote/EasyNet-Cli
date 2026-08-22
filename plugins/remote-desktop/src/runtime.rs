@@ -218,7 +218,15 @@ impl RemoteDesktopPlugin {
     }
 
     fn rehydrate_recovery_snapshots(plugin: &Arc<Self>) -> anyhow::Result<()> {
-        let snapshots = plugin.recovery.load_all()?;
+        let report = plugin.recovery.load_all()?;
+        for rejected in report.rejected() {
+            eprintln!(
+                "[remote-desktop] ignored recovery snapshot {}: {}",
+                rejected.path().display(),
+                rejected.reason()
+            );
+        }
+        let snapshots = report.into_snapshots();
         if snapshots.is_empty() {
             return Ok(());
         }
@@ -314,6 +322,8 @@ mod tests {
             })
             .expect("snapshot derives from source session");
         recovery.save(&snapshot).expect("snapshot saves");
+        std::fs::write(temp.path().join("rd-corrupt.json"), b"{not json")
+            .expect("write corrupt snapshot fixture");
 
         let recovered = RemoteDesktopPlugin::with_recovery_store_for_test(
             Arc::new(SyntheticScreenBackend),

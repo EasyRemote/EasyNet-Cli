@@ -755,6 +755,14 @@ require 'daemon_default' "$SESSION_RECOVERY" \
   'session recovery store must have a daemon-local default state path'
 require 'load_all' "$SESSION_RECOVERY" \
   'session recovery store must enumerate snapshots for plugin startup rehydration'
+require 'RemoteDesktopRecoveryLoadReport' "$SESSION_RECOVERY" \
+  'session recovery batch loading must return accepted snapshots plus rejected-row evidence'
+require 'RemoteDesktopRecoveryLoadRejection' "$SESSION_RECOVERY" \
+  'session recovery batch loading must identify corrupt or mismatched snapshots without poisoning valid rows'
+require 'harden_recovery_dir' "$SESSION_RECOVERY" \
+  'session recovery store must harden daemon-local recovery directories because snapshots include session tokens'
+require 'harden_recovery_file' "$SESSION_RECOVERY" \
+  'session recovery store must harden daemon-local recovery files because snapshots include session tokens'
 require 'session_token' "$SESSION_RECOVERY" \
   'session recovery snapshot must preserve daemon-local session token for post-restart control access'
 require 'schema_version' "$SESSION_RECOVERY" \
@@ -767,6 +775,8 @@ require 'persist_recovery_snapshot' "$RUNTIME" \
   'RemoteApp runtime must expose a plugin-owned recovery snapshot write boundary'
 require 'rehydrate_recovery_snapshots' "$RUNTIME" \
   'RemoteApp runtime must load recovery snapshots into the plugin session store at startup'
+require 'ignored recovery snapshot' "$RUNTIME" \
+  'RemoteApp runtime startup must report and skip corrupt recovery snapshots without failing the whole batch'
 require 'plugin_startup_rehydrates_recovery_snapshot_for_public_show_session' "$RUNTIME" \
   'RemoteApp runtime must have regression coverage for startup rehydrate show/watch/end behavior'
 require 'SESSION_REHYDRATED' "$SESSION" \
@@ -789,6 +799,10 @@ require 'recovery_store_round_trips_valid_snapshot' "$SESSION_RECOVERY" \
   'session recovery store must have snapshot round-trip coverage'
 require 'recovery_store_fails_closed_for_corrupt_snapshot' "$SESSION_RECOVERY" \
   'session recovery store must fail closed for corrupt snapshots'
+require 'recovery_store_load_all_reports_corrupt_snapshots_without_dropping_valid_rows' "$SESSION_RECOVERY" \
+  'session recovery store must isolate corrupt snapshots during startup batch load'
+require 'recovery_store_saves_private_snapshot_permissions' "$SESSION_RECOVERY" \
+  'session recovery store must protect snapshots containing session tokens with private filesystem permissions'
 require 'recovery_store_rejects_path_unsafe_session_ids' "$SESSION_RECOVERY" \
   'session recovery store must reject path-unsafe session ids'
 require 'create_session_persists_recovery_snapshot' "$CREATE_SESSION_HANDLER" \

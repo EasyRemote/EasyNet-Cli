@@ -185,6 +185,8 @@
         "2026-08-23 live daemon kill/restart probe returned session_not_found for rd-crash-probe-45956, proving the historical runtime did not rehydrate active RemoteApp sessions after daemon crash",
         "RemoteDesktopRecoveryStore and RemoteDesktopRecoverySnapshot now define the daemon-local durable snapshot contract with round-trip and corrupt-snapshot fail-closed tests",
         "plugin startup now rehydrates snapshots into degraded RemoteDesktopSession rows and preserves session_id, selected Resource URA, caller, consent receipt, daemon-local session token, target binding, event replay, and terminal receipt",
+        "recovery batch loading reports and skips corrupt snapshot rows without dropping valid rows",
+        "Unix recovery directories and snapshot files are private because persisted snapshots include daemon-local session tokens",
         "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row"
       ],
       "required_evidence_before_product_complete": [
