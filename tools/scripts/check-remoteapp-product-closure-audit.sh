@@ -280,6 +280,14 @@ require 'write_report "skipped"' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must not default to false pass evidence'
 require 'service_owner_projection_failed' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must retain diagnostics for legacy Service owner projection failures'
+require '"source"' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must report source provenance'
+require '"runtime"' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must report runtime image provenance'
+require 'image_created' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must report runtime image creation time'
+require 'build_requested' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must report whether runtime image rebuild was requested'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
 require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \

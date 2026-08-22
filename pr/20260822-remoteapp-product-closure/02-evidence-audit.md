@@ -169,6 +169,11 @@ Current frontend lifecycle evidence:
   timeout. This keeps cross-device evidence auditable: environment failures
   remain failed reports with explicit reasons instead of indefinite hangs or
   missing `result.json` files.
+- The cross-device product smoke report now records source/runtime provenance:
+  EasyNet-Cli source revision, dirty-state, runtime image name, image id, image
+  creation time, and whether `--build` was requested. This is required because
+  the default smoke path reuses `EASYNET_RUNTIME_IMAGE`; a stale image failure
+  must not be treated as authoritative evidence against the current source.
 - Latest local structured environment report:
   `target/e2e/remoteapp-cross-device-product-smoke/20260822-051119-57565/report.json`
   failed before child E2Es with reason `docker info timed out after 3s` and

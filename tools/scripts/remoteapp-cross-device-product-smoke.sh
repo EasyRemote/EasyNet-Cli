@@ -17,6 +17,7 @@ PROJECT_PREFIX="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_PROJECT_PREFIX:-easynet-r
 MIN_FREE_KIB="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_MIN_FREE_KIB:-2097152}"
 DOCKER_INFO_TIMEOUT_SECONDS="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_DOCKER_INFO_TIMEOUT_SECONDS:-20}"
 STEP_TIMEOUT_SECONDS="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_STEP_TIMEOUT_SECONDS:-900}"
+RUNTIME_IMAGE="${EASYNET_RUNTIME_IMAGE:-${EASYNET_HUB_IMAGE:-easynet/hub-e2e:local}}"
 RUN=0
 KEEP=0
 BUILD=0
@@ -74,7 +75,17 @@ done
 write_report() {
   local status="$1"
   local reason="$2"
-  python3 - "$OUT_DIR" "$status" "$reason" <<'PY'
+  local source_revision source_dirty runtime_image_id runtime_image_created
+  source_revision="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+  if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]]; then
+    source_dirty=true
+  else
+    source_dirty=false
+  fi
+  runtime_image_id="$(docker image inspect "$RUNTIME_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+  runtime_image_created="$(docker image inspect "$RUNTIME_IMAGE" --format '{{.Created}}' 2>/dev/null || true)"
+  python3 - "$OUT_DIR" "$status" "$reason" "$source_revision" "$source_dirty" \
+    "$RUNTIME_IMAGE" "$runtime_image_id" "$runtime_image_created" "$BUILD" <<'PY'
 import json
 import pathlib
 import sys
@@ -82,6 +93,12 @@ import sys
 out_dir = pathlib.Path(sys.argv[1])
 status = sys.argv[2]
 reason = sys.argv[3]
+source_revision = sys.argv[4]
+source_dirty = sys.argv[5].lower() == "true"
+runtime_image = sys.argv[6]
+runtime_image_id = sys.argv[7] or None
+runtime_image_created = sys.argv[8] or None
+build_requested = sys.argv[9] == "1"
 out_dir.mkdir(parents=True, exist_ok=True)
 
 steps = []
@@ -137,6 +154,16 @@ report = {
     "script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
     "status": status,
     "reason": reason,
+    "source": {
+        "revision": source_revision,
+        "dirty": source_dirty,
+    },
+    "runtime": {
+        "image": runtime_image,
+        "image_id": runtime_image_id,
+        "image_created": runtime_image_created,
+        "build_requested": build_requested,
+    },
     "steps": steps,
     "coverage": coverage,
     "non_claims": [
@@ -155,6 +182,12 @@ report = {
     "# RemoteApp Cross-Device Product Smoke\n\n"
     f"- Status: `{status}`\n"
     f"- Reason: `{reason}`\n"
+    f"- Source revision: `{source_revision}`\n"
+    f"- Source dirty: `{str(source_dirty).lower()}`\n"
+    f"- Runtime image: `{runtime_image}`\n"
+    f"- Runtime image id: `{runtime_image_id or 'unknown'}`\n"
+    f"- Runtime image created: `{runtime_image_created or 'unknown'}`\n"
+    f"- Runtime image build requested: `{str(build_requested).lower()}`\n"
     f"- Cross-device Hub routing: `{str(coverage['cross_device_hub_routing']).lower()}`\n"
     f"- Synthetic stream/bidi carrier: `{str(coverage['synthetic_stream_bidi_carrier']).lower()}`\n"
     "\nThis report is not product-complete RemoteApp evidence for real OS capture,\n"
@@ -282,6 +315,10 @@ if [[ "$RUN" == "self-test" ]]; then
   grep -q "EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_MIN_FREE_KIB" "$0"
   grep -q "EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_DOCKER_INFO_TIMEOUT_SECONDS" "$0"
   grep -q "EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_STEP_TIMEOUT_SECONDS" "$0"
+  grep -q '"source"' "$0"
+  grep -q '"runtime"' "$0"
+  grep -q "image_created" "$0"
+  grep -q "build_requested" "$0"
   grep -q "docker info timed out" "$0"
   grep -q "command timed out after" "$0"
   grep -q "write_report \"skipped\"" "$0"

@@ -162,6 +162,9 @@ covered by `service_owner_projection_is_fenced_per_host_device`,
 cross-device product smoke still did not produce authoritative product evidence.
 Current structured environment reason: `docker info timed out after 3s`.
 Cross-device product readiness therefore remains partial.
+The cross-device smoke report now records source revision, dirty-state, runtime
+image, image id, image creation time, and whether `--build` was requested, so
+stale-image failures are not treated as authoritative current-source failures.
 They do not prove every operating system, network topology, input mode, codec
 path, and frontend lifecycle is product-ready.
 

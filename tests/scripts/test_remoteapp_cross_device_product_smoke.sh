@@ -22,6 +22,12 @@ import sys
 
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["status"] == "skipped"
+assert report["source"]["revision"]
+assert isinstance(report["source"]["dirty"], bool)
+assert report["runtime"]["image"]
+assert "image_id" in report["runtime"]
+assert "image_created" in report["runtime"]
+assert report["runtime"]["build_requested"] is False
 assert report["coverage"]["cross_device_hub_routing"] is False
 assert report["coverage"]["synthetic_stream_bidi_carrier"] is False
 assert report["coverage"]["real_os_window_application_capture"] is False
@@ -45,6 +51,8 @@ import sys
 
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["status"] == "failed"
+assert report["source"]["revision"]
+assert report["runtime"]["image"]
 assert "insufficient free space" in report["reason"]
 assert report["coverage"]["cross_device_hub_routing"] is False
 assert report["coverage"]["synthetic_stream_bidi_carrier"] is False
@@ -78,6 +86,8 @@ import sys
 
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["status"] == "failed"
+assert report["source"]["revision"]
+assert report["runtime"]["image"]
 assert "docker info timed out" in report["reason"]
 assert report["coverage"]["cross_device_hub_routing"] is False
 assert report["coverage"]["synthetic_stream_bidi_carrier"] is False
