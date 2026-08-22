@@ -523,3 +523,37 @@ Product effect:
 - This closes the frontend offline/resume seam only; long outages, NAT/relay
   handoff, process crash/restart, and real cross-device recovery still require
   E2E evidence before RemoteApp can be called product-complete.
+
+## 2026-08-22 — Input rejection must be visible at the product surface
+
+Decision:
+
+- A browser data-channel send returning `true` does not prove OS input
+  injection. The daemon may still reject the frame because input permission,
+  policy, target tracking, target geometry revision, or platform support is not
+  ready.
+- The daemon already owns this execution decision and records it as RemoteApp
+  session events. The frontend must consume those events instead of inventing a
+  second input-result protocol.
+- Ordinary input rejection is not a media transport failure and must not close
+  WebRTC by default.
+
+Implementation delta:
+
+- Frontend `watch_events` recovery now maps `INPUT_CHANNEL_OPENED` with
+  blocked activation into visible input-blocked status.
+- Frontend `watch_events` recovery now maps `INPUT_FRAME_REJECTED` into visible
+  input-rejected status including daemon reason and frame kind/action when
+  present.
+- The frontend boundary gate rejects missing input rejection/activation event
+  handling and rejects treating input rejection as a default media transport
+  close.
+
+Product effect:
+
+- Users and E2E harnesses can observe why input did not take effect, including
+  reasons such as `input_injection_unavailable` and
+  `stale_pointer_target_geometry`.
+- This closes a silent-failure seam only; successful low-latency pointer and
+  keyboard injection still needs real OS E2E evidence across supported
+  platforms.

@@ -170,6 +170,13 @@ Current frontend lifecycle evidence:
   before transport send. This closes the UI gating seam for requested
   interactive sessions that are correctly downgraded to view-only, while still
   leaving real OS input injection product evidence incomplete.
+- Frontend watch_events recovery now consumes daemon input-plane events:
+  `INPUT_CHANNEL_OPENED` with blocked activation and `INPUT_FRAME_REJECTED`.
+  The UI status shows the daemon reason such as
+  `input_injection_unavailable` or `stale_pointer_target_geometry` without
+  closing the media/WebRTC transport. This closes a silent-input-failure
+  observability seam; it still does not prove successful low-latency OS input
+  injection.
 - RemoteApp session views now expose a plugin-owned
   `terminal_receipt` projection after explicit `end_session` and lease timeout.
   The receipt binds the session id, target binding epochs, terminal reason, and

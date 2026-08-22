@@ -173,6 +173,18 @@ function remoteDesktopSessionEventRecovery(event: RemoteDesktopEvent) {
       syncTerminalSession: true,
     }
   }
+  if (event.eventType === 'INPUT_FRAME_REJECTED') {
+    return {
+      status: 'remote desktop input rejected (stale_pointer_target_geometry)',
+      closeLocalTransport: false,
+    }
+  }
+  if (event.eventType === 'INPUT_CHANNEL_OPENED') {
+    return {
+      status: 'remote desktop input blocked (input_injection_unavailable)',
+      closeLocalTransport: false,
+    }
+  }
   if (event.eventType === 'SESSION_DEGRADED') {
     return {
       status: 'remote desktop session needs retry',
@@ -647,6 +659,10 @@ it('keeps remote desktop consent and session input policy view-only when interac
 })
 
 it('surfaces remote desktop recovery events from the session watcher', async () => {
+  expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('input blocked')
+  expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('input_injection_unavailable')
+  expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('input rejected')
+  expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('stale_pointer_target_geometry')
   expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('session needs retry')
   expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('permission was revoked')
   expect(useMediaChannelStore.getState().entries[key].session.terminalReceipt.reasonCode).toBe('target_permission_revoked')
@@ -857,6 +873,33 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/event\\.eventType === 'TARGET_PERMISSION_IGNORED'/event.eventType === 'TARGET_PERMISSION_REVOKED'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/event\\.eventType === 'INPUT_FRAME_REJECTED'/event.eventType === 'INPUT_FRAME_IGNORED'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing input rejection event handling" >&2
+  exit 1
+fi
+perl -0pi -e "s/event\\.eventType === 'INPUT_FRAME_IGNORED'/event.eventType === 'INPUT_FRAME_REJECTED'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/event\\.eventType === 'INPUT_CHANNEL_OPENED'/event.eventType === 'INPUT_CHANNEL_IGNORED'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing input activation block event handling" >&2
+  exit 1
+fi
+perl -0pi -e "s/event\\.eventType === 'INPUT_CHANNEL_IGNORED'/event.eventType === 'INPUT_CHANNEL_OPENED'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/status: 'remote desktop input rejected \\(stale_pointer_target_geometry\\)',\\n      closeLocalTransport: false/status: 'remote desktop input rejected (stale_pointer_target_geometry)',\\n      closeLocalTransport: true/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted input rejection closing media transport" >&2
+  exit 1
+fi
+perl -0pi -e "s/status: 'remote desktop input rejected \\(stale_pointer_target_geometry\\)',\\n      closeLocalTransport: true/status: 'remote desktop input rejected (stale_pointer_target_geometry)',\\n      closeLocalTransport: false/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e "s/webrtcStatus: 'device offline; remote desktop session preserved for reconnect',/session: null,\\n      webrtcStatus: 'device offline; remote desktop session preserved for reconnect',/" \

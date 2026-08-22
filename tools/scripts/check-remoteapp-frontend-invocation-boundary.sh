@@ -159,8 +159,18 @@ require 'SESSION_DEGRADED' "$STORE" \
   'frontend must surface degraded client/media sessions as retryable recovery state'
 require 'TARGET_PERMISSION_REVOKED' "$STORE" \
   'frontend must surface permission revocation from watch_events'
+require 'INPUT_FRAME_REJECTED' "$STORE" \
+  'frontend must surface daemon input frame rejection events from watch_events'
+require 'INPUT_CHANNEL_OPENED' "$STORE" \
+  'frontend must surface daemon input channel activation state from watch_events'
+require 'remote desktop input rejected' "$STORE" \
+  'frontend input rejection status must be user-visible instead of silent'
+require 'remote desktop input blocked' "$STORE" \
+  'frontend input activation block status must be user-visible instead of silent'
 require 'closeLocalTransport' "$STORE" \
   'frontend recovery mapping must explicitly decide whether to close local transport'
+require_multiline 'm/INPUT_FRAME_REJECTED(?:(?!\n  if \().)*closeLocalTransport:\s*false/s' "$STORE" \
+  'frontend input rejection events must not close RemoteApp media transport by default'
 require_multiline 'm/TARGET_PERMISSION_REVOKED[\s\S]*closeLocalTransport:\s*true/s' "$STORE" \
   'frontend permission-revoked recovery must close local WebRTC/input transport'
 require 'syncRemoteDesktopTerminalSession' "$STORE" \
@@ -319,6 +329,10 @@ require "mode: 'view_only'" "$STORE_TEST" \
   'frontend store tests must prove disabled interactive mode creates a view-only session'
 require 'surfaces remote desktop recovery events from the session watcher' "$STORE_TEST" \
   'frontend store tests must prove watch_events recovery events affect UI/transport state'
+require 'stale_pointer_target_geometry' "$STORE_TEST" \
+  'frontend store tests must prove daemon input rejection reasons are visible'
+require 'input_injection_unavailable' "$STORE_TEST" \
+  'frontend store tests must prove daemon input activation block reasons are visible'
 require 'preserves and rebinds remote desktop sessions across device offline resume' "$STORE_TEST" \
   'frontend store tests must prove RemoteApp offline resume preserves and rebinds daemon sessions'
 require 'target_permission_revoked' "$STORE_TEST" \
