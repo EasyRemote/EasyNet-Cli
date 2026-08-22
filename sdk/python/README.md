@@ -73,12 +73,14 @@ Before tagging a Python SDK release, synchronize and verify its independent
 version line without changing the EasyNet Runtime version:
 
 ```bash
-./tools/scripts/update-python-sdk-version.sh
-./tools/scripts/update-python-sdk-version.sh --check
+SDK_VERSION="$(tide mark --local-only)"
+./tools/scripts/update-python-sdk-version.sh "$SDK_VERSION"
+./tools/scripts/update-python-sdk-version.sh --check "$SDK_VERSION"
 ```
 
-Both commands obtain the current release mark from Tide. Pass an explicit
-version only when validating immutable release input such as a Git tag.
+Capture the release mark only after functional code is frozen. Keep that value
+through the metadata commit and tag; recomputing Tide after another commit would
+describe a different HEAD.
 
 ## Source release scope
 
