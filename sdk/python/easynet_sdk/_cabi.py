@@ -1664,6 +1664,9 @@ def _callback_backpressure_failure() -> bytes:
             "state": "Failed",
             "terminal": False,
             "transport_terminal": True,
+            "payload_content_type": "",
+            "admission_receipt": None,
+            "terminal_receipt": None,
             "error": {
                 "code": "ADMISSION_DENIED",
                 "stage": "cabi_callback",

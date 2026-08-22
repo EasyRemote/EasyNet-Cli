@@ -67,7 +67,8 @@
         "VideoToolbox descriptor",
         "adaptive bitrate helper",
         "queue/drop boundary tests",
-        "session/device capability view explicitly reports host_audio_not_implemented"
+        "session/device capability view explicitly reports host_audio_not_implemented",
+        "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection"
       ],
       "required_evidence_before_product_complete": [
         "end-to-end codec negotiation reports",

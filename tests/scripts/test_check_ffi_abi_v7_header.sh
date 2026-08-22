@@ -13,6 +13,7 @@ make_sandbox() {
     mkdir -p "$sandbox/include" "$sandbox/src" "$sandbox/docs/spec"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
     cp -R "$REPO_ROOT/src/ffi" "$sandbox/src/ffi"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
     echo "$sandbox"

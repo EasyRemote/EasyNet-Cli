@@ -13,6 +13,7 @@ from easynet_sdk import (
     StreamTerminalEvent,
     is_code,
 )
+from easynet_sdk.stream import RawStreamPacket
 
 
 class MemoryStreamTransport:
@@ -185,6 +186,67 @@ class StreamTests(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def test_raw_stream_packet_requires_canonical_metadata_fields(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            StreamEvent.from_raw_packet(
+                RawStreamPacket(
+                    metadata_json=(
+                        b'{"sequence":1,"kind":"data","state":"Open",'
+                        b'"terminal":false,"payload_content_type":"video/h264"}'
+                    ),
+                    payload=b"\x00\x01",
+                )
+            )
+
+        self.assertIn(
+            "raw stream packet metadata missing required canonical field",
+            str(caught.exception),
+        )
+        self.assertIn("transport_terminal", str(caught.exception))
+        self.assertIn("admission_receipt", str(caught.exception))
+        self.assertIn("terminal_receipt", str(caught.exception))
+        self.assertIn("error", str(caught.exception))
+
+    def test_raw_stream_packet_projects_raw_payload_without_payload_aliases(self) -> None:
+        event = StreamEvent.from_raw_packet(
+            RawStreamPacket(
+                metadata_json=(
+                    b'{"sequence":1,"kind":"data","state":"Open",'
+                    b'"terminal":false,"transport_terminal":false,'
+                    b'"payload_content_type":"video/h264",'
+                    b'"admission_receipt":null,"terminal_receipt":null,'
+                    b'"error":null}'
+                ),
+                payload=b"\x00\x01\x02",
+            )
+        )
+
+        self.assertEqual(event.payload_bytes, b"\x00\x01\x02")
+        self.assertEqual(event.payload_base64, "")
+        self.assertIsNone(event.payload_json)
+        self.assertFalse(event.terminal)
+        self.assertFalse(event.transport_terminal)
+
+    def test_raw_stream_packet_rejects_payload_projection_in_metadata(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            StreamEvent.from_raw_packet(
+                RawStreamPacket(
+                    metadata_json=(
+                        b'{"sequence":1,"kind":"data","state":"Open",'
+                        b'"terminal":false,"transport_terminal":false,'
+                        b'"payload_content_type":"video/h264",'
+                        b'"admission_receipt":null,"terminal_receipt":null,'
+                        b'"error":null,"payload_base64":"AAE="}'
+                    ),
+                    payload=b"\x00\x01",
+                )
+            )
+
+        self.assertIn(
+            "raw stream packet metadata must not duplicate payload fields",
+            str(caught.exception),
+        )
 
     def test_stream_terminal_event_projects_terminal_receipt(self) -> None:
         transport = MemoryStreamTransport(

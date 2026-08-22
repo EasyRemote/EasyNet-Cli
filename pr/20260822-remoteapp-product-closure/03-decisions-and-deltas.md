@@ -1,5 +1,31 @@
 # Decisions and Deltas — RemoteApp Product Closure
 
+## 2026-08-22 — v8 raw stream must preserve canonical lifecycle metadata
+
+Decision:
+
+- Raw bytes are an ABI v8 transport representation, not a new Invocation or
+  stream lifecycle semantic.
+- SDKs must reject v8 raw metadata that omits canonical lifecycle, receipt,
+  terminal, or error fields.
+- ABI v7 remains JSON/base64 compatible.
+
+Implementation delta:
+
+- Python SDK `RawStreamPacket` parsing now requires `sequence`, `kind`,
+  `state`, `terminal`, `transport_terminal`, `payload_content_type`,
+  `admission_receipt`, `terminal_receipt`, and `error`.
+- Rust FFI stream transport-error and receipt-verification-error metadata now
+  carry the same v8 metadata fields.
+- The v8 ABI gate now checks for SDK strictness and Rust metadata tests.
+
+Product effect:
+
+- EasyRemote/RemoteApp can consume raw media bytes without bypassing Runtime
+  Core stream state machines.
+- This is data-plane infrastructure only; it does not complete real host
+  audio/video capture, codec negotiation, network adaptation, or E2E evidence.
+
 ## 2026-08-22 — Host audio must be explicit unsupported product state
 
 Decision:

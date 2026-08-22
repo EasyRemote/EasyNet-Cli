@@ -586,7 +586,10 @@ class FakeRawCABI:
             callback,
             user_data,
             b'{"sequence":1,"kind":"data","state":"Open",'
-            b'"terminal":false,"payload_content_type":"application/json"}',
+            b'"terminal":false,"transport_terminal":false,'
+            b'"payload_content_type":"application/json",'
+            b'"admission_receipt":null,"terminal_receipt":null,'
+            b'"error":null}',
             b'{"provider":"cabi"}',
         )
         return 0

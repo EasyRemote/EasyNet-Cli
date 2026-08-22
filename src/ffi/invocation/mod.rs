@@ -7381,6 +7381,9 @@ fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json:
         "sequence": sequence.max(1),
         "terminal": false,
         "transport_terminal": true,
+        "payload_content_type": "",
+        "admission_receipt": null,
+        "terminal_receipt": null,
         "error": {
             "code": format!("{:?}", status.code()),
             "stage": "stream_transport",
@@ -7401,6 +7404,9 @@ fn stream_receipt_verification_error_json(
         "sequence": sequence.max(1),
         "terminal": false,
         "transport_terminal": true,
+        "payload_content_type": "",
+        "admission_receipt": null,
+        "terminal_receipt": null,
         "error": {
             "code": "RECEIPT_VERIFICATION_FAILED",
             "stage": "receipt_verification",
@@ -13272,9 +13278,29 @@ mod tests {
         assert_eq!(value["sequence"], 4);
         assert_eq!(value["terminal"], false);
         assert_eq!(value["transport_terminal"], true);
+        assert_eq!(value["payload_content_type"], "");
+        assert!(value["admission_receipt"].is_null());
+        assert!(value["terminal_receipt"].is_null());
         assert_eq!(value["error"]["code"], "Unavailable");
         assert_eq!(value["error"]["stage"], "stream_transport");
         assert_eq!(value["error"]["message"], "stream transport closed");
+    }
+
+    #[test]
+    fn stream_receipt_verification_error_carries_v8_metadata_contract() {
+        let value = stream_receipt_verification_error_json(0, "bad receipt");
+
+        assert_eq!(value["kind"], "error");
+        assert_eq!(value["state"], "Failed");
+        assert_eq!(value["sequence"], 1);
+        assert_eq!(value["terminal"], false);
+        assert_eq!(value["transport_terminal"], true);
+        assert_eq!(value["payload_content_type"], "");
+        assert!(value["admission_receipt"].is_null());
+        assert!(value["terminal_receipt"].is_null());
+        assert_eq!(value["error"]["code"], "RECEIPT_VERIFICATION_FAILED");
+        assert_eq!(value["error"]["stage"], "receipt_verification");
+        assert_eq!(value["error"]["message"], "bad receipt");
     }
 
     #[test]

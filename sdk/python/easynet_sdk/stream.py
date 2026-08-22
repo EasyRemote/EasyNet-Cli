@@ -16,6 +16,20 @@ from ._receipt_projection import reject_retired_top_level_receipt_alias
 
 MAX_STREAM_BUFFERED_EVENTS = 1024
 
+_RAW_STREAM_REQUIRED_METADATA_FIELDS = frozenset(
+    (
+        "sequence",
+        "kind",
+        "state",
+        "terminal",
+        "transport_terminal",
+        "payload_content_type",
+        "admission_receipt",
+        "terminal_receipt",
+        "error",
+    )
+)
+
 
 class StreamState(StrEnum):
     """Runtime Core server-stream states."""
@@ -152,6 +166,8 @@ class StreamEvent:
             raise _invalid_stream("raw stream packet metadata_json must be bytes")
         if not isinstance(packet.payload, bytes):
             raise _invalid_stream("raw stream packet payload must be bytes")
+        decoded = _decode_stream_event_json(packet.metadata_json)
+        _require_raw_stream_metadata_contract(decoded)
         event = cls.from_json(packet.metadata_json)
         if event.payload_base64 or event.payload_json is not None:
             raise _invalid_stream(
@@ -179,6 +195,32 @@ class StreamEvent:
             admission_receipt=event.admission_receipt,
             terminal_receipt=event.terminal_receipt,
         )
+
+
+def _decode_stream_event_json(raw: bytes | str) -> dict[str, object]:
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        decoded = json.loads(text)
+    except Exception as exc:
+        raise _invalid_stream(f"decode stream event JSON: {exc}", exc) from exc
+    if not isinstance(decoded, dict):
+        raise _invalid_stream("stream event JSON must be an object")
+    return decoded
+
+
+def _require_raw_stream_metadata_contract(decoded: dict[str, object]) -> None:
+    missing = sorted(_RAW_STREAM_REQUIRED_METADATA_FIELDS.difference(decoded))
+    if missing:
+        raise _invalid_stream(
+            "raw stream packet metadata missing required canonical field "
+            + ", ".join(missing)
+        )
+    _required_string(decoded, "state")
+    _required_bool(decoded, "terminal")
+    _required_bool(decoded, "transport_terminal")
+    if not isinstance(decoded.get("payload_content_type"), str):
+        raise _invalid_stream("payload_content_type is required")
+
 
 @dataclass(frozen=True)
 class StreamTerminalEvent:

@@ -132,6 +132,30 @@ fi
 if ! rg -q "RawStreamPacket" sdk/python/easynet_sdk/_cabi.py; then
     record_violation "Python C ABI provider must expose raw packet bridge" "sdk/python/easynet_sdk/_cabi.py"
 fi
+if ! rg -q "_require_raw_stream_metadata_contract" sdk/python/easynet_sdk/stream.py; then
+    record_violation "Python SDK raw stream packets must require canonical lifecycle metadata" \
+        "sdk/python/easynet_sdk/stream.py"
+fi
+if ! rg -q '"admission_receipt"' sdk/python/easynet_sdk/stream.py; then
+    record_violation "Python SDK raw stream metadata contract must include admission_receipt" \
+        "sdk/python/easynet_sdk/stream.py"
+fi
+if ! rg -q '"terminal_receipt"' sdk/python/easynet_sdk/stream.py; then
+    record_violation "Python SDK raw stream metadata contract must include terminal_receipt" \
+        "sdk/python/easynet_sdk/stream.py"
+fi
+if ! rg -q "test_raw_stream_packet_requires_canonical_metadata_fields" sdk/python/tests/test_stream.py; then
+    record_violation "Python stream tests must reject incomplete v8 raw metadata" \
+        "sdk/python/tests/test_stream.py"
+fi
+if ! rg -q "stream_receipt_verification_error_carries_v8_metadata_contract" src/ffi/invocation/mod.rs; then
+    record_violation "Rust FFI tests must pin v8 receipt-verification error metadata" \
+        "src/ffi/invocation/mod.rs"
+fi
+if ! rg -q '"payload_content_type": ""' src/ffi/invocation/mod.rs; then
+    record_violation "Rust FFI transport-error metadata must include payload_content_type" \
+        "src/ffi/invocation/mod.rs"
+fi
 if ! rg -q "runtime_cabi_call_stream_open_v8" sdk/go/cabi_runtime.go; then
     record_violation "Go C ABI provider must bind v8 raw stream open" "sdk/go/cabi_runtime.go"
 fi

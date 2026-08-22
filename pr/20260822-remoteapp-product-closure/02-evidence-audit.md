@@ -122,6 +122,11 @@ Current frontend lifecycle evidence:
   explicit unsupported product state (`host_audio_not_implemented`). This
   prevents video readiness from being treated as full audio/video readiness;
   audio capture, audio codec negotiation, and audio E2E remain missing.
+- ABI v8 raw stream packets now keep payload bytes out of metadata while
+  requiring canonical lifecycle, receipt, terminal, and error fields in the
+  metadata contract. This is required for high-frequency RemoteApp/EasyRemote
+  media streams, but it does not prove real host audio/video capture or network
+  adaptation.
 - 2026-08-22 verification after the Service projection fix:
   response/unit/script gates passed, but an actual
   `remoteapp-cross-device-product-smoke.sh --run` attempt did not produce
