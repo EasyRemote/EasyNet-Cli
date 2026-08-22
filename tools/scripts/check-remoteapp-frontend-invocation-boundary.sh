@@ -227,5 +227,17 @@ require 'gates frontend input frames on runtime target tracking and input policy
   'frontend protocol tests must cover target-tracking and input-policy input gating'
 require 'keeps base media controls available when remote desktop target refresh fails' "$ACCESS_TEST" \
   'frontend access tests must prove remote target failure does not disable base media'
+require 'runs the remote desktop UI flow from target picker through session end' "$ACCESS_TEST" \
+  'frontend access tests must prove picker-to-session-to-end remote desktop UI flow'
+require 'remote_desktop\.grant_consent' "$ACCESS_TEST" \
+  'frontend access tests must prove UI flow grants target-scoped consent'
+require 'remote_desktop\.create_session' "$ACCESS_TEST" \
+  'frontend access tests must prove UI flow creates a remote desktop session'
+require 'remote_desktop\.watch_events' "$ACCESS_TEST" \
+  'frontend access tests must prove UI flow starts the watch_events stream'
+require 'remote_desktop\.end_session' "$ACCESS_TEST" \
+  'frontend access tests must prove UI flow ends the session'
+require 'subject_ura: screenResource\.resource_ura' "$ACCESS_TEST" \
+  'frontend access tests must assert selected target subject propagation through UI flow'
 
 printf 'check-remoteapp-frontend-invocation-boundary: ok\n'

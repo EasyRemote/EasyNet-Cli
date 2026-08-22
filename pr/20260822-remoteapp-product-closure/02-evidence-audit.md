@@ -21,6 +21,9 @@ Current verified boundary gates:
 
 Current frontend lifecycle evidence:
 
+- Frontend `DeviceMediaAccess` component coverage drives the user-visible
+  Remote desktop flow from target picker through Share, target-scoped consent,
+  `create_session`, WebRTC signaling, `watch_events`, and End.
 - Frontend `media-channel-store` starts `remote_desktop.watch_events` after
   negotiated WebRTC setup with the selected target subject, session token, and
   consent causal context.

@@ -366,6 +366,25 @@ it('keeps base media controls available when remote desktop target refresh fails
   expect(screen.getByRole('button', { name: /Camera/i })).not.toBeDisabled()
   expect(screen.getByRole('button', { name: /Remote desktop/i })).toBeDisabled()
 })
+
+it('runs the remote desktop UI flow from target picker through session end', async () => {
+  expect(mocks.invokeAbility).toHaveBeenCalledWith(expect.objectContaining({
+    ability: 'remote_desktop.grant_consent',
+    subject_ura: screenResource.resource_ura,
+  }))
+  expect(mocks.invokeAbility).toHaveBeenCalledWith(expect.objectContaining({
+    ability: 'remote_desktop.create_session',
+    subject_ura: screenResource.resource_ura,
+  }))
+  expect(mocks.invokeAbilityStream).toHaveBeenCalledWith(expect.objectContaining({
+    ability: 'remote_desktop.watch_events',
+    subject_ura: screenResource.resource_ura,
+  }), expect.anything())
+  expect(mocks.invokeAbility).toHaveBeenCalledWith(expect.objectContaining({
+    ability: 'remote_desktop.end_session',
+    subject_ura: screenResource.resource_ura,
+  }))
+})
 TSX
 
 CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
@@ -468,6 +487,15 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
 fi
 perl -0pi -e "s/event\\.eventType === 'TARGET_PERMISSION_IGNORED'/event.eventType === 'TARGET_PERMISSION_REVOKED'/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/runs the remote desktop UI flow from target picker through session end/runs an incomplete remote desktop UI flow/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing full remote desktop UI flow test" >&2
+  exit 1
+fi
+perl -0pi -e "s/runs an incomplete remote desktop UI flow/runs the remote desktop UI flow from target picker through session end/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
 
 perl -0pi -e 's/remoteDesktopInputFrameAllowed\(session, frame\)/true/' \
   "$FRONTEND_SRC/store/media-channel-store.ts"
