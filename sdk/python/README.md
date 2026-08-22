@@ -73,9 +73,12 @@ Before tagging a Python SDK release, synchronize and verify its independent
 version line without changing the EasyNet Runtime version:
 
 ```bash
-./tools/scripts/update-python-sdk-version.sh 0.91.31
-./tools/scripts/update-python-sdk-version.sh --check 0.91.31
+./tools/scripts/update-python-sdk-version.sh
+./tools/scripts/update-python-sdk-version.sh --check
 ```
+
+Both commands obtain the current release mark from Tide. Pass an explicit
+version only when validating immutable release input such as a Git tag.
 
 ## Source release scope
 

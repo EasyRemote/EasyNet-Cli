@@ -2,8 +2,9 @@
 # Synchronize the independent easynet-sdk Python distribution version.
 #
 # Usage:
-#   ./tools/scripts/update-python-sdk-version.sh 0.91.31
-#   ./tools/scripts/update-python-sdk-version.sh --check 0.91.31
+#   ./tools/scripts/update-python-sdk-version.sh
+#   ./tools/scripts/update-python-sdk-version.sh --check
+#   ./tools/scripts/update-python-sdk-version.sh 0.142.22
 
 set -euo pipefail
 
@@ -15,7 +16,7 @@ CHECK_ONLY=false
 REQUESTED_VERSION=""
 
 usage() {
-  echo "usage: $0 [--check] VERSION" >&2
+  echo "usage: $0 [--check] [VERSION]" >&2
 }
 
 for arg in "$@"; do
@@ -39,8 +40,16 @@ for arg in "$@"; do
 done
 
 if [[ -z "${REQUESTED_VERSION}" ]]; then
-  usage
-  exit 2
+  command -v tide >/dev/null 2>&1 || {
+    echo "error: tide is required when VERSION is omitted" >&2
+    exit 1
+  }
+  echo "Fetching Python SDK release mark from tide …"
+  REQUESTED_VERSION="$(tide mark --local-only)"
+  if [[ -z "${REQUESTED_VERSION}" ]]; then
+    echo "error: tide mark --local-only returned empty output" >&2
+    exit 1
+  fi
 fi
 
 if ! [[ "${REQUESTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][0-9A-Za-z-]+)*$ ]]; then

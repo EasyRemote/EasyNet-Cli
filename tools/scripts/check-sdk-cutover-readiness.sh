@@ -74,7 +74,7 @@ make_easyremote_good() {
   cat >"$root/pyproject.toml" <<'EOF'
 [project]
 name = "easyremote"
-dependencies = ["easynet-sdk>=0.91.31,<0.92"]
+dependencies = ["easynet-sdk>=0.142.22,<0.143"]
 EOF
   cat >"$root/easyremote/client.py" <<'EOF'
 from easynet_sdk import AbilityInvocationClient, InvocationDraft
