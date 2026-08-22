@@ -98,10 +98,11 @@ The Browser/Tauri lifecycle verifier,
 required artifact contract for a real frontend runner: proof mode
 `real_browser_tauri_lifecycle`, `component_mock=false`,
 `real_backend_runtime=true`, ordered picker/permission/consent/create/attach/
-watch/media/input/end/terminal-receipt steps, public RemoteApp ability names,
-host-local `permission_status`, selected Resource URA binding for session
-abilities, and no product-complete claim. Its self-test only proves the
-contract validator; a live Browser/Tauri artifact is still required.
+watch/media/media-pipeline-support/input/end/terminal-receipt steps, public
+RemoteApp ability names, host-local `permission_status`, selected Resource URA
+binding for session abilities, visible `media_pipeline_support`, and no
+product-complete claim. Its self-test only proves the contract validator; a
+live Browser/Tauri artifact is still required.
 The frontend session-details surface now also renders daemon route state; a
 host-only WebRTC route is visible as `route host_only · no NAT/relay`, so
 transport presence is not confused with production NAT/relay readiness.

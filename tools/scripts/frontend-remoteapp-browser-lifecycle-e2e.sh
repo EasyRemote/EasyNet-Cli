@@ -50,8 +50,8 @@ Evidence contract:
   app_loaded -> authenticated_session -> target_picker_opened ->
   permission_status_checked -> consent_granted -> session_created ->
   webrtc_attached -> watch_events_streaming -> media_presented ->
-  input_control_attempted_or_policy_blocked -> session_ended ->
-  terminal_receipt_visible.
+  media_pipeline_support_visible -> input_control_attempted_or_policy_blocked
+  -> session_ended -> terminal_receipt_visible.
 
 Non-claims:
   A skipped report or self-test does not prove frontend product readiness.
@@ -157,6 +157,7 @@ required_steps = [
     "webrtc_attached",
     "watch_events_streaming",
     "media_presented",
+    "media_pipeline_support_visible",
     "input_control_attempted_or_policy_blocked",
     "session_ended",
     "terminal_receipt_visible",
@@ -239,6 +240,7 @@ ended = step_by_name.get("session_ended", {})
 terminal = step_by_name.get("terminal_receipt_visible", {})
 watch = step_by_name.get("watch_events_streaming", {})
 media = step_by_name.get("media_presented", {})
+pipeline = step_by_name.get("media_pipeline_support_visible", {})
 input_step = step_by_name.get("input_control_attempted_or_policy_blocked", {})
 require(created.get("session_id") == session_id,
         "session_created must bind the top-level session_id")
@@ -248,6 +250,25 @@ require(ended.get("session_id") == session_id,
         "session_ended must bind the created session_id")
 require(media.get("frame_presented") is True,
         "media_presented must prove at least one rendered media frame")
+pipeline_label = pipeline.get("visible_label")
+require(isinstance(pipeline_label, str) and pipeline_label,
+        "media_pipeline_support_visible must include visible_label")
+if isinstance(pipeline_label, str):
+    for token in (
+        "pipeline video_only",
+        "h264",
+        "bounded_queue_drop_stale_frames",
+        "host_audio_not_implemented",
+    ):
+        require(token in pipeline_label,
+                f"media_pipeline_support_visible.visible_label must include {token}")
+require(pipeline.get("product_ready") is False,
+        "media_pipeline_support_visible must keep product_ready=false")
+blockers = pipeline.get("product_blockers")
+require(isinstance(blockers, list)
+        and "host_audio_not_implemented" in blockers
+        and "remoteapp_media_adaptation_e2e_artifact_missing" in blockers,
+        "media_pipeline_support_visible must expose host-audio and live media-adaptation E2E blockers")
 require(input_step.get("result") in {"input_applied", "policy_blocked"},
         "input control must either apply input or prove policy_blocked")
 require(terminal.get("reason_code") in {"user_cancelled", "caller_ended", "resume_e2e_cleanup"},
@@ -306,6 +327,16 @@ steps = [
     {"name": "webrtc_attached", "status": "passed", "ability": "remote_desktop.attach", "subject_ura": subject, "session_id": session_id},
     {"name": "watch_events_streaming", "status": "passed", "ability": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id},
     {"name": "media_presented", "status": "passed", "frame_presented": True},
+    {
+        "name": "media_pipeline_support_visible",
+        "status": "passed",
+        "visible_label": "pipeline video_only · h264 · bounded_queue_drop_stale_frames · host_audio_not_implemented",
+        "product_ready": False,
+        "product_blockers": [
+            "host_audio_not_implemented",
+            "remoteapp_media_adaptation_e2e_artifact_missing",
+        ],
+    },
     {"name": "input_control_attempted_or_policy_blocked", "status": "passed", "result": "policy_blocked"},
     {"name": "session_ended", "status": "passed", "ability": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id},
     {"name": "terminal_receipt_visible", "status": "passed", "terminal": True, "reason_code": "user_cancelled", "session_id": session_id},

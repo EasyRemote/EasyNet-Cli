@@ -49,10 +49,11 @@ Current frontend lifecycle evidence:
   Browser/Tauri lifecycle evidence verifier. It accepts evidence from a real UI
   runner and requires `real_browser_tauri_lifecycle`, `component_mock=false`,
   `real_backend_runtime=true`, ordered picker/permission/consent/create/attach/
-  watch/media/input/end/terminal-receipt steps, public RemoteApp ability names,
-  host-local `permission_status`, selected Resource URA subject binding for
-  session abilities, and no product-complete claim. Self-test validates only
-  the contract; a live Browser/Tauri artifact remains required.
+  watch/media/media-pipeline-support/input/end/terminal-receipt steps, public
+  RemoteApp ability names, host-local `permission_status`, selected Resource
+  URA subject binding for session abilities, visible `media_pipeline_support`,
+  and no product-complete claim. Self-test validates only the contract; a live
+  Browser/Tauri artifact remains required.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:
@@ -514,7 +515,9 @@ Missing or insufficient product evidence:
   session-projected config instead of hard-coding an empty ICE server list.
   This is required plumbing; it is not real relay reachability evidence.
 - Frontend full lifecycle E2E across Browser/Tauri surfaces, using
-  `frontend-remoteapp-browser-lifecycle-e2e.sh` with a live artifact.
+  `frontend-remoteapp-browser-lifecycle-e2e.sh` with a live artifact proving
+  visible media pipeline support in addition to picker/permission/consent,
+  media, input/control, end, and terminal-receipt steps.
 - RemoteApp-specific cross-device smoke/regression with remote target
   inventory, real display/window/application capture, input policy, and
   teardown.

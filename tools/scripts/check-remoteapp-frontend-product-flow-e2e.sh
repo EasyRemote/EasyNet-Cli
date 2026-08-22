@@ -118,6 +118,14 @@ require 'remote_desktop\.watch_events' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must bind event watch to remote_desktop.watch_events'
 require 'media_presented' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require rendered media evidence'
+require 'media_pipeline_support_visible' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require visible media pipeline support evidence'
+require 'pipeline video_only' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require video-only media pipeline visibility'
+require 'bounded_queue_drop_stale_frames' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require stale-frame drop policy visibility'
+require 'remoteapp_media_adaptation_e2e_artifact_missing' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require missing media-adaptation E2E blocker visibility'
 require 'input_control_attempted_or_policy_blocked' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require input/control or policy-block evidence'
 require 'session_ended' "$BROWSER_LIFECYCLE" \
@@ -321,6 +329,8 @@ require 'Live Browser/Tauri E2E artifact with real backend/runtime' "$AUDIT" \
   'product readiness audit must retain real Browser/Tauri full-flow evidence as still required'
 require 'visible terminal receipt' "$AUDIT" \
   'product readiness audit must require visible terminal receipt evidence'
+require 'visible `media_pipeline_support`' "$AUDIT" \
+  'product readiness audit must require visible media_pipeline_support evidence'
 require 'target recovery' "$AUDIT" \
   'product readiness audit must record frontend target recovery projection evidence'
 require 'route state' "$AUDIT" \
@@ -352,6 +362,8 @@ require 'explicit --run report remains required' "$PLAN" \
   'product closure plan must require an explicit run report before using harness evidence'
 require 'Frontend full lifecycle E2E across Browser/Tauri surfaces' "$PLAN" \
   'product closure plan must retain Browser/Tauri full lifecycle gap'
+require 'visible media pipeline support' "$PLAN" \
+  'product closure plan must retain visible media pipeline support as live Browser/Tauri evidence'
 require 'target lost · target_not_found · refresh_targets' "$PLAN" \
   'product closure plan must record the target recovery UI evidence'
 require 'Refresh targets' "$PLAN" \

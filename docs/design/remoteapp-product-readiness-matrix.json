@@ -250,6 +250,7 @@
         "picker to permission to consent to create_session",
         "WebRTC attach and watch_events recovery",
         "media presentation",
+        "visible media_pipeline_support with video-only/H.264/drop-policy/product-blocker state",
         "input/control or policy-block and end_session",
         "visible terminal receipt"
       ],

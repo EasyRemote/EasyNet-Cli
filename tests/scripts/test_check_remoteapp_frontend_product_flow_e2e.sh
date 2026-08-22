@@ -99,6 +99,18 @@ mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
 
 cp "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good"
+perl -0pi -e 's/media_pipeline_support_visible/media_pipeline_support_hidden/g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without visible media pipeline support evidence"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good"
 perl -0pi -e 's/terminal_receipt_visible/terminal_receipt_hidden/g' \
   "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
