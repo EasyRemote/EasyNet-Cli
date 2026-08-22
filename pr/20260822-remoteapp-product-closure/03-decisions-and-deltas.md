@@ -208,6 +208,33 @@ Product effect:
 - Browser-created display RemoteApp sessions can now present the daemon with
   the explicit input-control consent needed to unlock display-global
   interactivity when OS input injection is ready.
+
+## 2026-08-22 — Runtime input readiness must be visible in the session UI
+
+Decision:
+
+- The frontend must distinguish requested interactive intent from daemon
+  effective input readiness.
+- A session details panel that only says `input interactive` hides the important
+  product fact when the daemon downgraded the session to view-only or blocked
+  input for OS permission/scope reasons.
+
+Implementation delta:
+
+- Remote Desktop session details now render a daemon-readiness label derived
+  from `RemoteDesktopView.inputReadiness`.
+- The label shows requested-to-effective mode changes and `blockedReason`, with
+  legacy `inputPolicy` used only when `inputReadiness` is absent.
+- Frontend component tests and the frontend invocation boundary checker now
+  require visible blocked-readiness coverage.
+
+Product effect:
+
+- An interactive RemoteApp request that becomes view-only is now visible to the
+  user/operator with the daemon reason.
+- This closes the UI observability seam only. Product completion still requires
+  real OS input injection, focus/activation safety, latency, and cross-device
+  E2E evidence.
 - View-only remains safe and explicit.
 - This does not claim product-level input injection completion; real OS
   pointer/keyboard E2E and latency evidence remain required.

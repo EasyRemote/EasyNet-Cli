@@ -175,6 +175,11 @@ Current frontend lifecycle evidence:
   frames with missing or mismatched target-local geometry revision before
   platform input injection. This closes a stale-transform execution seam; it
   still does not prove successful OS pointer/keyboard injection.
+- Frontend session details now render daemon-projected `input_readiness` instead
+  of only the user's requested `input_policy`. An interactive request downgraded
+  to view-only now appears with the effective mode and blocked reason such as
+  `input_injection_unavailable`. This closes an operator-observability seam; it
+  does not turn blocked input into successful pointer/keyboard injection.
 
 Missing or insufficient product evidence:
 

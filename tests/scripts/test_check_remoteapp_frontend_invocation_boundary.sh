@@ -262,6 +262,8 @@ export function DeviceMediaAccess() {
   const result = invokeMediaUnary('resource.refresh_remote_targets', {})
   const screenResources = remoteTargetData.resources
   const screenResource = screenResources.find((resource) => resource.resource_ura === selectedScreenURA)
+  const session = entry.session
+  const inputReadinessDetails = session ? remoteDesktopInputReadinessLabel(session) : undefined
   if (selectedScreenURA && !screenResources.some((resource) => resource.resource_ura === selectedScreenURA)) {
     setSelectedScreenURA(undefined)
   }
@@ -272,7 +274,18 @@ export function DeviceMediaAccess() {
       onStalled={reportStalled}
     />
   )
-  return remoteTargetReady && screenResource ? <div /> : null
+  return remoteTargetReady && screenResource ? <div>{inputReadinessDetails}</div> : null
+}
+
+function remoteDesktopInputReadinessLabel(view: RemoteDesktopView) {
+  const readiness = view.inputReadiness
+  if (!readiness) return `input ${view.inputPolicy}`
+  const effectiveMode = readiness.effectiveMode ?? (readiness.interactiveReady ? 'interactive' : 'view_only')
+  const requestedMode = readiness.requestedMode && readiness.requestedMode !== effectiveMode
+    ? `${readiness.requestedMode}->${effectiveMode}`
+    : effectiveMode
+  const state = readiness.interactiveReady ? `${requestedMode} ready` : requestedMode
+  return readiness.blockedReason ? `input ${state} · ${readiness.blockedReason}` : `input ${state}`
 }
 TSX
 
@@ -537,6 +550,10 @@ it('runs the remote desktop UI flow from target picker through session end', asy
     subject_ura: screenResource.resource_ura,
   }))
 })
+
+it('surfaces daemon remote desktop input readiness in session details', async () => {
+  expect(screen.getByText('input interactive->view_only · input_injection_unavailable')).toBeInTheDocument()
+})
 TSX
 
 CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
@@ -692,6 +709,33 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/runs an incomplete remote desktop UI flow/runs the remote desktop UI flow from target picker through session end/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
+
+perl -0pi -e 's/remoteDesktopInputReadinessLabel\(session\)/`input ${session.inputPolicy}`/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted session details without daemon input_readiness rendering" >&2
+  exit 1
+fi
+perl -0pi -e 's/`input \$\{session\.inputPolicy\}`/remoteDesktopInputReadinessLabel(session)/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e 's/readiness\.blockedReason/readiness.reasonBlocked/g' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted input readiness details without blocked_reason" >&2
+  exit 1
+fi
+perl -0pi -e 's/readiness\.reasonBlocked/readiness.blockedReason/g' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e "s/surfaces daemon remote desktop input readiness in session details/surfaces only requested input policy in session details/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing input readiness details test" >&2
+  exit 1
+fi
+perl -0pi -e "s/surfaces only requested input policy in session details/surfaces daemon remote desktop input readiness in session details/" \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
 
 perl -0pi -e 's/remoteDesktopInputFrameAllowed\(session, frame\)/true/' \

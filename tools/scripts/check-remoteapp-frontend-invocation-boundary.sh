@@ -188,6 +188,14 @@ require 'targetGeometryRevision = entry\.session\?\.targetTracking\?\.targetGeom
   'frontend pointer input frames must bind to the session target geometry revision when available'
 require 'target_geometry_revision: targetGeometryRevision' "$ACCESS" \
   'frontend pointer input frames must carry target_geometry_revision for daemon stale-transform rejection'
+require 'remoteDesktopInputReadinessLabel\(session\)' "$ACCESS" \
+  'frontend session details must render daemon input_readiness instead of only requested input policy'
+require 'const readiness = view\.inputReadiness' "$ACCESS" \
+  'frontend input readiness details must read the daemon-projected inputReadiness object'
+require 'readiness\.interactiveReady' "$ACCESS" \
+  'frontend input readiness details must expose daemon interactive_ready state'
+require 'readiness\.blockedReason' "$ACCESS" \
+  'frontend input readiness details must expose daemon blocked_reason state'
 
 require 'listRemoteDesktopTargets' "$WORKSPACE" \
   'frontend workspace must use live remote target inventory'
@@ -281,6 +289,12 @@ require 'keeps base media controls available when remote desktop target refresh 
   'frontend access tests must prove remote target failure does not disable base media'
 require 'runs the remote desktop UI flow from target picker through session end' "$ACCESS_TEST" \
   'frontend access tests must prove picker-to-session-to-end remote desktop UI flow'
+require 'surfaces daemon remote desktop input readiness in session details' "$ACCESS_TEST" \
+  'frontend access tests must prove daemon input_readiness appears in session details'
+require 'input_injection_unavailable' "$ACCESS_TEST" \
+  'frontend access tests must cover visible blocked input readiness reason'
+require 'interactive->view_only' "$ACCESS_TEST" \
+  'frontend access tests must cover visible interactive-to-view-only input downgrade'
 require 'remote_desktop\.grant_consent' "$ACCESS_TEST" \
   'frontend access tests must prove UI flow grants target-scoped consent'
 require 'input_control: true' "$ACCESS_TEST" \
