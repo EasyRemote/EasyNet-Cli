@@ -107,6 +107,9 @@ pub struct PointerInputFrame {
     pub target_height: Option<f64>,
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub target_geometry_revision: Option<u64>,
+    #[serde(default)]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub button: Option<u8>,
     #[serde(default)]
     pub delta_x: Option<f64>,
@@ -369,7 +372,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effecti
     }
     match frame {
         RemoteDesktopInputFrame::Pointer(frame) => {
-            apply_pointer_frame(frame, input_policy.pointer_target())
+            let pointer_target = input_policy.pointer_target();
+            if let Some(reason) = pointer_target_revision_reject_reason(frame, pointer_target) {
+                return InputApplyOutcome::rejected(reason);
+            }
+            apply_pointer_frame(frame, pointer_target)
         }
         RemoteDesktopInputFrame::Key(frame) => apply_key_frame(frame),
         RemoteDesktopInputFrame::Clipboard(_) => {
@@ -930,6 +937,18 @@ fn pointer_target_from_snapshot(snapshot: &TargetTrackerSnapshot) -> Option<Poin
         .pointer_target_value()
         .as_ref()
         .and_then(pointer_target_geometry_from_value)
+}
+
+fn pointer_target_revision_reject_reason(
+    frame: &PointerInputFrame,
+    target: Option<PointerTargetGeometry>,
+) -> Option<&'static str> {
+    let expected_revision = target.and_then(|target| target.target_geometry_revision)?;
+    if frame.target_geometry_revision == Some(expected_revision) {
+        None
+    } else {
+        Some("stale_pointer_target_geometry")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1960,6 +1979,60 @@ mod tests {
             input_policy_reject_reason(&policy, "pointer"),
             Some("input_scope_unsupported"),
             "window input remains view-only while still projecting the current target-local transform"
+        );
+    }
+
+    #[test]
+    fn pointer_input_rejects_stale_target_geometry_revision_before_os_injection() {
+        let missing_revision =
+            parse_input_frame(r#"{"type":"pointer","action":"move","x":10,"y":20}"#).unwrap();
+        let stale_revision = parse_input_frame(
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"target_geometry_revision":6}"#,
+        )
+        .unwrap();
+        let matching_revision = match parse_input_frame(
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"target_geometry_revision":7}"#,
+        )
+        .unwrap()
+        {
+            RemoteDesktopInputFrame::Pointer(frame) => frame,
+            _ => unreachable!(),
+        };
+        let policy = EffectiveRemoteDesktopInputPolicy::from_test_value(json!({
+            "input_scope": "target_local",
+            "pointer_enabled": true,
+            "keyboard_enabled": false,
+            "pointer_target": {
+                "origin_x": 100.0,
+                "origin_y": 200.0,
+                "width": 800.0,
+                "height": 600.0,
+                "target_geometry_revision": 7,
+            },
+        }));
+
+        let missing_outcome =
+            apply_input_frame_with_effective_policy(&policy, &missing_revision);
+        assert!(!missing_outcome.applied);
+        assert_eq!(
+            missing_outcome.reason,
+            Some("stale_pointer_target_geometry")
+        );
+
+        let stale_outcome = apply_input_frame_with_effective_policy(&policy, &stale_revision);
+        assert!(!stale_outcome.applied);
+        assert_eq!(
+            stale_outcome.reason,
+            Some("stale_pointer_target_geometry")
+        );
+
+        assert_eq!(
+            pointer_target_revision_reject_reason(
+                &matching_revision,
+                policy.pointer_target(),
+            ),
+            None,
+            "matching target_geometry_revision must pass the stale-frame gate before platform dispatch"
         );
     }
 

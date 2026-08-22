@@ -138,6 +138,14 @@ require 'current_session_input_policy_reapplies_session_input_scope_to_latest_sn
   'production input path must test reapplying session-owned input scope to the latest target snapshot'
 require 'current_session_input_policy_uses_same_geometry_revision_as_target_event' "$INPUT" \
   'E2E-08 must prove target event and input mapping consume the same committed geometry revision'
+require 'target_geometry_revision: Option<u64>' "$INPUT" \
+  'pointer input frames must carry the client-observed target geometry revision when target-local geometry exists'
+require 'fn pointer_target_revision_reject_reason\(' "$INPUT" \
+  'input execution path must reject stale pointer frames before OS injection'
+require 'stale_pointer_target_geometry' "$INPUT" \
+  'input execution path must expose a stable stale pointer geometry rejection reason'
+require 'pointer_input_rejects_stale_target_geometry_revision_before_os_injection' "$INPUT" \
+  'input tests must prove stale pointer geometry is rejected before OS injection'
 require 'fn pointer_target_from_snapshot\(' "$INPUT" \
   'input policy must be derivable from the latest target tracker snapshot'
 require 'fn current_session_effective_input_policy\(' "$INPUT" \

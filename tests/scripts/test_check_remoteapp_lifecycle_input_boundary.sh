@@ -1019,6 +1019,10 @@ const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] = &["clipboard", "file_drop"];
 
 fn unsupported_input_channel_types_value() {}
 
+struct PointerInputFrame {
+    target_geometry_revision: Option<u64>,
+}
+
 struct RemoteDesktopInputPolicy;
 
 impl RemoteDesktopInputPolicy {
@@ -1099,6 +1103,13 @@ fn apply_input_frame_with_effective_policy() {
     if let Some(reason) = input_policy.reject_reason(frame.kind().as_policy_key()) {
         return InputApplyOutcome::rejected(reason);
     }
+    if let Some(reason) = pointer_target_revision_reject_reason(frame, input_policy.pointer_target()) {
+        return InputApplyOutcome::rejected(reason);
+    }
+}
+
+fn pointer_target_revision_reject_reason() -> Option<&'static str> {
+    Some("stale_pointer_target_geometry")
 }
 
 fn record_rejection() {
@@ -1151,6 +1162,9 @@ mod tests {
 
     #[test]
     fn current_session_input_policy_uses_same_geometry_revision_as_target_event() {}
+
+    #[test]
+    fn pointer_input_rejects_stale_target_geometry_revision_before_os_injection() {}
 
     #[test]
     fn effective_input_policy_is_the_core_policy_object() {
@@ -2513,6 +2527,21 @@ write_fixture
 perl -0pi -e 's/current_session_input_policy_uses_same_geometry_revision_as_target_event/current_session_input_policy_allows_stale_geometry_revision/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'E2E-08 must prove target event and input mapping consume the same committed geometry revision'
+
+write_fixture
+perl -0pi -e 's/target_geometry_revision: Option<u64>/target_geometry_revision_removed: Option<u64>/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'pointer input frames must carry the client-observed target geometry revision'
+
+write_fixture
+perl -0pi -e 's/fn pointer_target_revision_reject_reason/fn pointer_target_revision_accepts_stale_reason/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'input execution path must reject stale pointer frames before OS injection'
+
+write_fixture
+perl -0pi -e 's/stale_pointer_target_geometry/ignored_pointer_target_geometry/g' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'input execution path must expose a stable stale pointer geometry rejection reason'
 
 write_fixture
 perl -0pi -e 's/if let Some\(reason\) = input_policy\.reject_reason\(frame\.kind\(\)\.as_policy_key\(\)\) \{\n        return InputApplyOutcome::rejected\(reason\);\n    \}//' \

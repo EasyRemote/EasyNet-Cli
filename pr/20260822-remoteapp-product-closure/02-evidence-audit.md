@@ -170,6 +170,11 @@ Current frontend lifecycle evidence:
   `input_control=true`; explicit view-only requests carry `input_control=false`
   and disabled keyboard/pointer policy. The CLI frontend boundary gate now
   rejects drift away from this shared-intent contract.
+- Pointer input frames now carry the session target tracker
+  `target_geometry_revision` when one is available. The daemon rejects pointer
+  frames with missing or mismatched target-local geometry revision before
+  platform input injection. This closes a stale-transform execution seam; it
+  still does not prove successful OS pointer/keyboard injection.
 
 Missing or insufficient product evidence:
 

@@ -184,6 +184,10 @@ require 'onPresented=\{reportPresented\}' "$ACCESS" \
   'frontend WebRTC viewport must wire decoded-frame presentation to client media reporting'
 require "reportClientMediaState\\(channelKey, 'presenting'\\)" "$ACCESS" \
   'frontend media viewport must report presenting only through the remote desktop client media state action'
+require 'targetGeometryRevision = entry\.session\?\.targetTracking\?\.targetGeometryRevision' "$ACCESS" \
+  'frontend pointer input frames must bind to the session target geometry revision when available'
+require 'target_geometry_revision: targetGeometryRevision' "$ACCESS" \
+  'frontend pointer input frames must carry target_geometry_revision for daemon stale-transform rejection'
 
 require 'listRemoteDesktopTargets' "$WORKSPACE" \
   'frontend workspace must use live remote target inventory'

@@ -253,6 +253,11 @@ export function DeviceMediaAccess() {
     () => reportClientMediaState(channelKey, 'stalled'),
     [channelKey, reportClientMediaState],
   )
+  const targetGeometryRevision = entry.session?.targetTracking?.targetGeometryRevision
+  const pointerFrame = {
+    type: 'pointer',
+    target_geometry_revision: targetGeometryRevision,
+  }
   const remoteTargetData = listRemoteDesktopTargets()
   const result = invokeMediaUnary('resource.refresh_remote_targets', {})
   const screenResources = remoteTargetData.resources
@@ -633,6 +638,24 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/reportClientMediaState\\(channelKey, 'stalled'\\)/reportClientMediaState(channelKey, 'presenting')/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e 's/  const targetGeometryRevision = entry\.session\?\.targetTracking\?\.targetGeometryRevision\n//' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted pointer frames without session target geometry revision binding" >&2
+  exit 1
+fi
+perl -0pi -e "s/  const pointerFrame = \\{/  const targetGeometryRevision = entry.session?.targetTracking?.targetGeometryRevision\\n  const pointerFrame = {/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e 's/    target_geometry_revision: targetGeometryRevision,\n//' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted pointer frames without target_geometry_revision payload" >&2
+  exit 1
+fi
+perl -0pi -e "s/    type: 'pointer',/    type: 'pointer',\\n    target_geometry_revision: targetGeometryRevision,/" \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
 
 perl -0pi -e "s/if \\(pc\\.connectionState === 'connected'\\) updateWebRtcStatus\\(\\)/if (pc.connectionState === 'connected') reportClientMediaState(key, 'presenting')/" \

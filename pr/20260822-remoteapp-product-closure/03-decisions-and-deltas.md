@@ -211,3 +211,33 @@ Product effect:
 - View-only remains safe and explicit.
 - This does not claim product-level input injection completion; real OS
   pointer/keyboard E2E and latency evidence remain required.
+
+## 2026-08-22 — Pointer input must reject stale target geometry
+
+Decision:
+
+- Target-local pointer input is unsafe if the browser sends coordinates derived
+  from an older target geometry than the daemon's committed target tracker
+  snapshot.
+- When an effective input policy carries a pointer target
+  `target_geometry_revision`, pointer frames must echo that revision and the
+  daemon must reject mismatches before OS injection.
+- Display-global input remains allowed to omit the field because no target-local
+  geometry transform is used.
+
+Implementation delta:
+
+- `PointerInputFrame` now accepts optional `target_geometry_revision`.
+- `apply_input_frame_with_effective_policy` rejects stale/missing target-local
+  pointer revisions with `stale_pointer_target_geometry` before platform
+  dispatch.
+- The frontend pointer frame builder includes
+  `entry.session.targetTracking.targetGeometryRevision` when present.
+- Lifecycle/input and frontend boundary gates now pin the source and tests.
+
+Product effect:
+
+- This closes a real execution-path safety seam for future target-local pointer
+  dispatch and prevents stale client coordinates from reaching CGEvent/X11/etc.
+- The input-injection product row remains incomplete until real OS E2E and
+  latency evidence exist.
