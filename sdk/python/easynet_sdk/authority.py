@@ -865,9 +865,9 @@ def _session_owner_ura_from_subject(subject_ura: str, owner_user_id: str) -> str
         )
     except SDKError:
         return ""
-    if subject_owner_user_id != owner_user_id:
+    if kind != "device_resource" and subject_owner_user_id != owner_user_id:
         return ""
-    if kind in {"user", "session"}:
+    if kind in {"user", "session", "device_resource"}:
         try:
             projection = parse_ura(subject_ura.strip())
         except SDKError:
@@ -885,6 +885,12 @@ def _validate_session_authority_subject_binding(
         subject_ura
     )
     owner = session_owner_user_id.strip()
+    if kind == "device_resource":
+        if not owner:
+            raise _invalid_authority(
+                "Device Resource session authority requires a session owner User"
+            )
+        return
     if owner_user_id != owner:
         raise _invalid_authority(
             "session authority user subject must match session_owner_user_id"
@@ -900,7 +906,7 @@ def _canonical_session_authority_subject(subject_ura: str) -> tuple[str, str, st
         projection = parse_ura(subject_ura.strip())
     except SDKError as exc:
         raise _invalid_authority(
-            "session authority subject_ura must be a canonical user or session subject",
+            "session authority subject_ura must be a canonical User, session, or Device Resource subject",
             exc,
         ) from exc
     if projection.kind == "user":
@@ -911,6 +917,9 @@ def _canonical_session_authority_subject(subject_ura: str) -> tuple[str, str, st
         owner_id = projection.components.get("owner_id")
         path = projection.components.get("path")
         if isinstance(owner_id, str) and isinstance(path, str):
+            device_id = owner_id.removeprefix("device.")
+            if device_id != owner_id and device_id.strip() and path.strip():
+                return ("device_resource", "", "")
             owner_user_id = owner_id.removeprefix("user.")
             session_id = path.removeprefix("session/")
             if (
@@ -923,7 +932,7 @@ def _canonical_session_authority_subject(subject_ura: str) -> tuple[str, str, st
             ):
                 return ("session", owner_user_id.strip(), session_id.strip())
     raise _invalid_authority(
-        "session authority subject_ura must be a canonical user or session subject"
+        "session authority subject_ura must be a canonical User, session, or Device Resource subject"
     )
 
 
@@ -991,7 +1000,9 @@ def _validate_delegation(proof: DelegationProof) -> None:
     )
     if not proof.scopes:
         raise _invalid_authority("delegation authority scopes are required")
-    _validate_authority_audience_selector("delegation authority audience", proof.audience)
+    _validate_authority_audience_selector(
+        "delegation authority audience", proof.audience
+    )
     if proof.expires_at_ms <= proof.issued_at_ms:
         raise _invalid_authority(
             "delegation authority expires_at_ms must be greater than issued_at_ms"
@@ -1038,8 +1049,12 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
         raise _invalid_authority(
             "session authority allowed follow-up abilities are required"
         )
-    _validate_callable_authority_target("session authority callee_ura", authority.callee_ura)
-    _validate_authority_audience_selector("session authority audience", authority.audience)
+    _validate_callable_authority_target(
+        "session authority callee_ura", authority.callee_ura
+    )
+    _validate_authority_audience_selector(
+        "session authority audience", authority.audience
+    )
     if authority.expires_at_ms <= authority.issued_at_ms:
         raise _invalid_authority(
             "session authority expires_at_ms must be greater than issued_at_ms"

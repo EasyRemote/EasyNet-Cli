@@ -148,7 +148,14 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["terminal_state"], "Completed")
         self.assertIn("output_content_type", result)
         self.assertNotIn("state", result)
-        self.assertEqual(runtime.seen_options, {})
+        self.assertEqual(
+            runtime.seen_options,
+            {
+                "policy_ref": "provider-key-inventory:sha256:test-policy",
+                "provider_managed_signing": True,
+                "signer_id": "signer-alice-key-1",
+            },
+        )
         self.assertEqual(runtime.seen_await_id, 7)
         self.assertEqual(runtime.seen_free_id, 7)
         assert runtime.seen_signed is not None
@@ -468,6 +475,31 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
 
         self.assertTrue(event["terminal"])
         self.assertEqual(event["kind"], "terminal")
+
+    def test_signed_stream_binds_prepare_to_managed_signer_policy(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        adapter = InvocationResultAdapter.from_runtime_client(RuntimeClient(runtime))
+        signer = signer_with_signature(
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        stream = adapter.stream_signed(complete_draft(), signer=signer)
+        event = stream.recv()
+        stream.close()
+
+        self.assertTrue(event["terminal"])
+        self.assertEqual(
+            runtime.seen_options,
+            {
+                "material_only": True,
+                "policy_ref": "provider-key-inventory:sha256:test-policy",
+                "provider_managed_signing": True,
+                "signer_id": "signer-alice-key-1",
+            },
+        )
 
     def test_invocation_result_adapter_delegates_stream_and_bidi(self) -> None:
         runtime = MemoryRuntimeTransport()

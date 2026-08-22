@@ -41,7 +41,9 @@ class AuthorityTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(authority.audience, "easynet:///r/example/agent/device.dev-a.runtime-health")
+        self.assertEqual(
+            authority.audience, "easynet:///r/example/agent/device.dev-a.runtime-health"
+        )
         self.assertEqual(len(authority.signature), 64)
         self.assertEqual(len(signer.payloads), 1)
 
@@ -159,7 +161,9 @@ class AuthorityTests(unittest.TestCase):
         payload["session_owner_user_id"] = "00000000-0000-0000-0000-000000000000"
         value = _authority_metadata(payload, b"session-signature")
 
-        with self.assertRaisesRegex(SDKError, "session_owner_user_id must not be all-zero"):
+        with self.assertRaisesRegex(
+            SDKError, "session_owner_user_id must not be all-zero"
+        ):
             SessionAuthority.from_metadata(value)
 
     def test_authority_metadata_rejects_device_authority_targets(self) -> None:
@@ -242,6 +246,31 @@ class AuthorityTests(unittest.TestCase):
         ):
             SessionAuthority.from_metadata(value)
 
+    def test_session_authority_accepts_exact_device_resource_subject(self) -> None:
+        payload = _session_authority_payload()
+        payload.update(
+            {
+                "issuer_ura": "easynet:///r/example/user/alice",
+                "creator_principal_id": "easynet:///r/example/user/alice",
+                "subject_ura": (
+                    "easynet:///r/example/resource/device.dev-a/fs/home/ability"
+                ),
+            }
+        )
+
+        authority = SessionAuthority.from_metadata(
+            _authority_metadata(payload, b"session-signature")
+        )
+
+        self.assertEqual(
+            authority.subject_ura,
+            "easynet:///r/example/resource/device.dev-a/fs/home/ability",
+        )
+        self.assertEqual(
+            authority.session_owner_ura,
+            "easynet:///r/example/user/alice",
+        )
+
         payload = _session_authority_payload()
         payload["session_owner_user_id"] = "teamalice"
         payload["subject_ura"] = (
@@ -251,7 +280,7 @@ class AuthorityTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             SDKError,
-            "session authority subject_ura must be a canonical user or session subject",
+            "session authority subject_ura must be a canonical User, session, or Device Resource subject",
         ):
             SessionAuthority.from_metadata(value)
 
@@ -259,7 +288,7 @@ class AuthorityTests(unittest.TestCase):
         client = AuthorityClient(transport)
         with self.assertRaisesRegex(
             SDKError,
-            "session authority subject_ura must be a canonical user or session subject",
+            "session authority subject_ura must be a canonical User, session, or Device Resource subject",
         ):
             client.mint_session_authority(
                 SessionAuthorityRequest(
@@ -313,14 +342,18 @@ class AuthorityTests(unittest.TestCase):
         )
 
         self.assertEqual(draft.metadata["trace"], "t-1")
-        self.assertEqual(draft.metadata[DELEGATION_METADATA_KEY], proof.metadata().value)
+        self.assertEqual(
+            draft.metadata[DELEGATION_METADATA_KEY], proof.metadata().value
+        )
 
     def test_invocation_builder_rejects_ambiguous_authority_metadata(self) -> None:
         with self.assertRaises(SDKError) as caught:
             (
                 InvocationBuilder()
                 .with_caller_ura("easynet:///r/example/agent/backend")
-                .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
+                .with_callee_ura(
+                    "easynet:///r/example/agent/device.dev-a.runtime-health"
+                )
                 .with_descriptor_ref(
                     "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
@@ -403,11 +436,18 @@ class AuthorityTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(authority.audience, "easynet:///r/example/agent/device.dev-a.runtime-health")
+        self.assertEqual(
+            authority.audience, "easynet:///r/example/agent/device.dev-a.runtime-health"
+        )
         self.assertEqual(authority.metadata().value, value)
-        self.assertEqual(transport.seen_session["audience"], "easynet:///r/example/agent/device.dev-a.runtime-health")
+        self.assertEqual(
+            transport.seen_session["audience"],
+            "easynet:///r/example/agent/device.dev-a.runtime-health",
+        )
 
-    def test_authority_client_projects_canonical_principal_uras_to_current_session_wire(self) -> None:
+    def test_authority_client_projects_canonical_principal_uras_to_current_session_wire(
+        self,
+    ) -> None:
         payload = _session_authority_payload()
         payload["creator_principal_id"] = "easynet:///r/example/authority"
         value = _authority_metadata(payload, b"session-signature")
@@ -448,7 +488,9 @@ class AuthorityTests(unittest.TestCase):
         )
         self.assertNotIn("session_owner_ura", transport.seen_session)
 
-    def test_session_authority_request_requires_explicit_creator_principal_ura(self) -> None:
+    def test_session_authority_request_requires_explicit_creator_principal_ura(
+        self,
+    ) -> None:
         request = SessionAuthorityRequest(
             issuer_ura="easynet:///r/example/agent/backend",
             session_id="session-1",
@@ -471,7 +513,9 @@ class AuthorityTests(unittest.TestCase):
         )
         self.assertEqual(normalized.creator_principal_ura, "")
 
-    def test_authority_client_rejects_conflicting_canonical_principal_uras(self) -> None:
+    def test_authority_client_rejects_conflicting_canonical_principal_uras(
+        self,
+    ) -> None:
         client = AuthorityClient(_MemoryAuthorityTransport())
 
         with self.assertRaises(SDKError) as caught:
@@ -603,7 +647,6 @@ class _CanonicalSigner:
     def sign_canonical(self, payload: bytes) -> bytes:
         self.payloads.append(payload)
         return b"s" * 64
-
 
 
 if __name__ == "__main__":

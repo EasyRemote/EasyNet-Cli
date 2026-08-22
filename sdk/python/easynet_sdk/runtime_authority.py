@@ -1,12 +1,14 @@
 """Local runtime authority binding over explicit Invocation drafts.
 
-The provider binds only user-owned subjects and leaves Device/SystemAgent
-subjects to daemon self+identity admission. Key custody and rotation remain
-behind the daemon key service; consumers never enumerate key inventory.
+The provider binds User-owned subjects with delegation and exact local
+Device-owned Resources with session authority. Key custody, rotation, and the
+final Device/User ownership decision remain behind the daemon key service and
+admission boundary; consumers never enumerate key inventory.
 """
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -17,14 +19,14 @@ from .authority import (
     SESSION_AUTHORITY_METADATA_KEY,
     CanonicalSigner,
     DelegationRequest,
+    SessionAuthorityRequest,
     new_canonical_authority_client,
 )
 from .axon_addressing import AddressingClient, AddressingProjection
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 from .managed_signing import ManagedSigningClient
-
-USER_RUNTIME_SIGNING_PURPOSE = "user_signing.cli"
+from .runtime_signer import USER_RUNTIME_SIGNING_PURPOSE
 
 
 class DraftAuthorityProvider(Protocol):
@@ -68,7 +70,7 @@ class LocalRuntimeAuthorityProvider:
         self._authority_ttl_ms = authority_ttl_ms
 
     def bind(self, draft: InvocationDraft) -> InvocationDraft:
-        """Bind exact-scope User delegation when the subject requires it."""
+        """Bind exact authority for one User caller and protected subject."""
 
         if not isinstance(draft, InvocationDraft):
             raise _authority_error(
@@ -81,10 +83,21 @@ class LocalRuntimeAuthorityProvider:
         if caller.kind != "user":
             return draft
         caller_user_id = _component(caller, "user_id")
-        subject_user_id = _subject_user_id(
-            self._addressing,
-            self._addressing.parse_ura(draft.subject_ura),
-        )
+        subject = self._addressing.parse_ura(draft.subject_ura)
+        device_id = _device_resource_id(subject)
+        if device_id:
+            _require_local_device_resource_geometry(
+                self._addressing,
+                caller,
+                draft,
+                device_id,
+            )
+            return self._bind_device_resource_session(
+                draft,
+                caller_user_id=caller_user_id,
+            )
+
+        subject_user_id = _subject_user_id(self._addressing, subject)
         if not subject_user_id or draft.subject_ura == draft.caller_ura:
             return draft
         if subject_user_id != caller_user_id:
@@ -106,6 +119,42 @@ class LocalRuntimeAuthorityProvider:
                     scopes=(scope,),
                     issued_at_ms=now_ms,
                     expires_at_ms=now_ms + self._authority_ttl_ms,
+                )
+            )
+        finally:
+            authority_client.close()
+        return replace(
+            draft,
+            metadata=authority.metadata().merge_into(draft.metadata),
+        )
+
+    def _bind_device_resource_session(
+        self,
+        draft: InvocationDraft,
+        *,
+        caller_user_id: str,
+    ) -> InvocationDraft:
+        scope, action = _descriptor_contract(self._addressing, draft.descriptor_ref)
+        now_ms = self._clock_ms()
+        signer = self._signer_loader(draft.caller_ura)
+        authority_client = new_canonical_authority_client(signer)
+        try:
+            authority = authority_client.mint_session_authority(
+                SessionAuthorityRequest(
+                    issuer_ura=draft.caller_ura,
+                    session_id=_invocation_session_id(draft.nonce_base64),
+                    session_owner_user_id=caller_user_id,
+                    creator_principal_id=draft.caller_ura,
+                    callee_ura=draft.callee_ura,
+                    subject_ura=draft.subject_ura,
+                    audience=draft.callee_ura,
+                    scopes=(scope,),
+                    allowed_actions=(action,),
+                    allowed_followup_abilities=(scope,),
+                    issued_at_ms=now_ms,
+                    expires_at_ms=now_ms + self._authority_ttl_ms,
+                    session_owner_ura=draft.caller_ura,
+                    creator_principal_ura=draft.caller_ura,
                 )
             )
         finally:
@@ -146,6 +195,12 @@ def _subject_user_id(
 
 
 def _descriptor_scope(addressing: AddressingClient, descriptor_ref: str) -> str:
+    return _descriptor_contract(addressing, descriptor_ref)[0]
+
+
+def _descriptor_contract(
+    addressing: AddressingClient, descriptor_ref: str
+) -> tuple[str, str]:
     descriptor = addressing.project_descriptor_ref(descriptor_ref)
     ability = addressing.project_ability_ura(descriptor.ability_ura)
     scope = ability.public_name.strip() or descriptor.ability_ura.strip()
@@ -154,7 +209,47 @@ def _descriptor_scope(addressing: AddressingClient, descriptor_ref: str) -> str:
             ErrorCode.INVALID_INVOCATION,
             "descriptor did not resolve to an exact authority scope",
         )
-    return scope
+    action = descriptor.action.strip()
+    if not action or action == "*":
+        raise _authority_error(
+            ErrorCode.INVALID_INVOCATION,
+            "descriptor did not resolve to an exact authority action",
+        )
+    return scope, action
+
+
+def _device_resource_id(subject: AddressingProjection) -> str:
+    if subject.kind != "resource":
+        return ""
+    owner_id = _component(subject, "owner_id")
+    if not owner_id.startswith("device."):
+        return ""
+    return owner_id.removeprefix("device.").strip()
+
+
+def _require_local_device_resource_geometry(
+    addressing: AddressingClient,
+    caller: AddressingProjection,
+    draft: InvocationDraft,
+    device_id: str,
+) -> None:
+    callee = addressing.parse_ura(draft.callee_ura)
+    callee_device_id = _component(callee, "device_id")
+    if (
+        not device_id
+        or caller.realm != callee.realm
+        or callee.kind != "agent"
+        or callee_device_id != device_id
+    ):
+        raise _authority_error(
+            ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+            "Device Resource and device-sponsored callee must identify the same local Device",
+        )
+
+
+def _invocation_session_id(nonce_base64: str) -> str:
+    digest = hashlib.sha256(nonce_base64.encode("ascii")).hexdigest()
+    return f"invoke-{digest}"
 
 
 def _component(projection: AddressingProjection, key: str) -> str:

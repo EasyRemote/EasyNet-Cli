@@ -507,6 +507,22 @@ class SigningTests(unittest.TestCase):
             Signer(handle=forged_source, provider=MemorySignatureProvider()).sign(prepared)
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+        legacy_handle = SignerHandle(
+            profile="signing",
+            signer_id=handle.signer_id,
+            owner_ura=handle.owner_ura,
+            key_id=handle.key_id,
+            algorithm=handle.algorithm,
+            policy={},
+            metadata={},
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            Signer(handle=legacy_handle, provider=MemorySignatureProvider()).sign(
+                prepared
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
         forged_policy = SignerHandle(
             profile=handle.profile,
             signer_id=handle.signer_id,

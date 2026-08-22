@@ -518,7 +518,15 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertTrue(signed.submit_ready())
         self.assertTrue(material.canonical_bytes_base64)
         self.assertIsNone(runtime.seen_signed)
-        self.assertEqual(runtime.seen_options, {"expires_in_ms": 60000})
+        self.assertEqual(
+            runtime.seen_options,
+            {
+                "expires_in_ms": 60000,
+                "policy_ref": "provider-key-inventory:sha256:test-policy",
+                "provider_managed_signing": True,
+                "signer_id": "signer-alice-key-1",
+            },
+        )
         assert runtime.seen_draft is not None
         self.assertEqual(
             runtime.seen_draft["callee_ura"],

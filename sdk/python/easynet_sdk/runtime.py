@@ -106,6 +106,7 @@ class PrepareOptions:
     expires_in_ms: int = 0
     signer_id: str = ""
     policy_ref: str = ""
+    provider_managed_signing: bool = False
 
     def to_json_dict(self) -> dict[str, object]:
         value: dict[str, object] = {}
@@ -116,12 +117,43 @@ class PrepareOptions:
 
         if self.policy_ref:
             value["policy_ref"] = self.policy_ref
+        if self.provider_managed_signing:
+            value["provider_managed_signing"] = True
         return value
 
     def to_json_bytes(self) -> bytes:
         return json.dumps(
             self.to_json_dict(), separators=(",", ":"), sort_keys=True
         ).encode("utf-8")
+
+
+def _signer_bound_prepare_options(
+    options: PrepareOptions,
+    signer: Signer,
+) -> PrepareOptions:
+    """Bind native prepare policy to the exact managed signer handle."""
+
+    if not isinstance(options, PrepareOptions):
+        raise _invalid_runtime("prepare options are required")
+    handle = signer.handle
+    mode = handle.policy.get("mode")
+    policy_ref = handle.policy.get("policy_ref")
+    if mode != "provider_managed_signing":
+        raise _invalid_runtime(
+            "runtime signing requires a provider-managed signer handle"
+        )
+    if not isinstance(policy_ref, str) or not policy_ref:
+        raise _invalid_runtime("managed signer handle policy_ref is required")
+    if options.signer_id and options.signer_id != handle.signer_id:
+        raise _invalid_runtime("prepare signer_id does not match signer handle")
+    if options.policy_ref and options.policy_ref != policy_ref:
+        raise _invalid_runtime("prepare policy_ref does not match signer handle")
+    return replace(
+        options,
+        signer_id=handle.signer_id,
+        policy_ref=policy_ref,
+        provider_managed_signing=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -1279,7 +1311,9 @@ class RuntimeClient:
 
         if signer is None:
             raise _invalid_runtime("signer is required")
-        material = self.prepare_signing_material(draft, options)
+        material = self.prepare_signing_material(
+            draft, _signer_bound_prepare_options(options, signer)
+        )
         signature = signer.sign_material(material)
         return self.invoke_stream(replace(draft, caller_signature=signature))
 
@@ -1394,7 +1428,9 @@ class RuntimeClient:
 
         if signer is None:
             raise _invalid_runtime("signer is required")
-        prepared, material = self.prepare(draft, options)
+        prepared, material = self.prepare(
+            draft, _signer_bound_prepare_options(options, signer)
+        )
         return signer.sign(prepared)._bind_runtime(self), material
 
     def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:

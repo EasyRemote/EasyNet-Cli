@@ -1700,10 +1700,37 @@ class RuntimeTests(unittest.TestCase):
         stream.close()
 
         self.assertTrue(terminal.terminal)
-        self.assertEqual(transport.seen_options, {"material_only": True})
+        self.assertEqual(
+            transport.seen_options,
+            {
+                "material_only": True,
+                "policy_ref": "provider-key-inventory:sha256:test-policy",
+                "provider_managed_signing": True,
+                "signer_id": "signer-alice-key-1",
+            },
+        )
         assert transport.seen_draft is not None
         signature = transport.seen_draft["caller_signature"]
         self.assertEqual(signature["key_id_hint"], "signer-alice-key-1")
+
+    def test_prepare_and_open_stream_rejects_signer_policy_override(self) -> None:
+        client = RuntimeClient(MemoryRuntimeTransport())
+        signer = signer_with_signature(
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.prepare_and_open_stream(
+                complete_draft(),
+                signer,
+                PrepareOptions(policy_ref="provider-key-inventory:sha256:other"),
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("policy_ref does not match", caught.exception.message)
 
     def test_prepare_and_sign_returns_inspectable_signed_envelope(self) -> None:
         transport = MemoryRuntimeTransport()
@@ -1724,7 +1751,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(signed.submit_ready())
         self.assertTrue(material.canonical_bytes_base64)
         self.assertIsNone(transport.seen_signed)
-        self.assertEqual(transport.seen_options, {"expires_in_ms": 60000})
+        self.assertEqual(
+            transport.seen_options,
+            {
+                "expires_in_ms": 60000,
+                "policy_ref": "provider-key-inventory:sha256:test-policy",
+                "provider_managed_signing": True,
+                "signer_id": "signer-alice-key-1",
+            },
+        )
 
         handle = client.submit_signed(signed)
 

@@ -20,13 +20,10 @@ from .runtime_lifecycle import RuntimeLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
 from .axon_addressing import AddressingClient
-from .managed_signing import ManagedSigningClient
 from .runtime import RuntimeClient
 from .runtime_ability import RuntimeAbilityClient
-from .runtime_authority import (
-    USER_RUNTIME_SIGNING_PURPOSE,
-    LocalRuntimeAuthorityProvider,
-)
+from .runtime_authority import LocalRuntimeAuthorityProvider
+from .runtime_signer import LocalRuntimeSignerProvider
 from .signing import Signer
 from .runtime_environment import (
     RuntimeIdentityProjection,
@@ -360,14 +357,15 @@ class SdkEnvironment:
     def local_runtime_invocation_signer(self, caller_ura: str) -> Signer:
         """Resolve the daemon-custodied active signer for a local caller."""
 
+        return self.local_runtime_signer_provider().resolve(caller_ura)
+
+    def local_runtime_signer_provider(self) -> LocalRuntimeSignerProvider:
+        """Create managed signer selection bound to this runtime's key service."""
+
         self._require_open()
-        managed = ManagedSigningClient(
-            socket_path=str(self.runtime_state_root() / "keyring.sock")
-        ).active_signer_for_subject(
-            caller_ura,
-            purpose=USER_RUNTIME_SIGNING_PURPOSE,
+        return LocalRuntimeSignerProvider(
+            key_service_path=str(self.runtime_state_root() / "keyring.sock"),
         )
-        return managed.invocation_signer()
 
     def health_client(self) -> HealthClient:
         """Open a health facade for the configured control path."""

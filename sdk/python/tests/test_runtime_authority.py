@@ -6,7 +6,12 @@ import pytest
 
 import easynet_sdk
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
-from easynet_sdk.authority import DELEGATION_METADATA_KEY, DelegationProof
+from easynet_sdk.authority import (
+    DELEGATION_METADATA_KEY,
+    SESSION_AUTHORITY_METADATA_KEY,
+    DelegationProof,
+    SessionAuthority,
+)
 from easynet_sdk.invocation import InvocationBuilder
 from easynet_sdk.runtime_authority import LocalRuntimeAuthorityProvider
 
@@ -34,7 +39,9 @@ def _draft(*, caller: str, subject: str):
     return (
         InvocationBuilder()
         .with_caller_ura(caller)
-        .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-introspection")
+        .with_callee_ura(
+            "easynet:///r/example/agent/device.dev-a.runtime-introspection"
+        )
         .with_descriptor_ref(
             "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
         )
@@ -64,7 +71,10 @@ def test_local_runtime_authority_binds_same_user_resource_subject() -> None:
     assert proof.subject_ura == (
         "easynet:///r/example/resource/user.alice/runtime-state/read"
     )
-    assert proof.audience == "easynet:///r/example/agent/device.dev-a.runtime-introspection"
+    assert (
+        proof.audience
+        == "easynet:///r/example/agent/device.dev-a.runtime-introspection"
+    )
     assert proof.scopes == ("meta.list_resources",)
     assert proof.issued_at_ms == 1_000
     assert proof.expires_at_ms == 61_000
@@ -83,13 +93,40 @@ def test_local_runtime_authority_rejects_cross_user_resource_subject() -> None:
     assert exc_info.value.code == easynet_sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH
 
 
-def test_local_runtime_authority_leaves_device_subject_unbound() -> None:
+def test_local_runtime_authority_binds_local_device_resource_session() -> None:
+    signer = _Signer()
     draft = _draft(
         caller="easynet:///r/example/user/alice",
         subject="easynet:///r/example/resource/device.dev-a/streams/display.main",
     )
 
-    assert _provider().bind(draft) is draft
+    bound = _provider(signer).bind(draft)
+
+    authority = SessionAuthority.from_metadata(
+        bound.metadata[SESSION_AUTHORITY_METADATA_KEY]
+    )
+    assert authority.issuer_ura == "easynet:///r/example/user/alice"
+    assert authority.session_owner_user_id == "alice"
+    assert authority.creator_principal_id == "easynet:///r/example/user/alice"
+    assert authority.subject_ura == draft.subject_ura
+    assert authority.audience == draft.callee_ura
+    assert authority.scopes == ("meta.list_resources",)
+    assert authority.allowed_actions == ("read",)
+    assert authority.allowed_followup_abilities == ("meta.list_resources",)
+    assert authority.session_id.startswith("invoke-")
+    assert signer.signed
+
+
+def test_local_runtime_authority_rejects_cross_device_resource_session() -> None:
+    with pytest.raises(easynet_sdk.SDKError) as exc_info:
+        _provider().bind(
+            _draft(
+                caller="easynet:///r/example/user/alice",
+                subject="easynet:///r/example/resource/device.dev-b/streams/display.main",
+            )
+        )
+
+    assert exc_info.value.code == easynet_sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH
 
 
 def test_local_runtime_authority_binds_same_user_agent_subject() -> None:
@@ -100,9 +137,7 @@ def test_local_runtime_authority_binds_same_user_agent_subject() -> None:
         )
     )
 
-    proof = DelegationProof.from_metadata(
-        draft.metadata[DELEGATION_METADATA_KEY]
-    )
+    proof = DelegationProof.from_metadata(draft.metadata[DELEGATION_METADATA_KEY])
     assert proof.subject_ura == "easynet:///r/example/agent/alice.worker"
     assert proof.scopes == ("meta.list_resources",)
 
