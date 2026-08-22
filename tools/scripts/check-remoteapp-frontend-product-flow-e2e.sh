@@ -61,6 +61,8 @@ require 'daemon\.invocation_accepting is not true' "$HARNESS" \
   'product-flow daemon readiness preflight must require daemon invocation readiness'
 require 'connection\.failure=' "$HARNESS" \
   'product-flow daemon readiness preflight must report connection failure codes'
+require 'hub_api_endpoint=' "$HARNESS" \
+  'product-flow daemon readiness preflight must report the Hub API endpoint used for credential verification'
 require 'host-remoteapp-permission-subject-e2e\.sh' "$HARNESS" \
   'product-flow harness must invoke host permission subject E2E'
 require '--require-screen-capture-granted' "$HARNESS" \

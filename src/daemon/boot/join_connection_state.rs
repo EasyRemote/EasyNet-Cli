@@ -209,6 +209,8 @@ pub struct JoinConnectionSnapshot {
     pub device_ura: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hub_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hub_api_endpoint: Option<String>,
     pub source: String,
     pub observed_at_unix_ms: i64,
 }
@@ -254,6 +256,7 @@ impl JoinConnectionSnapshot {
             node_id,
             device_ura,
             hub_endpoint,
+            hub_api_endpoint: None,
             source: source.into(),
             observed_at_unix_ms: Utc::now().timestamp_millis(),
         }
@@ -275,6 +278,7 @@ impl JoinConnectionSnapshot {
             node_id: creds.node_id.clone(),
             device_ura: ura::device_ura(creds.realm_str(), &creds.node_id),
             hub_endpoint: Some(creds.hub_endpoint.clone()),
+            hub_api_endpoint: Some(creds.api_base()),
             source: source.into(),
             observed_at_unix_ms: Utc::now().timestamp_millis(),
         }
@@ -305,6 +309,7 @@ impl JoinConnectionSnapshot {
             node_id: creds.node_id.clone(),
             device_ura: ura::device_ura(creds.realm_str(), &creds.node_id),
             hub_endpoint: Some(creds.hub_endpoint.clone()),
+            hub_api_endpoint: Some(creds.api_base()),
             source: source.into(),
             observed_at_unix_ms: Utc::now().timestamp_millis(),
         }
@@ -342,6 +347,7 @@ impl JoinConnectionSnapshot {
             node_id,
             device_ura,
             hub_endpoint,
+            hub_api_endpoint: None,
             source,
             observed_at_unix_ms: Utc::now().timestamp_millis(),
         }
@@ -358,6 +364,7 @@ impl JoinConnectionSnapshot {
             node_id: String::new(),
             device_ura: String::new(),
             hub_endpoint: None,
+            hub_api_endpoint: None,
             source: "cli".to_string(),
             observed_at_unix_ms: Utc::now().timestamp_millis(),
         }
@@ -478,6 +485,10 @@ mod tests {
             Some("T10_ADMIT_PRESENCE")
         );
         assert_eq!(snapshot.device_ura, "easynet:///r/localhost/device/node-1");
+        assert_eq!(
+            snapshot.hub_api_endpoint.as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
     }
 
     #[test]
@@ -498,6 +509,10 @@ mod tests {
         assert_eq!(
             snapshot.failure.as_ref().map(|f| f.code.as_str()),
             Some("CALLER_SIGNATURE_INVALID")
+        );
+        assert_eq!(
+            snapshot.hub_api_endpoint.as_deref(),
+            Some("http://127.0.0.1:8080")
         );
     }
 

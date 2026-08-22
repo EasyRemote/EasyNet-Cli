@@ -229,6 +229,7 @@ daemon = status.get("daemon") if isinstance(status, dict) else None
 connection = status.get("connection") if isinstance(status, dict) else None
 runtime_status = status.get("runtime_status") if isinstance(status, dict) else None
 errors = []
+hub_api_endpoint = None
 if not isinstance(daemon, dict):
     errors.append("runtime status did not include daemon object")
 else:
@@ -239,12 +240,15 @@ else:
     if daemon.get("pid_alive") is not True:
         errors.append("daemon.pid_alive is not true")
 if isinstance(connection, dict):
+    hub_api_endpoint = connection.get("hub_api_endpoint")
     failure = connection.get("failure")
     if isinstance(failure, dict):
         errors.append(
             "connection.failure="
             f"{failure.get('code')}: {failure.get('message')}"
         )
+if hub_api_endpoint:
+    print(f"hub_api_endpoint={hub_api_endpoint}", file=sys.stderr)
 if errors:
     print(f"runtime_status={runtime_status}", file=sys.stderr)
     for error in errors:

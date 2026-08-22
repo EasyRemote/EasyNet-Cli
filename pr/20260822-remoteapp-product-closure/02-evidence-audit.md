@@ -49,6 +49,13 @@ Current frontend lifecycle evidence:
   `START_FAILED_CREDENTIAL_VERIFY: Hub credential verification is unavailable`.
   This is environment evidence against product completion, not a RemoteApp
   pass.
+- The connection-state snapshot now carries both the Hub session endpoint and
+  credential-verification API endpoint. The current local report names
+  `hub_endpoint=https://127.0.0.1:50443` and
+  `hub_api_endpoint=http://localhost:8080`; the API endpoint is refusing
+  connections because the local Hub/Docker runtime is not running. RemoteApp
+  product E2E must not proceed to host capture/media/input evidence until this
+  upstream product readiness gate is green.
 
 Missing or insufficient product evidence:
 
