@@ -215,6 +215,12 @@ Current frontend lifecycle evidence:
   to view-only now appears with the effective mode and blocked reason such as
   `input_injection_unavailable`. This closes an operator-observability seam; it
   does not turn blocked input into successful pointer/keyboard injection.
+- Frontend session details now render daemon-projected target recovery state
+  from `latestTargetDiagnostic` and `targetTracking`. A lost selected
+  window/application target appears as actionable status such as
+  `target lost · target_not_found · refresh_targets` instead of a generic
+  RemoteApp failure. This closes an application/window observability seam; it
+  does not prove real cross-platform capture or multi-window churn E2E.
 - Frontend protocol/store/UI code now parses and renders daemon-projected
   RemoteApp `terminal_receipt`. After `end_session`, the store retains the
   closed session view with its terminal receipt while clearing `sessionToken`.

@@ -50,6 +50,8 @@ cp "$REPO_ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md" \
   "$SB/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+cp "$REPO_ROOT/../EasyNet/Frontend/src/components/easynet/DeviceMediaAccess.tsx" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/lib/api/remote-desktop-protocol.ts" \
   "$SB/Frontend/src/lib/api/remote-desktop-protocol.ts"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/store/media-channel-store.ts" \
@@ -178,6 +180,18 @@ if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
   fail "checker accepted frontend coverage without picker-to-end UI flow"
+fi
+mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+
+cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"
+perl -0pi -e 's/target lost · target_not_found · refresh_targets/target lost/g' \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted frontend coverage without target recovery action UI"
 fi
 mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"

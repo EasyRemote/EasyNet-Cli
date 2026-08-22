@@ -10,6 +10,7 @@ DECODED_FRAME="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 VIEW_ONLY_INPUT="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 HUB_API_PREFLIGHT="$ROOT/tools/scripts/hub-api-readiness-preflight.sh"
 FRONTEND_UI_TEST="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.test.tsx"
+FRONTEND_UI="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.tsx"
 FRONTEND_STORE="$FRONTEND_ROOT/src/store/media-channel-store.ts"
 FRONTEND_STORE_TEST="$FRONTEND_ROOT/src/store/media-channel-store.test.ts"
 FRONTEND_PROTOCOL="$FRONTEND_ROOT/src/lib/api/remote-desktop-protocol.ts"
@@ -69,6 +70,7 @@ require_order() {
 [[ -f "$VIEW_ONLY_INPUT" ]] || fail "missing host view-only input safety E2E harness"
 [[ -f "$HUB_API_PREFLIGHT" ]] || fail "missing Hub API readiness preflight harness"
 [[ -f "$FRONTEND_UI_TEST" ]] || fail "missing frontend RemoteApp UI flow test"
+[[ -f "$FRONTEND_UI" ]] || fail "missing frontend RemoteApp UI component"
 [[ -f "$FRONTEND_STORE" ]] || fail "missing frontend RemoteApp media channel store"
 [[ -f "$FRONTEND_STORE_TEST" ]] || fail "missing frontend RemoteApp media channel store test"
 [[ -f "$FRONTEND_PROTOCOL" ]] || fail "missing frontend RemoteApp protocol projection"
@@ -181,6 +183,18 @@ require 'audioReady: readiness\.audio_ready === true' "$FRONTEND_PROTOCOL" \
   'frontend production readiness must parse audio readiness separately from video readiness'
 require 'host_audio_not_implemented' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove session details surface the host-audio unsupported blocker'
+require 'remoteDesktopTargetStatusLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected target recovery state in session details'
+require 'remoteDesktopTargetRecoveryMessage' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must consume canonical target recovery projection instead of inventing UI-only target state'
+require 'latestTargetDiagnostic' "$FRONTEND_UI" \
+  'frontend RemoteApp target status must be derived from daemon latestTargetDiagnostic'
+require 'frontendAction' "$FRONTEND_UI" \
+  'frontend RemoteApp target status must surface daemon frontendAction recovery guidance'
+require 'surfaces daemon remote desktop target recovery state in session details' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove session details surface target recovery state'
+require 'target lost · target_not_found · refresh_targets' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove lost window/application targets expose reason and recovery action'
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
   'product readiness audit must mention the product-flow E2E harness'
@@ -188,6 +202,8 @@ require 'runnable product-flow harness entrypoint' "$AUDIT" \
   'product readiness audit must classify the harness as an entrypoint, not proof of completion'
 require 'Browser/Tauri E2E for full user flow with real backend/runtime' "$AUDIT" \
   'product readiness audit must retain real Browser/Tauri full-flow evidence as still required'
+require 'target recovery' "$AUDIT" \
+  'product readiness audit must record frontend target recovery projection evidence'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
@@ -199,5 +215,7 @@ require 'explicit --run report remains required' "$PLAN" \
   'product closure plan must require an explicit run report before using harness evidence'
 require 'Frontend full lifecycle E2E across Browser/Tauri surfaces' "$PLAN" \
   'product closure plan must retain Browser/Tauri full lifecycle gap'
+require 'target lost · target_not_found · refresh_targets' "$PLAN" \
+  'product closure plan must record the target recovery UI evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'
