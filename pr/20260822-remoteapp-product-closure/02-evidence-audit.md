@@ -8,6 +8,10 @@ Current conclusion:
 
 - Targeted-session architecture: implemented with source and host-E2E harnesses.
 - Full interactive RemoteApp product: incomplete.
+- RemoteApp implementation test evidence must come from the main EasyNet crate,
+  not the standalone `easynet-plugin-remote-desktop` package. The standalone
+  package is a provider/export shim whose zero-test result does not exercise
+  the daemon-embedded implementation.
 
 Current verified boundary gates:
 
@@ -19,6 +23,7 @@ Current verified boundary gates:
 - `check-remoteapp-picker-subject-boundary.sh`
 - `check-remoteapp-session-subject-boundary.sh`
 - `check-remoteapp-frontend-product-flow-e2e.sh`
+- `check-remoteapp-main-crate-implementation-tests.sh`
 
 Current frontend lifecycle evidence:
 
@@ -185,6 +190,13 @@ Current frontend lifecycle evidence:
   frontend lifecycle, and cross-device E2E. The product closure audit gate
   rejects missing rows, unsupported statuses, empty evidence fields, and any
   premature `product_complete=true` claim.
+- `tools/scripts/check-remoteapp-main-crate-implementation-tests.sh` now pins
+  the correct implementation-test entrypoint. It verifies the standalone
+  remote-desktop crate remains a provider shim, then runs main-crate
+  implementation tests for app/window target observation, fail-closed
+  non-macOS app/window observation, WebRTC media fallback rejection, native
+  plugin platform catalogue state, and current-session input policy. This is
+  implementation evidence only; it does not prove live product completion.
 - RemoteApp session views now expose `input_readiness` as a single
   machine-readable projection for requested mode, effective mode,
   `interactive_ready`, input scope, and blocked reason. This improves frontend

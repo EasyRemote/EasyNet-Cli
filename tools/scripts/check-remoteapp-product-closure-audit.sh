@@ -7,6 +7,7 @@ AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+MAIN_CRATE_IMPL_TESTS="$ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
 MEDIA_ADAPTATION="$ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh"
@@ -49,6 +50,7 @@ reject() {
 [[ -f "$MATRIX" ]] || fail "missing RemoteApp product readiness matrix"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -f "$MAIN_CRATE_IMPL_TESTS" ]] || fail "missing RemoteApp main-crate implementation test gate"
 [[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
 [[ -f "$INPUT_INJECTION" ]] || fail "missing RemoteApp input injection verifier"
 [[ -f "$MEDIA_ADAPTATION" ]] || fail "missing RemoteApp media adaptation evidence verifier"
@@ -182,6 +184,8 @@ require 'Cross-device E2E smoke/regression exists beyond local provider boundary
   'audit must cover cross-device proof'
 require 'remoteapp-cross-device-product-smoke.sh' "$AUDIT" \
   'audit must name the cross-device product smoke gate'
+require 'check-remoteapp-main-crate-implementation-tests.sh' "$AUDIT" \
+  'audit must name the main-crate implementation test gate'
 require 'governed Hub routing, cross-device ability visibility/invocation' "$AUDIT" \
   'audit must scope cross-device smoke to routing and synthetic media evidence'
 require 'does not prove real' "$AUDIT" \
@@ -237,6 +241,8 @@ require 'Cross-platform capture implementation/evidence using' "$PLAN" \
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'remoteapp-cross-platform-capture-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the cross-platform capture verifier'
+require 'check-remoteapp-main-crate-implementation-tests\.sh' "$PLAN" \
+  'plan evidence audit must record the main-crate implementation test gate'
 require 'Windows/Linux capture or explicit product unsupported state' "$PLAN" \
   'plan evidence audit must preserve Windows/Linux capture or unsupported requirement'
 require 'Real input injection E2E for pointer/keyboard using' "$PLAN" \

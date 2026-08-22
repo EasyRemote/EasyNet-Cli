@@ -24,6 +24,7 @@
         "non-macOS app/window target observation fails closed",
         "frontend session details surface daemon target loss reason and recovery action",
         "frontend action row executes daemon-guided refresh_targets recovery by refetching target inventory",
+        "check-remoteapp-main-crate-implementation-tests.sh runs main-crate app/window target observation and fail-closed implementation tests",
         "remoteapp-cross-platform-capture-e2e.sh verifier for real macOS/Windows/Linux capture or explicit unsupported artifacts"
       ],
       "required_evidence_before_product_complete": [
@@ -64,6 +65,7 @@
         "session input_readiness reports target_input_not_ready when target tracking disables input",
         "remote_desktop.request_permission contract and frontend status expose Accessibility/input-injection permission alongside Screen Recording",
         "frontend exposes Request permission recovery when daemon input_readiness reports input_injection_unavailable",
+        "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate current-session input policy implementation test",
         "remoteapp-input-injection-e2e.sh verifier for real pointer/keyboard input injection artifacts"
       ],
       "required_evidence_before_product_complete": [
@@ -97,6 +99,7 @@
         "frontend session details surface media bitrate, FPS, drops, and backpressure from daemon/browser media stats",
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",
         "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract",
+        "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate WebRTC app/window display-fallback rejection and native plugin catalogue implementation tests",
         "remoteapp-media-adaptation-e2e.sh verifier for real audio/video codec, FPS, bitrate, adaptation, drop, and backpressure artifacts"
       ],
       "required_evidence_before_product_complete": [
@@ -130,6 +133,7 @@
         "application capture passes uncommitted same-app same-display windows as ScreenCaptureKit exceptingWindows",
         "frontend session details surface target tracking recovery state instead of opaque failure",
         "frontend exposes a Refresh targets CTA for target tracking recovery instead of leaving lost targets as a dead end",
+        "check-remoteapp-main-crate-implementation-tests.sh runs main-crate app/window target rebind implementation tests",
         "remoteapp-multi-window-tracking-e2e.sh verifier for real independent app/window tracking artifacts"
       ],
       "required_evidence_before_product_complete": [

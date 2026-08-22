@@ -194,6 +194,36 @@ Product effect:
   architectural drift and false product-complete claims while those
   capabilities are built.
 
+## 2026-08-23 — RemoteApp implementation tests must run through the main crate
+
+Decision:
+
+- The standalone `easynet-plugin-remote-desktop` crate is a provider/export
+  shim. A green standalone test run with zero tests is not RemoteApp
+  implementation evidence.
+- Product closure gates must execute implementation tests through the main
+  EasyNet crate where the daemon embeds the plugin implementation.
+- The gate must fail if a selected test filter matches zero tests.
+
+Implementation delta:
+
+- Added `tools/scripts/check-remoteapp-main-crate-implementation-tests.sh`.
+- The script verifies the provider-shim boundary and runs main-crate tests for
+  app/window target observation, explicit rebind policy, non-macOS app/window
+  fail-closed behavior, WebRTC app/window display-fallback rejection, native
+  plugin platform catalogue state, and current-session input policy.
+- The product-closure audit now requires this gate and records it in the plan
+  pack.
+
+Product effect:
+
+- This prevents a concrete false-readiness seam: using a zero-test standalone
+  package result to claim RemoteApp app/window/input/media implementation
+  coverage.
+- It does not prove live macOS/Windows/Linux capture, successful OS input
+  injection, audio/video adaptation, network fallback, frontend lifecycle, or
+  cross-device product completion.
+
 ## 2026-08-22 — Input readiness must be projected as one product state
 
 Decision:
