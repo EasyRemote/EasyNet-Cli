@@ -128,6 +128,7 @@
         "host-remoteapp-session-timeout-e2e.sh creates a short-lived session through the CLI, observes session_expired through public show_session, and verifies post-timeout end_session idempotency preserves the original terminal receipt",
         "host-remoteapp-session-cancel-e2e.sh creates a live-target session through the CLI, invokes public remote_desktop.end_session with user_cancelled, observes the closed state through public show_session, and verifies repeated end_session preserves the original cancel terminal receipt",
         "host-remoteapp-permission-revoke-e2e.sh creates a live-target session and waits for real platform permission revoke evidence before accepting public show_session projection of target_permission_revoked, revoked consent, ordered TARGET_PERMISSION_REVOKED/MEDIA_SOURCE_LOST/SESSION_CLOSED events, and terminal receipt binding",
+        "host-remoteapp-session-resume-e2e.sh creates a short-lease session, invokes public remote_desktop.refresh_lease, waits past the original lease, validates the same non-terminal session through public show_session, and closes it with resume_e2e_cleanup",
         "frontend retains closed end_session views with terminal_receipt while clearing session tokens",
         "permission revocation terminates the daemon session with a terminal_receipt and frontend terminal sync",
         "target loss and transport failure taxonomy",
@@ -138,6 +139,7 @@
       ],
       "required_evidence_before_product_complete": [
         "long-outage and network transport reconnect handoff E2E",
+        "browser/WebRTC rebind E2E after daemon-session lease refresh",
         "live consent revoke termination E2E pass report from a real host permission revoke",
         "canonical Axon cancel/timeout receipt-chain evidence for RemoteApp abilities",
         "crash/restart recovery E2E"

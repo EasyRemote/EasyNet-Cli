@@ -339,6 +339,13 @@ Current frontend lifecycle evidence:
   `TARGET_PERMISSION_REVOKED` / `MEDIA_SOURCE_LOST` / `SESSION_CLOSED`
   events, and terminal receipt binding. Its self-test validates the harness
   contract only; product evidence still requires a live run with real platform permission revoke.
+- Host session resume E2E now has a runnable entrypoint:
+  `host-remoteapp-session-resume-e2e.sh`. It creates a short-lease session
+  through the public CLI, invokes public `remote_desktop.refresh_lease`, waits past the original lease, validates the same non-terminal session through
+  `remote_desktop.show_session`, and closes it with `resume_e2e_cleanup`.
+  This proves daemon/session lease refresh survival; browser/WebRTC rebind,
+  long-outage reconnect, crash/restart recovery, and cross-device resume remain
+  missing.
 
 Missing or insufficient product evidence:
 

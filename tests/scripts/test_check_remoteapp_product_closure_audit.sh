@@ -23,6 +23,7 @@ cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-matrix.json" "$SB/docs/design/remoteapp-product-readiness-matrix.json"
@@ -112,6 +113,24 @@ fi
 grep -q "permission revoke E2E must prove target_permission_revoked terminal reason" /tmp/check-remoteapp-product-closure-permission-revoke-reason.out || \
   fail "expected permission revoke terminal reason failure"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+
+perl -0pi -e 's#remote_desktop\.refresh_lease#remote_desktop.recreate_session#g' \
+  "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-session-resume-refresh.out 2>&1; then
+  fail "checker accepted session resume E2E without public refresh_lease"
+fi
+grep -q "session resume E2E must invoke public refresh_lease" /tmp/check-remoteapp-product-closure-session-resume-refresh.out || \
+  fail "expected session resume refresh_lease failure"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+
+perl -0pi -e 's#show_after_original_lease must prove the refreshed session survived#show_after_original_lease may create a replacement session#g' \
+  "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-session-resume-survival.out 2>&1; then
+  fail "checker accepted session resume E2E without same-session survival proof"
+fi
+grep -q "session resume E2E must prove same-session survival after original lease" /tmp/check-remoteapp-product-closure-session-resume-survival.out || \
+  fail "expected session resume survival failure"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 
 python3 - "$SB/docs/design/remoteapp-product-readiness-matrix.json" <<'PY'
 import json

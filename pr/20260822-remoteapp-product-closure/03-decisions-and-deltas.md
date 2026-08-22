@@ -888,3 +888,34 @@ Product effect:
 - Product completion still requires an actual live pass report from a real host
   permission revoke, plus reconnect/resume, crash/restart, and cross-device
   revoke evidence.
+
+## 2026-08-23 — Session resume needs daemon lease-refresh evidence
+
+Decision:
+
+- Short disconnect/resume must preserve the same daemon RemoteApp session; a
+  replacement `create_session` is not resume evidence.
+- The daemon/session layer can be proven independently from browser WebRTC
+  rebind by refreshing the lease, waiting past the original lease, and
+  validating the same non-terminal session through public `show_session`.
+
+Implementation delta:
+
+- Added `host-remoteapp-session-resume-e2e.sh`.
+- The harness creates a short-lease `remote_desktop.create_session`, invokes
+  public `remote_desktop.refresh_lease`, waits past the original lease,
+  validates the same non-terminal session and refreshed
+  `lease_expires_at_ms` through `remote_desktop.show_session`, and closes the
+  session through public `remote_desktop.end_session` with
+  `resume_e2e_cleanup`.
+- The E2E acceptance and product-closure gates now require the resume harness,
+  public refresh/show/end abilities, `lease_refresh_resume` proof mode,
+  original-lease survival evidence, explicit lease extension, and cleanup
+  terminal reason.
+
+Product effect:
+
+- Daemon/session lease-refresh resume now has host-level executable evidence.
+- Product completion still requires browser/WebRTC rebind after resume,
+  long-outage reconnect, crash/restart recovery, and cross-device resume
+  evidence.

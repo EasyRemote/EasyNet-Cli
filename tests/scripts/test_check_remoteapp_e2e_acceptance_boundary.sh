@@ -15,6 +15,7 @@ VIEW_ONLY_INPUT_SAFETY="$REPO_ROOT/tools/scripts/host-remoteapp-view-only-input-
 SESSION_TIMEOUT="$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 PERMISSION_REVOKE="$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+SESSION_RESUME="$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
@@ -31,6 +32,7 @@ cp "$VIEW_ONLY_INPUT_SAFETY" "$SANDBOX/tools/scripts/host-remoteapp-view-only-in
 cp "$SESSION_TIMEOUT" "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cp "$SESSION_CANCEL" "$SANDBOX/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 cp "$PERMISSION_REVOKE" "$SANDBOX/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+cp "$SESSION_RESUME" "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
@@ -45,6 +47,7 @@ chmod +x "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+chmod +x "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-01 target picker freshness | live refresh returns known target |
 | E2E-02 permission subject correctness | invalid_argument for target Resource subjects |
@@ -84,6 +87,8 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-session-cancel-e2e.sh" \
   --self-test >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" \
+  --self-test >/dev/null
+"$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh" \
   --self-test >/dev/null
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
@@ -175,6 +180,28 @@ if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-permission-revoke-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh.good"
+perl -0pi -e 's/remote_desktop\.refresh_lease/remote_desktop.recreate_session/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted session resume harness without public refresh_lease" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh.good"
+perl -0pi -e 's/show_after_original_lease must prove the refreshed session survived/show_after_original_lease may create a replacement session/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted session resume harness without same-session survival proof" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"

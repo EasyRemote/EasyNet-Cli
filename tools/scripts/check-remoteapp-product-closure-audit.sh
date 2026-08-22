@@ -10,6 +10,7 @@ CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 PERMISSION_REVOKE="$ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+SESSION_RESUME="$ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
@@ -44,6 +45,7 @@ reject() {
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
 [[ -f "$SESSION_CANCEL" ]] || fail "missing RemoteApp session cancel E2E harness"
 [[ -f "$PERMISSION_REVOKE" ]] || fail "missing RemoteApp permission revoke E2E harness"
+[[ -f "$SESSION_RESUME" ]] || fail "missing RemoteApp session resume E2E harness"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
@@ -176,6 +178,10 @@ require 'host-remoteapp-permission-revoke-e2e\.sh' "$AUDIT" \
   'audit must record the host permission revoke E2E harness'
 require 'real platform permission revoke' "$AUDIT" \
   'audit must distinguish permission revoke harness from completed real OS evidence'
+require 'host-remoteapp-session-resume-e2e\.sh' "$AUDIT" \
+  'audit must record the host session resume E2E harness'
+require 'lease refresh' "$AUDIT" \
+  'audit must describe session resume as lease refresh evidence'
 
 require 'Full interactive RemoteApp product: incomplete' "$PLAN" \
   'plan evidence audit must keep the goal open'
@@ -187,6 +193,10 @@ require 'host-remoteapp-permission-revoke-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the host permission revoke E2E harness'
 require 'requires a live run with real platform permission revoke' "$PLAN" \
   'plan evidence audit must not claim permission revoke product completion from self-test'
+require 'host-remoteapp-session-resume-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the host session resume E2E harness'
+require 'waits past the original lease' "$PLAN" \
+  'plan evidence audit must record session resume original-lease survival evidence'
 require 'Cross-platform capture implementation/evidence for Windows and Linux' "$PLAN" \
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'Frontend full lifecycle E2E' "$PLAN" \
@@ -248,6 +258,20 @@ require 'SESSION_CLOSED' "$PERMISSION_REVOKE" \
   'permission revoke E2E must inspect SESSION_CLOSED event evidence'
 require 'terminal_receipt\.reason_code' "$PERMISSION_REVOKE" \
   'permission revoke E2E must inspect revoke terminal_receipt.reason_code'
+require 'remote_desktop\.refresh_lease' "$SESSION_RESUME" \
+  'session resume E2E must invoke public refresh_lease'
+require 'remote_desktop\.show_session' "$SESSION_RESUME" \
+  'session resume E2E must validate through public show_session'
+require 'lease_refresh_resume' "$SESSION_RESUME" \
+  'session resume E2E must identify lease_refresh_resume proof mode'
+require 'waited_past_original_lease' "$SESSION_RESUME" \
+  'session resume E2E must wait past original lease'
+require 'refresh_lease must extend lease_expires_at_ms' "$SESSION_RESUME" \
+  'session resume E2E must prove lease extension'
+require 'show_after_original_lease must prove the refreshed session survived' "$SESSION_RESUME" \
+  'session resume E2E must prove same-session survival after original lease'
+require 'resume_e2e_cleanup' "$SESSION_RESUME" \
+  'session resume E2E must clean up with explicit terminal reason'
 
 require 'terminal_receipt: Option<Value>' "$SESSION" \
   'session aggregate must store a single terminal receipt projection'
