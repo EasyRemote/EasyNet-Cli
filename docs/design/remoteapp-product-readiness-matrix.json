@@ -66,7 +66,8 @@
         "macOS H.264/WebRTC path",
         "VideoToolbox descriptor",
         "adaptive bitrate helper",
-        "queue/drop boundary tests"
+        "queue/drop boundary tests",
+        "session/device capability view explicitly reports host_audio_not_implemented"
       ],
       "required_evidence_before_product_complete": [
         "end-to-end codec negotiation reports",
@@ -75,6 +76,7 @@
         "degraded network/drop policy E2E"
       ],
       "non_claims": [
+        "explicit host audio unsupported state does not implement audio capture",
         "synthetic media carrier does not prove host audio/video product readiness"
       ]
     },

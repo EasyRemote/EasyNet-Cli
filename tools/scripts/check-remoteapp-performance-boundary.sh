@@ -51,6 +51,7 @@ SESSION_SIGNALING="$ROOT/plugins/remote-desktop/src/session_signaling.rs"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
 VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
+VIEW_DEVICE="$ROOT/plugins/remote-desktop/src/view_device.rs"
 VIEW_TRANSPORT="$ROOT/plugins/remote-desktop/src/view_transport.rs"
 SDP="$ROOT/plugins/remote-desktop/src/sdp.rs"
 TARGET="$ROOT/plugins/remote-desktop/src/target.rs"
@@ -176,6 +177,26 @@ require '"readiness_blocker": self\.readiness_blocker\(\)' "$VIEW_TRANSPORT" \
   'PERF-05 transport summary and metadata must project the canonical readiness blocker'
 require '"route_readiness_blocker": transport_view\.readiness_blocker\(\)' "$VIEW" \
   'PERF-05 production_readiness must expose the transport route blocker without making it the media readiness blocker'
+require 'audio_support_view' "$VIEW_DEVICE" \
+  'RemoteApp device view must expose explicit host-audio product state'
+require 'AUDIO_UNSUPPORTED_REASON' "$VIEW_DEVICE" \
+  'RemoteApp device view must use a stable host-audio blocked reason'
+require '"host_audio_not_implemented"' "$VIEW_DEVICE" \
+  'RemoteApp device view must report host audio as not implemented'
+require '"capability": "host_audio"' "$VIEW_DEVICE" \
+  'RemoteApp unsupported capability list must include host_audio'
+require 'device_capabilities_report_host_audio_as_explicitly_unsupported' "$VIEW_DEVICE" \
+  'RemoteApp device capability tests must pin explicit host-audio unsupported state'
+require '"audio": audio\.clone\(\)' "$VIEW" \
+  'RemoteApp public session view must expose explicit audio product state'
+require '"media_scope": "video_only"' "$VIEW" \
+  'RemoteApp production readiness must state that current media readiness is video-only'
+require '"audio_ready": false' "$VIEW" \
+  'RemoteApp production readiness must not imply host audio is ready'
+require '"audio_blocked_reason": AUDIO_UNSUPPORTED_REASON' "$VIEW" \
+  'RemoteApp production readiness must expose the canonical host-audio blocker'
+require 'session_view_reports_audio_as_explicitly_unsupported_product_state' "$VIEW" \
+  'RemoteApp session view tests must pin explicit host-audio unsupported state'
 require 'view\["production_readiness"\]\["route_readiness_blocker"\]\["frontend_action"\]' "$SESSION" \
   'PERF-05 production readiness tests must prove route blockers publish frontend recovery action separately'
 require 'summary\["readiness_blocker"\]\["frontend_action"\]' "$VIEW_TRANSPORT" \

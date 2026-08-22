@@ -224,13 +224,52 @@ fn production_readiness_reports_client_blocker_and_route_degradation_before_pres
 }
 RS
 
+cat >"$SB/plugins/remote-desktop/src/view_device.rs" <<'RS'
+pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &str =
+    "host_audio_not_implemented";
+
+fn audio_support_view() {
+    json!({
+        "supported": false,
+        "capture_ready": false,
+        "send_ready": false,
+        "codec_profiles": [],
+        "blocked_reason": AUDIO_UNSUPPORTED_REASON,
+    });
+    json!({
+        "unsupported_capabilities": [
+            {
+                "capability": "host_audio",
+                "reason": AUDIO_UNSUPPORTED_REASON,
+            }
+        ]
+    });
+}
+
+#[test]
+fn device_capabilities_report_host_audio_as_explicitly_unsupported() {}
+RS
+
 cat >"$SB/plugins/remote-desktop/src/view.rs" <<'RS'
 fn serialize_session(session: Session, transport_route_state: Value) {
     let _ = session.signaling_view(transport_route_state.clone());
+    let audio = audio_support_view();
     json!({
+        "audio": audio.clone(),
         "route_readiness_blocker": transport_view.readiness_blocker(),
     });
 }
+
+fn production_readiness_view() {
+    json!({
+        "media_scope": "video_only",
+        "audio_ready": false,
+        "audio_blocked_reason": AUDIO_UNSUPPORTED_REASON,
+    });
+}
+
+#[test]
+fn session_view_reports_audio_as_explicitly_unsupported_product_state() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/view_transport.rs" <<'RS'
@@ -330,6 +369,52 @@ RS
   cd "$SB"
   CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
 ) >/dev/null || fail "happy path should pass"
+
+perl -0pi -e 's/"audio_ready": false/"audio_ready": true/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-audio-ready.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "misreported host-audio readiness should exit 1 (got $rc)"
+grep -q "must not imply host audio is ready" /tmp/check-remoteapp-performance-boundary-audio-ready.out || fail "expected audio readiness failure"
+
+perl -0pi -e 's/"audio_ready": true/"audio_ready": false/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+perl -0pi -e 's/host_audio_not_implemented/host_audio_ready/g' \
+  "$SB/plugins/remote-desktop/src/view_device.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-audio-reason.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing stable host-audio blocker should exit 1 (got $rc)"
+grep -q "host audio as not implemented" /tmp/check-remoteapp-performance-boundary-audio-reason.out || fail "expected host-audio blocker failure"
+
+perl -0pi -e 's/host_audio_ready/host_audio_not_implemented/g' \
+  "$SB/plugins/remote-desktop/src/view_device.rs"
+perl -0pi -e 's/session_view_reports_audio_as_explicitly_unsupported_product_state/session_view_omits_audio_product_state/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-audio-test.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing session audio product-state regression should exit 1 (got $rc)"
+grep -q "session view tests must pin explicit host-audio unsupported state" /tmp/check-remoteapp-performance-boundary-audio-test.out || fail "expected session audio regression failure"
+
+perl -0pi -e 's/session_view_omits_audio_product_state/session_view_reports_audio_as_explicitly_unsupported_product_state/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
 
 perl -0pi -e 's/Reserved\(DirectWebRtcEndpoint\)/Reserved/' \
   "$SB/plugins/remote-desktop/src/handlers/add_ice_candidate.rs"

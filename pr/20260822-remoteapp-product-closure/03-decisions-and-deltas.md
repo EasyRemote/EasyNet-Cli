@@ -1,5 +1,31 @@
 # Decisions and Deltas — RemoteApp Product Closure
 
+## 2026-08-22 — Host audio must be explicit unsupported product state
+
+Decision:
+
+- RemoteApp video transport readiness must not imply host audio readiness.
+- Until the plugin owns real host-audio capture, encode, and WebRTC send
+  paths, host audio is a first-class unsupported product state, not an omitted
+  field.
+
+Implementation delta:
+
+- Device capability views expose an `audio` object and a `host_audio`
+  unsupported capability with the stable reason `host_audio_not_implemented`.
+- Session views expose the same `audio` object.
+- Production readiness now states `media_scope=video_only`,
+  `audio_ready=false`, and `audio_blocked_reason=host_audio_not_implemented`.
+- The RemoteApp performance boundary gate pins the projection and mutation
+  tests reject false audio readiness.
+
+Product effect:
+
+- Frontend and E2E harnesses can no longer treat video readiness as full
+  audio/video readiness.
+- This does not implement audio capture, audio codec negotiation, or audio
+  E2E; those remain required before product completion.
+
 ## 2026-08-22 — User Service projection conflict must not kill Device session
 
 Decision:

@@ -19,6 +19,9 @@ use crate::daemon::plugins::remote_desktop::media::{
     MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID, XCAP_MACOS_RECORDER_MAX_FPS, XCAP_OPENH264_BACKEND_ID,
 };
 
+pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &str =
+    "host_audio_not_implemented";
+
 /// Build media quality targets from create-session video constraints.
 pub(in crate::daemon::plugins::remote_desktop) fn quality_targets(video: &Value) -> Value {
     json!({
@@ -117,6 +120,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     } else {
         "xcap.avcapture_screen_input"
     };
+    let audio = audio_support_view();
     let production_target_subjects = production_backend.supported_subjects_value();
     let capture_target_models = json!([
         "display_surface",
@@ -134,6 +138,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "media_backends": backend_catalog_view(),
         "production_gate": production_gate_view(),
         "codec_profiles": codec_profiles,
+        "audio": audio.clone(),
         "hardware_cursor": false,
         "input_injection": input_injection_available(),
         "data_channel_input": true,
@@ -158,6 +163,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
                     "remote_desktop.file_transfer.accept",
                     "remote_desktop.file_transfer.send",
                     "remote_desktop.file_transfer.cancel"
+                ]
+            },
+            {
+                "capability": "host_audio",
+                "reason": AUDIO_UNSUPPORTED_REASON,
+                "future_abilities": [
+                    "remote_desktop.audio.capture",
+                    "remote_desktop.audio.set_description",
+                    "remote_desktop.audio.stop"
                 ]
             }
         ],
@@ -184,6 +198,21 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             "next_required_backend": MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
             "reason": reason,
         }
+    })
+}
+
+/// Product-visible audio state. RemoteApp currently owns video transport only;
+/// audio must stay an explicit unsupported state until a real host-audio
+/// capture/encode/WebRTC path exists.
+pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view() -> Value {
+    json!({
+        "supported": false,
+        "capture_ready": false,
+        "send_ready": false,
+        "codec_profiles": [],
+        "blocked_reason": AUDIO_UNSUPPORTED_REASON,
+        "transport": Value::Null,
+        "non_claim": "video transport readiness does not prove host audio readiness",
     })
 }
 
@@ -236,6 +265,28 @@ mod tests {
             capabilities["unsupported_capabilities"][1]["future_abilities"][2],
             json!("remote_desktop.file_transfer.send")
         );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][2]["capability"],
+            json!("host_audio")
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][2]["reason"],
+            json!("host_audio_not_implemented")
+        );
+    }
+
+    #[test]
+    fn device_capabilities_report_host_audio_as_explicitly_unsupported() {
+        let capabilities = device_capabilities_view();
+
+        assert_eq!(capabilities["audio"]["supported"], json!(false));
+        assert_eq!(capabilities["audio"]["capture_ready"], json!(false));
+        assert_eq!(capabilities["audio"]["send_ready"], json!(false));
+        assert_eq!(
+            capabilities["audio"]["blocked_reason"],
+            json!("host_audio_not_implemented")
+        );
+        assert_eq!(capabilities["audio"]["codec_profiles"], json!([]));
     }
 
     #[test]

@@ -113,11 +113,15 @@ Current frontend lifecycle evidence:
   `service/<user>.pages` with the same generation/revision but different
   host/digest, the second write is a `rejected_conflict`. That Service surface
   must remain on the already-selected host, but the caller Device session must
-  not reconnect/backoff and appear offline because RemoteApp device-native
+  not reconnect/backoff or appear offline because RemoteApp device-native
   abilities are independent SystemAgent descriptors. The fix is to expose the
   Hub projection upsert `outcome` and let the user-scoped Service prelude
   degrade only on read-model rejection while keeping device-native and
   hosted-agent projections strict.
+- RemoteApp session/device capability views now project host audio as an
+  explicit unsupported product state (`host_audio_not_implemented`). This
+  prevents video readiness from being treated as full audio/video readiness;
+  audio capture, audio codec negotiation, and audio E2E remain missing.
 - 2026-08-22 verification after the Service projection fix:
   response/unit/script gates passed, but an actual
   `remoteapp-cross-device-product-smoke.sh --run` attempt did not produce

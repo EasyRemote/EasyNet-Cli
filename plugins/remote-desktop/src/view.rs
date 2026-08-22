@@ -14,7 +14,8 @@ use crate::daemon::plugins::remote_desktop::media::{
 };
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::daemon::plugins::remote_desktop::view_device::{
-    device_capabilities_view, empty_pipeline_metrics, quality_targets,
+    audio_support_view, device_capabilities_view, empty_pipeline_metrics, quality_targets,
+    AUDIO_UNSUPPORTED_REASON,
 };
 use crate::daemon::plugins::remote_desktop::view_transport::RemoteDesktopTransportView;
 
@@ -41,6 +42,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let transport_route_state = transport_view.route_state();
     let signaling = session.signaling_view(transport_route_state.clone());
     let production_readiness = production_readiness_view(session, &transport_view);
+    let audio = audio_support_view();
     let mut view = json!({
         "session_id": session.session_id(),
         "state": session.state().json_name(),
@@ -77,6 +79,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "media_sdk": sdk_contract_view(),
         "media_backends": backend_catalog_view(),
         "production_gate": production_gate_view(),
+        "audio": audio.clone(),
         "device_capabilities": device_capabilities_view(),
         "latest_metrics": media_stats.clone().unwrap_or_else(empty_pipeline_metrics),
         "media_stats": media_stats,
@@ -141,6 +144,9 @@ fn production_readiness_view(
         "ready": session.production_media_ready(),
         "blocked_reason": production_readiness_blocked_reason(session),
         "target_scope_ready": session.target_scope_ready(),
+        "media_scope": "video_only",
+        "audio_ready": false,
+        "audio_blocked_reason": AUDIO_UNSUPPORTED_REASON,
         "requires_production_codec": true,
         "production_codec_negotiated": session.production_codec_negotiated(),
         "media_transport_ready": session.media_transport_ready(),
@@ -397,5 +403,32 @@ mod tests {
         );
         assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
         assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);
+    }
+
+    #[test]
+    fn session_view_reports_audio_as_explicitly_unsupported_product_state() {
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-view-audio-product-state",
+            "easynet:///r/acme/resource/display.audio",
+            vec!["webrtc".into()],
+        ));
+
+        let view = serialize_session(&session);
+
+        assert_eq!(view["audio"]["supported"], json!(false));
+        assert_eq!(
+            view["audio"]["blocked_reason"],
+            json!("host_audio_not_implemented")
+        );
+        assert_eq!(view["device_capabilities"]["audio"], view["audio"]);
+        assert_eq!(
+            view["production_readiness"]["media_scope"],
+            json!("video_only")
+        );
+        assert_eq!(view["production_readiness"]["audio_ready"], json!(false));
+        assert_eq!(
+            view["production_readiness"]["audio_blocked_reason"],
+            json!("host_audio_not_implemented")
+        );
     }
 }
