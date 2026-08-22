@@ -24,6 +24,7 @@ use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapsh
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
+const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
 const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
 const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;
 pub(in crate::daemon::plugins::remote_desktop) const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] =
@@ -85,6 +86,14 @@ impl RemoteDesktopInputFrame {
             Self::FileDrop(_) => "drop",
         }
     }
+
+    pub fn client_sent_at_ms(&self) -> Option<u64> {
+        match self {
+            Self::Pointer(frame) => frame.sent_at_ms,
+            Self::Key(frame) => frame.sent_at_ms,
+            Self::Clipboard(_) | Self::FileDrop(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -115,6 +124,8 @@ pub struct PointerInputFrame {
     pub delta_x: Option<f64>,
     #[serde(default)]
     pub delta_y: Option<f64>,
+    #[serde(default)]
+    pub sent_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -130,6 +141,8 @@ pub struct KeyInputFrame {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub repeat: bool,
+    #[serde(default)]
+    pub sent_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -546,6 +559,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     }
                 };
                 let kind = frame.kind().as_policy_key();
+                let client_sent_at_ms = frame.client_sent_at_ms();
                 let Some(effective_input_policy) = current_session_effective_input_policy(
                     &sessions,
                     &session_id,
@@ -560,7 +574,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         epoch,
                         InputRejectSample::new("target_input_not_ready", rejected_count)
                             .kind(kind)
-                            .action(frame.action()),
+                            .action(frame.action())
+                            .client_sent_at_ms(client_sent_at_ms),
                     );
                     continue;
                 };
@@ -580,12 +595,13 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                             &session_id,
                             epoch,
                             "INPUT_FRAME_APPLIED",
-                            json!({
-                                "kind": kind,
-                                "action": frame.action(),
-                                "accepted_count": accepted_count,
-                                "rejected_count": rejected_count,
-                            }),
+                            input_frame_applied_payload(
+                                kind,
+                                frame.action(),
+                                accepted_count,
+                                rejected_count,
+                                client_sent_at_ms,
+                            ),
                         );
                     }
                 } else {
@@ -600,7 +616,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                             rejected_count,
                         )
                         .kind(kind)
-                        .action(frame.action()),
+                        .action(frame.action())
+                        .client_sent_at_ms(client_sent_at_ms),
                     );
                 }
             }
@@ -722,6 +739,7 @@ struct InputRejectSample {
     signature: InputRejectSignature,
     message: Option<String>,
     rejected_count: u64,
+    client_sent_at_ms: Option<u64>,
 }
 
 impl InputRejectSample {
@@ -734,6 +752,7 @@ impl InputRejectSample {
             },
             message: None,
             rejected_count,
+            client_sent_at_ms: None,
         }
     }
 
@@ -751,12 +770,18 @@ impl InputRejectSample {
         self.message = Some(message);
         self
     }
+
+    fn client_sent_at_ms(mut self, client_sent_at_ms: Option<u64>) -> Self {
+        self.client_sent_at_ms = client_sent_at_ms;
+        self
+    }
 }
 
 #[derive(Debug)]
 struct PendingInputReject {
     signature: InputRejectSignature,
     latest_message: Option<String>,
+    latest_client_sent_at_ms: Option<u64>,
     first_rejected_count: u64,
     last_rejected_count: u64,
     observed_total: u64,
@@ -769,6 +794,7 @@ impl PendingInputReject {
         Self {
             signature: sample.signature,
             latest_message: sample.message,
+            latest_client_sent_at_ms: sample.client_sent_at_ms,
             first_rejected_count: sample.rejected_count,
             last_rejected_count: sample.rejected_count,
             observed_total: 0,
@@ -779,6 +805,7 @@ impl PendingInputReject {
 
     fn observe(&mut self, sample: InputRejectSample) {
         self.latest_message = sample.message;
+        self.latest_client_sent_at_ms = sample.client_sent_at_ms;
         self.last_rejected_count = sample.rejected_count;
         self.observed_total = self.observed_total.saturating_add(1);
     }
@@ -795,6 +822,7 @@ impl PendingInputReject {
         if let Some(message) = self.latest_message.as_deref() {
             payload.insert("message".to_string(), json!(message));
         }
+        insert_client_sent_at_ms(&mut payload, self.latest_client_sent_at_ms);
         payload.insert(
             "rejected_count".to_string(),
             json!(self.last_rejected_count),
@@ -840,6 +868,28 @@ fn flush_input_rejections(
 ) {
     for payload in coalescer.flush() {
         record_input_channel_event(sessions, session_id, epoch, "INPUT_FRAME_REJECTED", payload);
+    }
+}
+
+fn input_frame_applied_payload(
+    kind: &str,
+    action: &str,
+    accepted_count: u64,
+    rejected_count: u64,
+    client_sent_at_ms: Option<u64>,
+) -> Value {
+    let mut payload = Map::new();
+    payload.insert("kind".to_string(), json!(kind));
+    payload.insert("action".to_string(), json!(action));
+    payload.insert("accepted_count".to_string(), json!(accepted_count));
+    payload.insert("rejected_count".to_string(), json!(rejected_count));
+    insert_client_sent_at_ms(&mut payload, client_sent_at_ms);
+    Value::Object(payload)
+}
+
+fn insert_client_sent_at_ms(payload: &mut Map<String, Value>, client_sent_at_ms: Option<u64>) {
+    if let Some(client_sent_at_ms) = client_sent_at_ms {
+        payload.insert("client_sent_at_ms".to_string(), json!(client_sent_at_ms));
     }
 }
 
@@ -1081,6 +1131,7 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
             {
                 anyhow::bail!("pointer wheel deltas must be finite")
             }
+            validate_client_sent_at_ms(pointer.sent_at_ms)?;
         }
         RemoteDesktopInputFrame::Key(key) => {
             match key.action.as_str() {
@@ -1090,8 +1141,16 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
             if key.key.trim().is_empty() && key.code.trim().is_empty() {
                 anyhow::bail!("key input frame must include key or code")
             }
+            validate_client_sent_at_ms(key.sent_at_ms)?;
         }
         RemoteDesktopInputFrame::Clipboard(_) | RemoteDesktopInputFrame::FileDrop(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_client_sent_at_ms(sent_at_ms: Option<u64>) -> anyhow::Result<()> {
+    if sent_at_ms.is_some_and(|value| value > MAX_CLIENT_SENT_AT_MS) {
+        anyhow::bail!("sent_at_ms must be a JavaScript-safe millisecond timestamp")
     }
     Ok(())
 }
@@ -1444,10 +1503,11 @@ mod tests {
     #[test]
     fn parses_pointer_input_frame() {
         let frame = parse_input_frame(
-            r#"{"type":"pointer","action":"move","x":10,"y":20,"normalized_x":0.5,"normalized_y":0.25}"#,
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"normalized_x":0.5,"normalized_y":0.25,"sent_at_ms":1787331000123}"#,
         )
         .unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Pointer);
+        assert_eq!(frame.client_sent_at_ms(), Some(1_787_331_000_123));
     }
 
     #[test]
@@ -1461,7 +1521,8 @@ mod tests {
                 coalescer.observe(
                     InputRejectSample::new("input_policy_denied", rejected_count)
                         .kind("pointer")
-                        .action("move"),
+                        .action("move")
+                        .client_sent_at_ms(Some(1_787_331_000_000 + rejected_count)),
                 ),
             );
         }
@@ -1503,6 +1564,10 @@ mod tests {
             emitted.last().unwrap()["coalesced_rejections"],
             json!(REJECT_STORM)
         );
+        assert_eq!(
+            emitted.last().unwrap()["client_sent_at_ms"],
+            json!(1_787_331_000_000 + REJECT_STORM)
+        );
         assert!(
             emitted.last().unwrap()["suppressed_since_last_event"]
                 .as_u64()
@@ -1510,6 +1575,18 @@ mod tests {
                 > 0,
             "flush summary should report suppressed rejected frames"
         );
+    }
+
+    #[test]
+    fn input_frame_applied_payload_preserves_client_timestamp() {
+        let payload =
+            input_frame_applied_payload("pointer", "move", 1, 0, Some(1_787_331_000_123));
+
+        assert_eq!(payload["kind"], json!("pointer"));
+        assert_eq!(payload["action"], json!("move"));
+        assert_eq!(payload["accepted_count"], json!(1));
+        assert_eq!(payload["rejected_count"], json!(0));
+        assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_123_u64));
     }
 
     #[test]
@@ -1615,8 +1692,21 @@ mod tests {
 
     #[test]
     fn parses_key_input_frame() {
-        let frame = parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
+        let frame =
+            parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA","sent_at_ms":1787331000456}"#)
+                .unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Key);
+        assert_eq!(frame.client_sent_at_ms(), Some(1_787_331_000_456));
+    }
+
+    #[test]
+    fn rejects_client_sent_at_ms_outside_javascript_safe_integer_range() {
+        let err = parse_input_frame(
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"sent_at_ms":9007199254740992}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("JavaScript-safe millisecond timestamp"));
     }
 
     #[test]

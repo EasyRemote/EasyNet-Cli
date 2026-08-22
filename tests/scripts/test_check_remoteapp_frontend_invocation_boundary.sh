@@ -259,7 +259,7 @@ export const actions = {
     if (!session || !remoteDesktopInputFrameAllowed(session, frame)) return false
     const channel = refsFor(key).inputChannel
     if (!channel || channel.readyState !== 'open') return false
-    channel.send(JSON.stringify(frame))
+    channel.send(JSON.stringify({ ...frame, sent_at_ms: Date.now() }))
     return true
   },
   rdRequestPermission: async (key: string) => {
@@ -983,6 +983,15 @@ fi
 perl -0pi -e 's/if \(!session \|\| true\) return false/if (!session || remoteDesktopInputFrameAllowed(session, frame)) return false/' \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 perl -0pi -e 's/if \(!session \|\| remoteDesktopInputFrameAllowed\(session, frame\)\) return false/if (!session || !remoteDesktopInputFrameAllowed(session, frame)) return false/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/JSON\.stringify\(\{ \.\.\.frame, sent_at_ms: Date\.now\(\) \}\)/JSON.stringify(frame)/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted input send without client timestamp metadata" >&2
+  exit 1
+fi
+perl -0pi -e 's/JSON\.stringify\(frame\)/JSON.stringify({ ...frame, sent_at_ms: Date.now() })/' \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e "s/    inputReadiness,\\n//" \

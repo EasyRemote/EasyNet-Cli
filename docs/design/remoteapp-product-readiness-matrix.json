@@ -42,6 +42,7 @@
         "clipboard/file-drop are unsupported",
         "session view projects requested/effective input readiness and blocked reason",
         "frontend input sender consumes daemon input_readiness and fails closed before sending pointer/key frames",
+        "daemon pointer/key input frame schema accepts frontend sent_at_ms metadata and preserves client_sent_at_ms in input applied/rejected events",
         "frontend watch_events maps daemon input activation blocks and input frame rejections into visible RemoteApp status without closing media transport",
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
         "window/application sessions remain view_only until target-scoped keyboard/pointer dispatch is safe",

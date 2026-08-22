@@ -875,7 +875,7 @@ require 'fn close_after_permission_revoked\(&mut self\)' "$SESSION" \
   'permission revocation must close through a dedicated aggregate terminal path'
 require_multiline 'm/self\.lifecycle\s*\.\s*terminate_closed\(REASON_TARGET_PERMISSION_REVOKED\)/s' "$SESSION" \
   'permission revocation must terminate the RemoteApp session with the stable reason'
-require_multiline 'm/self\.terminal_receipt = Some\(\s*self\.project_terminal_receipt\(REASON_TARGET_PERMISSION_REVOKED/s' "$SESSION" \
+require_multiline 'm/self\.terminal_receipt\s*=\s*Some\(\s*self\.project_terminal_receipt\(REASON_TARGET_PERMISSION_REVOKED/s' "$SESSION" \
   'permission revocation must publish a RemoteApp terminal receipt'
 require 'consent_revocation_terminates_session_and_blocks_input_activation' "$SESSION" \
   'consent revocation must have session-level terminal media/input regression coverage'
@@ -999,6 +999,16 @@ require 'display_interactive_without_input_consent_remains_view_only' "$INPUT" \
   'input policy tests must prove display interactive cannot enable key/pointer without input consent'
 require 'struct EffectiveRemoteDesktopInputPolicy' "$INPUT" \
   'input execution policy must be a typed core object, not raw JSON'
+require_multiline 'm/struct PointerInputFrame \{[\s\S]*sent_at_ms: Option<u64>/s' "$INPUT" \
+  'daemon pointer input frame schema must accept frontend client send timestamps'
+require_multiline 'm/struct KeyInputFrame \{[\s\S]*sent_at_ms: Option<u64>/s' "$INPUT" \
+  'daemon key input frame schema must accept frontend client send timestamps'
+require 'fn client_sent_at_ms\(&self\) -> Option<u64>' "$INPUT" \
+  'daemon input frame schema must expose client send timestamps for input observability'
+require 'validate_client_sent_at_ms' "$INPUT" \
+  'daemon input frame validation must bound client send timestamps'
+require 'MAX_CLIENT_SENT_AT_MS' "$INPUT" \
+  'daemon input timestamp bound must be explicit and centrally named'
 require 'fn apply_scope\(&mut self, input_scope: InputScope\)' "$INPUT" \
   'input policy must centralize scope-based disablement on the typed effective policy'
 require 'fn reject_reason\(' "$INPUT" \
@@ -1027,8 +1037,14 @@ require_multiline 'm/fn reject_reason\(\s*&self,.+?self\.input_scope == InputSco
   'view-only key/pointer rejection must report input_scope_unsupported'
 require_multiline 'm/InputRejectSample::new\(\s*outcome\.reason\.unwrap_or\("input_injection_failed"\),\s*rejected_count/s' "$INPUT" \
   'WebRTC input rejection diagnostics must use the policy-enforced apply outcome'
+require 'input_frame_applied_payload' "$INPUT" \
+  'WebRTC input applied events must use a centralized payload builder'
+require 'client_sent_at_ms' "$INPUT" \
+  'WebRTC input events must preserve frontend client send timestamp evidence when present'
 require 'BTreeMap<InputRejectSignature, PendingInputReject>' "$INPUT" \
   'input rejection coalescing must aggregate by signature instead of a single pending rejection'
+require 'input_frame_applied_payload_preserves_client_timestamp' "$INPUT" \
+  'input tests must prove applied input events preserve client send timestamp evidence'
 require 'input_reject_diagnostics_are_coalesced_across_interleaved_signatures' "$INPUT" \
   'PERF-07 must prove alternating invalid input signatures do not produce one diagnostic per frame'
 require 'InputTransportGuard::DirectWebRtc\(epoch\)' "$INPUT" \

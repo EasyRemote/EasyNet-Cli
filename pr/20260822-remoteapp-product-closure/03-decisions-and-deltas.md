@@ -557,3 +557,34 @@ Product effect:
 - This closes a silent-failure seam only; successful low-latency pointer and
   keyboard injection still needs real OS E2E evidence across supported
   platforms.
+
+## 2026-08-22 — Frontend input timestamps are part of the RemoteApp data-channel schema
+
+Decision:
+
+- The browser currently sends `sent_at_ms` on RemoteApp pointer/key frames.
+  Because the daemon parser uses `deny_unknown_fields`, that field must be an
+  explicit part of the RemoteApp input frame schema or real frontend input will
+  be rejected before policy and OS injection.
+- The field is input-plane observability metadata, not a new Axon Invocation
+  tuple field and not an authority decision.
+- The daemon must preserve strict unknown-field rejection for all other schema
+  drift.
+
+Implementation delta:
+
+- `PointerInputFrame` and `KeyInputFrame` accept optional `sent_at_ms`.
+- The daemon bounds the value to JavaScript-safe integer range.
+- Input applied/rejected session events preserve the value as
+  `client_sent_at_ms` when present.
+- Lifecycle/input and frontend boundary gates now pin the cross-repo schema
+  contract: frontend attaches `sent_at_ms`, daemon accepts it, and events
+  retain it for observability.
+
+Product effect:
+
+- Real frontend pointer/key input can now reach daemon policy and OS-injection
+  decisions instead of being rejected as an invalid frame solely because of
+  frontend metadata.
+- This is a required precondition for trustworthy input latency E2E, but it
+  does not itself prove successful low-latency OS injection.

@@ -170,6 +170,12 @@ Current frontend lifecycle evidence:
   before transport send. This closes the UI gating seam for requested
   interactive sessions that are correctly downgraded to view-only, while still
   leaving real OS input injection product evidence incomplete.
+- Daemon pointer/key input frame parsing now accepts the frontend's
+  `sent_at_ms` metadata while keeping strict `deny_unknown_fields` for other
+  schema drift. Input applied/rejected events preserve this as
+  `client_sent_at_ms`, so the actual data-channel path no longer rejects real
+  frontend frames before policy/OS-injection checks and has timestamp evidence
+  for later latency E2E.
 - Frontend watch_events recovery now consumes daemon input-plane events:
   `INPUT_CHANNEL_OPENED` with blocked activation and `INPUT_FRAME_REJECTED`.
   The UI status shows the daemon reason such as

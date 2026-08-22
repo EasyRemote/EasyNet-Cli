@@ -304,6 +304,8 @@ require 'view\.inputReadiness\.keyboardEnabled === true' "$PROTOCOL" \
   'frontend keyboard input gating must use daemon input_readiness keyboard readiness when present'
 require_multiline 'm/rdSendInput:\s*\(key,\s*frame\)\s*=>\s*\{(?:(?!bindCanvas).)*remoteDesktopInputFrameAllowed\(session,\s*frame\)/s' "$STORE" \
   'frontend rdSendInput must check session target tracking/input policy before sending frames'
+require 'sent_at_ms: Date\.now\(\)' "$STORE" \
+  'frontend rdSendInput must attach client send timestamp metadata expected by the daemon input schema'
 require 'remoteDesktopTargetRecoveryMessage' "$PROTOCOL" \
   'frontend must derive target-domain recovery messages from runtime target diagnostics'
 require_multiline 'm/const reason = remoteDesktopTargetRecoveryMessage\(view\)\s*\?\?\s*view\.productionBlockedReason/s' "$PROTOCOL" \

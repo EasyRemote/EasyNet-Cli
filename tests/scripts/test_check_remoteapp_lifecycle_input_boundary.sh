@@ -1038,6 +1038,11 @@ fn unsupported_input_channel_types_value() {}
 
 struct PointerInputFrame {
     target_geometry_revision: Option<u64>,
+    sent_at_ms: Option<u64>,
+}
+
+struct KeyInputFrame {
+    sent_at_ms: Option<u64>,
 }
 
 struct RemoteDesktopInputPolicy;
@@ -1114,6 +1119,17 @@ fn reject_unsupported_input_channel_frame() {}
 
 fn validate_input_frame() {
     reject_unsupported_input_channel_frame(frame)?;
+    validate_client_sent_at_ms(sent_at_ms)?;
+}
+
+const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
+
+fn validate_client_sent_at_ms() {}
+
+impl RemoteDesktopInputFrame {
+    fn client_sent_at_ms(&self) -> Option<u64> {
+        Some(sent_at_ms)
+    }
 }
 
 fn apply_input_frame_with_effective_policy() {
@@ -1133,7 +1149,12 @@ fn record_rejection() {
     InputRejectSample::new(
         outcome.reason.unwrap_or("input_injection_failed"),
         rejected_count,
-    );
+    )
+    .client_sent_at_ms(frame.client_sent_at_ms());
+}
+
+fn input_frame_applied_payload() {
+    let _ = client_sent_at_ms;
 }
 
 struct InputRejectSignature;
@@ -1182,6 +1203,9 @@ mod tests {
 
     #[test]
     fn pointer_input_rejects_stale_target_geometry_revision_before_os_injection() {}
+
+    #[test]
+    fn input_frame_applied_payload_preserves_client_timestamp() {}
 
     #[test]
     fn effective_input_policy_is_the_core_policy_object() {
