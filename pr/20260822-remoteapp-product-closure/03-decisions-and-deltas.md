@@ -951,3 +951,39 @@ Product effect:
   lifecycle artifact.
 - This still does not prove product completion; a live Browser/Tauri artifact
   against a real backend/runtime remains required.
+
+## 2026-08-23 — Network fallback needs live route artifact verification
+
+Decision:
+
+- Typed route models, ICE server projection, and frontend route labels are
+  necessary plumbing, but they do not prove that direct, STUN srflx, TURN relay,
+  or EasyNet relay paths are reachable.
+- Product evidence must come from a real two-device, network-namespace, or
+  deployment runner and must include the selected WebRTC candidate pair,
+  rendered media, redacted credentials, public RemoteApp session abilities, and
+  terminal receipts for every route scenario.
+
+Implementation delta:
+
+- Added `tools/scripts/remoteapp-network-fallback-e2e.sh`.
+- The verifier accepts `--evidence-json` or `--runner-cmd` only in explicit
+  `--run` mode and emits bounded JSON/Markdown reports.
+- Evidence must state `proof_mode=real_network_fallback_matrix`,
+  `component_mock=false`, `real_backend_runtime=true`, and
+  `product_complete_claim=false`.
+- Evidence must include passing `direct`, `stun_srflx`, `turn_relay`, and
+  `easynet_relay` scenarios with selected Resource URA subject binding,
+  connected/completed ICE state, route-specific candidate evidence, rendered
+  media, and visible terminal receipts.
+- The verifier rejects raw credential/secret fields and requires redaction
+  markers on all scenarios.
+- Product-closure gates now require this verifier and reject missing route
+  coverage or missing terminal/media proof.
+
+Product effect:
+
+- The repository now has a precise contract for the missing network fallback
+  artifact.
+- This still does not prove product completion; live direct/STUN/TURN/EasyNet
+  relay artifacts against real backend/runtime infrastructure remain required.

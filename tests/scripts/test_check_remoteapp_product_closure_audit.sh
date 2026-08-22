@@ -20,6 +20,7 @@ mkdir -p \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
@@ -60,6 +61,24 @@ fi
 grep -q "cross-device smoke must preserve product non-claims" /tmp/check-remoteapp-product-closure-cross-device-gate.out || \
   fail "expected cross-device smoke non-claim failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
+perl -0pi -e 's#real_network_fallback_matrix#route_model_source_check#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-proof-mode.out 2>&1; then
+  fail "checker accepted network fallback verifier without real network fallback proof mode"
+fi
+grep -q "network fallback verifier must require real network fallback proof mode" /tmp/check-remoteapp-product-closure-network-proof-mode.out || \
+  fail "expected network fallback proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
+perl -0pi -e 's#turn_relay#turn_model_only#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-turn.out 2>&1; then
+  fail "checker accepted network fallback verifier without TURN relay coverage"
+fi
+grep -q "network fallback verifier must require TURN relay route evidence" /tmp/check-remoteapp-product-closure-network-turn.out || \
+  fail "expected network fallback TURN relay failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 
 perl -0pi -e 's#real_browser_tauri_lifecycle#component_mock_lifecycle#g' \
   "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"

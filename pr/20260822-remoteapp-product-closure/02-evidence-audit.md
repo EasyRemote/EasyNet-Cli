@@ -262,6 +262,14 @@ Current frontend lifecycle evidence:
   NAT/relay gap visible instead of letting `webrtc ready` imply production
   network readiness. This is route observability evidence, not real
   direct/STUN/TURN/EasyNet relay deployment evidence.
+- `tools/scripts/remoteapp-network-fallback-e2e.sh` now provides the network
+  fallback evidence verifier. It accepts evidence from a real two-device,
+  network-namespace, or deployment runner and requires direct, STUN srflx, TURN
+  relay, and EasyNet relay scenarios with connected WebRTC selected
+  candidate-pair evidence, rendered media, public RemoteApp session abilities,
+  selected Resource URA subject binding, redacted credentials, and visible
+  terminal receipts. Self-test validates only the contract; a live network
+  artifact remains required.
 - Frontend session details now render a compact media quality summary from
   daemon/browser `mediaStats`: bitrate, outbound FPS, aggregate drops, and RTP
   sender backpressure appear as status such as
@@ -370,7 +378,8 @@ Missing or insufficient product evidence:
   transparency, not host-audio implementation evidence.
 - Multi-display application capture or explicit product unsupported flow.
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
-- Real STUN/TURN/EasyNet relay reachability matrix.
+- Real direct/STUN/TURN/EasyNet relay reachability matrix using
+  `remoteapp-network-fallback-e2e.sh` with a live artifact.
   Current source/product-path progress: daemon transport views now project
   browser `client_ice_servers`, and the frontend WebRTC path consumes that
   session-projected config instead of hard-coding an empty ICE server list.

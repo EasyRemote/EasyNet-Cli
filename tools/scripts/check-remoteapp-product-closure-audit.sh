@@ -7,6 +7,7 @@ AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
 FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
@@ -43,6 +44,7 @@ reject() {
 [[ -f "$MATRIX" ]] || fail "missing RemoteApp product readiness matrix"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
 [[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
 [[ -f "$SESSION_CANCEL" ]] || fail "missing RemoteApp session cancel E2E harness"
@@ -152,6 +154,8 @@ require 'Disconnect/reconnect, session resume, consent revoke, cancel, timeout' 
   'audit must cover recovery and lifecycle closure'
 require 'NAT/relay/WebRTC/direct fallback network paths' "$AUDIT" \
   'audit must cover real network paths'
+require 'remoteapp-network-fallback-e2e\.sh' "$AUDIT" \
+  'audit must record the network fallback evidence verifier'
 require 'Frontend UI can discover, authorize, start, display, control, and end session' "$AUDIT" \
   'audit must cover frontend full lifecycle'
 require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$AUDIT" \
@@ -217,6 +221,8 @@ require 'real OS' "$PLAN" \
   'plan evidence audit must preserve real OS non-claims'
 require 'NAT/STUN/TURN relay' "$PLAN" \
   'plan evidence audit must preserve cross-device non-claims'
+require 'remoteapp-network-fallback-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the network fallback verifier'
 
 require 'docker-two-node-easyremote-cli-e2e.sh' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must compose the two-node routing E2E'
@@ -228,6 +234,40 @@ require 'service_owner_projection_failed' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must classify current Service owner projection failures'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
+require 'real_network_fallback_matrix' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require real network fallback proof mode'
+require 'component_mock.*False|component_mock.*false' "$NETWORK_FALLBACK" \
+  'network fallback verifier must reject component mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require real backend/runtime evidence'
+require 'direct' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require direct route evidence'
+require 'stun_srflx' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require STUN srflx route evidence'
+require 'turn_relay' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require TURN relay route evidence'
+require 'easynet_relay' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require EasyNet relay route evidence'
+require 'selected_candidate_pair' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect selected candidate-pair evidence'
+require 'remote_desktop\.create_session' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect create_session evidence'
+require 'remote_desktop\.attach' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect attach evidence'
+require 'remote_desktop\.watch_events' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect watch_events evidence'
+require 'remote_desktop\.end_session' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect end_session evidence'
+require 'frames_rendered' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect rendered media evidence'
+require 'terminal_receipt' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect terminal receipt evidence'
+require 'credentials_redacted' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require credential redaction'
+require 'raw credential/secret fields are forbidden' "$NETWORK_FALLBACK" \
+  'network fallback verifier must reject raw credential fields'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$NETWORK_FALLBACK" \
+  'network fallback verifier must reject product completion claims'
 require 'real_browser_tauri_lifecycle' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must require real lifecycle proof mode'
 require 'component_mock.*False|component_mock.*false' "$FRONTEND_BROWSER_LIFECYCLE" \
