@@ -78,7 +78,27 @@ export async function rdCreate(entry: Entry, env: { resource?: { resource_ura: s
   })
   assertRemoteDesktopCreateSessionIdentity(result)
   const view = projectRemoteDesktopView(result)
+  const negotiated = view
+  startRemoteDesktopEventWatch(key, negotiated)
   return view
+}
+
+function stopRemoteDesktopEventWatch(key: string) {
+  refsFor(key).remoteDesktopEventsAbort?.abort()
+}
+
+function startRemoteDesktopEventWatch(key: string, view: RemoteDesktopView) {
+  const causalContext = remoteDesktopSessionCausalContext(view)
+  return invokeMediaStream(
+    'remote_desktop.watch_events',
+    {
+      deviceUra: entries[key].deviceUra,
+      subjectURA: view.subjectUra,
+      causalContext,
+      args: { session_id: view.sessionId, session_token: view.sessionToken },
+      timeoutMs: 0,
+    },
+  )
 }
 
 export const actions = {
@@ -296,6 +316,18 @@ cat >"$FRONTEND_SRC/store/media-channel-store.test.ts" <<'TS'
 it('reports missing remote desktop session subject before projection fallback', async () => {
   expect(entry.error).toContain('remote_desktop.create_session response did not include subject_ura')
 })
+
+it('runs remote desktop WebRTC sessions with a target-scoped event watcher', async () => {
+  expect(mocks.invokeMediaStream).toHaveBeenCalledWith(
+    'remote_desktop.watch_events',
+    expect.objectContaining({
+      subjectURA: screenResource.resource_ura,
+      args: { session_id: 'rd-1', session_token: 'session-token' },
+      timeoutMs: 0,
+    }),
+    expect.anything(),
+  )
+})
 TS
 
 cat >"$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx" <<'TSX'
@@ -386,6 +418,15 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/if \\(pc\\.connectionState === 'connected'\\) reportClientMediaState\\(key, 'presenting'\\)/if (pc.connectionState === 'connected') updateWebRtcStatus()/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/'remote_desktop\\.watch_events'/'remote_desktop.show_session'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing watch_events session stream" >&2
+  exit 1
+fi
+perl -0pi -e "s/'remote_desktop\\.show_session'/'remote_desktop.watch_events'/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e 's/remoteDesktopInputFrameAllowed\(session, frame\)/true/' \

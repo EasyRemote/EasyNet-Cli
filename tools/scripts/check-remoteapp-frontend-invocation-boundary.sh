@@ -129,6 +129,14 @@ require 'remote desktop did not present a frame within' "$STORE" \
   'frontend must fail closed when decoded-frame presentation is not observed'
 reject_multiline '/pc\.connectionState === '\''connected'\''[\s\S]{0,240}reportClientMediaState\(key, '\''presenting'\''\)/s' "$STORE" \
   'frontend must not report production presentation from peer-connection connected alone'
+require 'stopRemoteDesktopEventWatch' "$STORE" \
+  'frontend must own remote desktop watch_events stream teardown'
+require 'remoteDesktopEventsAbort\?\.abort\(\)' "$STORE" \
+  'frontend must abort the remote desktop watch_events stream on close/end'
+require 'startRemoteDesktopEventWatch\(key, negotiated\)' "$STORE" \
+  'frontend must start watch_events after WebRTC session negotiation'
+require_multiline 'm/invokeMediaStream\(\s*'\''remote_desktop\.watch_events'\''[\s\S]*subjectURA: view\.subjectUra[\s\S]*causalContext[\s\S]*args: \{ session_id: view\.sessionId, session_token: view\.sessionToken \}[\s\S]*timeoutMs: 0/s' "$STORE" \
+  'frontend must subscribe to remote_desktop.watch_events with the negotiated session subject, causal context, and token'
 
 require 'resource\.refresh_remote_targets' "$ACCESS" \
   'frontend display/application/window picker must use live resource.refresh_remote_targets'
@@ -197,6 +205,8 @@ require 'subjectURA: .*streams/display-1' "$INVOCATION_TEST" \
   'frontend invocation tests must prove selected resource subject propagation'
 require 'reports missing remote desktop session subject before projection fallback' "$STORE_TEST" \
   'frontend store tests must prove create_session subject_ura is checked before projection'
+require 'runs remote desktop WebRTC sessions with a target-scoped event watcher' "$STORE_TEST" \
+  'frontend store tests must prove watch_events is bound to the negotiated session subject'
 require 'projects target diagnostics and tracking state from the runtime session view' "$PROTOCOL_TEST" \
   'frontend protocol tests must cover latest target diagnostic and tracking projection'
 require 'does not treat ordinary view-only input state as target recovery failure' "$PROTOCOL_TEST" \
