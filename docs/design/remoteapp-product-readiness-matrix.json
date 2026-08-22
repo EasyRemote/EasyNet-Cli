@@ -181,7 +181,9 @@
         "frontend exposes Retry session for daemon retry_session guidance and allows create_session after retained terminal receipts",
         "frontend preserves non-terminal RemoteApp sessions across device-offline presence drops, validates with remote_desktop.show_session on resume, and rebinds WebRTC without ending the daemon session on failed rebind",
         "canonical SDK cancel/timeout semantics",
-        "remoteapp-crash-restart-recovery-e2e.sh verifier for real daemon/plugin crash and restart recovery artifacts"
+        "remoteapp-crash-restart-recovery-e2e.sh verifier for real daemon/plugin crash and restart recovery artifacts",
+        "2026-08-23 live daemon kill/restart probe returned session_not_found for rd-crash-probe-45956, proving active RemoteApp sessions are not yet rehydrated after daemon crash",
+        "RemoteDesktopRecoveryStore and RemoteDesktopRecoverySnapshot now define the daemon-local durable snapshot contract with round-trip and corrupt-snapshot fail-closed tests"
       ],
       "required_evidence_before_product_complete": [
         "long-outage and network transport reconnect handoff E2E",
@@ -198,7 +200,8 @@
       ],
       "non_claims": [
         "taxonomy and unit coverage do not prove recovery product behavior",
-        "the crash/restart recovery verifier self-test does not prove live process recovery"
+        "the crash/restart recovery verifier self-test does not prove live process recovery",
+        "the recovery snapshot store contract alone does not prove startup rehydration, media reattachment, or full crash/restart recovery"
       ]
     },
     {

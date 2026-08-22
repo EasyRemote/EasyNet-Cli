@@ -42,6 +42,7 @@ pub(crate) mod session_events;
 pub(crate) mod session_identity;
 pub(crate) mod session_lease;
 pub(crate) mod session_lifecycle;
+pub(crate) mod session_recovery;
 pub(crate) mod session_signaling;
 pub(crate) mod session_state;
 pub(crate) mod session_store;

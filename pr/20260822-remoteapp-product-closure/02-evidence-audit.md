@@ -514,6 +514,20 @@ Current frontend lifecycle evidence:
   session, original terminal receipt replay, endpoint readiness, and visible
   terminal receipts. Self-test validates only the contract; a live recovery
   artifact remains required.
+- Latest live crash/restart probe:
+  `target/e2e/remoteapp-crash-restart-probe/20260822-223509-45956`.
+  The probe killed the daemon with active RemoteApp session
+  `rd-crash-probe-45956`, restarted it, and public
+  `remote_desktop.show_session` returned `session_not_found`. This is
+  authoritative negative evidence: active RemoteApp sessions are not currently
+  rehydrated after daemon crash.
+- `plugins/remote-desktop/src/session_recovery.rs` now defines
+  `RemoteDesktopRecoveryStore` and `RemoteDesktopRecoverySnapshot` as the
+  daemon-local durable snapshot contract for the next recovery implementation
+  slice. The store has round-trip, corrupt-snapshot fail-closed, path-safe
+  session id, and selected Resource URA validation tests. This contract is not
+  yet wired into plugin startup rehydration and does not satisfy the live
+  crash/restart verifier.
 
 Missing or insufficient product evidence:
 

@@ -173,6 +173,17 @@ explicit stale control/invocation socket cleanup, endpoint readiness, selected
 Resource URA subject binding, and visible terminal receipts. Its self-test
 proves only the contract validator; it is not real crash/restart recovery
 evidence.
+The latest live crash/restart probe,
+`target/e2e/remoteapp-crash-restart-probe/20260822-223509-45956`, killed the
+daemon with active RemoteApp window session `rd-crash-probe-45956` and then
+restarted it. Public `remote_desktop.show_session` returned
+`session_not_found` for the original session id. This proves the current
+implementation does not rehydrate active RemoteApp sessions after daemon
+crash. The new `RemoteDesktopRecoveryStore` /
+`RemoteDesktopRecoverySnapshot` contract in
+`plugins/remote-desktop/src/session_recovery.rs` is only the first durable
+snapshot layer; it is not yet wired into plugin startup rehydration or the full
+crash/restart verifier.
 The latest local run,
 `target/e2e/frontend-remoteapp-product-flow/20260822-044248-69775/report.md`,
 passed the bounded single-machine product-flow bundle after the local Hub was

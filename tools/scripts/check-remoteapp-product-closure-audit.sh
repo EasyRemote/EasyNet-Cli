@@ -21,6 +21,7 @@ SESSION_RESUME="$ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
+SESSION_RECOVERY="$ROOT/plugins/remote-desktop/src/session_recovery.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
@@ -65,6 +66,7 @@ reject() {
 [[ -f "$CRASH_RESTART_RECOVERY" ]] || fail "missing RemoteApp crash/restart recovery evidence verifier"
 [[ -f "$LIFECYCLE_HARNESS_LIB" ]] || fail "missing RemoteApp lifecycle harness helper library"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
+[[ -f "$SESSION_RECOVERY" ]] || fail "missing RemoteApp session recovery snapshot store"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
@@ -293,6 +295,10 @@ require 'lease refresh' "$AUDIT" \
   'audit must describe session resume as lease refresh evidence'
 require 'remoteapp-crash-restart-recovery-e2e\.sh' "$AUDIT" \
   'audit must record the crash/restart recovery evidence verifier'
+require 'session_not_found' "$AUDIT" \
+  'audit must record current live crash/restart session loss evidence'
+require 'RemoteDesktopRecoveryStore' "$AUDIT" \
+  'audit must record the new RemoteApp recovery store contract'
 
 require 'Full interactive RemoteApp product: incomplete' "$PLAN" \
   'plan evidence audit must keep the goal open'
@@ -312,6 +318,10 @@ require 'Crash/restart recovery E2E' "$PLAN" \
   'plan evidence audit must list missing live crash/restart recovery evidence'
 require 'remoteapp-crash-restart-recovery-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the crash/restart recovery verifier'
+require 'session_not_found' "$PLAN" \
+  'plan evidence audit must preserve live crash/restart session loss evidence'
+require 'RemoteDesktopRecoveryStore' "$PLAN" \
+  'plan evidence audit must record the recovery store contract'
 require 'Cross-platform capture implementation/evidence using' "$PLAN" \
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'remoteapp-cross-platform-capture-e2e\.sh' "$PLAN" \
@@ -723,6 +733,22 @@ require 'terminal_receipt' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must reject product completion claims'
+require 'RemoteDesktopRecoverySnapshot' "$SESSION_RECOVERY" \
+  'session recovery store must define a versioned durable snapshot contract'
+require 'RemoteDesktopRecoveryStore' "$SESSION_RECOVERY" \
+  'session recovery store must define the daemon-local durable store'
+require 'schema_version' "$SESSION_RECOVERY" \
+  'session recovery snapshot must be schema-versioned'
+require 'selected_resource_ura' "$SESSION_RECOVERY" \
+  'session recovery snapshot must bind the selected Resource URA'
+require 'terminal_receipt' "$SESSION_RECOVERY" \
+  'session recovery snapshot must preserve terminal receipt projection'
+require 'recovery_store_round_trips_valid_snapshot' "$SESSION_RECOVERY" \
+  'session recovery store must have snapshot round-trip coverage'
+require 'recovery_store_fails_closed_for_corrupt_snapshot' "$SESSION_RECOVERY" \
+  'session recovery store must fail closed for corrupt snapshots'
+require 'recovery_store_rejects_path_unsafe_session_ids' "$SESSION_RECOVERY" \
+  'session recovery store must reject path-unsafe session ids'
 
 require 'terminal_receipt: Option<Value>' "$SESSION" \
   'session aggregate must store a single terminal receipt projection'
