@@ -34,10 +34,10 @@ Current frontend lifecycle evidence:
 - `check-remoteapp-frontend-invocation-boundary.sh` now gates both the
   watch_events subscription and the recovery-event consumption contract.
 - `tools/scripts/frontend-remoteapp-product-flow-e2e.sh` now provides the
-  combined frontend/host product-flow harness entrypoint: explicit product
-  runtime readiness preflight, frontend typecheck, `DeviceMediaAccess` UI flow,
-  host permission-subject preflight, target picker freshness, decoded-frame
-  WebRTC, and view-only input safety. An explicit --run report remains required
+  combined frontend/host product-flow harness entrypoint: explicit Hub API
+  readiness preflight, product runtime readiness preflight, frontend typecheck,
+  `DeviceMediaAccess` UI flow, host permission-subject preflight, target picker
+  freshness, decoded-frame WebRTC, and view-only input safety. An explicit --run report remains required
   before treating it as environment evidence; the default skipped
   report only proves the harness contract exists.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
@@ -65,6 +65,16 @@ Current frontend lifecycle evidence:
   `hub_api_endpoint=http://localhost:8080` and no frontend/host evidence steps
   recorded. That is the correct current product evidence shape while the local
   Hub API remains unavailable.
+- `tools/scripts/hub-api-readiness-preflight.sh` now isolates the first upstream
+  product gate: runtime status must expose the Hub API endpoint, Docker must be
+  reachable, and `${hub_api_endpoint}/api/v1/health` must respond before daemon,
+  frontend, host capture, media, or input evidence can run.
+- Latest local `--run` after adding the Hub API preflight now fails at
+  `hub-api-readiness-preflight` only. The nested report shows
+  `hub_api_endpoint=http://localhost:8080`, `docker.status=unreachable`, and
+  `health=null`; no daemon, frontend, host capture, media, or input evidence is
+  recorded. This is the current correct product evidence shape while Docker and
+  the local Hub API remain unavailable.
 
 Missing or insufficient product evidence:
 

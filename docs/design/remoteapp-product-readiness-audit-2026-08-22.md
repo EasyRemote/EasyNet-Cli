@@ -38,11 +38,11 @@ surface drives the picker-to-session-to-end UI path, starts
 `remote_desktop.watch_events` after negotiated WebRTC setup, and maps
 degraded/permission-revoked session events into recovery UI/transport state.
 The frontend product-flow script is a runnable product-flow harness entrypoint:
-with an explicit `--run`, it first verifies product runtime readiness for Hub
-API plus daemon control/invocation, then composes frontend typecheck/UI flow
-coverage with host permission-subject, target-freshness, decoded-frame, and
-view-only input E2E harnesses. A skipped/self-test report from that entrypoint
-is only harness evidence, not product completion.
+with an explicit `--run`, it first verifies Hub API reachability, then product
+runtime readiness for daemon control/invocation, then composes frontend
+typecheck/UI flow coverage with host permission-subject, target-freshness,
+decoded-frame, and view-only input E2E harnesses. A skipped/self-test report
+from that entrypoint is only harness evidence, not product completion.
 They do not prove every operating system, network topology, input mode, codec
 path, and frontend lifecycle is product-ready.
 

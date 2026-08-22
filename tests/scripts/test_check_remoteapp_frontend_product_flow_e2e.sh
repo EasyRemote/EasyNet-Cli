@@ -27,6 +27,8 @@ mkdir -p \
 
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
 cp "$HARNESS" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/hub-api-readiness-preflight.sh" \
+  "$SB/tools/scripts/hub-api-readiness-preflight.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh" \
   "$SB/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
@@ -46,6 +48,42 @@ chmod +x "$SB/tools/scripts/"*.sh
 CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
 CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step hub-api-readiness-preflight run_hub_api_readiness_preflight/# hub api readiness preflight removed/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without Hub API readiness preflight step"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step hub-api-readiness-preflight run_hub_api_readiness_preflight\nrun_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight/run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight\nrun_step hub-api-readiness-preflight run_hub_api_readiness_preflight/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness that checks daemon before Hub API"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/hub-api-readiness-preflight.sh" \
+  "$SB/tools/scripts/hub-api-readiness-preflight.sh.good"
+perl -0pi -e 's#/api/v1/health#/debug-only-health#g' \
+  "$SB/tools/scripts/hub-api-readiness-preflight.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Hub API preflight without canonical health endpoint"
+fi
+mv "$SB/tools/scripts/hub-api-readiness-preflight.sh.good" \
+  "$SB/tools/scripts/hub-api-readiness-preflight.sh"
 
 cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"

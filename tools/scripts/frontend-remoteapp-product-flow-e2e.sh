@@ -20,6 +20,7 @@ PERMISSION_SUBJECT="$SELF_DIR/host-remoteapp-permission-subject-e2e.sh"
 TARGET_FRESHNESS="$SELF_DIR/host-remoteapp-target-picker-freshness-e2e.sh"
 DECODED_FRAME="$SELF_DIR/host-remoteapp-decoded-frame-e2e.sh"
 VIEW_ONLY_INPUT="$SELF_DIR/host-remoteapp-view-only-input-safety-e2e.sh"
+HUB_API_PREFLIGHT="$SELF_DIR/hub-api-readiness-preflight.sh"
 
 usage() {
   cat <<'USAGE'
@@ -43,13 +44,14 @@ Environment:
                         and delegated host E2E harnesses.
 
 The --run path performs:
-  1. Product runtime readiness preflight for Hub API + daemon control/invocation.
-  2. Frontend TypeScript check.
-  3. Frontend DeviceMediaAccess RemoteApp UI flow test.
-  4. Host permission subject preflight with screen-capture permission granted.
-  5. Host target picker freshness with a sentinel fixture.
-  6. Host decoded-frame WebRTC E2E for window/application targets.
-  7. Host view-only input safety for app/window targets.
+  1. Hub API readiness preflight.
+  2. Product runtime readiness preflight for daemon control/invocation.
+  3. Frontend TypeScript check.
+  4. Frontend DeviceMediaAccess RemoteApp UI flow test.
+  5. Host permission subject preflight with screen-capture permission granted.
+  6. Host target picker freshness with a sentinel fixture.
+  7. Host decoded-frame WebRTC E2E for window/application targets.
+  8. Host view-only input safety for app/window targets.
 
 This harness still does not claim product completion by itself; it produces one
 bounded E2E evidence bundle for the frontend + daemon + host RemoteApp flow.
@@ -90,6 +92,7 @@ steps = []
 failed_step = None
 failed_step_stderr = None
 step_order = [
+    "hub-api-readiness-preflight",
     "product-runtime-readiness-preflight",
     "frontend-typecheck",
     "frontend-remoteapp-ui-flow",
@@ -137,6 +140,7 @@ report = {
     "evidence_contract": [
         "frontend TypeScript check",
         "DeviceMediaAccess RemoteApp UI flow",
+        "hub api readiness preflight",
         "product runtime readiness preflight",
         "host permission subject preflight",
         "host target picker freshness",
@@ -277,8 +281,14 @@ run_view_only_input_kind() {
     --out-dir "$OUT_DIR/host-view-only-input-$kind"
 }
 
+run_hub_api_readiness_preflight() {
+  "$HUB_API_PREFLIGHT" --run --out-dir "$OUT_DIR/hub-api-readiness-preflight"
+}
+
 if [[ "$SELF_TEST" -eq 1 ]]; then
   bash -n "$0"
+  grep -q 'hub-api-readiness-preflight.sh' "$0"
+  grep -q 'run_hub_api_readiness_preflight' "$0"
   grep -q 'DeviceMediaAccess.test.tsx' "$0"
   grep -q 'npx tsc --noEmit' "$0"
   grep -q 'run_product_runtime_readiness_preflight' "$0"
@@ -312,6 +322,7 @@ fi
   exit 1
 }
 
+run_step hub-api-readiness-preflight run_hub_api_readiness_preflight
 run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight
 run_step frontend-typecheck run_frontend_tsc
 run_step frontend-remoteapp-ui-flow run_frontend_ui_flow

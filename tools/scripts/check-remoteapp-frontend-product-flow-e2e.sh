@@ -8,6 +8,7 @@ PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh
 TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 DECODED_FRAME="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 VIEW_ONLY_INPUT="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+HUB_API_PREFLIGHT="$ROOT/tools/scripts/hub-api-readiness-preflight.sh"
 FRONTEND_UI_TEST="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.test.tsx"
 AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
@@ -61,16 +62,28 @@ require_order() {
 [[ -f "$TARGET_FRESHNESS" ]] || fail "missing host target picker freshness E2E harness"
 [[ -f "$DECODED_FRAME" ]] || fail "missing host decoded-frame E2E harness"
 [[ -f "$VIEW_ONLY_INPUT" ]] || fail "missing host view-only input safety E2E harness"
+[[ -f "$HUB_API_PREFLIGHT" ]] || fail "missing Hub API readiness preflight harness"
 [[ -f "$FRONTEND_UI_TEST" ]] || fail "missing frontend RemoteApp UI flow test"
 [[ -f "$AUDIT" ]] || fail "missing RemoteApp product readiness audit"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 
 bash "$HARNESS" --self-test >/dev/null
+bash "$HUB_API_PREFLIGHT" --self-test >/dev/null
+require '/api/v1/health' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must probe the canonical backend health endpoint'
+require 'Docker daemon is not reachable' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must classify Docker-daemon unreachability explicitly'
+require 'does not start Docker' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must stay read-only and never start Docker implicitly'
 
 require 'npx tsc --noEmit' "$HARNESS" \
   'product-flow harness must run frontend TypeScript checks'
 require 'npm test -- src/components/easynet/DeviceMediaAccess\.test\.tsx' "$HARNESS" \
   'product-flow harness must run DeviceMediaAccess RemoteApp UI flow coverage'
+require 'hub-api-readiness-preflight\.sh' "$HARNESS" \
+  'product-flow harness must invoke Hub API readiness preflight'
+require 'run_step hub-api-readiness-preflight run_hub_api_readiness_preflight' "$HARNESS" \
+  'product-flow harness must execute Hub API readiness as the first product-flow gate'
 require 'run_product_runtime_readiness_preflight' "$HARNESS" \
   'product-flow harness must run an explicit product runtime readiness preflight'
 require 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' "$HARNESS" \
@@ -85,6 +98,8 @@ require 'connection\.failure=' "$HARNESS" \
   'product-flow runtime readiness preflight must report connection failure codes'
 require 'hub_api_endpoint=' "$HARNESS" \
   'product-flow runtime readiness preflight must report the Hub API endpoint used for credential verification'
+require_order 'run_step hub-api-readiness-preflight run_hub_api_readiness_preflight' 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' "$HARNESS" \
+  'product-flow must check Hub API before daemon runtime readiness'
 require_order 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' 'run_step frontend-typecheck run_frontend_tsc' "$HARNESS" \
   'product-flow report order must put runtime readiness before frontend checks'
 require 'host-remoteapp-permission-subject-e2e\.sh' "$HARNESS" \
