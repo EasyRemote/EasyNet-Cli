@@ -126,6 +126,16 @@ Current frontend lifecycle evidence:
   because the local volume was full from regenerated Rust build artifacts.
   This is external environment evidence only. It does not contradict the unit
   fix, and it does not prove cross-device product readiness.
+- The cross-device product smoke harness now fails before child E2Es with a
+  structured report when the report filesystem lacks sufficient free space or
+  when `docker info` hangs/fails. Each child E2E is also bounded by a step
+  timeout. This keeps cross-device evidence auditable: environment failures
+  remain failed reports with explicit reasons instead of indefinite hangs or
+  missing `result.json` files.
+- Latest local structured environment report:
+  `target/e2e/remoteapp-cross-device-product-smoke/20260822-051119-57565/report.json`
+  failed before child E2Es with reason `docker info timed out after 3s` and
+  both cross-device routing and synthetic media coverage marked false.
 
 Missing or insufficient product evidence:
 

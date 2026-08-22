@@ -31,6 +31,58 @@ PY
 grep -q "SKIPPED" /tmp/remoteapp-cross-device-smoke-default.out || \
   fail "default mode must be explicit skipped evidence, not a pass"
 
+DISK_FAIL_DIR="$OUT_DIR/disk-fail"
+if EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_MIN_FREE_KIB=999999999999 \
+  "$SCRIPT" --run --out-dir "$DISK_FAIL_DIR" \
+  >/tmp/remoteapp-cross-device-smoke-disk.out \
+  2>/tmp/remoteapp-cross-device-smoke-disk.err; then
+  fail "run mode must fail before child E2Es when report filesystem lacks free space"
+fi
+
+python3 - "$DISK_FAIL_DIR/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report["status"] == "failed"
+assert "insufficient free space" in report["reason"]
+assert report["coverage"]["cross_device_hub_routing"] is False
+assert report["coverage"]["synthetic_stream_bidi_carrier"] is False
+PY
+
+FAKE_BIN="$OUT_DIR/fake-bin"
+mkdir -p "$FAKE_BIN"
+cat >"$FAKE_BIN/docker" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "info" ]]; then
+  sleep 5
+  exit 0
+fi
+exit 1
+SH
+chmod +x "$FAKE_BIN/docker"
+
+DOCKER_FAIL_DIR="$OUT_DIR/docker-fail"
+if PATH="$FAKE_BIN:$PATH" \
+  EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_MIN_FREE_KIB=1 \
+  EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_DOCKER_INFO_TIMEOUT_SECONDS=1 \
+  "$SCRIPT" --run --out-dir "$DOCKER_FAIL_DIR" \
+  >/tmp/remoteapp-cross-device-smoke-docker.out \
+  2>/tmp/remoteapp-cross-device-smoke-docker.err; then
+  fail "run mode must fail with a report when docker info hangs"
+fi
+
+python3 - "$DOCKER_FAIL_DIR/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report["status"] == "failed"
+assert "docker info timed out" in report["reason"]
+assert report["coverage"]["cross_device_hub_routing"] is False
+assert report["coverage"]["synthetic_stream_bidi_carrier"] is False
+PY
+
 grep -q "docker-two-node-easyremote-cli-e2e.sh" "$SCRIPT" || \
   fail "cross-device gate must compose the two-node routing smoke"
 grep -q "docker-media-bidi-e2e.sh" "$SCRIPT" || \

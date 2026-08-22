@@ -14,6 +14,9 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 OUT_DIR="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_OUT_DIR:-$REPO_ROOT/target/e2e/remoteapp-cross-device-product-smoke/$(date -u +%Y%m%d-%H%M%S)-$$}"
 PROJECT_PREFIX="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_PROJECT_PREFIX:-easynet-remoteapp-cross-device}"
+MIN_FREE_KIB="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_MIN_FREE_KIB:-2097152}"
+DOCKER_INFO_TIMEOUT_SECONDS="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_DOCKER_INFO_TIMEOUT_SECONDS:-20}"
+STEP_TIMEOUT_SECONDS="${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_STEP_TIMEOUT_SECONDS:-900}"
 RUN=0
 KEEP=0
 BUILD=0
@@ -40,6 +43,13 @@ Options:
 Environment:
   EASYNET_RUNTIME_IMAGE
                     Runtime image reused by the child E2E gates.
+  EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_MIN_FREE_KIB
+                    Minimum free KiB required on the report filesystem before
+                    running child Docker E2Es. Defaults to 2097152 (2 GiB).
+  EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_DOCKER_INFO_TIMEOUT_SECONDS
+                    Timeout for the Docker readiness probe. Defaults to 20.
+  EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_STEP_TIMEOUT_SECONDS
+                    Timeout for each child E2E step. Defaults to 900.
 
 Evidence scope:
   This gate proves cross-device Hub routing and synthetic stream/bidi carrier
@@ -154,13 +164,89 @@ report = {
 PY
 }
 
+fail_preflight() {
+  local reason="$1"
+  echo "[remoteapp-cross-device-product-smoke] FAIL: $reason" >&2
+  write_report "failed" "$reason"
+  exit 1
+}
+
+require_free_space() {
+  python3 - "$OUT_DIR" "$MIN_FREE_KIB" <<'PY'
+import os
+import pathlib
+import sys
+
+out_dir = pathlib.Path(sys.argv[1])
+min_free_kib = int(sys.argv[2])
+probe_dir = out_dir if out_dir.exists() else out_dir.parent
+while not probe_dir.exists() and probe_dir != probe_dir.parent:
+    probe_dir = probe_dir.parent
+stat = os.statvfs(probe_dir)
+free_kib = (stat.f_bavail * stat.f_frsize) // 1024
+if free_kib < min_free_kib:
+    print(
+        "insufficient free space for cross-device smoke reports "
+        f"(path={probe_dir}, free_kib={free_kib}, required_kib={min_free_kib})"
+    )
+    raise SystemExit(1)
+PY
+}
+
+require_docker_ready() {
+  command -v docker >/dev/null 2>&1 || {
+    echo "docker CLI not found on PATH"
+    return 1
+  }
+  python3 - "$DOCKER_INFO_TIMEOUT_SECONDS" <<'PY'
+import subprocess
+import sys
+
+timeout = float(sys.argv[1])
+try:
+    result = subprocess.run(
+        ["docker", "info"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+    )
+except subprocess.TimeoutExpired:
+    print(f"docker info timed out after {timeout:g}s")
+    raise SystemExit(1)
+
+if result.returncode != 0:
+    stderr = (result.stderr or "").strip().splitlines()
+    detail = stderr[-1] if stderr else f"exit status {result.returncode}"
+    print(f"docker info failed: {detail}")
+    raise SystemExit(1)
+PY
+}
+
+run_command_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+  python3 - "$timeout_seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    raise SystemExit(subprocess.run(cmd, timeout=timeout).returncode)
+except subprocess.TimeoutExpired:
+    print(f"command timed out after {timeout:g}s: {' '.join(cmd)}", file=sys.stderr)
+    raise SystemExit(124)
+PY
+}
+
 run_step() {
   local name="$1"
   shift
   local step_dir="$OUT_DIR/$name"
   mkdir -p "$step_dir"
   echo "[remoteapp-cross-device-product-smoke] running $name"
-  if "$@" >"$step_dir/stdout.txt" 2>"$step_dir/stderr.txt"; then
+  if run_command_with_timeout "$STEP_TIMEOUT_SECONDS" "$@" >"$step_dir/stdout.txt" 2>"$step_dir/stderr.txt"; then
     printf '{"status":"passed","name":"%s"}\n' "$name" >"$step_dir/result.json"
     return 0
   fi
@@ -193,6 +279,11 @@ if [[ "$RUN" == "self-test" ]]; then
   grep -q "real_os_window_application_capture" "$0"
   grep -q "does not prove real OS window/application capture" "$0"
   grep -q -- "--skip-build" "$0"
+  grep -q "EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_MIN_FREE_KIB" "$0"
+  grep -q "EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_DOCKER_INFO_TIMEOUT_SECONDS" "$0"
+  grep -q "EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_STEP_TIMEOUT_SECONDS" "$0"
+  grep -q "docker info timed out" "$0"
+  grep -q "command timed out after" "$0"
   grep -q "write_report \"skipped\"" "$0"
   echo "remoteapp-cross-device-product-smoke self-test ok"
   exit 0
@@ -208,6 +299,14 @@ fi
 
 [[ -x "$ROUTING_SMOKE" ]] || { echo "missing routing smoke: $ROUTING_SMOKE" >&2; exit 1; }
 [[ -x "$MEDIA_SMOKE" ]] || { echo "missing media smoke: $MEDIA_SMOKE" >&2; exit 1; }
+
+if ! free_space_error="$(require_free_space 2>&1)"; then
+  fail_preflight "$free_space_error"
+fi
+
+if ! docker_error="$(require_docker_ready 2>&1)"; then
+  fail_preflight "$docker_error"
+fi
 
 CHILD_ARGS=()
 build_child_args "${PROJECT_PREFIX}-routing" "$OUT_DIR/cross-device-routing"

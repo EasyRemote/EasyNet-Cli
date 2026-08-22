@@ -29,3 +29,28 @@ Product effect:
   projection.
 - This does not claim product completion for real OS capture, input injection,
   audio/video, NAT/relay, or frontend end-to-end RemoteApp lifecycle.
+
+## 2026-08-22 — Cross-device smoke must produce bounded environment evidence
+
+Decision:
+
+- Cross-device RemoteApp evidence must be terminal and inspectable even when
+  the local Docker or filesystem environment is not ready.
+- A Docker probe hang and insufficient report filesystem space are environment
+  failures, not RemoteApp feature failures.
+
+Implementation delta:
+
+- The cross-device smoke now checks report filesystem free space before child
+  E2Es.
+- The Docker readiness probe uses a bounded `docker info` timeout.
+- Each child E2E step runs under a bounded timeout and writes a failed step
+  report on timeout/failure.
+
+Product effect:
+
+- Future `--run` attempts will either produce cross-device product evidence or
+  a structured failed report explaining why the environment could not execute
+  the product path.
+- This closes an evidence-chain seam only; it does not complete real capture,
+  input, audio/video, relay, or frontend lifecycle coverage.
