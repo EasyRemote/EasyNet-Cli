@@ -145,6 +145,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ended["state"], json!("closed"));
+        assert_eq!(
+            ended["terminal_receipt"]["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        let terminal_receipt = ended["terminal_receipt"].clone();
         assert!(
             ended.get("session_token").is_none(),
             "terminal session views must not leak session_token"
@@ -159,6 +164,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ended_again["already_ended"], json!(true));
+        assert_eq!(
+            ended_again["terminal_receipt"], terminal_receipt,
+            "idempotent end_session must return the original terminal receipt"
+        );
     }
 
     #[test]

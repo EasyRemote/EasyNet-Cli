@@ -83,6 +83,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSession {
     transport: RemoteDesktopTransportState,
     target: RemoteAppTargetBindingStateMachine,
     event_log: RemoteDesktopEventLog,
+    terminal_receipt: Option<Value>,
 }
 
 impl RemoteDesktopSession {
@@ -102,6 +103,7 @@ impl RemoteDesktopSession {
             signaling: RemoteDesktopSignalingState::new(),
             transport: RemoteDesktopTransportState::new(),
             event_log: RemoteDesktopEventLog::new(),
+            terminal_receipt: None,
         };
         session.push_projected_event(session_events::session_created());
         session.push_projected_event(session_events::capture_target_resolved(
@@ -377,17 +379,24 @@ impl RemoteDesktopSession {
         self.lifecycle.end_reason()
     }
 
-    fn push_event(&mut self, event_type: &str, payload: Value) {
+    pub(in crate::daemon::plugins::remote_desktop) fn terminal_receipt(&self) -> Option<Value> {
+        self.terminal_receipt.clone()
+    }
+
+    fn push_event(&mut self, event_type: &str, payload: Value) -> Value {
         self.event_log.push(
             self.profile.session_id(),
             self.lifecycle.state(),
             event_type,
             payload,
-        );
+        )
     }
 
-    fn push_projected_event(&mut self, event: session_events::RemoteDesktopEventProjection) {
-        self.push_event(event.event_type(), event.into_payload());
+    fn push_projected_event(
+        &mut self,
+        event: session_events::RemoteDesktopEventProjection,
+    ) -> Value {
+        self.push_event(event.event_type(), event.into_payload())
     }
 
     fn push_target_tracking_event(&mut self, event: TargetTrackingEmission) {
@@ -400,6 +409,31 @@ impl RemoteDesktopSession {
             payload["transport_epoch"] = transport_epoch.clone();
             self.push_event(event_type, payload);
         }
+    }
+
+    fn project_terminal_receipt(&self, reason: &str, terminal_event: &Value) -> Value {
+        json!({
+            "receipt_type": "remoteapp.session.terminal.v1",
+            "session_id": self.session_id(),
+            "subject_ura": self.subject_ura(),
+            "subject_type": self.subject_type().as_str(),
+            "binding_id": self.target.binding().binding_id(),
+            "binding_epoch": self.target.binding().binding_epoch(),
+            "target_identity_epoch": self.target.binding().target_identity_epoch(),
+            "target_geometry_revision": self.target.binding().target_geometry_revision(),
+            "media_source_epoch": self.target.binding().media_source_epoch(),
+            "consent_epoch": self.target.binding().consent_epoch(),
+            "reason": reason,
+            "reason_code": reason,
+            "terminal_event_id": terminal_event.get("event_id").cloned().unwrap_or(Value::Null),
+            "terminal_event_sequence": terminal_event.get("sequence").cloned().unwrap_or(Value::Null),
+            "terminal_event_type": terminal_event.get("event_type").cloned().unwrap_or(Value::Null),
+            "closed_at_ms": terminal_event.get("at_ms").cloned().unwrap_or(Value::Null),
+            "state": terminal_event.get("state").cloned().unwrap_or(Value::Null),
+            "state_proto": terminal_event.get("state_proto").cloned().unwrap_or(Value::Null),
+            "lifecycle_phase": self.lifecycle.phase().as_str(),
+            "terminal": true,
+        })
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation(
@@ -924,7 +958,8 @@ impl RemoteDesktopSession {
         self.consent.expire();
         self.lifecycle.terminate_closed(reason);
         self.touch();
-        self.push_projected_event(session_events::session_closed(reason));
+        let terminal_event = self.push_projected_event(session_events::session_closed(reason));
+        self.terminal_receipt = Some(self.project_terminal_receipt(reason, &terminal_event));
         self.event_log.close();
     }
 
@@ -935,10 +970,12 @@ impl RemoteDesktopSession {
         }
         self.consent.expire();
         self.lease.touch(now);
-        self.push_projected_event(session_events::session_expired(
+        let terminal_event = self.push_projected_event(session_events::session_expired(
             REASON_SESSION_EXPIRED,
             self.lease.expires_at_ms(),
         ));
+        self.terminal_receipt =
+            Some(self.project_terminal_receipt(REASON_SESSION_EXPIRED, &terminal_event));
         self.event_log.close();
     }
 
@@ -1178,6 +1215,25 @@ mod tests {
         assert_eq!(closed["payload"]["reason_code"], json!("caller_ended"));
         assert_eq!(closed["payload"]["recoverability"], json!("closed"));
         assert_eq!(closed["terminal"], json!(true));
+
+        let terminal_receipt = session
+            .terminal_receipt()
+            .expect("caller close must project a terminal receipt");
+        assert_eq!(
+            terminal_receipt["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        assert_eq!(terminal_receipt["session_id"], json!("rd-close-event"));
+        assert_eq!(terminal_receipt["reason_code"], json!("caller_ended"));
+        assert_eq!(
+            terminal_receipt["terminal_event_id"],
+            closed["event_id"].clone()
+        );
+        assert_eq!(
+            terminal_receipt["terminal_event_sequence"],
+            closed["sequence"].clone()
+        );
+        assert_eq!(terminal_receipt["terminal"], json!(true));
     }
 
     #[test]
@@ -1282,6 +1338,27 @@ mod tests {
         );
         assert_eq!(event["payload"]["recoverability"], json!("closed"));
         assert_eq!(event["terminal"], json!(true));
+
+        let terminal_receipt = session
+            .terminal_receipt()
+            .expect("lease expiry must project a terminal receipt");
+        assert_eq!(
+            terminal_receipt["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        assert_eq!(
+            terminal_receipt["reason_code"],
+            json!(REASON_SESSION_EXPIRED)
+        );
+        assert_eq!(
+            terminal_receipt["terminal_event_id"],
+            event["event_id"].clone()
+        );
+        assert_eq!(
+            terminal_receipt["terminal_event_sequence"],
+            event["sequence"].clone()
+        );
+        assert_eq!(terminal_receipt["terminal"], json!(true));
     }
 
     #[test]

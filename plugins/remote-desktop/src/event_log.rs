@@ -136,7 +136,7 @@ impl RemoteDesktopEventLog {
         state: RemoteDesktopSessionState,
         event_type: &str,
         payload: Value,
-    ) {
+    ) -> Value {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
         let target_field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
@@ -182,6 +182,10 @@ impl RemoteDesktopEventLog {
         if let Some(event_tx) = self.event_tx.as_ref() {
             let _ = event_tx.send(event);
         }
+        self.events
+            .back()
+            .expect("event log push appends one record")
+            .to_value()
     }
 
     fn compaction_diagnostic_event(
@@ -305,6 +309,24 @@ mod tests {
         TARGET_CHANGED_EVENT_TYPES,
     };
     use crate::daemon::plugins::remote_desktop::contract::RemoteDesktopSessionState;
+
+    #[test]
+    fn event_log_push_returns_the_stored_event_record() {
+        let mut log = RemoteDesktopEventLog::new();
+
+        let event = log.push(
+            "rd-event-return",
+            RemoteDesktopSessionState::Closed,
+            "SESSION_CLOSED",
+            json!({ "reason_code": "caller_ended" }),
+        );
+
+        assert_eq!(event["event_id"], json!("rd-event-return:1"));
+        assert_eq!(event["sequence"], json!(1));
+        assert_eq!(event["event_type"], json!("SESSION_CLOSED"));
+        assert_eq!(event["terminal"], json!(true));
+        assert_eq!(log.events(), vec![event]);
+    }
 
     #[test]
     fn event_log_retains_fixed_ring_and_monotonic_sequences_under_large_storm() {

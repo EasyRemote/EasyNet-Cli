@@ -1,5 +1,33 @@
 # Decisions and Deltas — RemoteApp Product Closure
 
+## 2026-08-22 — Session terminal facts must be explicit
+
+Decision:
+
+- RemoteApp session lifecycle needs a deterministic terminal fact for product
+  UI and E2E assertions.
+- The terminal fact belongs to the RemoteApp plugin session aggregate; it must
+  not redefine or replace Axon Invocation receipts.
+- Idempotent `end_session` on an already terminal row must return the original
+  terminal fact.
+
+Implementation delta:
+
+- `RemoteDesktopSession` now stores one `terminal_receipt` projection.
+- Explicit close and lease timeout populate the projection from the stored
+  terminal `SESSION_CLOSED` event.
+- Public session views expose `terminal_receipt`; active sessions project
+  `null`.
+- Product closure gates now reject removal of terminal receipt projection and
+  idempotent end-session receipt coverage.
+
+Product effect:
+
+- Frontend and E2E code can assert explicit close and timeout outcomes without
+  scanning the event log or guessing from `end_reason`.
+- This does not implement reconnect/session resume, consent-revoke E2E, or
+  crash/restart recovery.
+
 ## 2026-08-22 — Application capture must not widen beyond committed window set
 
 Decision:

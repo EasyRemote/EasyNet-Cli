@@ -13,13 +13,21 @@ fail() {
 
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
-mkdir -p "$SB/docs/design" "$SB/pr/20260822-remoteapp-product-closure" "$SB/tools/scripts"
+mkdir -p \
+  "$SB/docs/design" \
+  "$SB/pr/20260822-remoteapp-product-closure" \
+  "$SB/tools/scripts" \
+  "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-matrix.json" "$SB/docs/design/remoteapp-product-readiness-matrix.json"
 cp "$REPO_ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md" "$SB/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
+cp "$REPO_ROOT/plugins/remote-desktop/src/session.rs" "$SB/plugins/remote-desktop/src/session.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/view.rs" "$SB/plugins/remote-desktop/src/view.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/event_log.rs" "$SB/plugins/remote-desktop/src/event_log.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/mod.rs" "$SB/plugins/remote-desktop/src/handlers/mod.rs"
 
 perl -0pi -e 's/full RemoteApp product closure incomplete as of 2026-08-22/implemented; full acceptance verified 2026-08-16/' \
   "$SB/docs/design/remoteapp-targeted-session-spec.md"
@@ -46,6 +54,7 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "cross-device smoke must preserve product non-claims" /tmp/check-remoteapp-product-closure-cross-device-gate.out || \
   fail "expected cross-device smoke non-claim failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 
 python3 - "$SB/docs/design/remoteapp-product-readiness-matrix.json" <<'PY'
 import json
@@ -80,5 +89,23 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "missing requirement ids: frontend_lifecycle" /tmp/check-remoteapp-product-closure-matrix-missing.out || \
   fail "expected missing frontend lifecycle matrix failure"
+
+cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-matrix.json" "$SB/docs/design/remoteapp-product-readiness-matrix.json"
+perl -0pi -e 's/"terminal_receipt": session\.terminal_receipt\(\),//' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-terminal-view.out 2>&1; then
+  fail "checker accepted session view without terminal_receipt projection"
+fi
+grep -q "session view must expose terminal_receipt" /tmp/check-remoteapp-product-closure-terminal-view.out || \
+  fail "expected missing terminal_receipt view failure"
+
+cp "$REPO_ROOT/plugins/remote-desktop/src/view.rs" "$SB/plugins/remote-desktop/src/view.rs"
+perl -0pi -e 's/idempotent end_session must return the original terminal receipt/idempotent end_session does not check terminal receipt/' \
+  "$SB/plugins/remote-desktop/src/handlers/mod.rs"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-terminal-idempotent.out 2>&1; then
+  fail "checker accepted end_session without terminal receipt idempotency proof"
+fi
+grep -q "end_session tests must prove idempotent close returns the original terminal receipt" /tmp/check-remoteapp-product-closure-terminal-idempotent.out || \
+  fail "expected missing terminal receipt idempotency failure"
 
 echo "test_check_remoteapp_product_closure_audit: ok"

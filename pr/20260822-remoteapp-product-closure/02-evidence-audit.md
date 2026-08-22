@@ -170,6 +170,13 @@ Current frontend lifecycle evidence:
   before transport send. This closes the UI gating seam for requested
   interactive sessions that are correctly downgraded to view-only, while still
   leaving real OS input injection product evidence incomplete.
+- RemoteApp session views now expose a plugin-owned
+  `terminal_receipt` projection after explicit `end_session` and lease timeout.
+  The receipt binds the session id, target binding epochs, terminal reason, and
+  final `SESSION_CLOSED` event id/sequence. This gives frontend and E2E code a
+  deterministic session terminal fact instead of inferring closure from the
+  last event row. It is not a replacement for canonical Axon Invocation
+  receipts.
 - RemoteApp consent now separates media/session consent from input-control
   consent. `grant_consent` may mint an explicit `input_control` scoped ticket;
   `create_session` consumes that scope before target binding resolution. Only

@@ -60,6 +60,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "updated_at_ms": session.updated_at_ms(),
         "lease_expires_at_ms": session.lease_expires_at_ms(),
         "end_reason": session.end_reason(),
+        "terminal_receipt": session.terminal_receipt(),
         "video": video.clone(),
         "input_policy": input_policy.clone(),
         "input_readiness": input_readiness.clone(),
@@ -430,5 +431,34 @@ mod tests {
             view["production_readiness"]["audio_blocked_reason"],
             json!("host_audio_not_implemented")
         );
+    }
+
+    #[test]
+    fn session_view_projects_terminal_receipt_only_after_close() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-view-terminal-receipt",
+            "easynet:///r/acme/resource/display.terminal-receipt",
+            vec!["webrtc".into()],
+        ));
+
+        let active_view = serialize_session(&session);
+        assert_eq!(active_view["terminal_receipt"], json!(null));
+
+        session.close("caller_ended");
+        let terminal_view = serialize_session(&session);
+
+        assert_eq!(
+            terminal_view["terminal_receipt"]["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        assert_eq!(
+            terminal_view["terminal_receipt"]["session_id"],
+            json!("rd-view-terminal-receipt")
+        );
+        assert_eq!(
+            terminal_view["terminal_receipt"]["reason_code"],
+            json!("caller_ended")
+        );
+        assert_eq!(terminal_view["terminal_receipt"]["terminal"], json!(true));
     }
 }
