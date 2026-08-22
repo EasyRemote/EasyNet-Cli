@@ -996,7 +996,14 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/view_device.rs" <<'RS'
 fn device_capabilities_view() {
-    let production_target_subjects = production_backend.supported_subjects_value();
+    let production_backend = native_webrtc_backend_runtime_descriptor();
+    let production_ready = production_backend.production_ready();
+    let production_target_subjects = if production_ready {
+        production_backend.supported_subjects_value()
+    } else {
+        json!([])
+    };
+    let diagnostic_target_subjects = XCAP_OPENH264_WEBRTC_BACKEND.supported_subjects_value();
     json!({
         "unsupported_input_types": unsupported_input_channel_types_value(),
         "unsupported_capabilities": [
@@ -1011,6 +1018,17 @@ fn device_capabilities_view() {
         ],
         "metadata": {
             "production_target_subjects": production_target_subjects,
+            "diagnostic_target_subjects": diagnostic_target_subjects,
+            "production_target_subjects_source": if production_ready {
+                MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
+            } else {
+                "none"
+            },
+            "production_target_subjects_blocked_reason": if production_ready {
+                Value::Null
+            } else {
+                json!(production_backend.unavailable_reason().unwrap_or("production_backend_not_ready"))
+            },
             "capture_target_models": [
                 "display_surface",
                 "window_surface",
@@ -2717,14 +2735,49 @@ perl -0pi -e 's/"unsupported_capabilities":/"enabled_capabilities":/' \
 run_fail 'device capabilities must report unsupported rich-input capabilities'
 
 write_fixture
+perl -0pi -e 's/native_webrtc_backend_runtime_descriptor\(\)/MACOS_SCK_VIDEOTOOLBOX_BACKEND/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must derive production target subjects from the runtime native backend descriptor'
+
+write_fixture
+perl -0pi -e 's/let production_target_subjects = if production_ready \{\s*production_backend\.supported_subjects_value\(\)\s*\} else \{\s*json!\(\[\]\)\s*\};/let production_target_subjects = production_backend.supported_subjects_value();/s' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must gate production target subjects on runtime production readiness'
+
+write_fixture
 perl -0pi -e 's/production_backend\.supported_subjects_value\(\)/json!(["display"])/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must project production target subjects from the backend descriptor'
+run_fail 'device capabilities must gate production target subjects on runtime production readiness'
+
+write_fixture
+perl -0pi -e 's/json!\(\[\]\)/json!(["display", "window", "application"])/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must gate production target subjects on runtime production readiness'
 
 write_fixture
 perl -0pi -e 's/"production_target_subjects": production_target_subjects,//' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must expose the native production backend display/window/application subject matrix'
+
+write_fixture
+perl -0pi -e 's/"diagnostic_target_subjects": diagnostic_target_subjects,//' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose diagnostic target subjects separately from production target subjects'
+
+write_fixture
+perl -0pi -e 's/XCAP_OPENH264_WEBRTC_BACKEND\.supported_subjects_value\(\)/json!(["display", "window"])/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must derive diagnostic target subjects from the display-only xcap WebRTC backend'
+
+write_fixture
+perl -0pi -e 's/"production_target_subjects_blocked_reason": if production_ready \{\s*Value::Null\s*\} else \{\s*json!\(production_backend\.unavailable_reason\(\)\.unwrap_or\("production_backend_not_ready"\)\)\s*\},//s' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose why production app/window subjects are not claimable'
+
+write_fixture
+perl -0pi -e 's/"production_target_subjects_source": if production_ready \{\s*MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID\s*\} else \{\s*"none"\s*\},//s' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose the source backend for production target subjects'
 
 write_fixture
 perl -0pi -e 's/"display_scoped_application_window_set"/"application"/' \

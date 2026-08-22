@@ -1115,10 +1115,24 @@ require '"remote_desktop\.file_transfer\.send"' "$VIEW_DEVICE" \
   'device capabilities must point file transfer to future split abilities instead of datachannel support'
 require 'device_capabilities_report_clipboard_and_file_transfer_unsupported' "$VIEW_DEVICE" \
   'device capability tests must prove clipboard/file transfer are reported unsupported'
+require 'native_webrtc_backend_runtime_descriptor\(\)' "$VIEW_DEVICE" \
+  'device capabilities must derive production target subjects from the runtime native backend descriptor'
+require_multiline 'm/let production_target_subjects = if production_ready \{\s*production_backend\.supported_subjects_value\(\)\s*\} else \{\s*json!\(\[\]\)\s*\};/s' "$VIEW_DEVICE" \
+  'device capabilities must gate production target subjects on runtime production readiness'
 require 'production_backend\.supported_subjects_value\(\)' "$VIEW_DEVICE" \
-  'device capabilities must project production target subjects from the backend descriptor'
+  'device capabilities must project production target subjects from the ready runtime backend descriptor'
+require 'json!\(\[\]\)' "$VIEW_DEVICE" \
+  'device capabilities must project no production target subjects while the production gate is closed'
 require '"production_target_subjects": production_target_subjects' "$VIEW_DEVICE" \
   'device capabilities must expose the native production backend display/window/application subject matrix'
+require '"diagnostic_target_subjects": diagnostic_target_subjects' "$VIEW_DEVICE" \
+  'device capabilities must expose diagnostic target subjects separately from production target subjects'
+require 'XCAP_OPENH264_WEBRTC_BACKEND\.supported_subjects_value\(\)' "$VIEW_DEVICE" \
+  'device capabilities must derive diagnostic target subjects from the display-only xcap WebRTC backend'
+require '"production_target_subjects_blocked_reason"' "$VIEW_DEVICE" \
+  'device capabilities must expose why production app/window subjects are not claimable'
+require '"production_target_subjects_source"' "$VIEW_DEVICE" \
+  'device capabilities must expose the source backend for production target subjects'
 require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
   'device capabilities must expose the application target model instead of flattening applications to display capture'
 require 'display/window/application target capture' "$VIEW_DEVICE" \

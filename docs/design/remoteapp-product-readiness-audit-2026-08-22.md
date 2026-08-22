@@ -76,6 +76,9 @@ production subjects, while the xcap diagnostic fallback remains display-only.
 That projection uses the same runtime native backend descriptor as
 `production_gate_view`, so Screen Recording permission denial and non-macOS
 `not_installed` state are not hidden by the compile-time macOS descriptor.
+The lifecycle/input boundary gate and mutation tests now pin this projection
+shape, including the runtime-native descriptor source, production-ready gate,
+display-only diagnostic subjects, blocked reason, and production subject source.
 The frontend product-flow script is a runnable product-flow harness entrypoint:
 with an explicit `--run`, it first verifies Hub API reachability, then product
 runtime readiness for daemon control/invocation, then composes frontend

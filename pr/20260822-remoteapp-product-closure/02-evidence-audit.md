@@ -206,6 +206,10 @@ Current frontend lifecycle evidence:
   The projection uses the same runtime native backend descriptor as
   `production_gate_view`, so macOS permission denial and non-macOS
   `not_installed` state are represented consistently.
+- `check-remoteapp-lifecycle-input-boundary.sh` and its mutation test fixture
+  now pin that production-vs-diagnostic target-subject projection. Removing the
+  runtime-native descriptor, production-ready gate, display-only diagnostic
+  subjects, blocked reason, or production subject source fails the boundary.
 - RemoteApp session views now expose `input_readiness` as a single
   machine-readable projection for requested mode, effective mode,
   `interactive_ready`, input scope, and blocked reason. This improves frontend
