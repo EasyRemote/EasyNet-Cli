@@ -5,6 +5,7 @@ ROOT="${CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
+CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 
 fail() {
   printf 'check-remoteapp-product-closure-audit: %s\n' "$1" >&2
@@ -30,6 +31,7 @@ reject() {
 [[ -f "$SPEC" ]] || fail "missing RemoteApp targeted-session SPEC"
 [[ -f "$AUDIT" ]] || fail "missing RemoteApp product readiness audit"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
+[[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
 
 reject 'full acceptance verified' "$SPEC" \
   'targeted-session SPEC must not claim full product acceptance'
@@ -64,6 +66,14 @@ require 'Frontend UI can discover, authorize, start, display, control, and end s
   'audit must cover frontend full lifecycle'
 require 'Cross-device E2E smoke/regression exists beyond local provider boundary' "$AUDIT" \
   'audit must cover cross-device proof'
+require 'remoteapp-cross-device-product-smoke.sh' "$AUDIT" \
+  'audit must name the cross-device product smoke gate'
+require 'governed Hub routing, cross-device ability visibility/invocation' "$AUDIT" \
+  'audit must scope cross-device smoke to routing and synthetic media evidence'
+require 'does not prove real' "$AUDIT" \
+  'audit must reject cross-device smoke as real OS capture proof'
+require 'accepted_count=0, expected_count=5' "$AUDIT" \
+  'audit must record the current cross-device service owner projection failure'
 require 'source-contract checker, unit test, local provider' "$AUDIT" \
   'audit must name weak evidence classes'
 require 'benchmark, or SPEC statement is insufficient' "$AUDIT" \
@@ -77,5 +87,26 @@ require 'Cross-platform capture implementation/evidence for Windows and Linux' "
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'Frontend full lifecycle E2E' "$PLAN" \
   'plan evidence audit must list frontend full lifecycle E2E as missing'
+require 'remoteapp-cross-device-product-smoke.sh' "$PLAN" \
+  'plan evidence audit must record the cross-device smoke gate'
+require 'failed at `cross-device-routing`' "$PLAN" \
+  'plan evidence audit must record the latest cross-device smoke failure'
+require 'accepted_count=0, expected_count=5' "$PLAN" \
+  'plan evidence audit must preserve the service owner projection failure evidence'
+require 'real OS' "$PLAN" \
+  'plan evidence audit must preserve real OS non-claims'
+require 'NAT/STUN/TURN relay' "$PLAN" \
+  'plan evidence audit must preserve cross-device non-claims'
+
+require 'docker-two-node-easyremote-cli-e2e.sh' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must compose the two-node routing E2E'
+require 'docker-media-bidi-e2e.sh' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must compose the media/bidi E2E'
+require 'write_report "skipped"' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must not default to false pass evidence'
+require 'service_owner_projection_failed' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must classify current Service owner projection failures'
+require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must preserve product non-claims'
 
 printf 'check-remoteapp-product-closure-audit: ok\n'

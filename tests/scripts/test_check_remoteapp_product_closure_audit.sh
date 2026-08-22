@@ -15,6 +15,7 @@ SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 mkdir -p "$SB/docs/design" "$SB/pr/20260822-remoteapp-product-closure" "$SB/tools/scripts"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md" "$SB/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
@@ -35,5 +36,14 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "cross-device proof" /tmp/check-remoteapp-product-closure-cross-device.out || \
   fail "expected cross-device audit failure"
+
+cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
+perl -0pi -e 's#does not prove real OS window/application capture#proves real OS window/application capture#g' \
+  "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-cross-device-gate.out 2>&1; then
+  fail "checker accepted cross-device smoke without product non-claims"
+fi
+grep -q "cross-device smoke must preserve product non-claims" /tmp/check-remoteapp-product-closure-cross-device-gate.out || \
+  fail "expected cross-device smoke non-claim failure"
 
 echo "test_check_remoteapp_product_closure_audit: ok"

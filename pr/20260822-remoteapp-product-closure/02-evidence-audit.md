@@ -91,6 +91,22 @@ Current frontend lifecycle evidence:
   view-only input safety for window and application targets. This is strong
   local product-flow evidence, not cross-platform/cross-device product
   completion evidence.
+- `tools/scripts/remoteapp-cross-device-product-smoke.sh` now provides a
+  separate cross-device product smoke entrypoint. With `--run`, it composes
+  the existing Docker two-node EasyRemote CLI routing E2E and Docker synthetic
+  media/bidi E2E under one report. The report marks cross-device Hub routing
+  and synthetic stream/bidi carrier coverage separately, and keeps real OS
+  capture, pointer/keyboard injection, host audio, NAT/STUN/TURN relay
+  deployment, and frontend rendering as non-claims.
+- Latest local cross-device `--run` evidence:
+  `target/e2e/remoteapp-cross-device-product-smoke/20260822-044924-manual/report.md`
+  failed at `cross-device-routing` before synthetic media/bidi could run. The
+  provider joined and was visible as an online federated device, but the caller
+  device repeatedly failed the user-scoped Service owner projection prelude for
+  `easynet:///r/hub/service/alice.pages`: Hub rejected
+  `federation.advertise_abilities` with `accepted_count=0, expected_count=5`.
+  This is now the first concrete cross-device product seam to fix before
+  RemoteApp-specific remote target inventory/media evidence can be trusted.
 
 Missing or insufficient product evidence:
 
@@ -101,4 +117,6 @@ Missing or insufficient product evidence:
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
 - Real STUN/TURN/EasyNet relay reachability matrix.
 - Frontend full lifecycle E2E across Browser/Tauri surfaces.
-- Cross-device smoke/regression with remote target inventory and teardown.
+- RemoteApp-specific cross-device smoke/regression with remote target
+  inventory, real display/window/application capture, input policy, and
+  teardown.

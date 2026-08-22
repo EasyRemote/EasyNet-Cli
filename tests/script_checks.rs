@@ -281,6 +281,14 @@ fn remoteapp_frontend_product_flow_e2e_script_holds() {
 }
 
 #[test]
+fn remoteapp_cross_device_product_smoke_script_holds() {
+    // Pins the cross-device smoke entrypoint to Hub-routed Docker evidence
+    // while preserving explicit non-claims for real OS capture, input, audio,
+    // relay deployment, and frontend rendering.
+    run_bash_script("tests/scripts/test_remoteapp_cross_device_product_smoke.sh");
+}
+
+#[test]
 fn frontend_ability_contract_boundary_script_holds() {
     // Pins every governed ability descriptor to one explicit execution surface
     // and subject-construction owner. Remote desktop abilities must stay on

@@ -30,6 +30,7 @@ The following gates prove useful boundaries and regression constraints:
 - `tools/scripts/check-remoteapp-picker-subject-boundary.sh`
 - `tools/scripts/check-remoteapp-session-subject-boundary.sh`
 - `tools/scripts/frontend-remoteapp-product-flow-e2e.sh`
+- `tools/scripts/remoteapp-cross-device-product-smoke.sh`
 
 They prove that current source contracts preserve target binding, subject
 placement, view-only safety, source-level E2E harnesses, and performance
@@ -49,6 +50,17 @@ passed the bounded single-machine product-flow bundle after the local Hub was
 restarted with the paired `localhost` realm and the device connection-state
 projector preserved `hub_api_endpoint` across the
 `FRONTEND_CONNECTED` projection.
+The cross-device smoke entrypoint composes the existing two-node EasyRemote CLI
+E2E and synthetic media/bidi Docker E2E. Its evidence scope is intentionally
+narrow: governed Hub routing, cross-device ability visibility/invocation, and
+synthetic stream/bidi carrier receipt chains. It explicitly does not prove real
+OS window/application capture, input injection, host audio, NAT/TURN deployment,
+or frontend browser rendering.
+The latest local cross-device run failed at the two-node routing step: the
+provider became visible as an online federated device, but the caller's
+user-scoped `service/alice.pages` owner projection was rejected by the Hub with
+`accepted_count=0, expected_count=5`. That failure is upstream of RemoteApp
+target inventory/media and keeps cross-device product readiness partial.
 They do not prove every operating system, network topology, input mode, codec
 path, and frontend lifecycle is product-ready.
 
@@ -63,7 +75,7 @@ path, and frontend lifecycle is product-ready.
 | Disconnect/reconnect, session resume, consent revoke, cancel, timeout are complete | Partial | Lease monitor, refresh/end session, target loss and transport failure taxonomy, frontend watch_events recovery handling for degraded and permission-revoked sessions, canonical SDK cancel/timeout semantics | Session resume after transport loss, reconnect handoff, consent revoke termination E2E, cancel/timeout receipts, crash/restart recovery E2E |
 | NAT/relay/WebRTC/direct fallback network paths are verified | Partial | Typed host/STUN/TURN/EasyNet relay route evidence and source-level provider gates | Real direct, STUN srflx, TURN relay, EasyNet relay deployment reports with credentials redacted and reachability verified |
 | Frontend UI can discover, authorize, start, display, control, and end session | Partial | Frontend subject boundary, dedicated surface gates, component coverage for picker → consent → create → WebRTC attach → watch_events → end, target-scoped WebRTC lifecycle unit coverage, watch_events recovery-state coverage, and product-flow harness entrypoint for combined frontend/host evidence | Browser/Tauri E2E for full user flow with real backend/runtime: picker → permission → consent → create → WebRTC attach → watch_events recovery → input/control → end |
-| Cross-device E2E smoke/regression exists beyond local provider boundary | Missing as product proof | Docker media/bidi source contract; host-local decoded-frame scripts | Two real devices or equivalent network namespace E2E with Hub routing, remote target inventory, remote WebRTC/media, and teardown evidence |
+| Cross-device E2E smoke/regression exists beyond local provider boundary | Partial | `remoteapp-cross-device-product-smoke.sh` composes Docker two-node routing and synthetic media/bidi carrier gates; host-local decoded-frame scripts cover local capture/render decode | RemoteApp-specific two-device or equivalent network namespace E2E with remote target inventory, remote WebRTC/media from actual display/window/application capture, input policy, and teardown evidence |
 
 ## Product-complete definition
 
