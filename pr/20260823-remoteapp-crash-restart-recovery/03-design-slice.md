@@ -42,12 +42,14 @@ Stage 1 should not pretend media survived a daemon crash. On restart:
 
 - non-terminal sessions are restored as recoverable session rows;
 - media/input transports are marked not ready;
+- the same recovered `session_id` may start a new media generation when the
+  client performs fresh signaling;
 - watch-events can replay a `SESSION_REHYDRATED` or degraded/retry event;
 - `show_session` returns the same `session_id` instead of `session_not_found`;
 - `end_session` remains idempotent and can close the recovered row.
 
-Stage 2 can reattach watch/media transport and satisfy the stricter
-`daemon_restart_active_session` verifier scenario.
+Stage 2 still needs live watch/media transport reattachment evidence and must
+satisfy the stricter `daemon_restart_active_session` verifier scenario.
 
 ## Acceptance evidence
 
@@ -105,11 +107,15 @@ Stage 2 can reattach watch/media transport and satisfy the stricter
     receipt;
   - corrupt or mismatched snapshot rows are reported and skipped instead of
     aborting the whole startup recovery batch;
+  - recovered non-terminal sessions can leave the rehydrated `Suspended` phase
+    and start a new media negotiation epoch without minting a replacement
+    session id;
   - public `show_session`, `watch_events`, and `end_session` operate through the
     normal session access/lifecycle path after rehydration.
 
 This slice is intentionally not marked as full product recovery. Stage 1
-control-plane rehydration exists, but media/input transports are deliberately
-not marked ready after process restart. The live crash/restart verifier remains
-a product blocker until media reattachment, frame rendering after restart,
+control-plane rehydration exists and the lifecycle can accept a fresh media
+epoch, but media/input transports are deliberately not marked ready merely
+because a snapshot was loaded. The live crash/restart verifier remains a
+product blocker until actual media reattachment, frame rendering after restart,
 cross-process evidence, and endpoint cleanup all pass.

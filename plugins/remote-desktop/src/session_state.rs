@@ -140,6 +140,8 @@ impl RemoteDesktopSessionStateMachine {
                     | RemoteDesktopSessionPhase::MediaStarting
                     | RemoteDesktopSessionPhase::MediaActive
                     | RemoteDesktopSessionPhase::InputActive
+                    | RemoteDesktopSessionPhase::Suspended
+                    | RemoteDesktopSessionPhase::Rebinding
             )
         {
             return false;
@@ -438,7 +440,6 @@ mod tests {
         assert!(state.activate_media());
         assert!(state.suspend());
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Suspended);
-        assert!(!state.start_media());
         assert!(state.begin_rebinding());
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Rebinding);
         assert!(state.reject_rebinding());
@@ -446,5 +447,31 @@ mod tests {
         assert!(state.begin_termination());
         state.terminate_closed("caller_ended");
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Terminated);
+    }
+
+    #[test]
+    fn recoverable_suspended_session_can_start_a_new_media_generation() {
+        let mut state = RemoteDesktopSessionStateMachine::rehydrate_degraded();
+        assert_eq!(state.phase(), RemoteDesktopSessionPhase::Suspended);
+        assert_eq!(state.state(), RemoteDesktopState::Degraded);
+
+        assert!(state.start_media());
+
+        assert_eq!(state.phase(), RemoteDesktopSessionPhase::MediaStarting);
+        assert_eq!(state.state(), RemoteDesktopState::Negotiating);
+    }
+
+    #[test]
+    fn recoverable_rebinding_session_can_restart_media_negotiation() {
+        let mut state = RemoteDesktopSessionStateMachine::new();
+        assert!(state.start_media());
+        assert!(state.activate_media());
+        assert!(state.suspend());
+        assert!(state.begin_rebinding());
+
+        assert!(state.start_media());
+
+        assert_eq!(state.phase(), RemoteDesktopSessionPhase::MediaStarting);
+        assert_eq!(state.state(), RemoteDesktopState::Negotiating);
     }
 }

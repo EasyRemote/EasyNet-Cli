@@ -22,6 +22,7 @@ CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e
 LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_RECOVERY="$ROOT/plugins/remote-desktop/src/session_recovery.rs"
+SESSION_STATE="$ROOT/plugins/remote-desktop/src/session_state.rs"
 SESSION_LIFECYCLE="$ROOT/plugins/remote-desktop/src/session_lifecycle.rs"
 RUNTIME="$ROOT/plugins/remote-desktop/src/runtime.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
@@ -73,6 +74,7 @@ reject() {
 [[ -f "$LIFECYCLE_HARNESS_LIB" ]] || fail "missing RemoteApp lifecycle harness helper library"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$SESSION_RECOVERY" ]] || fail "missing RemoteApp session recovery snapshot store"
+[[ -f "$SESSION_STATE" ]] || fail "missing RemoteApp session lifecycle state machine"
 [[ -f "$SESSION_LIFECYCLE" ]] || fail "missing RemoteApp session lifecycle module"
 [[ -f "$RUNTIME" ]] || fail "missing RemoteApp runtime module"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
@@ -783,6 +785,12 @@ require 'SESSION_REHYDRATED' "$SESSION" \
   'RemoteApp session aggregate must emit SESSION_REHYDRATED for non-terminal startup recovery'
 require 'fn rehydrate\(' "$SESSION" \
   'RemoteApp session aggregate must own snapshot-to-session rehydration'
+require 'rehydrated_non_terminal_session_can_start_new_media_epoch_without_new_session' "$SESSION" \
+  'RemoteApp session aggregate must prove rehydrated sessions can restart media without minting a new session'
+require 'recoverable_suspended_session_can_start_a_new_media_generation' "$SESSION_STATE" \
+  'RemoteApp lifecycle state machine must allow rehydrated suspended sessions to restart media'
+require 'recoverable_rebinding_session_can_restart_media_negotiation' "$SESSION_STATE" \
+  'RemoteApp lifecycle state machine must allow recoverable rebind sessions to restart media negotiation'
 for recovery_writer in \
   "$CREATE_SESSION_HANDLER" \
   "$REFRESH_LEASE_HANDLER" \

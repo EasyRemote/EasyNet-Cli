@@ -187,6 +187,7 @@
         "plugin startup now rehydrates snapshots into degraded RemoteDesktopSession rows and preserves session_id, selected Resource URA, caller, consent receipt, daemon-local session token, target binding, event replay, and terminal receipt",
         "recovery batch loading reports and skips corrupt snapshot rows without dropping valid rows",
         "Unix recovery directories and snapshot files are private because persisted snapshots include daemon-local session tokens",
+        "rehydrated non-terminal sessions can start a fresh media negotiation epoch without minting a new session id",
         "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row"
       ],
       "required_evidence_before_product_complete": [
@@ -205,7 +206,7 @@
       "non_claims": [
         "taxonomy and unit coverage do not prove recovery product behavior",
         "the crash/restart recovery verifier self-test does not prove live process recovery",
-        "Stage 1 startup rehydration does not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
+        "Stage 1 startup rehydration and new media epoch admission do not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
       ]
     },
     {

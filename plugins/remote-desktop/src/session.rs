@@ -1201,6 +1201,7 @@ mod tests {
         RemoteDesktopSession, RemoteDesktopState,
     };
     use crate::daemon::plugins::remote_desktop::session_consent_state::RemoteDesktopConsentPhase;
+    use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
     use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopSessionPhase;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
@@ -1296,6 +1297,56 @@ mod tests {
             session.latest_target_diagnostic()["frontend_action"],
             json!("refresh_targets")
         );
+    }
+
+    #[test]
+    fn rehydrated_non_terminal_session_can_start_new_media_epoch_without_new_session() {
+        let source = RemoteDesktopSession::new(test_session_init(
+            "rd-rehydrate-media-resume",
+            "easynet:///r/acme/resource/display.rehydrate-media",
+            vec!["webrtc".into()],
+        ));
+        let snapshot =
+            RemoteDesktopRecoverySnapshot::from_session(&source).expect("snapshot derives");
+        let mut session = RemoteDesktopSession::rehydrate(&snapshot).expect("session rehydrates");
+        let epoch = TransportEpoch::new(7);
+        let endpoint_ura = direct_webrtc_endpoint_ura("rd-rehydrate-media-resume");
+
+        assert_eq!(session.session_id(), "rd-rehydrate-media-resume");
+        assert_eq!(session.state(), RemoteDesktopState::Degraded);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+        assert!(!session.media_transport_ready());
+
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0\r\n"}),
+                "plugin.macos.screencapturekit.videotoolbox.webrtc.v1",
+                true,
+                endpoint_ura.clone(),
+            )
+            .expect("local answer records on rehydrated session");
+        session.mark_webrtc_media_sending(epoch, endpoint_ura);
+        assert!(session.report_client_media_state(epoch, "presenting"));
+
+        assert_eq!(session.session_id(), "rd-rehydrate-media-resume");
+        assert_eq!(session.transport_epoch(), Some(epoch.value()));
+        assert_eq!(session.state(), RemoteDesktopState::Connected);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+        assert!(session.media_transport_ready());
+        assert!(session.client_media_ready());
+        assert!(session.production_media_ready());
+        assert!(session.events().iter().any(|event| {
+            event["event_type"] == json!("SESSION_REHYDRATED")
+                && event["payload"]["recoverability"] == json!("retry_session")
+        }));
     }
 
     #[test]
