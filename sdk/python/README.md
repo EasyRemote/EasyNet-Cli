@@ -69,6 +69,14 @@ The public Python exports are covered by
 covered by `../conformance/sdk-parity-matrix.json`. Product-neutrality is
 enforced by `../../tools/scripts/check-sdk-product-neutrality.sh`.
 
+Before tagging a Python SDK release, synchronize and verify its independent
+version line without changing the EasyNet Runtime version:
+
+```bash
+./tools/scripts/update-python-sdk-version.sh 0.91.31
+./tools/scripts/update-python-sdk-version.sh --check 0.91.31
+```
+
 ## Source release scope
 
 This distribution is a deliberately bounded public SDK, not a source release

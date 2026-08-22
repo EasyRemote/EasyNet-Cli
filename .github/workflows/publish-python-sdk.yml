@@ -61,6 +61,9 @@ jobs:
             echo "Manual dispatch is validation-only; no package will be published."
           fi
 
+      - name: Verify Python SDK version convergence
+        run: bash tools/scripts/update-python-sdk-version.sh --check "${{ steps.metadata.outputs.package_version }}"
+
       - name: Prove registry-only dependency resolution
         run: uv lock --project sdk/python --no-sources --dry-run
 
