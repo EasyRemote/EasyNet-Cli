@@ -1,6 +1,6 @@
 # EasyNet RemoteApp Targeted Session SPEC
 
-Status: implemented; full acceptance verified 2026-08-16
+Status: targeted-session boundary implemented; full RemoteApp product closure incomplete as of 2026-08-22
 Scope: EasyNet-Cli daemon, builtin remote desktop plugin, frontend execution surface
 Primary goal: make `application`, `window`, and `display` remote sessions functionally distinct and verifiable.
 
@@ -44,7 +44,7 @@ The current tree already contains these implementation foundations:
 - `resource.refresh_remote_targets` and `resource.watch_remote_targets` exist as daemon resource-inventory abilities. They are backend/frontend-contract foundations for live target pickers, not remote desktop session abilities.
 - Session target tracking has a plugin-owned monitor and platform observation seam; it samples host target state independently of WebRTC media transport.
 
-Implemented product state and explicit unsupported boundaries:
+Implemented targeted-session state and explicit unsupported product boundaries:
 
 - `meta.list_resources` remains a pure persisted-table read. The dedicated
   picker obtains current windows/applications through

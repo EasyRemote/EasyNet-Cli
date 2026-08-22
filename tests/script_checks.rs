@@ -267,6 +267,13 @@ fn remoteapp_performance_boundary_script_holds() {
 }
 
 #[test]
+fn remoteapp_product_closure_audit_script_holds() {
+    // Pins the product-completion audit so targeted-session boundary gates are
+    // not mistaken for full interactive RemoteApp readiness.
+    run_bash_script("tests/scripts/test_check_remoteapp_product_closure_audit.sh");
+}
+
+#[test]
 fn frontend_ability_contract_boundary_script_holds() {
     // Pins every governed ability descriptor to one explicit execution surface
     // and subject-construction owner. Remote desktop abilities must stay on
