@@ -238,7 +238,8 @@ RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/session_creation.rs" <<'RS'
 fn creation_workflow() {
-    ResourceEntryTargetResolver.resolve_for_session();
+    let input_control_granted = consent.permits_input_control();
+    ResourceEntryTargetResolver.resolve_for_session_with_input_consent(input_control_granted);
     verify_target_binding_for_session();
 }
 RS
@@ -325,6 +326,11 @@ RS
 cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
 struct ScreenCaptureKitTarget;
 
+struct ApplicationWindowSetTarget {
+    proof: AppWindowSetProof,
+    excepting_windows: Retained<NSArray<SCWindow>>,
+}
+
 impl ScreenCaptureKitTarget {
     fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
         todo!()
@@ -348,11 +354,26 @@ fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
     sck_app_identity_match(expected, app);
 }
 
+fn resolve_target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
+    let app_window_set = select_application_window_set_for_binding(ability, windows, binding, display).unwrap();
+    let filter = SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
+        SCContentFilter::alloc(),
+        &display,
+        &included_applications,
+        &app_window_set.excepting_windows,
+    );
+}
+
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let committed_window_set = binding.committed_app_window_set()?;
+    let mut uncommitted_same_display_windows = Vec::new();
     let off_display_window_ids = vec![10];
     for window_id in [10] {
+        let overlaps_selected_display = sck_window_overlaps_display(&window, display);
         if !committed_window_set.contains_window_id(window_id) {
+            if overlaps_selected_display {
+                uncommitted_same_display_windows.push(window);
+            }
             continue;
         }
     }
@@ -371,7 +392,19 @@ fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetErro
             "committed application window set changed",
         ));
     }
-    Ok(())
+    let proof = committed_window_set.clone();
+    let excepting_window_refs = uncommitted_same_display_windows
+        .iter()
+        .map(|window| window.as_ref())
+        .collect::<Vec<_>>();
+    let excepting_windows = NSArray::from_slice(&excepting_window_refs);
+    Ok(ApplicationWindowSetTarget { proof, excepting_windows })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn application_window_set_selector_excludes_uncommitted_same_display_windows() {}
 }
 RS
 
@@ -461,6 +494,50 @@ mod tests {
 RS
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/input_control_granted/input_control_implicit/g' \
+  "$SANDBOX/plugins/remote-desktop/src/session_creation.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted implicit input-control consent at target binding resolution" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/input_control_implicit/input_control_granted/g' \
+  "$SANDBOX/plugins/remote-desktop/src/session_creation.rs"
+
+perl -0pi -e 's/&app_window_set\.excepting_windows/&excepting_windows/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted application SCK filter without committed exceptingWindows" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/&excepting_windows/&app_window_set.excepting_windows/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+perl -0pi -e 's/uncommitted_same_display_windows\.push\(window\);/let _ = window;/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted application selector without uncommitted same-app window exclusions" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/let _ = window;/uncommitted_same_display_windows.push(window);/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+perl -0pi -e 's/application_window_set_selector_excludes_uncommitted_same_display_windows/application_window_set_selector_allows_uncommitted_same_display_windows/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing uncommitted same-app exclusion regression test" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/application_window_set_selector_allows_uncommitted_same_display_windows/application_window_set_selector_excludes_uncommitted_same_display_windows/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
 perl -0pi -e 's/create_session_rejects_stale_window_inventory_before_session_insert/create_session_accepts_stale_window_inventory/' \
   "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
@@ -807,6 +884,11 @@ CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
 struct ScreenCaptureKitTarget;
 
+struct ApplicationWindowSetTarget {
+    proof: AppWindowSetProof,
+    excepting_windows: Retained<NSArray<SCWindow>>,
+}
+
 impl ScreenCaptureKitTarget {
     fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
         todo!()
@@ -866,11 +948,26 @@ fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
     sck_app_identity_match(expected, app);
 }
 
+fn resolve_target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
+    let app_window_set = select_application_window_set_for_binding(ability, windows, binding, display).unwrap();
+    let filter = SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
+        SCContentFilter::alloc(),
+        &display,
+        &included_applications,
+        &app_window_set.excepting_windows,
+    );
+}
+
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let committed_window_set = binding.committed_app_window_set()?;
+    let mut uncommitted_same_display_windows = Vec::new();
     let off_display_window_ids = vec![10];
     for window_id in [10] {
+        let overlaps_selected_display = sck_window_overlaps_display(&window, display);
         if !committed_window_set.contains_window_id(window_id) {
+            if overlaps_selected_display {
+                uncommitted_same_display_windows.push(window);
+            }
             continue;
         }
     }
@@ -889,7 +986,19 @@ fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetErro
             "committed application window set changed",
         ));
     }
-    Ok(())
+    let proof = committed_window_set.clone();
+    let excepting_window_refs = uncommitted_same_display_windows
+        .iter()
+        .map(|window| window.as_ref())
+        .collect::<Vec<_>>();
+    let excepting_windows = NSArray::from_slice(&excepting_window_refs);
+    Ok(ApplicationWindowSetTarget { proof, excepting_windows })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn application_window_set_selector_excludes_uncommitted_same_display_windows() {}
 }
 RS
 

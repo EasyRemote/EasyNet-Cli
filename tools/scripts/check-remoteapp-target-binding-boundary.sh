@@ -86,9 +86,15 @@ reject 'input_policy_for_entry\s*\(' "$REMOTE_ROOT" \
 reject 'pointer_target_for_entry\s*\(' "$REMOTE_ROOT" \
   'production pointer targeting must consume RemoteAppTargetBinding plus tracker snapshot'
 
-require 'ResourceEntryTargetResolver\.resolve_for_session\(' \
+require 'ResourceEntryTargetResolver' \
   "$REMOTE_ROOT/session_creation.rs" \
-  'session creation workflow must be the ResourceEntry-to-target_binding boundary'
+  'session creation workflow must own the ResourceEntry-to-target_binding boundary'
+require 'resolve_for_session_with_input_consent\(' \
+  "$REMOTE_ROOT/session_creation.rs" \
+  'session creation workflow must be the ResourceEntry-to-target_binding boundary with explicit input-control consent'
+require 'input_control_granted' \
+  "$REMOTE_ROOT/session_creation.rs" \
+  'session creation workflow must make input-control consent explicit before target binding resolution'
 require 'verify_target_binding_for_session\(' \
   "$REMOTE_ROOT/session_creation.rs" \
   'session creation workflow must verify the resolved target binding before session insertion'
@@ -168,6 +174,21 @@ require 'binding\.committed_app_window_set\(\)' \
 require 'committed_window_set\.contains_window_id\(window_id\)' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit application capture must not include uncommitted same-app windows'
+require 'uncommitted_same_display_windows' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must collect same-display app windows outside the committed set'
+require 'uncommitted_same_display_windows\.push\(window\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must pass uncommitted same-app windows to exceptingWindows'
+require 'NSArray::from_slice\(&excepting_window_refs\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must build a native exceptingWindows array from uncommitted windows'
+require '&app_window_set\.excepting_windows' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must use committed-window-set exclusions in the content filter'
+reject 'let excepting_windows: Retained<NSArray<SCWindow>> = NSArray::new\(\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must not pass empty exceptingWindows for application sessions'
 require 'committed_window_set\.missing_window_ids\(&window_ids\)' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit application capture must fail closed when committed windows disappear'
@@ -389,6 +410,9 @@ require 'TargetResolutionError::TargetMultiDisplayUnsupported' \
 require 'MultiAppSurface support' \
   "$REMOTE_ROOT/screencapturekit_capture.rs" \
   'ScreenCaptureKit application binding must explain that multi-display applications require MultiAppSurface support'
+require 'application_window_set_selector_excludes_uncommitted_same_display_windows' \
+  "$REMOTE_ROOT/screencapturekit_capture.rs" \
+  'ScreenCaptureKit application filter must have regression coverage for excluding uncommitted same-app windows'
 
 while IFS=: read -r file line _match; do
   case "${file#"$ROOT/"}" in

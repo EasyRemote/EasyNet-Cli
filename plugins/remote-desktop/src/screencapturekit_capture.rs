@@ -381,14 +381,13 @@ fn resolve_target_for_binding(
                 select_application_window_set_for_binding(ability, &windows, binding, &display)?;
             let application_refs = [app.as_ref()];
             let included_applications = NSArray::from_slice(&application_refs);
-            let excepting_windows: Retained<NSArray<SCWindow>> = NSArray::new();
             proof_app_window_set = Some(app_window_set.proof);
             let filter = unsafe {
                 SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
                     SCContentFilter::alloc(),
                     &display,
                     &included_applications,
-                    &excepting_windows,
+                    &app_window_set.excepting_windows,
                 )
             };
             (filter, proof_display_id, None)
@@ -423,6 +422,7 @@ fn resolve_target_for_binding(
 
 struct ApplicationWindowSetTarget {
     proof: AppWindowSetProof,
+    excepting_windows: Retained<NSArray<SCWindow>>,
 }
 
 fn select_application_window_set_for_binding(
@@ -447,6 +447,7 @@ fn select_application_window_set_for_binding(
         )
     })?;
     let mut window_ids = Vec::new();
+    let mut uncommitted_same_display_windows = Vec::new();
     let mut off_display_window_ids = Vec::new();
     let mut matched_application = false;
     for window in windows.iter() {
@@ -456,10 +457,14 @@ fn select_application_window_set_for_binding(
         if sck_app_matches_binding(binding, &app) {
             matched_application = true;
             let window_id = unsafe { window.windowID() as u64 };
+            let overlaps_selected_display = sck_window_overlaps_display(&window, display);
             if !committed_window_set.contains_window_id(window_id) {
+                if overlaps_selected_display {
+                    uncommitted_same_display_windows.push(window);
+                }
                 continue;
             }
-            if sck_window_overlaps_display(&window, display) {
+            if overlaps_selected_display {
                 window_ids.push(window_id);
             } else {
                 off_display_window_ids.push(window_id);
@@ -505,7 +510,15 @@ fn select_application_window_set_for_binding(
         ));
     }
     let proof = committed_window_set.clone();
-    Ok(ApplicationWindowSetTarget { proof })
+    let excepting_window_refs = uncommitted_same_display_windows
+        .iter()
+        .map(|window| window.as_ref())
+        .collect::<Vec<_>>();
+    let excepting_windows = NSArray::from_slice(&excepting_window_refs);
+    Ok(ApplicationWindowSetTarget {
+        proof,
+        excepting_windows,
+    })
 }
 
 fn sck_window_overlaps_display(window: &SCWindow, display: &SCDisplay) -> bool {
@@ -944,6 +957,33 @@ mod tests {
         assert!(
             !application_arm.contains("initWithDisplay_includingWindows"),
             "application capture must not degrade to a window-list include filter"
+        );
+        assert!(
+            application_arm.contains("&app_window_set.excepting_windows"),
+            "application capture must pass committed-window-set exclusions into the ScreenCaptureKit filter"
+        );
+        assert!(
+            !application_arm.contains("excepting_windows: Retained<NSArray<SCWindow>> = NSArray::new()"),
+            "application capture must not pass an empty exceptingWindows list that widens to every same-app window"
+        );
+    }
+
+    #[test]
+    fn application_window_set_selector_excludes_uncommitted_same_display_windows() {
+        let source = include_str!("screencapturekit_capture.rs");
+
+        assert!(
+            source.contains("uncommitted_same_display_windows"),
+            "application selector must collect same-display app windows outside the committed window set"
+        );
+        assert!(
+            source.contains("!committed_window_set.contains_window_id(window_id)")
+                && source.contains("uncommitted_same_display_windows.push(window)"),
+            "uncommitted same-app windows must become ScreenCaptureKit exceptingWindows entries"
+        );
+        assert!(
+            source.contains("NSArray::from_slice(&excepting_window_refs)"),
+            "uncommitted same-app windows must be converted into the native exceptingWindows array"
         );
     }
 }

@@ -1,5 +1,32 @@
 # Decisions and Deltas — RemoteApp Product Closure
 
+## 2026-08-22 — Application capture must not widen beyond committed window set
+
+Decision:
+
+- An application RemoteApp session captures the committed display-scoped
+  `AppWindowSetProof`.
+- ScreenCaptureKit application filters are acceptable only if same-app windows
+  outside the committed set are explicitly excluded.
+- A newly opened same-application window must not silently join an existing
+  RemoteApp application session.
+
+Implementation delta:
+
+- The macOS ScreenCaptureKit target resolver now carries native
+  `exceptingWindows` with the committed application window-set proof.
+- The selector collects same-application, same-display windows that are not in
+  the committed proof and passes them to the native filter.
+- The target-binding boundary gate and source tests reject empty
+  `exceptingWindows`, missing uncommitted-window collection, and missing
+  regression coverage.
+
+Product effect:
+
+- This closes a concrete same-app leakage seam for macOS application capture.
+- It does not complete Windows/Linux application capture, multi-display
+  `MultiAppSurface`, or real app/window churn E2E.
+
 ## 2026-08-22 — v8 raw stream must preserve canonical lifecycle metadata
 
 Decision:

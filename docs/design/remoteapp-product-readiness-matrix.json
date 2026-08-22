@@ -19,6 +19,7 @@
       "status": "partial",
       "current_evidence": [
         "macOS ScreenCaptureKit target model",
+        "macOS ScreenCaptureKit application filter excludes uncommitted same-app same-display windows from committed window-set sessions",
         "host decoded-frame harnesses",
         "non-macOS app/window target observation fails closed"
       ],
@@ -88,7 +89,8 @@
       "current_evidence": [
         "target tracker state machine",
         "move/resize/loss/rebind events",
-        "same-display application window-set rebind"
+        "same-display application window-set rebind",
+        "application capture passes uncommitted same-app same-display windows as ScreenCaptureKit exceptingWindows"
       ],
       "required_evidence_before_product_complete": [
         "multi-display MultiAppSurface implementation or explicit product unsupported report",

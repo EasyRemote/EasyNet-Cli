@@ -91,6 +91,12 @@ Current frontend lifecycle evidence:
   view-only input safety for window and application targets. This is strong
   local product-flow evidence, not cross-platform/cross-device product
   completion evidence.
+- macOS ScreenCaptureKit application sessions now build the native
+  `exceptingWindows` filter from same-application, same-display windows outside
+  the committed `AppWindowSetProof`. This closes a concrete capture-scope seam:
+  selecting a committed application window set should not widen to unrelated
+  same-app windows that appear after session creation. It remains macOS-local
+  source/gate evidence, not cross-platform or real churn E2E completion.
 - `tools/scripts/remoteapp-cross-device-product-smoke.sh` now provides a
   separate cross-device product smoke entrypoint. With `--run`, it composes
   the existing Docker two-node EasyRemote CLI routing E2E and Docker synthetic
