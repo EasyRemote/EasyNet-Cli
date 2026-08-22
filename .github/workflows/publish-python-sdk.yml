@@ -1,0 +1,164 @@
+# EasyNet Runtime Python SDK release
+# Author: Silan Hu <silan.hu@u.nus.edu>
+# Copyright 2026 EasyNet.run
+
+name: Publish easynet-sdk
+
+on:
+  push:
+    tags:
+      - "sdk-python-v*"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-easynet-sdk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Validate and build easynet-sdk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      package_version: ${{ steps.metadata.outputs.package_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Resolve package metadata
+        id: metadata
+        run: |
+          PACKAGE_VERSION="$(python - <<'PY'
+          import pathlib
+          import tomllib
+
+          project = tomllib.loads(
+              pathlib.Path("sdk/python/pyproject.toml").read_text(encoding="utf-8")
+          )["project"]
+          if project["name"] != "easynet-sdk":
+              raise SystemExit(f"unexpected package name: {project['name']}")
+          print(project["version"])
+          PY
+          )"
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            EXPECTED_TAG="sdk-python-v${PACKAGE_VERSION}"
+            if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match ${EXPECTED_TAG}"
+              exit 1
+            fi
+          else
+            echo "Manual dispatch is validation-only; no package will be published."
+          fi
+
+      - name: Prove registry-only dependency resolution
+        run: uv lock --project sdk/python --no-sources --dry-run
+
+      - name: Reject an existing PyPI version
+        if: github.ref_type == 'tag'
+        env:
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+        run: |
+          if curl --fail --silent --show-error \
+            "https://pypi.org/pypi/easynet-sdk/${PACKAGE_VERSION}/json" \
+            >/dev/null 2>&1; then
+            echo "::error::easynet-sdk ${PACKAGE_VERSION} already exists on PyPI"
+            exit 1
+          fi
+
+      - name: Install SDK and test dependencies from release inputs
+        run: |
+          uv venv .release-venv --python 3.12
+          uv pip install --python .release-venv/bin/python "./sdk/python[dev]"
+
+      - name: Validate package contract
+        run: bash tools/scripts/check-sdk-package-metadata.sh
+
+      - name: Lint and test
+        run: |
+          .release-venv/bin/ruff check sdk/python/easynet_sdk sdk/python/tests
+          .release-venv/bin/pytest -q sdk/python/tests
+          SDK_CONFORMANCE_PYTHON="$PWD/.release-venv/bin/python" \
+            bash tools/scripts/check-python-sdk-static-contract.sh
+
+      - name: Build wheel and source distribution
+        run: uv build --project sdk/python --out-dir dist/easynet-sdk
+
+      - name: Validate distribution metadata
+        env:
+          EXPECTED_VERSION: ${{ steps.metadata.outputs.package_version }}
+        run: |
+          uvx --from twine twine check dist/easynet-sdk/*
+          python - <<'PY'
+          import email
+          import os
+          import pathlib
+          import zipfile
+
+          wheels = sorted(pathlib.Path("dist/easynet-sdk").glob("*.whl"))
+          sdists = sorted(pathlib.Path("dist/easynet-sdk").glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit("expected exactly one wheel and one sdist")
+
+          with zipfile.ZipFile(wheels[0]) as archive:
+              metadata_path = next(
+                  name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+              )
+              metadata = email.message_from_bytes(archive.read(metadata_path))
+
+          expected = {
+              "Name": "easynet-sdk",
+              "Version": os.environ["EXPECTED_VERSION"],
+              "License-Expression": "Apache-2.0",
+          }
+          for key, value in expected.items():
+              if metadata.get(key) != value:
+                  raise SystemExit(
+                      f"{key}={metadata.get(key)!r}, expected {value!r}"
+                  )
+          if "Silan Hu <silan.hu@u.nus.edu>" not in metadata.get("Author-email", ""):
+              raise SystemExit("missing canonical author metadata")
+          requires = metadata.get_all("Requires-Dist", [])
+          if not any(item.startswith("axon-runtime-sdk") for item in requires):
+              raise SystemExit("missing canonical axon-runtime-sdk dependency")
+          PY
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: easynet-sdk-${{ steps.metadata.outputs.package_version }}
+          path: dist/easynet-sdk/
+          if-no-files-found: error
+
+  publish:
+    name: Publish easynet-sdk to PyPI
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+      url: https://pypi.org/p/easynet-sdk
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: easynet-sdk-${{ needs.build.outputs.package_version }}
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

@@ -1,5 +1,8 @@
 name: Clippy Ratchet
 
+env:
+  EASYNET_AXON_COMPAT_REV: 25a97cc5e32610c3c81f26d085cb34deb50d7230
+
 # Enforces the lint ratchet (src/lib.rs `#![deny(...)]`): the lint
 # categories cleared to zero stay zero. A regression in any denied
 # category turns `cargo clippy` into a hard error, failing the PR —
@@ -36,6 +39,7 @@ jobs:
           repository: EasyRemote/EasyNet-Axon
           path: EasyNet-Axon
           token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
+          ref: ${{ env.EASYNET_AXON_COMPAT_REV }}
 
       - name: Install Rust + clippy
         uses: dtolnay/rust-toolchain@stable

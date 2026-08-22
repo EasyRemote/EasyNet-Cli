@@ -1,4 +1,10 @@
-# Python Runtime SDK
+# EasyNet Runtime Python SDK
+
+Install the `easynet-sdk` distribution and import it as `easynet_sdk`:
+
+```bash
+pip install easynet-sdk
+```
 
 The Python package is the Python binding of the canonical, product-neutral
 runtime SDK. It is not a product profile bundle.
@@ -62,3 +68,11 @@ The public Python exports are covered by
 `../conformance/canonical-public-api.json`. Go/Python capability state is
 covered by `../conformance/sdk-parity-matrix.json`. Product-neutrality is
 enforced by `../../tools/scripts/check-sdk-product-neutrality.sh`.
+
+## Source release scope
+
+This distribution is a deliberately bounded public SDK, not a source release
+of every EasyNet control-plane service, research mechanism, or evaluation
+asset. The [release-scope statement](https://github.com/EasyRemote/EasyNet-Cli/blob/main/SOURCE_RELEASE_SCOPE.md)
+explains the staged policy. It does not restrict the Apache-2.0 rights granted
+for files actually included in this distribution.

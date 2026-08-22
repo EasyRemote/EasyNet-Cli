@@ -1,22 +1,60 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "easynet-sdk"
 version = "0.91.31"
-description = "Python implementation of the canonical runtime SDK with explicit provider integrations."
+description = "Python SDK for invoking, publishing, and managing governed abilities through EasyNet Runtime"
+readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["NOTICE"]
+authors = [{ name = "Silan Hu", email = "silan.hu@u.nus.edu" }]
+maintainers = [{ name = "Silan Hu", email = "silan.hu@u.nus.edu" }]
+keywords = [
+    "ability-runtime",
+    "device-orchestration",
+    "distributed-systems",
+    "edge-computing",
+    "remote-execution",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
+]
 dependencies = [
     "cryptography>=41",
-    "axon-sdk>=0.129.23",
+    "axon-runtime-sdk>=0.183.3,<0.184",
     "grpcio>=1.60",
     "protobuf>=4.25",
 ]
 
+[project.urls]
+Homepage = "https://easynet.run"
+Documentation = "https://github.com/EasyRemote/EasyNet-Cli/tree/main/sdk/python"
+Repository = "https://github.com/EasyRemote/EasyNet-Cli"
+Issues = "https://github.com/EasyRemote/EasyNet-Cli/issues"
+Changelog = "https://github.com/EasyRemote/EasyNet-Cli/releases"
+
+[project.optional-dependencies]
+dev = [
+    "mypy==1.11.2",
+    "pytest==7.4.4",
+    "ruff==0.13.2",
+]
+
 [tool.uv.sources]
-axon-sdk = { path = "../../../EasyNet-Axon/sdk/python", editable = true }
+axon-runtime-sdk = { path = "../../../EasyNet-Axon/sdk/python", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["."]

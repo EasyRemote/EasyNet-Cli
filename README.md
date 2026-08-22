@@ -264,6 +264,11 @@ easynet invocation list | show <request-id> | trace <request-id>
 
 Apache-2.0 — see [LICENSE](https://github.com/EasyRemote/EasyNet-Cli/blob/main/LICENSE).
 
+This repository is a deliberately bounded public release of the wider EasyNet
+research system. See [Public Source Release Scope](./SOURCE_RELEASE_SCOPE.md)
+for what is published, what remains outside the distribution, and why releases
+are staged.
+
 ## Author
 
 [Silan Hu](https://github.com/Qingbolan) · [silan.hu@u.nus.edu](mailto:silan.hu@u.nus.edu)

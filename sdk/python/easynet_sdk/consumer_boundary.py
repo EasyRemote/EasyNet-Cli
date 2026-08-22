@@ -27,6 +27,7 @@ _DEPENDENCY_NAME = re.compile(r"^\s*([A-Za-z0-9_.-]+)")
 _FORBIDDEN_DEPENDENCY_NAMES = {
     "axon",
     "axon-pb2",
+    "axon-runtime-sdk",
     "axon-sdk",
     "easynet-axon",
     "easynet-run-axon",

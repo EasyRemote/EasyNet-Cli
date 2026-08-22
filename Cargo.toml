@@ -2,7 +2,10 @@
 name = "easynet"
 version = "0.139.14"
 edition = "2021"
-description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
+description = "Device runtime and CLI for publishing and invoking governed abilities over EasyNet."
+authors = ["Silan Hu <silan.hu@u.nus.edu>"]
+homepage = "https://easynet.run"
+repository = "https://github.com/EasyRemote/EasyNet-Cli"
 license = "Apache-2.0"
 build = "build.rs"
 

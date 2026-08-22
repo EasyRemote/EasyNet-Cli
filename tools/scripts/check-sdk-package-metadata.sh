@@ -61,10 +61,27 @@ if pyproject_path is not None:
     project = pyproject.get("project", {})
     if project.get("name") != "easynet-sdk":
         fail("pyproject:project.name_must_be_easynet-sdk")
+    if project.get("description") != (
+        "Python SDK for invoking, publishing, and managing governed abilities "
+        "through EasyNet Runtime"
+    ):
+        fail("pyproject:canonical_description_required")
     if not str(project.get("version", "")).strip():
         fail("pyproject:project.version_required")
     if project.get("requires-python") != ">=3.11":
         fail("pyproject:requires-python_must_be_>=3.11")
+    expected_person = [{"name": "Silan Hu", "email": "silan.hu@u.nus.edu"}]
+    if project.get("authors") != expected_person:
+        fail("pyproject:canonical_author_required")
+    if project.get("maintainers") != expected_person:
+        fail("pyproject:canonical_maintainer_required")
+    if project.get("license") != "Apache-2.0":
+        fail("pyproject:apache-2.0_license_required")
+    if not any(
+        str(dependency).startswith("axon-runtime-sdk>=")
+        for dependency in project.get("dependencies", [])
+    ):
+        fail("pyproject:canonical_axon_distribution_required")
     package_data = pyproject.get("tool", {}).get("setuptools", {}).get("package-data", {})
     if "py.typed" not in package_data.get("easynet_sdk", []):
         fail("pyproject:py.typed_package_data_required")

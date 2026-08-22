@@ -1,7 +1,7 @@
 name: Tests
 
 env:
-  EASYNET_AXON_COMPAT_REV: 896b35c1c403f23754604822a992d2fbbd14520c
+  EASYNET_AXON_COMPAT_REV: 25a97cc5e32610c3c81f26d085cb34deb50d7230
 
 # Compiles ALL test targets and runs the lib suite. This is the CI
 # that would have caught the five test-construction breaks the
@@ -50,8 +50,8 @@ jobs:
         working-directory: EasyNet-Cli
         run: |
           test "$(git -C ../EasyNet-Axon rev-parse HEAD)" = "$EASYNET_AXON_COMPAT_REV"
-          grep -Fq 'version = "0.129.22"' ../EasyNet-Axon/sdk/rust/Cargo.toml
-          grep -Fq 'version = "0.129.23"' ../EasyNet-Axon/sdk/python/pyproject.toml
+          grep -Fq 'version = "0.183.3"' ../EasyNet-Axon/sdk/rust/Cargo.toml
+          grep -Fq 'version = "0.183.3"' ../EasyNet-Axon/sdk/python/pyproject.toml
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
@@ -160,13 +160,9 @@ jobs:
         working-directory: EasyNet-Cli
         run: ruff check sdk/python/easynet_sdk sdk/python/tests sdk/conformance/python_sdk_type_contract.py
 
-      - name: Verify full strict Python SDK contract
+      - name: Verify Python SDK type contract
         working-directory: EasyNet-Cli
-        run: |
-          MYPYPATH=../EasyNet-Axon/sdk/python \
-            mypy --strict --follow-imports=skip \
-              sdk/python/easynet_sdk \
-              sdk/conformance/python_sdk_type_contract.py
+        run: bash tools/scripts/check-python-sdk-static-contract.sh
 
       - name: Verify SDK inventories and provider neutrality
         working-directory: EasyNet-Cli
@@ -188,8 +184,9 @@ jobs:
 
       # A source/header-only check cannot detect stale or accidental cdylib
       # exports. Build the actual shared library and compare its normalized
-      # dynamic symbol table against the canonical 54-symbol v5 allowlist.
-      - name: Verify exact generic C ABI v5 exports
+      # dynamic symbol table against the canonical base-v7 allowlist. The v8
+      # raw-stream entry point is additive and feature-detected.
+      - name: Verify exact generic C ABI v7 exports
         working-directory: EasyNet-Cli
         run: |
           cargo build --features axon-pb --lib
