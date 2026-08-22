@@ -210,6 +210,13 @@ impl RemoteDesktopPlugin {
         Arc::clone(&self.recovery)
     }
 
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn target_monitor_desired_sessions_for_test(
+        &self,
+    ) -> Vec<String> {
+        self.target_monitor.desired_sessions_for_test()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn persist_recovery_snapshot(
         &self,
         snapshot: &RemoteDesktopRecoverySnapshot,
@@ -241,6 +248,7 @@ impl RemoteDesktopPlugin {
             });
             if !terminal {
                 Self::schedule_session_lease(plugin, session_id.clone(), lease_expires_at_ms)?;
+                Self::track_session_target(plugin, session_id.clone())?;
             }
             restored.push(session_id);
         }
@@ -344,6 +352,11 @@ mod tests {
         assert_eq!(shown["session_id"], json!("rd-startup-rehydrate"));
         assert_eq!(shown["state"], json!("degraded"));
         assert_eq!(shown["media_transport_ready"], json!(false));
+        assert_eq!(
+            recovered.target_monitor_desired_sessions_for_test(),
+            vec!["rd-startup-rehydrate".to_string()],
+            "rehydrated non-terminal sessions must re-enter target monitoring"
+        );
         assert!(shown["events"].as_array().unwrap().iter().any(|event| {
             event["event_type"] == json!("SESSION_REHYDRATED")
                 && event["recoverability"] == json!("retry_session")

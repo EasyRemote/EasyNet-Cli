@@ -32,6 +32,7 @@ REFRESH_LEASE_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/refresh_lease.r
 SHOW_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/show_session.rs"
 END_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/end_session.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
+TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
 
 fail() {
   printf 'check-remoteapp-product-closure-audit: %s\n' "$1" >&2
@@ -84,6 +85,7 @@ reject() {
 [[ -f "$SHOW_SESSION_HANDLER" ]] || fail "missing RemoteApp show_session handler"
 [[ -f "$END_SESSION_HANDLER" ]] || fail "missing RemoteApp end_session handler"
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
+[[ -f "$TARGET_MONITOR" ]] || fail "missing RemoteApp target monitor"
 
 for lifecycle_harness in "$SESSION_TIMEOUT" "$SESSION_CANCEL" "$SESSION_RESUME"; do
   require 'remoteapp-lifecycle-harness-lib\.sh' "$lifecycle_harness" \
@@ -779,8 +781,18 @@ require 'rehydrate_recovery_snapshots' "$RUNTIME" \
   'RemoteApp runtime must load recovery snapshots into the plugin session store at startup'
 require 'ignored recovery snapshot' "$RUNTIME" \
   'RemoteApp runtime startup must report and skip corrupt recovery snapshots without failing the whole batch'
+require 'track_session_target\(plugin, session_id\.clone\(\)\)' "$RUNTIME" \
+  'RemoteApp runtime startup must re-register rehydrated non-terminal sessions with target monitoring'
 require 'plugin_startup_rehydrates_recovery_snapshot_for_public_show_session' "$RUNTIME" \
   'RemoteApp runtime must have regression coverage for startup rehydrate show/watch/end behavior'
+require 'target_monitor_desired_sessions_for_test' "$RUNTIME" \
+  'RemoteApp runtime regression must prove rehydrated sessions re-enter target monitoring'
+require 'desired: Mutex<HashSet<String>>' "$TARGET_MONITOR" \
+  'RemoteApp target monitor must keep plugin-owned desired tracking state outside the worker thread'
+require 'initial_tracked: HashSet<String>' "$TARGET_MONITOR" \
+  'RemoteApp target monitor worker restarts must be seeded from desired tracking state'
+require 'desired_sessions_for_test' "$TARGET_MONITOR" \
+  'RemoteApp target monitor must expose test evidence for desired tracking state'
 require 'SESSION_REHYDRATED' "$SESSION" \
   'RemoteApp session aggregate must emit SESSION_REHYDRATED for non-terminal startup recovery'
 require 'fn rehydrate\(' "$SESSION" \

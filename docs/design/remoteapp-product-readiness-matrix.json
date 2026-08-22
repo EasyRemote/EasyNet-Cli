@@ -188,6 +188,8 @@
         "recovery batch loading reports and skips corrupt snapshot rows without dropping valid rows",
         "Unix recovery directories and snapshot files are private because persisted snapshots include daemon-local session tokens",
         "rehydrated non-terminal sessions can start a fresh media negotiation epoch without minting a new session id",
+        "rehydrated non-terminal sessions re-enter target monitoring after plugin startup",
+        "target monitor desired tracking state is owned outside the worker thread so worker replacement can re-seed tracked sessions",
         "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row"
       ],
       "required_evidence_before_product_complete": [
@@ -206,7 +208,7 @@
       "non_claims": [
         "taxonomy and unit coverage do not prove recovery product behavior",
         "the crash/restart recovery verifier self-test does not prove live process recovery",
-        "Stage 1 startup rehydration and new media epoch admission do not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
+        "Stage 1 startup rehydration, target monitor re-registration, and new media epoch admission do not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
       ]
     },
     {

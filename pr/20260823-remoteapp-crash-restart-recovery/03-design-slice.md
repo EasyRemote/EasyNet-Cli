@@ -44,6 +44,9 @@ Stage 1 should not pretend media survived a daemon crash. On restart:
 - media/input transports are marked not ready;
 - the same recovered `session_id` may start a new media generation when the
   client performs fresh signaling;
+- recovered non-terminal sessions re-register with the plugin target monitor so
+  target loss, permission revoke, and rebind observations can continue after
+  daemon restart;
 - watch-events can replay a `SESSION_REHYDRATED` or degraded/retry event;
 - `show_session` returns the same `session_id` instead of `session_not_found`;
 - `end_session` remains idempotent and can close the recovered row.
@@ -110,6 +113,11 @@ satisfy the stricter `daemon_restart_active_session` verifier scenario.
   - recovered non-terminal sessions can leave the rehydrated `Suspended` phase
     and start a new media negotiation epoch without minting a replacement
     session id;
+  - recovered non-terminal sessions are registered into the target monitor
+    desired tracking set during startup rehydration;
+  - the target monitor owns a desired tracking set outside the worker thread, so
+    worker startup/restart can seed tracking from plugin state instead of losing
+    every tracked session when the worker is replaced;
   - public `show_session`, `watch_events`, and `end_session` operate through the
     normal session access/lifecycle path after rehydration.
 

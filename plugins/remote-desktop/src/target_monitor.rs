@@ -39,6 +39,7 @@ const TARGET_MONITOR_INTERVAL: Duration = Duration::from_millis(250);
 
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTargetMonitor {
     worker: Mutex<LifecycleWorker<TargetMonitorCommand>>,
+    desired: Mutex<HashSet<String>>,
 }
 
 enum TargetMonitorCommand {
@@ -61,6 +62,7 @@ impl RemoteDesktopTargetMonitor {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
         Self {
             worker: Mutex::new(LifecycleWorker::new()),
+            desired: Mutex::new(HashSet::new()),
         }
     }
 
@@ -69,6 +71,10 @@ impl RemoteDesktopTargetMonitor {
         plugin: &Arc<RemoteDesktopPlugin>,
         session_id: String,
     ) -> anyhow::Result<()> {
+        if session_id.is_empty() {
+            return Ok(());
+        }
+        self.desired().insert(session_id.clone());
         let command = TargetMonitorCommand::Track { session_id };
         let tx = self.ensure_worker(plugin)?;
         let command = match tx.send(command) {
@@ -76,23 +82,30 @@ impl RemoteDesktopTargetMonitor {
             Err(error) => error.0,
         };
 
-        if let TargetMonitorCommand::Track { session_id } = command {
+        if let TargetMonitorCommand::Track { .. } = command {
             let tx = self.restart_worker(plugin)?;
-            tx.send(TargetMonitorCommand::Track { session_id })
-                .map_err(|err| {
-                    anyhow::anyhow!("remote desktop target monitor unavailable: {err}")
-                })?;
+            drop(tx);
         }
         Ok(())
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn cancel(&self, session_id: &str) {
+        self.desired().remove(session_id);
         let tx = self.worker().sender();
         if let Some(tx) = tx {
             let _ = tx.send(TargetMonitorCommand::Cancel {
                 session_id: session_id.to_string(),
             });
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn desired_sessions_for_test(
+        &self,
+    ) -> Vec<String> {
+        let mut sessions: Vec<_> = self.desired().iter().cloned().collect();
+        sessions.sort();
+        sessions
     }
 
     fn ensure_worker(
@@ -103,8 +116,9 @@ impl RemoteDesktopTargetMonitor {
         if let Some(tx) = worker.sender() {
             return Ok(tx);
         }
+        let initial_tracked = self.desired_snapshot();
         worker
-            .start(|| spawn_target_monitor_worker(Arc::downgrade(plugin)))
+            .start(|| spawn_target_monitor_worker(Arc::downgrade(plugin), initial_tracked))
             .map_err(|err| anyhow::anyhow!("spawn remote desktop target monitor: {err}"))
     }
 
@@ -113,8 +127,9 @@ impl RemoteDesktopTargetMonitor {
         plugin: &Arc<RemoteDesktopPlugin>,
     ) -> anyhow::Result<Sender<TargetMonitorCommand>> {
         let mut worker = self.worker();
+        let initial_tracked = self.desired_snapshot();
         worker
-            .start(|| spawn_target_monitor_worker(Arc::downgrade(plugin)))
+            .start(|| spawn_target_monitor_worker(Arc::downgrade(plugin), initial_tracked))
             .map_err(|err| anyhow::anyhow!("restart remote desktop target monitor: {err}"))
     }
 
@@ -123,6 +138,17 @@ impl RemoteDesktopTargetMonitor {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         }
+    }
+
+    fn desired(&self) -> MutexGuard<'_, HashSet<String>> {
+        match self.desired.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn desired_snapshot(&self) -> HashSet<String> {
+        self.desired().clone()
     }
 }
 
@@ -138,16 +164,21 @@ impl Drop for RemoteDesktopTargetMonitor {
 
 fn spawn_target_monitor_worker(
     plugin: Weak<RemoteDesktopPlugin>,
+    initial_tracked: HashSet<String>,
 ) -> std::io::Result<(Sender<TargetMonitorCommand>, JoinHandle<()>)> {
     let (tx, rx) = mpsc::channel();
     let join = thread::Builder::new()
         .name("easynet-rd-target-monitor".into())
-        .spawn(move || run_target_monitor(plugin, rx))?;
+        .spawn(move || run_target_monitor(plugin, rx, initial_tracked))?;
     Ok((tx, join))
 }
 
-fn run_target_monitor(plugin: Weak<RemoteDesktopPlugin>, rx: Receiver<TargetMonitorCommand>) {
-    let mut tracked = HashSet::<String>::new();
+fn run_target_monitor(
+    plugin: Weak<RemoteDesktopPlugin>,
+    rx: Receiver<TargetMonitorCommand>,
+    initial_tracked: HashSet<String>,
+) {
+    let mut tracked = initial_tracked;
     loop {
         if tracked.is_empty() {
             match rx.recv() {
