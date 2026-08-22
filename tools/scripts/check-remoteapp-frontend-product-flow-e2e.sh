@@ -142,6 +142,14 @@ require 'EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_E2E' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require an explicit live-run gate'
 require '/api/v1/health' "$HUB_API_PREFLIGHT" \
   'Hub API readiness preflight must probe the canonical backend health endpoint'
+require '"connection_state": connection\.get\("state"\)' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must preserve runtime connection state diagnostics'
+require '"connection_failure": connection\.get\("failure"\)' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must preserve runtime credential failure diagnostics'
+require '"hub_endpoint": connection\.get\("hub_endpoint"\)' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must preserve paired Hub endpoint diagnostics'
+require 'details\["preflight_error"\]' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must record runtime-status preflight errors in evidence'
 require 'Docker daemon is not reachable' "$HUB_API_PREFLIGHT" \
   'Hub API readiness preflight must classify Docker-daemon unreachability explicitly'
 require 'does not start Docker' "$HUB_API_PREFLIGHT" \

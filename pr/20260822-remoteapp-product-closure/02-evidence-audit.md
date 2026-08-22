@@ -83,6 +83,21 @@ Current frontend lifecycle evidence:
   product gate: runtime status must expose the Hub API endpoint, Docker must be
   reachable, and `${hub_api_endpoint}/api/v1/health` must respond before daemon,
   frontend, host capture, media, or input evidence can run.
+- 2026-08-23 Hub API readiness evidence:
+  `target/e2e/hub-api-readiness/20260823-rich-failure-check-70909/report.md`
+  fails before RemoteApp product-flow execution with
+  `runtime_status=projection_present_process_missing`,
+  `connection_state=START_FAILED_CREDENTIAL_VERIFY`,
+  `connection_failure.stage=T06_VERIFY_CREDENTIAL`,
+  `hub_endpoint=https://127.0.0.1:50443`, and `hub_api_endpoint=null`. This is
+  current environment evidence against product completion, not a RemoteApp
+  frontend/capture/media/input pass.
+- 2026-08-23 full product-flow attempt:
+  `target/e2e/frontend-remoteapp-product-flow/20260823-live-preflight-82429/report.md`
+  fails at `hub-api-readiness-preflight` and propagates the same
+  credential-verification diagnostics into the product-flow report. No
+  frontend, host capture, media, or input product evidence ran after that
+  upstream gate failed.
 - 2026-08-22 runtime diagnosis found two upstream product-readiness failures
   before RemoteApp evidence could be trusted:
   - Docker was initially unavailable, then recovered after Docker Desktop

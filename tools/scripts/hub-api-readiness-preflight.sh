@@ -67,7 +67,10 @@ report = {
     "status": status,
     "reason": reason,
     "hub_api_endpoint": details.get("hub_api_endpoint"),
+    "hub_endpoint": details.get("hub_endpoint"),
     "runtime_status": details.get("runtime_status"),
+    "connection_state": details.get("connection_state"),
+    "connection_failure": details.get("connection_failure"),
     "docker": details.get("docker"),
     "health": details.get("health"),
 }
@@ -76,7 +79,11 @@ report = {
     "# Hub API Readiness Preflight\n\n"
     f"- Status: `{status}`\n"
     f"- Reason: `{reason}`\n"
-    f"- Hub API endpoint: `{report.get('hub_api_endpoint') or ''}`\n",
+    f"- Hub API endpoint: `{report.get('hub_api_endpoint') or ''}`\n"
+    f"- Hub endpoint: `{report.get('hub_endpoint') or ''}`\n"
+    f"- Runtime status: `{report.get('runtime_status') or ''}`\n"
+    f"- Connection state: `{report.get('connection_state') or ''}`\n"
+    f"- Connection failure: `{json.dumps(report.get('connection_failure'), sort_keys=True) if report.get('connection_failure') else ''}`\n",
     encoding="utf-8",
 )
 PY
@@ -115,6 +122,7 @@ if [[ "$MODE" == "self-test" ]]; then
   bash -n "$0"
   grep -q 'runtime status --json' "$0"
   grep -q 'hub_api_endpoint' "$0"
+  grep -q 'connection_failure' "$0"
   grep -q '/api/v1/health' "$0"
   grep -q 'Docker daemon is not reachable' "$0"
   grep -q 'does not start Docker' "$0"
@@ -129,7 +137,7 @@ DETAILS_JSON="$OUT_DIR/details.json"
 status_rc=0
 run_easynet runtime status --json >"$RUNTIME_STATUS_JSON" 2>"$OUT_DIR/runtime-status.stderr" || status_rc=$?
 
-python3 - "$RUNTIME_STATUS_JSON" "$DETAILS_JSON" "${EASYNET_PRODUCT_HUB_API_ENDPOINT:-}" "$status_rc" <<'PY'
+if python3 - "$RUNTIME_STATUS_JSON" "$DETAILS_JSON" "${EASYNET_PRODUCT_HUB_API_ENDPOINT:-}" "$status_rc" <<'PY'
 import json
 import pathlib
 import sys
@@ -154,15 +162,50 @@ details = {
     "runtime_status_command_exit_code": status_rc,
     "runtime_status": status.get("runtime_status") if isinstance(status, dict) else None,
     "hub_api_endpoint": hub_api_endpoint,
+    "hub_endpoint": connection.get("hub_endpoint") if isinstance(connection, dict) else None,
     "connection_state": connection.get("state") if isinstance(connection, dict) else None,
     "connection_failure": connection.get("failure") if isinstance(connection, dict) else None,
 }
-details_path.write_text(json.dumps(details, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 if status_rc != 0:
+    details["preflight_error"] = "runtime status --json failed"
+    details_path.write_text(json.dumps(details, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     raise SystemExit("runtime status --json failed")
 if not hub_api_endpoint:
+    details["preflight_error"] = "runtime status did not expose hub_api_endpoint; pair or pass EASYNET_PRODUCT_HUB_API_ENDPOINT"
+    details_path.write_text(json.dumps(details, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     raise SystemExit("runtime status did not expose hub_api_endpoint; pair or pass EASYNET_PRODUCT_HUB_API_ENDPOINT")
+details_path.write_text(json.dumps(details, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+then
+  :
+else
+  reason="$(python3 - "$DETAILS_JSON" <<'PY'
+import json
+import pathlib
+import sys
+
+details_path = pathlib.Path(sys.argv[1])
+details = json.loads(details_path.read_text(encoding="utf-8")) if details_path.exists() else {}
+print(details.get("preflight_error") or "runtime status preflight failed")
+PY
+)"
+  write_report "failed" "$reason"
+  python3 - "$DETAILS_JSON" <<'PY' >&2
+import json
+import pathlib
+import sys
+
+details = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(f"runtime_status={details.get('runtime_status')}")
+print(f"connection_state={details.get('connection_state')}")
+print(f"hub_endpoint={details.get('hub_endpoint')}")
+print(f"hub_api_endpoint={details.get('hub_api_endpoint')}")
+failure = details.get("connection_failure")
+if failure:
+    print("connection_failure=" + json.dumps(failure, sort_keys=True))
+PY
+  exit 1
+fi
 
 docker_status="unknown"
 docker_error=""

@@ -179,6 +179,22 @@ passed the bounded single-machine product-flow bundle after the local Hub was
 restarted with the paired `localhost` realm and the device connection-state
 projector preserved `hub_api_endpoint` across the
 `FRONTEND_CONNECTED` projection.
+Latest 2026-08-23 local Hub API readiness attempt,
+`target/e2e/hub-api-readiness/20260823-rich-failure-check-70909/report.md`,
+failed before RemoteApp product-flow execution:
+`runtime_status=projection_present_process_missing`,
+`connection_state=START_FAILED_CREDENTIAL_VERIFY`,
+`connection_failure.stage=T06_VERIFY_CREDENTIAL`,
+`hub_endpoint=https://127.0.0.1:50443`, and `hub_api_endpoint=null`. That is
+current environment evidence against product completion; it does not prove
+Browser/Tauri lifecycle, cross-device remote target inventory, real OS
+app/window capture, input injection, host audio, or network fallback readiness.
+The latest full product-flow attempt,
+`target/e2e/frontend-remoteapp-product-flow/20260823-live-preflight-82429/report.md`,
+failed at the first `hub-api-readiness-preflight` step and propagated the same
+credential-verification diagnostics into the product-flow report. No frontend,
+host capture, media, or input product evidence was executed after that failed
+upstream gate.
 The cross-device smoke entrypoint composes the existing two-node EasyRemote CLI
 E2E and synthetic media/bidi Docker E2E. Its evidence scope is intentionally
 narrow: governed Hub routing, cross-device ability visibility/invocation, and

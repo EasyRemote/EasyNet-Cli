@@ -220,6 +220,16 @@ require 'service_owner_projection_is_fenced_per_host_device' "$AUDIT" \
   'audit must record the Service multihost projection regression evidence'
 require 'docker info timed out after 3s' "$AUDIT" \
   'audit must record the latest live cross-device smoke environment failure'
+require '20260823-rich-failure-check-70909' "$AUDIT" \
+  'audit must record the latest Hub API readiness diagnostic artifact'
+require '20260823-live-preflight-82429' "$AUDIT" \
+  'audit must record the latest full product-flow preflight failure artifact'
+require 'START_FAILED_CREDENTIAL_VERIFY' "$AUDIT" \
+  'audit must preserve the current credential-verification blocker'
+require 'T06_VERIFY_CREDENTIAL' "$AUDIT" \
+  'audit must preserve the credential-verification failure stage'
+require 'hub_api_endpoint=null' "$AUDIT" \
+  'audit must preserve the missing Hub API endpoint blocker'
 require 'source-contract checker, unit test, local provider' "$AUDIT" \
   'audit must name weak evidence classes'
 require 'benchmark, or SPEC statement is insufficient' "$AUDIT" \
@@ -305,6 +315,14 @@ require 'service_owner_projection_selects_live_host_from_multihost_rows' "$PLAN"
   'plan evidence audit must record the live-host Service route regression evidence'
 require 'docker info timed out after 3s' "$PLAN" \
   'plan evidence audit must preserve the latest structured cross-device environment failure'
+require '20260823-rich-failure-check-70909' "$PLAN" \
+  'plan evidence audit must record the latest Hub API readiness diagnostic artifact'
+require '20260823-live-preflight-82429' "$PLAN" \
+  'plan evidence audit must record the latest full product-flow preflight failure artifact'
+require 'START_FAILED_CREDENTIAL_VERIFY' "$PLAN" \
+  'plan evidence audit must preserve the current credential-verification blocker'
+require 'hub_api_endpoint=null' "$PLAN" \
+  'plan evidence audit must preserve the missing Hub API endpoint blocker'
 require 'real OS' "$PLAN" \
   'plan evidence audit must preserve real OS non-claims'
 require 'NAT/STUN/TURN relay' "$PLAN" \
