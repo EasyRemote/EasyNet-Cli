@@ -270,6 +270,14 @@ export const actions = {
     })
     return remoteDesktopPermissionRequestResult(result)
   },
+  rdCheckPermission: async (key: string) => {
+    const entry = entries[key]
+    const result = await invokeMediaUnary('remote_desktop.permission_status', {
+      deviceUra: entry.deviceUra,
+      args: {},
+    })
+    return remoteDesktopPermissionStatusResult(result)
+  },
   rdEnd: async (key: string) => {
     const session = entries[key]?.session
     if (!session) return
@@ -327,6 +335,15 @@ function remoteDesktopPermissionRequestResult(result: Record<string, unknown> | 
     message: inputPermission
       ? 'Accessibility input permission requested but still unavailable for pointer/keyboard control.'
       : 'Screen Recording permission is still unavailable.',
+  }
+}
+
+function remoteDesktopPermissionStatusResult(result: Record<string, unknown> | undefined) {
+  const inputPermission = objectField(result, 'input_permission')
+  return {
+    message: inputPermission
+      ? 'Accessibility input permission is not granted for pointer/keyboard control.'
+      : 'Screen Recording permission is not granted.',
   }
 }
 TS
@@ -682,6 +699,13 @@ it('surfaces RemoteApp input permission results from request_permission', async 
   expect(entry.webrtcStatus).toContain('Accessibility input permission requested but still unavailable')
 })
 
+it('checks RemoteApp host permissions without target-scoped subject', async () => {
+  expect(mocks.invokeMediaUnary).toHaveBeenCalledWith('remote_desktop.permission_status', {
+    args: {},
+  })
+  expect(entry.webrtcStatus).toContain('Accessibility input permission is not granted')
+})
+
 it('preserves and rebinds remote desktop sessions across device offline resume', async () => {
   expect(useMediaChannelStore.getState().entries[key].session.sessionId).toBe('rd-1')
   expect(useMediaChannelStore.getState().entries[key].session.sessionToken).toBe('session-token')
@@ -807,22 +831,26 @@ fi
 perl -0pi -e "s/\\n      subjectURA: selectedTarget\\.resource_ura,//" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
-perl -0pi -e "s/objectField\\(result, 'input_permission'\\)/objectField(result, 'permission')/" \
+cp "$FRONTEND_SRC/store/media-channel-store.ts" \
+  "$FRONTEND_SRC/store/media-channel-store.ts.good"
+perl -0pi -e 's/input_permission/permission/g' \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted request_permission without input_permission parsing" >&2
   exit 1
 fi
-perl -0pi -e "s/objectField\\(result, 'permission'\\)/objectField(result, 'input_permission')/" \
+mv "$FRONTEND_SRC/store/media-channel-store.ts.good" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
-perl -0pi -e 's/Accessibility input permission/Input permission/' \
+cp "$FRONTEND_SRC/store/media-channel-store.ts" \
+  "$FRONTEND_SRC/store/media-channel-store.ts.good"
+perl -0pi -e 's/Accessibility input permission/Input permission/g' \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted request_permission status without Accessibility input wording" >&2
   exit 1
 fi
-perl -0pi -e 's/Input permission/Accessibility input permission/' \
+mv "$FRONTEND_SRC/store/media-channel-store.ts.good" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e 's/surfaces RemoteApp input permission results from request_permission/surfaces RemoteApp screen permission results from request_permission/' \
@@ -832,6 +860,33 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e 's/surfaces RemoteApp screen permission results from request_permission/surfaces RemoteApp input permission results from request_permission/' \
+  "$FRONTEND_SRC/store/media-channel-store.test.ts"
+
+perl -0pi -e 's/(remote_desktop\.permission_status'\''[\s\S]*?deviceUra: entry\.deviceUra,\n)/$1      subjectURA: selectedTarget.resource_ura,\n/s' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted target-scoped permission_status" >&2
+  exit 1
+fi
+perl -0pi -e "s/\\n      subjectURA: selectedTarget\\.resource_ura,//" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/remoteDesktopPermissionStatusResult\(result\)/result/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted permission_status without structured preflight formatting" >&2
+  exit 1
+fi
+perl -0pi -e 's/return result/return remoteDesktopPermissionStatusResult(result)/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/checks RemoteApp host permissions without target-scoped subject/checks generic RemoteApp permissions/' \
+  "$FRONTEND_SRC/store/media-channel-store.test.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted tests without permission_status host-local coverage" >&2
+  exit 1
+fi
+perl -0pi -e 's/checks generic RemoteApp permissions/checks RemoteApp host permissions without target-scoped subject/' \
   "$FRONTEND_SRC/store/media-channel-store.test.ts"
 
 perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura === selectedScreenURA\)/screenResources[0]/' \

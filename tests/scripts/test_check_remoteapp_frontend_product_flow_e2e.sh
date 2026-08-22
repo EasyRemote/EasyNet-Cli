@@ -52,6 +52,8 @@ cp "$REPO_ROOT/../EasyNet/Frontend/src/components/easynet/DeviceMediaAccess.test
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/components/easynet/DeviceMediaAccess.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx"
+cp "$REPO_ROOT/../EasyNet/Frontend/src/components/easynet/ShareContentPicker.tsx" \
+  "$SB/Frontend/src/components/easynet/ShareContentPicker.tsx"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/lib/api/remote-desktop-protocol.ts" \
   "$SB/Frontend/src/lib/api/remote-desktop-protocol.ts"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/store/media-channel-store.ts" \
@@ -255,6 +257,18 @@ if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
 fi
 mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+
+cp "$SB/Frontend/src/components/easynet/ShareContentPicker.tsx" \
+  "$SB/Frontend/src/components/easynet/ShareContentPicker.tsx.good"
+perl -0pi -e 's/Check permissions/Check status/g' \
+  "$SB/Frontend/src/components/easynet/ShareContentPicker.tsx"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted share picker without Check permissions preflight CTA"
+fi
+mv "$SB/Frontend/src/components/easynet/ShareContentPicker.tsx.good" \
+  "$SB/Frontend/src/components/easynet/ShareContentPicker.tsx"
 
 cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"

@@ -211,6 +211,12 @@ Current frontend lifecycle evidence:
   permission` recovery action when daemon input readiness reports
   `input_injection_unavailable`. This improves permission correctness and user
   recovery, but still does not prove successful OS input injection.
+- The RemoteApp share picker now exposes a non-prompting `Check permissions`
+  action before `create_session`. It invokes `remote_desktop.permission_status`
+  without a target `subjectURA` and displays Screen Recording plus
+  Accessibility/input-injection readiness inside the picker. This closes a
+  frontend authorization-preflight seam, while real OS permission and input E2E
+  evidence remain required.
 - Frontend RemoteApp creation now sends the same input intent through
   `grant_consent.args.input_control`, `create_session.args.mode`, and
   `create_session.args.input_policy`. The default Interactive path requests

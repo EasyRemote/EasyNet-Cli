@@ -401,6 +401,32 @@ Product effect:
 - This remains permission-recovery evidence only; focus-safe OS injection,
   coordinate mapping, and latency E2E remain required.
 
+## 2026-08-22 — Share picker needs host-local permission preflight
+
+Decision:
+
+- Authorization is a product step before session creation, not only an error
+  handler after capture or create-session fails.
+- `remote_desktop.permission_status` is the correct host-local, non-prompting
+  preflight ability; it must not be scoped to the selected target resource.
+
+Implementation delta:
+
+- Added frontend `rdCheckPermission` that invokes
+  `remote_desktop.permission_status` with `args: {}` and no target subject.
+- The share picker exposes `Check permissions` and renders the structured
+  Screen Recording plus Accessibility/input permission status without leaving
+  the picker.
+- Frontend invocation/product-flow gates and tests reject target-scoped
+  permission_status calls or missing preflight UI coverage.
+
+Product effect:
+
+- Users can verify host permission readiness before starting a RemoteApp
+  session, keeping the picker → permission → consent → create flow explicit.
+- This remains preflight evidence only; successful OS input injection and real
+  Browser/Tauri E2E are still required for product completion.
+
 ## 2026-08-22 — Frontend must preserve RemoteApp terminal receipts
 
 Decision:

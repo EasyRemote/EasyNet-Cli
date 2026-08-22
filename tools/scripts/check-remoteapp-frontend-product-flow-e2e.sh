@@ -11,6 +11,7 @@ VIEW_ONLY_INPUT="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.s
 HUB_API_PREFLIGHT="$ROOT/tools/scripts/hub-api-readiness-preflight.sh"
 FRONTEND_UI_TEST="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.test.tsx"
 FRONTEND_UI="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.tsx"
+FRONTEND_SHARE_PICKER="$FRONTEND_ROOT/src/components/easynet/ShareContentPicker.tsx"
 FRONTEND_STORE="$FRONTEND_ROOT/src/store/media-channel-store.ts"
 FRONTEND_STORE_TEST="$FRONTEND_ROOT/src/store/media-channel-store.test.ts"
 FRONTEND_PROTOCOL="$FRONTEND_ROOT/src/lib/api/remote-desktop-protocol.ts"
@@ -187,6 +188,12 @@ require 'offers permission recovery when daemon input injection is unavailable' 
   'frontend UI tests must prove input-injection blockers expose Request permission recovery'
 require 'rdRequestPermission' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove Request permission recovery executes the store action'
+require 'onCheckPermission' "$FRONTEND_UI" \
+  'frontend RemoteApp panel must wire permission_status preflight into the share picker'
+require 'Check permissions' "$FRONTEND_SHARE_PICKER" \
+  'frontend share picker must expose a non-prompting RemoteApp permission preflight action'
+require 'remote_desktop\.permission_status' "$FRONTEND_UI_TEST" \
+  'frontend UI flow tests must prove permission_status is part of the pre-share authorization flow'
 require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
   'frontend store tests must prove RTCPeerConnection receives session-projected ICE servers'
 require 'turn:turn\.example\.test:3478\?transport=udp' "$FRONTEND_STORE_TEST" \
@@ -260,6 +267,8 @@ require 'input scope display_global' "$AUDIT" \
   'product readiness audit must record input-scope visibility evidence'
 require 'Accessibility/input-injection permission' "$AUDIT" \
   'product readiness audit must record input-permission recovery evidence'
+require 'permission_status preflight' "$AUDIT" \
+  'product readiness audit must record frontend permission preflight evidence'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
@@ -285,5 +294,7 @@ require 'input scope display_global' "$PLAN" \
   'product closure plan must record input-scope visibility evidence'
 require 'Accessibility/input-injection permission' "$PLAN" \
   'product closure plan must record input-permission recovery evidence'
+require 'permission_status' "$PLAN" \
+  'product closure plan must record frontend permission preflight evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'
