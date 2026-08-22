@@ -488,3 +488,38 @@ Product effect:
   extension contract instead of relying on source-tree-only evidence.
 - This closes a distribution seam only; it does not prove codec negotiation,
   host audio, relay behavior, or cross-device RemoteApp media readiness.
+
+## 2026-08-22 — Device presence loss must not terminate RemoteApp sessions
+
+Decision:
+
+- A device online/offline presence change is a transport availability signal,
+  not a user/session terminal action.
+- The only product-level terminal actions for a RemoteApp session remain
+  explicit `end_session`, lease/session timeout, daemon terminal recovery, or
+  permission-revoked terminalization with a `terminal_receipt`.
+- Therefore the frontend must not call `rdEnd` or clear a non-terminal
+  RemoteApp session merely because the selected device becomes temporarily
+  offline.
+
+Implementation delta:
+
+- Frontend offline suspend preserves non-terminal RemoteApp session state and
+  closes only local browser transport.
+- Frontend online resume validates the preserved session with
+  `remote_desktop.show_session`, rebinds WebRTC, restarts `watch_events`, and
+  refreshes the lease.
+- Resume-time WebRTC transport failure preserves the daemon session instead of
+  invoking end-session cleanup.
+- The CLI frontend boundary gate now rejects session clearing in
+  `suspendEntryForOffline`, missing `show_session` validation during resume,
+  resume rebinds that end the daemon session on transport failure, and
+  `DeviceMediaAccess` offline effects that call `rdEnd`.
+
+Product effect:
+
+- A short UI/device presence drop no longer destroys a valid daemon RemoteApp
+  session, so the user can reconnect without losing session lifecycle state.
+- This closes the frontend offline/resume seam only; long outages, NAT/relay
+  handoff, process crash/restart, and real cross-device recovery still require
+  E2E evidence before RemoteApp can be called product-complete.

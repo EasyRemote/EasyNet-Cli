@@ -182,6 +182,64 @@ function remoteDesktopSessionEventRecovery(event: RemoteDesktopEvent) {
   return null
 }
 
+function closeAttach(key: string, reason: string, options?: { keepSessionPolling?: boolean }) {
+  refsFor(key).remoteDesktopEventsAbort?.abort()
+}
+
+function patchPreview(key: string, patch: Record<string, unknown>) {
+  return patch
+}
+
+const suspendEntryForOffline = (key: string, reason: string) => {
+  const entry = entries[key]
+  if (!entry) return
+  if (entry.channel === 'remoteDesktop') {
+    patchEntry(key, {
+      error: reason,
+      attached: false,
+      loading: false,
+      webrtcStatus: 'device offline; remote desktop session preserved for reconnect',
+    })
+  }
+}
+
+const resumeEntryFromOffline = (key: string) => {
+  const entry = entries[key]
+  if (!entry) return
+  if (entry.channel === 'remoteDesktop') {
+    const session = entry.session
+    if (!session || remoteDesktopSessionTerminal(session)) return
+    void resumeRemoteDesktopSessionAfterOffline(key, session)
+  }
+}
+
+const resumeRemoteDesktopSessionAfterOffline = async (key: string, session: RemoteDesktopView) => {
+  const refs = refsFor(key)
+  refs.remoteDesktopResumeIdentity = `${session.sessionId}:${session.sessionToken}`
+  const result = await invokeMediaUnary('remote_desktop.show_session', {
+    deviceUra: entries[key].deviceUra,
+    subjectURA: session.subjectUra,
+    causalContext: remoteDesktopSessionCausalContext(session),
+    args: { session_id: session.sessionId, session_token: session.sessionToken },
+  })
+  const view = projectRemoteDesktopView(result, session.sessionToken)
+  const negotiated = await startWebRtc(key, view, { endSessionOnTransportFailure: false })
+  patchEntry(key, { session: negotiated, webrtcStatus: 'remote desktop transport reconnected' })
+}
+
+async function startWebRtc(
+  key: string,
+  view: RemoteDesktopView,
+  options: { endSessionOnTransportFailure?: boolean } = {},
+) {
+  const endSessionOnTransportFailure = options.endSessionOnTransportFailure ?? true
+  if (!endSessionOnTransportFailure) {
+    patchEntry(key, { webrtcStatus: 'remote desktop transport failed; session preserved for reconnect' })
+    closeAttach(key, 'webrtc_failed_resume', { keepSessionPolling: true })
+  }
+  return view
+}
+
 export const actions = {
   rdReportClientMediaState: (key: string, state: 'presenting' | 'stalled' | 'detached') => reportClientMediaState(key, state),
   rdSendInput: (key, frame) => {
@@ -594,6 +652,14 @@ it('surfaces remote desktop recovery events from the session watcher', async () 
   expect(useMediaChannelStore.getState().entries[key].session.terminalReceipt.reasonCode).toBe('target_permission_revoked')
   expect(useMediaChannelStore.getState().entries[key].session?.sessionToken).toBeUndefined()
 })
+
+it('preserves and rebinds remote desktop sessions across device offline resume', async () => {
+  expect(useMediaChannelStore.getState().entries[key].session.sessionId).toBe('rd-1')
+  expect(useMediaChannelStore.getState().entries[key].session.sessionToken).toBe('session-token')
+  expect(mocks.invokeMediaUnary).toHaveBeenCalledWith('remote_desktop.show_session', expect.anything())
+  expect(mocks.invokeMediaUnary).toHaveBeenCalledWith('remote_desktop.set_description', expect.anything())
+  expect(mocks.invokeMediaStream).toHaveBeenCalledWith('remote_desktop.watch_events', expect.anything(), expect.anything())
+})
 TS
 
 cat >"$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx" <<'TSX'
@@ -640,6 +706,10 @@ it('surfaces daemon remote desktop input readiness in session details', async ()
 
 it('surfaces daemon remote desktop terminal receipts in session details', async () => {
   expect(screen.getByText('terminal caller_ended #9')).toBeInTheDocument()
+})
+
+it('does not end a remote desktop session when device presence drops offline', async () => {
+  expect(rdEnd).not.toHaveBeenCalled()
 })
 TSX
 
@@ -788,6 +858,42 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
 fi
 perl -0pi -e "s/event\\.eventType === 'TARGET_PERMISSION_IGNORED'/event.eventType === 'TARGET_PERMISSION_REVOKED'/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/webrtcStatus: 'device offline; remote desktop session preserved for reconnect',/session: null,\\n      webrtcStatus: 'device offline; remote desktop session preserved for reconnect',/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted device-offline RemoteApp session clearing" >&2
+  exit 1
+fi
+perl -0pi -e "s/\\n      session: null,//" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/subjectURA: session\\.subjectUra,/subjectURA: entry.subjectUra,/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted RemoteApp offline resume without show_session validation" >&2
+  exit 1
+fi
+perl -0pi -e "s/subjectURA: entry\\.subjectUra,/subjectURA: session.subjectUra,/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/startWebRtc\\(key, view, \\{ endSessionOnTransportFailure: false \\}\\)/startWebRtc(key, view, { endSessionOnTransportFailure: true })/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted offline resume transport failure ending the daemon session" >&2
+  exit 1
+fi
+perl -0pi -e "s/startWebRtc\\(key, view, \\{ endSessionOnTransportFailure: true \\}\\)/startWebRtc(key, view, { endSessionOnTransportFailure: false })/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/  return remoteTargetReady/  if (online === false) rdEnd(channelKey)\\n  return remoteTargetReady/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted UI presence-offline RemoteApp session end" >&2
+  exit 1
+fi
+perl -0pi -e "s/  if \\(online === false\\) rdEnd\\(channelKey\\)\\n//" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
 
 perl -0pi -e "s/runs the remote desktop UI flow from target picker through session end/runs an incomplete remote desktop UI flow/" \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"

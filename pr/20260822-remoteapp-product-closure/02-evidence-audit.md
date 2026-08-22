@@ -215,6 +215,16 @@ Current frontend lifecycle evidence:
   projection and clear the bearer token. This closes the permission-revoke
   lifecycle seam for product state, but still needs real OS permission-revoke
   E2E evidence.
+- Frontend device-offline handling now treats presence loss as local transport
+  suspension, not session termination. Non-terminal RemoteApp sessions keep
+  their daemon session token, resume validates the session with
+  `remote_desktop.show_session`, then rebinds WebRTC with transport-failure
+  cleanup configured to preserve the daemon session for another reconnect.
+  Component and store tests cover the presence drop and rebind path, and the
+  CLI frontend boundary gate rejects regressions that clear the session or call
+  `rdEnd` from offline presence. This closes the short offline/resume seam; it
+  does not prove long-outage, network handoff, process crash, or relay recovery
+  E2E.
 - Daemon session views now also project target-tracker input loss into
   `input_readiness.blocked_reason=target_input_not_ready`. This keeps the
   public session view aligned with the actual input execution path, which

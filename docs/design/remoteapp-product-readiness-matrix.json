@@ -113,11 +113,11 @@
         "permission revocation terminates the daemon session with a terminal_receipt and frontend terminal sync",
         "target loss and transport failure taxonomy",
         "frontend watch_events degraded/revoked recovery handling",
+        "frontend preserves non-terminal RemoteApp sessions across device-offline presence drops, validates with remote_desktop.show_session on resume, and rebinds WebRTC without ending the daemon session on failed rebind",
         "canonical SDK cancel/timeout semantics"
       ],
       "required_evidence_before_product_complete": [
-        "session resume after transport loss",
-        "reconnect handoff",
+        "long-outage and network transport reconnect handoff E2E",
         "consent revoke termination E2E",
         "canonical Axon cancel/timeout receipt-chain evidence for RemoteApp abilities",
         "crash/restart recovery E2E"

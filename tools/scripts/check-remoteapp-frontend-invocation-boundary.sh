@@ -171,6 +171,24 @@ require 'syncTerminalSession: true' "$STORE" \
   'frontend permission-revoked recovery must request daemon terminal session synchronization'
 require 'terminal sync failed' "$STORE" \
   'frontend terminal recovery sync failures must remain visible to the operator'
+require 'resumeRemoteDesktopSessionAfterOffline' "$STORE" \
+  'frontend must own RemoteApp offline resume as an explicit session lifecycle path'
+require 'remoteDesktopResumeIdentity' "$STORE" \
+  'frontend RemoteApp offline resume must deduplicate concurrent resume attempts'
+require_multiline 'm/const suspendEntryForOffline = \(key: string, reason: string\) => \{[\s\S]*if \(entry\.channel === '\''remoteDesktop'\''\) \{[\s\S]*remote desktop session preserved for reconnect/s' "$STORE" \
+  'frontend device-offline suspend must preserve non-terminal RemoteApp sessions for reconnect'
+reject_multiline 'm/const suspendEntryForOffline = \(key: string, reason: string\) => \{(?:(?!\n  const resumeEntryFromOffline).)*if \(entry\.channel === '\''remoteDesktop'\''\) \{(?:(?!\n  const resumeEntryFromOffline).)*session:\s*null/s' "$STORE" \
+  'frontend device-offline suspend must not clear RemoteApp session state'
+require_multiline 'm/const resumeEntryFromOffline = \(key: string\) => \{[\s\S]*entry\.channel === '\''remoteDesktop'\''[\s\S]*remoteDesktopSessionTerminal\(session\)[\s\S]*resumeRemoteDesktopSessionAfterOffline\(key, session\)/s' "$STORE" \
+  'frontend device-online resume must rebind only preserved non-terminal RemoteApp sessions'
+require_multiline 'm/const resumeRemoteDesktopSessionAfterOffline[\s\S]*invokeMediaUnary\('\''remote_desktop\.show_session'\''[\s\S]*subjectURA: session\.subjectUra[\s\S]*args: \{ session_id: session\.sessionId, session_token: session\.sessionToken \}/s' "$STORE" \
+  'frontend RemoteApp offline resume must validate the daemon session with remote_desktop.show_session before WebRTC rebind'
+require_multiline 'm/startWebRtc\(key, view, \{ endSessionOnTransportFailure: false \}\)/s' "$STORE" \
+  'frontend RemoteApp offline resume must preserve the daemon session when a rebind transport attempt fails'
+require 'remote desktop transport failed; session preserved for reconnect' "$STORE" \
+  'frontend failed resume transport must surface that the daemon session remains reusable'
+reject_multiline 'm/online === false[\s\S]{0,240}rdEnd\(channelKey\)/s' "$ACCESS" \
+  'frontend DeviceMediaAccess must not end RemoteApp sessions from device presence loss'
 
 require 'resource\.refresh_remote_targets' "$ACCESS" \
   'frontend display/application/window picker must use live resource.refresh_remote_targets'
@@ -301,6 +319,8 @@ require "mode: 'view_only'" "$STORE_TEST" \
   'frontend store tests must prove disabled interactive mode creates a view-only session'
 require 'surfaces remote desktop recovery events from the session watcher' "$STORE_TEST" \
   'frontend store tests must prove watch_events recovery events affect UI/transport state'
+require 'preserves and rebinds remote desktop sessions across device offline resume' "$STORE_TEST" \
+  'frontend store tests must prove RemoteApp offline resume preserves and rebinds daemon sessions'
 require 'target_permission_revoked' "$STORE_TEST" \
   'frontend store tests must prove permission-revoked events synchronize daemon terminal receipts'
 require 'session\?\.sessionToken\)\.toBeUndefined\(\)' "$STORE_TEST" \
@@ -321,6 +341,8 @@ require 'keeps base media controls available when remote desktop target refresh 
   'frontend access tests must prove remote target failure does not disable base media'
 require 'runs the remote desktop UI flow from target picker through session end' "$ACCESS_TEST" \
   'frontend access tests must prove picker-to-session-to-end remote desktop UI flow'
+require 'does not end a remote desktop session when device presence drops offline' "$ACCESS_TEST" \
+  'frontend access tests must prove device-offline presence does not invoke remote desktop end_session'
 require 'surfaces daemon remote desktop input readiness in session details' "$ACCESS_TEST" \
   'frontend access tests must prove daemon input_readiness appears in session details'
 require 'input_injection_unavailable' "$ACCESS_TEST" \
