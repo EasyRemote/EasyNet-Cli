@@ -332,7 +332,7 @@ require 'fn into_payload\(self\) -> Value' "$SESSION_EVENTS" \
   'session aggregate must consume event payload through the projection domain object'
 reject "type RemoteDesktopEventProjection = \\(&'static str, Value\\)" "$SESSION_EVENTS" \
   'session event projection must not regress to a tuple alias'
-require 'fn push_projected_event\(&mut self, event: session_events::RemoteDesktopEventProjection\)' "$SESSION" \
+require_multiline 'm/fn push_projected_event\(\s*&mut self,\s*event: session_events::RemoteDesktopEventProjection,?\s*\)/s' "$SESSION" \
   'session aggregate must only accept typed remote desktop event projections'
 reject "fn push_projected_event\\(&mut self, event: \\(&'static str, Value\\)\\)" "$SESSION" \
   'session aggregate must not accept arbitrary event_type/payload tuples'
@@ -869,10 +869,22 @@ require 'media_source_lost = self\.mark_active_media_source_lost\(reason\)' "$SE
   'consent revocation must mark active media source lost through the session media-source helper'
 require 'self\.consent\.expire\(\)' "$SESSION" \
   'terminal session lifecycle must expire active consent'
-require 'consent_revocation_suspends_media_and_blocks_input_activation' "$SESSION" \
-  'consent revocation must have session-level media/input regression coverage'
+require 'REASON_TARGET_PERMISSION_REVOKED' "$CONSTANTS" \
+  'permission revocation must use a stable terminal reason code'
+require 'fn close_after_permission_revoked\(&mut self\)' "$SESSION" \
+  'permission revocation must close through a dedicated aggregate terminal path'
+require_multiline 'm/self\.lifecycle\s*\.\s*terminate_closed\(REASON_TARGET_PERMISSION_REVOKED\)/s' "$SESSION" \
+  'permission revocation must terminate the RemoteApp session with the stable reason'
+require_multiline 'm/self\.terminal_receipt = Some\(\s*self\.project_terminal_receipt\(REASON_TARGET_PERMISSION_REVOKED/s' "$SESSION" \
+  'permission revocation must publish a RemoteApp terminal receipt'
+require 'consent_revocation_terminates_session_and_blocks_input_activation' "$SESSION" \
+  'consent revocation must have session-level terminal media/input regression coverage'
 require 'permission_revoked_index < media_source_lost_index' "$SESSION" \
   'consent revocation test must prove permission event precedes media source loss'
+require 'media_source_lost_index < session_closed_index' "$SESSION" \
+  'consent revocation test must prove media source loss precedes terminal closure'
+require 'session\.terminal_receipt\(\)\.unwrap\(\)\["reason_code"\]' "$SESSION" \
+  'consent revocation test must assert the terminal receipt reason code'
 require 'revoked consent must prevent input from reactivating' "$SESSION" \
   'consent revocation test must prove inactive consent blocks input activation'
 

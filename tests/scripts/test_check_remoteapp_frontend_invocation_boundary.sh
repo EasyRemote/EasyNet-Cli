@@ -144,10 +144,25 @@ function applyRemoteDesktopSessionEventEffect(key: string, sessionId: string, ev
   const recovery = remoteDesktopSessionEventRecovery(event)
   if (!recovery) return
   if (recovery.closeLocalTransport) stopRemoteDesktopEventWatch(key)
+  if (recovery.syncTerminalSession) syncRemoteDesktopTerminalSession(key, sessionId)
   patchEntry(key, {
     attached: false,
     webrtcStatus: recovery.status,
   })
+}
+
+async function syncRemoteDesktopTerminalSession(key: string, sessionId: string) {
+  try {
+    const result = await invokeMediaUnary('remote_desktop.show_session', {
+      deviceUra: entries[key].deviceUra,
+      subjectURA: entries[key].session.subjectUra,
+      causalContext: remoteDesktopSessionCausalContext(entries[key].session),
+      args: { session_id: sessionId, session_token: entries[key].session.sessionToken },
+    })
+    patchEntry(key, { session: projectRemoteDesktopView(result) })
+  } catch {
+    patchEntry(key, { webrtcStatus: 'terminal sync failed' })
+  }
 }
 
 function remoteDesktopSessionEventRecovery(event: RemoteDesktopEvent) {
@@ -155,6 +170,7 @@ function remoteDesktopSessionEventRecovery(event: RemoteDesktopEvent) {
     return {
       status: 'remote desktop permission was revoked',
       closeLocalTransport: true,
+      syncTerminalSession: true,
     }
   }
   if (event.eventType === 'SESSION_DEGRADED') {
@@ -575,6 +591,8 @@ it('keeps remote desktop consent and session input policy view-only when interac
 it('surfaces remote desktop recovery events from the session watcher', async () => {
   expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('session needs retry')
   expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('permission was revoked')
+  expect(useMediaChannelStore.getState().entries[key].session.terminalReceipt.reasonCode).toBe('target_permission_revoked')
+  expect(useMediaChannelStore.getState().entries[key].session?.sessionToken).toBeUndefined()
 })
 TS
 

@@ -374,6 +374,35 @@ Product effect:
   reconnect, consent-revoke termination E2E, and crash/restart recovery remain
   required before product completion.
 
+## 2026-08-22 — Permission revocation is a terminal RemoteApp outcome
+
+Decision:
+
+- A host permission revocation invalidates the consent grant for the current
+  RemoteApp session. The existing session must not remain suspended and
+  lease-refreshable under the old grant.
+- The consent state remains `revoked`, not `expired`, so audit can distinguish
+  caller close / lease expiry from user or platform permission revocation.
+
+Implementation delta:
+
+- Added stable terminal reason `target_permission_revoked`.
+- `TargetObservation::PermissionRevoked` now revokes consent, emits
+  `TARGET_PERMISSION_REVOKED`, emits `MEDIA_SOURCE_LOST`, and closes the
+  session with `SESSION_CLOSED` plus a RemoteApp `terminal_receipt`.
+- The frontend marks permission-revoked recovery as terminal-sync-required,
+  closes local WebRTC/input transport, invokes `remote_desktop.show_session`,
+  retains the daemon terminal receipt, and clears the session token.
+- Lifecycle and frontend boundary gates now reject regressions back to
+  suspended-only revoke handling.
+
+Product effect:
+
+- Permission revoke no longer leaves a zombie RemoteApp session occupying lease
+  lifecycle while the UI tells the user to create a new session.
+- This still does not prove real OS permission-revoke E2E, reconnect/resume, or
+  crash/restart recovery.
+
 ## 2026-08-22 — Target tracker input loss must block session input readiness
 
 Decision:

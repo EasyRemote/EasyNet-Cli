@@ -109,6 +109,7 @@
         "refresh/end session",
         "explicit end_session and lease-timeout terminal_receipt projection",
         "frontend retains closed end_session views with terminal_receipt while clearing session tokens",
+        "permission revocation terminates the daemon session with a terminal_receipt and frontend terminal sync",
         "target loss and transport failure taxonomy",
         "frontend watch_events degraded/revoked recovery handling",
         "canonical SDK cancel/timeout semantics"
@@ -153,6 +154,7 @@
         "target-scoped WebRTC lifecycle unit coverage",
         "protocol projection coverage for daemon input_readiness driven input gating",
         "frontend protocol/store/UI coverage for daemon terminal_receipt projection after end_session",
+        "frontend permission-revoked recovery synchronizes daemon terminal_receipt through show_session",
         "product-flow harness entrypoint"
       ],
       "required_evidence_before_product_complete": [

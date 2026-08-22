@@ -27,6 +27,8 @@ Direct WebRTC route discovery is provider-backed. Host candidates, configured ST
 MD
 
   cat >"$SANDBOX/plugins/remote-desktop/src/constants.rs" <<'RS'
+pub const REASON_TARGET_PERMISSION_REVOKED: &str = "target_permission_revoked";
+
 fn direct_webrtc_endpoint_ura(session_id: &str) -> String {
     format!(
         "easynet:///r/local/resource/remote-desktop-transport.{}/endpoint/webrtc",
@@ -181,6 +183,9 @@ fn record_target_observation() {
         session_events::media_source_lost(self.target.binding());
     }
     self.push_target_tracking_event(event);
+    if permission_revoked {
+        self.close_after_permission_revoked();
+    }
 }
 
 fn push_target_tracking_event() {
@@ -217,6 +222,13 @@ fn close() {
 fn revoke_consent() {
     self.lifecycle.suspend();
     media_source_lost = self.mark_active_media_source_lost(reason);
+}
+
+fn close_after_permission_revoked(&mut self) {
+    self.lifecycle.terminate_closed(REASON_TARGET_PERMISSION_REVOKED);
+    self.terminal_receipt = Some(
+        self.project_terminal_receipt(REASON_TARGET_PERMISSION_REVOKED, &terminal_event),
+    );
 }
 
 fn expire_target_rebind_deadline() {
@@ -348,8 +360,13 @@ mod tests {
     }
 
     #[test]
-    fn consent_revocation_suspends_media_and_blocks_input_activation() {
+    fn consent_revocation_terminates_session_and_blocks_input_activation() {
         assert!(permission_revoked_index < media_source_lost_index);
+        assert!(media_source_lost_index < session_closed_index);
+        assert_eq!(
+            session.terminal_receipt().unwrap()["reason_code"],
+            json!(REASON_TARGET_PERMISSION_REVOKED)
+        );
         assert!(
             !session.activate_input_for_transport_epoch(epoch),
             "revoked consent must prevent input from reactivating even with the same transport epoch"
@@ -1737,6 +1754,27 @@ write_fixture
 perl -0pi -e 's/target_lost_index < media_source_lost_index/media_source_lost_index < target_lost_index/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'E2E-09 must prove TARGET_LOST is ordered before MEDIA_SOURCE_LOST'
+
+write_fixture
+perl -0pi -e 's/REASON_TARGET_PERMISSION_REVOKED/REASON_PERMISSION_STILL_SUSPENDED/g' \
+  "$SANDBOX/plugins/remote-desktop/src/constants.rs" \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'permission revocation must use a stable terminal reason code'
+
+write_fixture
+perl -0pi -e 's/fn close_after_permission_revoked/fn suspend_after_permission_revoked/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'permission revocation must close through a dedicated aggregate terminal path'
+
+write_fixture
+perl -0pi -e 's/terminal_receipt/revoked_terminal_receipt/g' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'permission revocation must publish a RemoteApp terminal receipt'
+
+write_fixture
+perl -0pi -e 's/consent_revocation_terminates_session_and_blocks_input_activation/consent_revocation_suspends_media_and_blocks_input_activation/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'consent revocation must have session-level terminal media/input regression coverage'
 
 write_fixture
 perl -0pi -e 's/target_failure_payload/target_failure_projection_regression/g' \

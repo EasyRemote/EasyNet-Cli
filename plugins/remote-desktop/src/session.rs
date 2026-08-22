@@ -10,7 +10,9 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, watch};
 
 use crate::daemon::persistence::resources::ResourceType;
-use crate::daemon::plugins::remote_desktop::constants::REASON_SESSION_EXPIRED;
+use crate::daemon::plugins::remote_desktop::constants::{
+    REASON_SESSION_EXPIRED, REASON_TARGET_PERMISSION_REVOKED,
+};
 use crate::daemon::plugins::remote_desktop::event_log::{
     RemoteDesktopEventLog, RemoteDesktopEventReplay,
 };
@@ -489,6 +491,9 @@ impl RemoteDesktopSession {
         self.touch();
         self.push_target_tracking_event(event);
         self.push_media_source_lost_event(media_source_lost);
+        if permission_revoked {
+            self.close_after_permission_revoked();
+        }
         media_source_lost
     }
 
@@ -963,6 +968,25 @@ impl RemoteDesktopSession {
         self.event_log.close();
     }
 
+    fn close_after_permission_revoked(&mut self) {
+        if !self.lifecycle.begin_termination() {
+            return;
+        }
+        self.touch();
+        self.push_projected_event(session_events::session_closing(
+            REASON_TARGET_PERMISSION_REVOKED,
+        ));
+        self.lifecycle
+            .terminate_closed(REASON_TARGET_PERMISSION_REVOKED);
+        self.touch();
+        let terminal_event = self.push_projected_event(session_events::session_closed(
+            REASON_TARGET_PERMISSION_REVOKED,
+        ));
+        self.terminal_receipt =
+            Some(self.project_terminal_receipt(REASON_TARGET_PERMISSION_REVOKED, &terminal_event));
+        self.event_log.close();
+    }
+
     /// Mark the session closed because its lease elapsed.
     pub(in crate::daemon::plugins::remote_desktop) fn expire(&mut self, now: u64) {
         if !self.lifecycle.expire(REASON_SESSION_EXPIRED) {
@@ -1076,7 +1100,7 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::plugins::remote_desktop::constants::{
-        direct_webrtc_endpoint_ura, REASON_SESSION_EXPIRED,
+        direct_webrtc_endpoint_ura, REASON_SESSION_EXPIRED, REASON_TARGET_PERMISSION_REVOKED,
     };
     use crate::daemon::plugins::remote_desktop::session::{
         RemoteDesktopSession, RemoteDesktopState,
@@ -1774,7 +1798,7 @@ mod tests {
     }
 
     #[test]
-    fn consent_revocation_suspends_media_and_blocks_input_activation() {
+    fn consent_revocation_terminates_session_and_blocks_input_activation() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-consent-revoked-gate",
             "easynet:///r/acme/resource/display.test",
@@ -1809,13 +1833,15 @@ mod tests {
         assert_eq!(session.consent_phase(), RemoteDesktopConsentPhase::Revoked);
         assert_eq!(
             session.lifecycle_phase(),
-            RemoteDesktopSessionPhase::Suspended
+            RemoteDesktopSessionPhase::Terminated
         );
-        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(session.state(), RemoteDesktopState::Closed);
+        assert_eq!(session.end_reason(), Some(REASON_TARGET_PERMISSION_REVOKED));
+        assert!(session.is_terminal());
         assert!(!session.production_media_ready());
         assert!(
             !session.activate_input_for_transport_epoch(epoch),
-            "revoked consent must prevent input from reactivating even with the same transport epoch"
+            "terminal revoked consent must prevent input from reactivating even with the same transport epoch"
         );
 
         let events = session.events();
@@ -1827,9 +1853,17 @@ mod tests {
             .iter()
             .position(|event| event["event_type"] == json!("MEDIA_SOURCE_LOST"))
             .expect("MEDIA_SOURCE_LOST event");
+        let session_closed_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("SESSION_CLOSED"))
+            .expect("SESSION_CLOSED event");
         assert!(
             permission_revoked_index < media_source_lost_index,
             "consent/permission event must precede media-source stop projection"
+        );
+        assert!(
+            media_source_lost_index < session_closed_index,
+            "media-source stop projection must precede terminal session closure"
         );
         assert_eq!(
             events[permission_revoked_index]["payload"]["reason_code"],
@@ -1838,6 +1872,18 @@ mod tests {
         assert_eq!(
             events[media_source_lost_index]["payload"]["transport_epoch"],
             json!(epoch.value())
+        );
+        assert_eq!(
+            events[session_closed_index]["payload"]["reason_code"],
+            json!(REASON_TARGET_PERMISSION_REVOKED)
+        );
+        assert_eq!(
+            session.terminal_receipt().unwrap()["reason_code"],
+            json!(REASON_TARGET_PERMISSION_REVOKED)
+        );
+        assert_eq!(
+            session.terminal_receipt().unwrap()["terminal_event_type"],
+            json!("SESSION_CLOSED")
         );
     }
 

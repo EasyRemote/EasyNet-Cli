@@ -21,6 +21,7 @@ pub const REASON_RESOURCE_TYPE_MISMATCH: &str = "resource_type_mismatch";
 pub const REASON_SESSION_NOT_FOUND: &str = "session_not_found";
 pub const REASON_SESSION_TERMINAL: &str = "session_terminal";
 pub const REASON_SESSION_EXPIRED: &str = "session_expired";
+pub const REASON_TARGET_PERMISSION_REVOKED: &str = "target_permission_revoked";
 pub const REASON_SESSION_TOKEN_REQUIRED: &str = "session_token_required";
 pub const REASON_SESSION_TOKEN_MISMATCH: &str = "session_token_mismatch";
 pub const REASON_SESSION_CALLER_MISMATCH: &str = "session_caller_mismatch";

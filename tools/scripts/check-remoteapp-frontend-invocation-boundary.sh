@@ -163,6 +163,14 @@ require 'closeLocalTransport' "$STORE" \
   'frontend recovery mapping must explicitly decide whether to close local transport'
 require_multiline 'm/TARGET_PERMISSION_REVOKED[\s\S]*closeLocalTransport:\s*true/s' "$STORE" \
   'frontend permission-revoked recovery must close local WebRTC/input transport'
+require 'syncRemoteDesktopTerminalSession' "$STORE" \
+  'frontend must synchronize daemon terminal session projection after terminal recovery events'
+require "invokeMediaUnary\\('remote_desktop\\.show_session'" "$STORE" \
+  'frontend terminal recovery sync must read the daemon session view through remote_desktop.show_session'
+require 'syncTerminalSession: true' "$STORE" \
+  'frontend permission-revoked recovery must request daemon terminal session synchronization'
+require 'terminal sync failed' "$STORE" \
+  'frontend terminal recovery sync failures must remain visible to the operator'
 
 require 'resource\.refresh_remote_targets' "$ACCESS" \
   'frontend display/application/window picker must use live resource.refresh_remote_targets'
@@ -293,6 +301,10 @@ require "mode: 'view_only'" "$STORE_TEST" \
   'frontend store tests must prove disabled interactive mode creates a view-only session'
 require 'surfaces remote desktop recovery events from the session watcher' "$STORE_TEST" \
   'frontend store tests must prove watch_events recovery events affect UI/transport state'
+require 'target_permission_revoked' "$STORE_TEST" \
+  'frontend store tests must prove permission-revoked events synchronize daemon terminal receipts'
+require 'session\?\.sessionToken\)\.toBeUndefined\(\)' "$STORE_TEST" \
+  'frontend store tests must prove synchronized terminal sessions clear bearer tokens'
 require 'projects target diagnostics and tracking state from the runtime session view' "$PROTOCOL_TEST" \
   'frontend protocol tests must cover latest target diagnostic and tracking projection'
 require 'does not treat ordinary view-only input state as target recovery failure' "$PROTOCOL_TEST" \
