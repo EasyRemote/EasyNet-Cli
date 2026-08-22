@@ -125,6 +125,7 @@
         "lease monitor",
         "refresh/end session",
         "explicit end_session and lease-timeout terminal_receipt projection",
+        "host-remoteapp-session-timeout-e2e.sh creates a short-lived session through the CLI, observes session_expired through public show_session, and verifies post-timeout end_session idempotency preserves the original terminal receipt",
         "frontend retains closed end_session views with terminal_receipt while clearing session tokens",
         "permission revocation terminates the daemon session with a terminal_receipt and frontend terminal sync",
         "target loss and transport failure taxonomy",

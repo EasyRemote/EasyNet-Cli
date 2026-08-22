@@ -319,6 +319,12 @@ Current frontend lifecycle evidence:
   `client_sequence`. This proves the public diagnostic Bidi input path matches
   the app/window view-only policy instead of relying only on session-view
   policy projection.
+- Host session timeout E2E now has a runnable entrypoint:
+  `host-remoteapp-session-timeout-e2e.sh`. It creates a short-lived session
+  through the public CLI, waits past the lease, observes `session_expired`
+  through `remote_desktop.show_session`, and invokes
+  `remote_desktop.end_session` afterward to prove idempotent terminal receipt
+  preservation.
 
 Missing or insufficient product evidence:
 

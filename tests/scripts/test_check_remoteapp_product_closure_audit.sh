@@ -20,6 +20,7 @@ mkdir -p \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-matrix.json" "$SB/docs/design/remoteapp-product-readiness-matrix.json"
@@ -55,6 +56,24 @@ fi
 grep -q "cross-device smoke must preserve product non-claims" /tmp/check-remoteapp-product-closure-cross-device-gate.out || \
   fail "expected cross-device smoke non-claim failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
+perl -0pi -e 's#remote_desktop\.show_session#remote_desktop.status#g' \
+  "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-timeout-show.out 2>&1; then
+  fail "checker accepted session timeout E2E without public show_session observation"
+fi
+grep -q "session timeout E2E must observe timeout through public show_session" /tmp/check-remoteapp-product-closure-timeout-show.out || \
+  fail "expected timeout show_session failure"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+
+perl -0pi -e 's#terminal_receipt\.reason_code#terminal_receipt.reason#g' \
+  "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-timeout-receipt.out 2>&1; then
+  fail "checker accepted session timeout E2E without terminal_receipt.reason_code validation"
+fi
+grep -q "session timeout E2E must inspect timeout terminal_receipt.reason_code" /tmp/check-remoteapp-product-closure-timeout-receipt.out || \
+  fail "expected timeout receipt reason_code failure"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 
 python3 - "$SB/docs/design/remoteapp-product-readiness-matrix.json" <<'PY'
 import json

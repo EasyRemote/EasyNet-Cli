@@ -12,6 +12,7 @@ PERMISSION_SUBJECT="$REPO_ROOT/tools/scripts/host-remoteapp-permission-subject-e
 DISPLAY_FALLBACK_FORBIDDEN="$REPO_ROOT/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
 WEAK_IDENTITY_AMBIGUITY="$REPO_ROOT/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 VIEW_ONLY_INPUT_SAFETY="$REPO_ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+SESSION_TIMEOUT="$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
@@ -25,6 +26,7 @@ cp "$PERMISSION_SUBJECT" "$SANDBOX/tools/scripts/host-remoteapp-permission-subje
 cp "$DISPLAY_FALLBACK_FORBIDDEN" "$SANDBOX/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
 cp "$WEAK_IDENTITY_AMBIGUITY" "$SANDBOX/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 cp "$VIEW_ONLY_INPUT_SAFETY" "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+cp "$SESSION_TIMEOUT" "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
@@ -36,6 +38,7 @@ chmod +x "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+chmod +x "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-01 target picker freshness | live refresh returns known target |
 | E2E-02 permission subject correctness | invalid_argument for target Resource subjects |
@@ -70,6 +73,8 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
   --self-test >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
   --self-test >/dev/null
+"$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh" \
+  --self-test >/dev/null
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good"
@@ -94,6 +99,28 @@ if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh.good"
+perl -0pi -e 's/show-remote-desktop-session/show-remote-desktop-status/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted session timeout harness without public show_session observation" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh.good"
+perl -0pi -e 's/end_after_timeout must preserve the original timeout terminal receipt/end_after_timeout may replace timeout terminal receipt/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted session timeout harness without terminal receipt preservation" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"

@@ -11,6 +11,7 @@ PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh
 DISPLAY_FALLBACK_FORBIDDEN="$ROOT/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
 WEAK_IDENTITY_AMBIGUITY="$ROOT/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 VIEW_ONLY_INPUT_SAFETY="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -57,6 +58,7 @@ require_order() {
 [[ -f "$DISPLAY_FALLBACK_FORBIDDEN" ]] || fail "missing host display fallback forbidden E2E harness"
 [[ -f "$WEAK_IDENTITY_AMBIGUITY" ]] || fail "missing host weak identity ambiguity E2E harness"
 [[ -f "$VIEW_ONLY_INPUT_SAFETY" ]] || fail "missing host view-only input safety E2E harness"
+[[ -f "$SESSION_TIMEOUT" ]] || fail "missing host session timeout E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -180,6 +182,27 @@ require 'window\|application|window or application|window\\|application' "$VIEW_
   'host view-only input E2E must cover the app/window target class'
 require 'create_session args must not carry subject identity' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must keep selected target identity in Invocation.subject, not args'
+
+require 'resource\.refresh_remote_targets' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must select a live target through resource.refresh_remote_targets'
+require 'create-remote-desktop-session' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must create the leased RemoteApp session through the EasyNet CLI'
+require '--lease-ttl-ms "\$LEASE_TTL_MS"' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must create a bounded short lease'
+require 'show-remote-desktop-session' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must observe timeout through the public show_session view'
+require 'remote_desktop\.end_session' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must invoke end_session after timeout for idempotency evidence'
+require 'session_expired' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must require session_expired as the terminal reason'
+require 'terminal_receipt\.reason_code' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must verify timeout terminal_receipt.reason_code'
+require 'end_after_timeout must be idempotent after timeout' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must require idempotent end_session after timeout'
+require 'end_after_timeout must preserve the original timeout terminal receipt' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must prove post-timeout end_session preserves the terminal receipt'
+require 'create_session args must not carry subject identity' "$SESSION_TIMEOUT" \
+  'host session timeout E2E must keep selected target identity in Invocation.subject, not args'
 
 require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must refresh through resource.refresh_remote_targets'

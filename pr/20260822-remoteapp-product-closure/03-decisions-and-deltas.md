@@ -796,3 +796,32 @@ Product effect:
 - This still does not prove product-complete native input injection; the
   remaining requirement is successful focus-safe OS pointer/keyboard injection
   E2E with latency and permission evidence.
+
+## 2026-08-23 — Session timeout needs host-level terminal evidence
+
+Decision:
+
+- Lease timeout is part of RemoteApp product lifecycle, not only an internal
+  timer. Product evidence must observe timeout through public CLI/daemon
+  session views.
+- A timeout terminal receipt must be stable. Calling `end_session` after
+  timeout should be idempotent and preserve the original `session_expired`
+  receipt instead of creating a second close fact.
+
+Implementation delta:
+
+- Added `host-remoteapp-session-timeout-e2e.sh`.
+- The harness selects a live Resource URA, creates a short-lived
+  `remote_desktop.create_session`, waits past the lease, observes the closed
+  `session_expired` state through `remote_desktop.show_session`, then invokes
+  `remote_desktop.end_session` and verifies `already_ended=true`.
+- The E2E acceptance gate now requires the timeout harness, short-lease
+  creation, public show-session observation, `terminal_receipt.reason_code`,
+  and idempotent receipt preservation.
+
+Product effect:
+
+- Timeout lifecycle now has host-level executable evidence instead of only
+  unit/handler evidence.
+- This still does not prove long-outage reconnect, crash/restart recovery,
+  consent revoke E2E, or cross-device timeout receipt chains.
