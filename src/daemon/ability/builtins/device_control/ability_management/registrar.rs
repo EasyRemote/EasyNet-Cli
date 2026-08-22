@@ -651,6 +651,10 @@ impl AbilityDeploymentRegistrar {
             want,
             AbilityDeploymentCallModeResolution::from_descriptor_mode(key.call_mode()).axon_mode(),
             &control_plane_record,
+        ) && catalog.has_external_dynamic_runtime_binding(
+            key.authority_root(),
+            key.public_name(),
+            key.call_mode(),
         ))
     }
 
@@ -795,6 +799,11 @@ impl AbilityDeploymentRegistrar {
             );
         }
         for key in &control_plane_keys {
+            catalog.unbind_external_dynamic_runtime(
+                key.authority_root(),
+                key.public_name(),
+                key.call_mode(),
+            );
             catalog.remove_control_plane_record_for_authority_mode(
                 key.authority_root(),
                 key.public_name(),
@@ -879,6 +888,19 @@ impl AbilityDeploymentRegistrar {
                     "ability.deploy: durable install staging failed before binding: {commit_err}"
                 )
                 })?;
+        let displaced_control_plane_keys = match Self::control_plane_removal_keys(&overwritten) {
+            Ok(keys) => keys,
+            Err(error) => {
+                let rollback = self
+                    .store
+                    .rollback_install(record.install_id(), overwritten);
+                return Err(append_cleanup_error(
+                    error.context("ability.deploy: resolve displaced control-plane bindings"),
+                    rollback,
+                    "restore durable ability deployment store",
+                ));
+            }
+        };
 
         // ── control-plane materialization ───────────────────────────
         // The returned record is the only authority for runtime proof
@@ -886,6 +908,11 @@ impl AbilityDeploymentRegistrar {
         // or hashes from defaults after this point.
         let mut control_plane_txn =
             Self::begin_control_plane_transaction(&catalog, &control_plane_key);
+        catalog.unbind_external_dynamic_runtime(
+            control_plane_key.authority_root(),
+            control_plane_key.public_name(),
+            control_plane_key.call_mode(),
+        );
         let control_plane_record = match Self::rebind_control_plane_record(
             &catalog,
             &control_plane_key,
@@ -894,15 +921,23 @@ impl AbilityDeploymentRegistrar {
         ) {
             Ok(record) => record,
             Err(e) => {
+                let overwritten_for_restore = overwritten.clone();
                 let control_plane_restore = control_plane_txn.rollback();
                 let rollback = self
                     .store
                     .rollback_install(record.install_id(), overwritten);
+                let live_restore = self.restore_live_records(&overwritten_for_restore).await;
                 return Err(append_cleanup_error(
                     append_cleanup_error(
-                        anyhow::anyhow!("ability.deploy: control-plane rebind({key}) failed: {e}"),
-                        control_plane_restore,
-                        "restore prior control-plane records",
+                        append_cleanup_error(
+                            anyhow::anyhow!(
+                                "ability.deploy: control-plane rebind({key}) failed: {e}"
+                            ),
+                            control_plane_restore,
+                            "restore prior control-plane records",
+                        ),
+                        live_restore.map(|_| ()),
+                        "restore prior live runtime binding",
                     ),
                     rollback,
                     "restore durable ability deployment store",
@@ -965,6 +1000,36 @@ impl AbilityDeploymentRegistrar {
             ));
         }
 
+        if let Err(e) = catalog.bind_external_dynamic_runtime(
+            control_plane_key.authority_root(),
+            control_plane_key.public_name(),
+            control_plane_key.call_mode(),
+        ) {
+            let _ = runtime.unregister_ability(&runtime_key).await;
+            let overwritten_for_restore = overwritten.clone();
+            let rollback = self
+                .store
+                .rollback_install(record.install_id(), overwritten);
+            let live_restore = self.restore_live_records(&overwritten_for_restore).await;
+            let control_plane_restore = control_plane_txn.rollback();
+            return Err(append_cleanup_error(
+                append_cleanup_error(
+                    anyhow::anyhow!(
+                        "ability.deploy: bind execution index({runtime_key}) for {key} failed: {e}"
+                    ),
+                    rollback.and(live_restore.map(|_| ())),
+                    "restore durable ability deployment store and prior live runtime binding",
+                ),
+                control_plane_restore,
+                "restore prior control-plane records",
+            ));
+        }
+        Self::remove_superseded_control_plane_bindings(
+            &catalog,
+            &control_plane_key,
+            &displaced_control_plane_keys,
+        );
+
         // ── route + proof visibility (invariant 3, the danger point) ─
         // ACTIVE iff the runtime descriptor can see exactly this key,
         // supports the intended call mode, and carries the same proof facts
@@ -984,6 +1049,11 @@ impl AbilityDeploymentRegistrar {
             _ => InstallState::Installed,
         };
         if let Err(e) = self.store.commit_installed(record.install_id()) {
+            catalog.unbind_external_dynamic_runtime(
+                control_plane_key.authority_root(),
+                control_plane_key.public_name(),
+                control_plane_key.call_mode(),
+            );
             let _ = runtime.unregister_ability(&runtime_key).await;
             let overwritten_for_restore = overwritten.clone();
             let rollback = self
@@ -1092,6 +1162,11 @@ impl AbilityDeploymentRegistrar {
         transaction.advance(AbilityDeploymentUninstallStep::RuntimeCleared);
 
         for key in &control_plane_removals {
+            catalog.unbind_external_dynamic_runtime(
+                key.authority_root(),
+                key.public_name(),
+                key.call_mode(),
+            );
             if catalog.remove_control_plane_record_for_authority_mode(
                 key.authority_root(),
                 key.public_name(),
@@ -1210,6 +1285,11 @@ impl AbilityDeploymentRegistrar {
                         row.public_name()
                     )
                 })?;
+            catalog.bind_external_dynamic_runtime(
+                control_plane_key.authority_root(),
+                control_plane_key.public_name(),
+                control_plane_key.call_mode(),
+            )?;
             control_plane_txn.commit();
             restored += 1;
         }
@@ -1242,6 +1322,25 @@ impl AbilityDeploymentRegistrar {
             }
         }
         Ok(keys)
+    }
+
+    fn remove_superseded_control_plane_bindings(
+        catalog: &AxonAbilityCatalog,
+        active: &DeployedAbilityControlPlaneKey,
+        displaced: &[DeployedAbilityControlPlaneKey],
+    ) {
+        for key in displaced.iter().filter(|key| *key != active) {
+            catalog.unbind_external_dynamic_runtime(
+                key.authority_root(),
+                key.public_name(),
+                key.call_mode(),
+            );
+            catalog.remove_control_plane_record_for_authority_mode(
+                key.authority_root(),
+                key.public_name(),
+                key.call_mode(),
+            );
+        }
     }
 
     /// Boot replay (invariant 7): recover uncommitted install intents,
@@ -1451,8 +1550,31 @@ impl AbilityDeploymentRegistrar {
                 .await
             {
                 Ok(_) => {
-                    control_plane_txn.commit();
-                    report.push_registered(&row);
+                    match catalog.bind_external_dynamic_runtime(
+                        control_plane_key.authority_root(),
+                        control_plane_key.public_name(),
+                        control_plane_key.call_mode(),
+                    ) {
+                        Ok(()) => {
+                            control_plane_txn.commit();
+                            report.push_registered(&row);
+                        }
+                        Err(err) => {
+                            let _ = runtime.unregister_ability(row.ability_ura()).await;
+                            let rollback = control_plane_txn.rollback();
+                            report.push_errored(
+                                &row,
+                                append_cleanup_error(
+                                    anyhow::anyhow!(
+                                        "bind external dynamic runtime in execution index: {err}"
+                                    ),
+                                    rollback,
+                                    "restore prior control-plane records",
+                                )
+                                .to_string(),
+                            );
+                        }
+                    }
                 }
                 Err(err) => {
                     let _ = runtime.unregister_ability(row.ability_ura()).await;
@@ -1896,6 +2018,25 @@ mod tests {
         host_stream_install_with_version(store_dir, socket, None)
     }
 
+    fn host_rpc_install(store_dir: &std::path::Path, socket: &str) -> AbilityDeploymentInstall {
+        let manifest = host_stream_manifest_with_action(socket, "er.generate", "invoke");
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let manifest_path = store_dir.join("ability.json");
+        std::fs::write(&manifest_path, &manifest_bytes).unwrap();
+        AbilityDeploymentInstall::new(
+            "er.generate",
+            "er",
+            &deployed_ability_management_ability_ura("er.generate"),
+            manifest_path.to_string_lossy().into_owned(),
+            manifest_bytes,
+            manifest,
+            1,
+            "easynet:///r/localhost/user/test-user",
+            "test-deploy-invocation",
+        )
+        .unwrap()
+    }
+
     fn host_stream_install_with_version(
         store_dir: &std::path::Path,
         socket: &str,
@@ -2072,7 +2213,8 @@ mod tests {
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains("ability-management SystemAgent"),
+            err.to_string().contains("Device is execution substrate")
+                && err.to_string().contains("SystemAgent owner"),
             "{err}"
         );
     }
@@ -2264,6 +2406,57 @@ mod tests {
             facts.implementation_content_hash.as_deref(),
             Some(content_hash.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn installed_rpc_ability_is_visible_to_local_route_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
+        let (registrar, _, catalog) = wired_registrar(store);
+
+        let state = registrar
+            .install(host_rpc_install(dir.path(), "/tmp/er-host.sock"))
+            .await
+            .unwrap();
+
+        assert_eq!(state, InstallState::Active);
+        let publication =
+            crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(&catalog);
+        assert!(publication.resolves_with_call_mode(
+            &deployed_ability_management_owner_ura(),
+            "er.generate",
+            DescriptorCallMode::Rpc,
+        ));
+    }
+
+    #[tokio::test]
+    async fn redeploy_replaces_the_previous_public_call_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
+        let (registrar, _, catalog) = wired_registrar(store);
+        let owner = deployed_ability_management_owner_ura();
+
+        registrar
+            .install(host_rpc_install(dir.path(), "/tmp/er-host.sock"))
+            .await
+            .unwrap();
+        registrar
+            .install(host_stream_install(dir.path(), "/tmp/er-host.sock"))
+            .await
+            .unwrap();
+
+        let publication =
+            crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(&catalog);
+        assert!(!publication.resolves_with_call_mode(
+            &owner,
+            "er.generate",
+            DescriptorCallMode::Rpc,
+        ));
+        assert!(publication.resolves_with_call_mode(
+            &owner,
+            "er.generate",
+            DescriptorCallMode::Stream,
+        ));
     }
 
     #[tokio::test]
@@ -2644,10 +2837,18 @@ mod tests {
 
         let previous_manifest = host_stream_manifest("/tmp/old-host.sock", "er.generate");
         let previous_manifest_bytes = serde_json::to_vec(&previous_manifest).unwrap();
+        let previous_owner = crate::core::ura::device_agent_ura(
+            "localhost",
+            "old",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let previous_ability_ura =
+            crate::core::ura::owner_ability_ura(&previous_owner, "er.previous")
+                .expect("previous Device-sponsored SystemAgent ability URA");
         let previous_row = AbilityDeploymentRecord::new_with_manifest_bytes(
             "er.previous",
             "er",
-            "easynet:///r/localhost/ability/device.old.er.previous",
+            previous_ability_ura.clone(),
             dir.path()
                 .join("previous-ability.json")
                 .to_string_lossy()
@@ -2684,8 +2885,7 @@ mod tests {
         }));
         assert!(rt2.has_ability(er_generate_runtime_key()).await);
         assert!(
-            !rt2.has_ability("easynet:///r/localhost/ability/device.old.er.previous")
-                .await,
+            !rt2.has_ability(&previous_ability_ura).await,
             "foreign ability deployment must never be registered"
         );
         let replayable_rows = AbilityDeploymentStore::open_at(store_path).load().unwrap();

@@ -3179,6 +3179,18 @@ fn runtime_modes_insert(modes: &mut AbilityCallModes, call_mode: DescriptorCallM
     }
 }
 
+fn runtime_modes_remove(modes: &mut AbilityCallModes, call_mode: DescriptorCallMode) {
+    match call_mode {
+        DescriptorCallMode::Rpc => modes.rpc = false,
+        DescriptorCallMode::Stream => modes.stream = false,
+        DescriptorCallMode::Bidi => modes.bidi = false,
+    }
+}
+
+fn runtime_modes_any(modes: AbilityCallModes) -> bool {
+    modes.rpc || modes.stream || modes.bidi
+}
+
 impl ExecutionIndexEntry {
     fn has_handlers(&self) -> bool {
         !self.handlers.is_empty()
@@ -3271,6 +3283,64 @@ impl ExecutionIndex {
             "external daemon-invocation binding attempted to overwrite a dynamic execution row"
         );
         runtime_modes_insert(&mut entry.external_runtime_modes, call_mode);
+    }
+
+    fn install_external_dynamic_binding(
+        &mut self,
+        key: ControlPlaneAbilityKey,
+        call_mode: DescriptorCallMode,
+    ) -> anyhow::Result<()> {
+        let entry = self
+            .entries
+            .entry(key)
+            .or_insert_with(|| ExecutionIndexEntry {
+                origin: ExecutionOrigin::Dynamic,
+                handlers: RuntimeHandlerSet::default(),
+                external_runtime_modes: empty_runtime_modes(),
+            });
+        if entry.origin != ExecutionOrigin::Dynamic {
+            anyhow::bail!(
+                "external dynamic runtime binding attempted to overwrite a static execution row"
+            );
+        }
+        if entry.has_handlers() {
+            anyhow::bail!(
+                "external dynamic runtime binding conflicts with a catalog-owned dynamic handler"
+            );
+        }
+        runtime_modes_insert(&mut entry.external_runtime_modes, call_mode);
+        Ok(())
+    }
+
+    fn remove_external_dynamic_binding(
+        &mut self,
+        key: &ControlPlaneAbilityKey,
+        call_mode: DescriptorCallMode,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(key) else {
+            return false;
+        };
+        if entry.origin != ExecutionOrigin::Dynamic
+            || !runtime_modes_contain(entry.external_runtime_modes, call_mode)
+        {
+            return false;
+        }
+        runtime_modes_remove(&mut entry.external_runtime_modes, call_mode);
+        if !entry.has_handlers() && !runtime_modes_any(entry.external_runtime_modes) {
+            self.entries.remove(key);
+        }
+        true
+    }
+
+    fn has_external_dynamic_binding(
+        &self,
+        key: &ControlPlaneAbilityKey,
+        call_mode: DescriptorCallMode,
+    ) -> bool {
+        self.entries.get(key).is_some_and(|entry| {
+            entry.origin == ExecutionOrigin::Dynamic
+                && runtime_modes_contain(entry.external_runtime_modes, call_mode)
+        })
     }
 
     fn install_dynamic(&mut self, key: ControlPlaneAbilityKey, registration: DynamicRegistration) {
@@ -6597,6 +6667,73 @@ impl AxonAbilityCatalog {
                 }
             })
             .collect()
+    }
+
+    /// Record a process-owned dynamic runtime binding whose handler lifecycle
+    /// is managed outside this catalog (for example `ability.deploy`).
+    ///
+    /// The canonical execution index remains the sole publication-readiness
+    /// source; registering only the descriptor and Axon runtime row would make
+    /// discovery report an ability that `namespace.resolve` rejects as
+    /// unbound.
+    pub(crate) fn bind_external_dynamic_runtime(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> anyhow::Result<()> {
+        let _dynamic_txn_guard = self.dynamic_txn.lock().expect("dynamic_txn mutex poisoned");
+        let record = self
+            .control_plane_record_for_authority_mode(authority_root, ability, call_mode)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "external dynamic runtime binding has no exact control-plane record for {authority_root} {ability:?} {call_mode:?}"
+                )
+            })?;
+        if record.implementation().source() == &AbilityImplSource::DescriptorOnly {
+            anyhow::bail!(
+                "external dynamic runtime binding cannot bind descriptor-only ability {ability:?}"
+            );
+        }
+        self.execution_index
+            .write()
+            .expect("execution_index RwLock poisoned")
+            .install_external_dynamic_binding(
+                ControlPlaneAbilityKey::new(authority_root, ability),
+                call_mode,
+            )
+    }
+
+    pub(crate) fn unbind_external_dynamic_runtime(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> bool {
+        let _dynamic_txn_guard = self.dynamic_txn.lock().expect("dynamic_txn mutex poisoned");
+        self.execution_index
+            .write()
+            .expect("execution_index RwLock poisoned")
+            .remove_external_dynamic_binding(
+                &ControlPlaneAbilityKey::new(authority_root, ability),
+                call_mode,
+            )
+    }
+
+    pub(crate) fn has_external_dynamic_runtime_binding(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> bool {
+        let _dynamic_txn_guard = self.dynamic_txn.lock().expect("dynamic_txn mutex poisoned");
+        self.execution_index
+            .read()
+            .expect("execution_index RwLock poisoned")
+            .has_external_dynamic_binding(
+                &ControlPlaneAbilityKey::new(authority_root, ability),
+                call_mode,
+            )
     }
 
     /// Atomic owner/root binding for the process-local invocation ledger.
