@@ -101,6 +101,32 @@ function startRemoteDesktopEventWatch(key: string, view: RemoteDesktopView) {
   )
 }
 
+function applyRemoteDesktopSessionEventEffect(key: string, sessionId: string, event: RemoteDesktopEvent) {
+  const recovery = remoteDesktopSessionEventRecovery(event)
+  if (!recovery) return
+  if (recovery.closeLocalTransport) stopRemoteDesktopEventWatch(key)
+  patchEntry(key, {
+    attached: false,
+    webrtcStatus: recovery.status,
+  })
+}
+
+function remoteDesktopSessionEventRecovery(event: RemoteDesktopEvent) {
+  if (event.eventType === 'TARGET_PERMISSION_REVOKED') {
+    return {
+      status: 'remote desktop permission was revoked',
+      closeLocalTransport: true,
+    }
+  }
+  if (event.eventType === 'SESSION_DEGRADED') {
+    return {
+      status: 'remote desktop session needs retry',
+      closeLocalTransport: false,
+    }
+  }
+  return null
+}
+
 export const actions = {
   rdReportClientMediaState: (key: string, state: 'presenting' | 'stalled' | 'detached') => reportClientMediaState(key, state),
   rdSendInput: (key, frame) => {
@@ -328,6 +354,11 @@ it('runs remote desktop WebRTC sessions with a target-scoped event watcher', asy
     expect.anything(),
   )
 })
+
+it('surfaces remote desktop recovery events from the session watcher', async () => {
+  expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('session needs retry')
+  expect(useMediaChannelStore.getState().entries[key].webrtcStatus).toContain('permission was revoked')
+})
 TS
 
 cat >"$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx" <<'TSX'
@@ -427,6 +458,15 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/'remote_desktop\\.show_session'/'remote_desktop.watch_events'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/event\\.eventType === 'TARGET_PERMISSION_REVOKED'/event.eventType === 'TARGET_PERMISSION_IGNORED'/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing permission-revoked recovery handling" >&2
+  exit 1
+fi
+perl -0pi -e "s/event\\.eventType === 'TARGET_PERMISSION_IGNORED'/event.eventType === 'TARGET_PERMISSION_REVOKED'/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e 's/remoteDesktopInputFrameAllowed\(session, frame\)/true/' \

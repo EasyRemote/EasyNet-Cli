@@ -137,6 +137,16 @@ require 'startRemoteDesktopEventWatch\(key, negotiated\)' "$STORE" \
   'frontend must start watch_events after WebRTC session negotiation'
 require_multiline 'm/invokeMediaStream\(\s*'\''remote_desktop\.watch_events'\''[\s\S]*subjectURA: view\.subjectUra[\s\S]*causalContext[\s\S]*args: \{ session_id: view\.sessionId, session_token: view\.sessionToken \}[\s\S]*timeoutMs: 0/s' "$STORE" \
   'frontend must subscribe to remote_desktop.watch_events with the negotiated session subject, causal context, and token'
+require 'remoteDesktopSessionEventRecovery' "$STORE" \
+  'frontend must map remote desktop session events into recovery UI state'
+require 'SESSION_DEGRADED' "$STORE" \
+  'frontend must surface degraded client/media sessions as retryable recovery state'
+require 'TARGET_PERMISSION_REVOKED' "$STORE" \
+  'frontend must surface permission revocation from watch_events'
+require 'closeLocalTransport' "$STORE" \
+  'frontend recovery mapping must explicitly decide whether to close local transport'
+require_multiline 'm/TARGET_PERMISSION_REVOKED[\s\S]*closeLocalTransport:\s*true/s' "$STORE" \
+  'frontend permission-revoked recovery must close local WebRTC/input transport'
 
 require 'resource\.refresh_remote_targets' "$ACCESS" \
   'frontend display/application/window picker must use live resource.refresh_remote_targets'
@@ -207,6 +217,8 @@ require 'reports missing remote desktop session subject before projection fallba
   'frontend store tests must prove create_session subject_ura is checked before projection'
 require 'runs remote desktop WebRTC sessions with a target-scoped event watcher' "$STORE_TEST" \
   'frontend store tests must prove watch_events is bound to the negotiated session subject'
+require 'surfaces remote desktop recovery events from the session watcher' "$STORE_TEST" \
+  'frontend store tests must prove watch_events recovery events affect UI/transport state'
 require 'projects target diagnostics and tracking state from the runtime session view' "$PROTOCOL_TEST" \
   'frontend protocol tests must cover latest target diagnostic and tracking projection'
 require 'does not treat ordinary view-only input state as target recovery failure' "$PROTOCOL_TEST" \

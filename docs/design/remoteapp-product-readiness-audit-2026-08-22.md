@@ -31,8 +31,11 @@ The following gates prove useful boundaries and regression constraints:
 
 They prove that current source contracts preserve target binding, subject
 placement, view-only safety, source-level E2E harnesses, and performance
-boundaries. They do not prove every operating system, network topology, input
-mode, codec path, and frontend lifecycle is product-ready.
+boundaries. The frontend invocation boundary also proves that the browser
+surface starts `remote_desktop.watch_events` after negotiated WebRTC setup and
+maps degraded/permission-revoked session events into recovery UI/transport
+state. They do not prove every operating system, network topology, input mode,
+codec path, and frontend lifecycle is product-ready.
 
 ## Product closure matrix
 
@@ -42,9 +45,9 @@ mode, codec path, and frontend lifecycle is product-ready.
 | Mouse/keyboard input injection is controllable, low-latency, and permission-correct | Incomplete by design | App/window sessions downgrade to `view_only`; pointer/key frames are policy-gated; clipboard/file-drop are unsupported | Focus validation, coordinate mapping, target epoch checks, OS permission checks, latency measurements, and successful input injection E2E |
 | Audio/video codec, frame rate, bitrate adaptation, and drop policy are product-ready | Partial | macOS H.264/WebRTC path, VideoToolbox descriptor, adaptive bitrate helper, queue/drop boundary tests | End-to-end codec negotiation reports, audio path, frame-rate/bitrate soak under load, degraded network/drop policy E2E |
 | Multi-window/multi-application independent tracking works as an execution effect | Partial | Target tracker state machine, move/resize/loss/rebind events, same-display application window-set rebind | Multi-display `MultiAppSurface` or explicit product unsupported report; real app/window churn E2E with independent tracked streams |
-| Disconnect/reconnect, session resume, consent revoke, cancel, timeout are complete | Partial | Lease monitor, refresh/end session, target loss and transport failure taxonomy, canonical SDK cancel/timeout semantics | Session resume after transport loss, reconnect handoff, consent revoke termination, cancel/timeout receipts, crash/restart recovery E2E |
+| Disconnect/reconnect, session resume, consent revoke, cancel, timeout are complete | Partial | Lease monitor, refresh/end session, target loss and transport failure taxonomy, frontend watch_events recovery handling for degraded and permission-revoked sessions, canonical SDK cancel/timeout semantics | Session resume after transport loss, reconnect handoff, consent revoke termination E2E, cancel/timeout receipts, crash/restart recovery E2E |
 | NAT/relay/WebRTC/direct fallback network paths are verified | Partial | Typed host/STUN/TURN/EasyNet relay route evidence and source-level provider gates | Real direct, STUN srflx, TURN relay, EasyNet relay deployment reports with credentials redacted and reachability verified |
-| Frontend UI can discover, authorize, start, display, control, and end session | Partial | Frontend subject boundary and dedicated surface gates | Browser/Tauri E2E for full user flow: picker → permission → consent → create → WebRTC attach → input/control → end |
+| Frontend UI can discover, authorize, start, display, control, and end session | Partial | Frontend subject boundary, dedicated surface gates, target-scoped WebRTC lifecycle unit coverage, and watch_events recovery-state coverage | Browser/Tauri E2E for full user flow: picker → permission → consent → create → WebRTC attach → watch_events recovery → input/control → end |
 | Cross-device E2E smoke/regression exists beyond local provider boundary | Missing as product proof | Docker media/bidi source contract; host-local decoded-frame scripts | Two real devices or equivalent network namespace E2E with Hub routing, remote target inventory, remote WebRTC/media, and teardown evidence |
 
 ## Product-complete definition
