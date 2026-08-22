@@ -319,7 +319,7 @@ async fn run_user_service_owner_projection_prelude(
         owner_count = owner_count,
     );
     for (owner_ura, descriptors) in service_owner_projections {
-        if let Err(status) = send_user_service_advertise_abilities_prelude(
+        match send_user_service_advertise_abilities_prelude(
             client,
             &owner_ura,
             caller_ura,
@@ -329,20 +329,38 @@ async fn run_user_service_owner_projection_prelude(
         )
         .await
         {
-            let code = status.code();
-            let msg = status.message();
-            crate::op_event!(
-                component = session,
-                kind = advertise_service_abilities_prelude_failed,
-                owner_ura = owner_ura,
-                code = code,
-                error = msg,
-                message = "user-scoped Service owner projection publish failed; reconnecting instead of exposing an online host with an incomplete namespace",
-            );
-            return Err(SessionError::OwnerProjectionFailed {
-                endpoint: hub_endpoint.to_string(),
-                status,
-            });
+            Ok(UserServiceAdvertiseAbilitiesPreludeOutcome::Published) => {}
+            Ok(UserServiceAdvertiseAbilitiesPreludeOutcome::ReadModelRejected {
+                accepted_count,
+                expected_count,
+                outcome,
+            }) => {
+                crate::op_event!(
+                    component = session,
+                    kind = advertise_service_abilities_prelude_degraded,
+                    owner_ura = owner_ura,
+                    accepted_count = accepted_count,
+                    expected_count = expected_count,
+                    outcome = outcome.as_deref().unwrap_or("unknown"),
+                    message = "user-scoped Service owner projection was not selected by the Hub read model; keeping the Device session online and leaving that Service surface on the existing projection",
+                );
+            }
+            Err(status) => {
+                let code = status.code();
+                let msg = status.message();
+                crate::op_event!(
+                    component = session,
+                    kind = advertise_service_abilities_prelude_failed,
+                    owner_ura = owner_ura,
+                    code = code,
+                    error = msg,
+                    message = "user-scoped Service owner projection publish failed before read-model selection; reconnecting instead of exposing an unauthorised or malformed namespace",
+                );
+                return Err(SessionError::OwnerProjectionFailed {
+                    endpoint: hub_endpoint.to_string(),
+                    status,
+                });
+            }
         }
     }
     crate::op_event!(
@@ -815,6 +833,16 @@ async fn send_advertise_abilities_prelude(
     .await
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UserServiceAdvertiseAbilitiesPreludeOutcome {
+    Published,
+    ReadModelRejected {
+        accepted_count: usize,
+        expected_count: usize,
+        outcome: Option<String>,
+    },
+}
+
 async fn send_user_service_advertise_abilities_prelude(
     client: &mut InvocationClient<Channel>,
     owner_ura: &str,
@@ -822,7 +850,7 @@ async fn send_user_service_advertise_abilities_prelude(
     device_signer: &dyn CanonicalSigner,
     user_signer: &dyn CanonicalSigner,
     descriptors: &[AbilityDescriptor],
-) -> Result<(), tonic::Status> {
+) -> Result<UserServiceAdvertiseAbilitiesPreludeOutcome, tonic::Status> {
     let projection = crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
         owner_ura,
         host_device_ura,
@@ -833,14 +861,15 @@ async fn send_user_service_advertise_abilities_prelude(
             "federation.advertise_abilities Service prelude projection: {e}"
         ))
     })?;
-    send_prepared_advertise_abilities_prelude(
+    let response = invoke_prepared_advertise_abilities_prelude(
         client,
         owner_ura,
         device_signer,
         PreludeOwnerProjectionAuthority::UserDelegation(user_signer),
         &projection,
     )
-    .await
+    .await?;
+    classify_user_service_advertise_abilities_response(response, projection.ability_summaries.len())
 }
 
 #[derive(Clone, Copy)]
@@ -856,6 +885,29 @@ async fn send_prepared_advertise_abilities_prelude(
     authority: PreludeOwnerProjectionAuthority<'_>,
     projection: &crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication,
 ) -> Result<(), tonic::Status> {
+    let response = invoke_prepared_advertise_abilities_prelude(
+        client,
+        owner_ura,
+        device_signer,
+        authority,
+        projection,
+    )
+    .await?;
+    crate::daemon::federation::advertise::validate_advertise_abilities_response(
+        response,
+        projection.ability_summaries.len(),
+    )
+    .map(|_| ())
+    .map_err(tonic::Status::failed_precondition)
+}
+
+async fn invoke_prepared_advertise_abilities_prelude(
+    client: &mut InvocationClient<Channel>,
+    owner_ura: &str,
+    device_signer: &dyn CanonicalSigner,
+    authority: PreludeOwnerProjectionAuthority<'_>,
+    projection: &crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication,
+) -> Result<crate::daemon::federation::advertise::AdvertiseAbilitiesResponse, tonic::Status> {
     let body = serde_json::json!({
         "owner_ura": &projection.owner_ura,
         "host_device_ura": &projection.host_device_ura,
@@ -881,11 +933,31 @@ async fn send_prepared_advertise_abilities_prelude(
     attach_owner_projection_authority(&mut request, owner_ura, device_signer, authority).await?;
 
     let response = invoke_prelude_unary(client, request, "federation.advertise_abilities").await?;
-    crate::daemon::federation::advertise::decode_advertise_abilities_response(
-        &response.result,
-        projection.ability_summaries.len(),
+    crate::daemon::federation::advertise::parse_advertise_abilities_response(&response.result)
+        .map_err(tonic::Status::failed_precondition)
+}
+
+fn classify_user_service_advertise_abilities_response(
+    response: crate::daemon::federation::advertise::AdvertiseAbilitiesResponse,
+    expected_count: usize,
+) -> Result<UserServiceAdvertiseAbilitiesPreludeOutcome, tonic::Status> {
+    if response.ack && response.count == expected_count {
+        return Ok(UserServiceAdvertiseAbilitiesPreludeOutcome::Published);
+    }
+    if response.is_read_model_rejection() {
+        return Ok(
+            UserServiceAdvertiseAbilitiesPreludeOutcome::ReadModelRejected {
+                accepted_count: response.count,
+                expected_count,
+                outcome: response.outcome,
+            },
+        );
+    }
+    crate::daemon::federation::advertise::validate_advertise_abilities_response(
+        response,
+        expected_count,
     )
-    .map(|_| ())
+    .map(|_| UserServiceAdvertiseAbilitiesPreludeOutcome::Published)
     .map_err(tonic::Status::failed_precondition)
 }
 
@@ -1715,13 +1787,15 @@ fn is_service_owner_ura(owner_ura: &str) -> bool {
 mod tests {
     use super::{
         apply_federation_join_receipt, attach_owner_projection_authority,
+        classify_user_service_advertise_abilities_response,
         committed_user_service_owner_descriptors, paired_user_publish_public_keys,
         paired_user_resolve_key_args, paired_user_resolve_public_keys,
         paired_user_signer_public_key_b64, paired_user_trust_present,
         resolve_hosted_agent_user_segment, resolved_public_keys,
         run_hosted_agent_advertise_prelude, signed_prelude_request, sync_paired_user_trust_prelude,
         PairedUserTrustSigner, PreludeOwnerProjectionAuthority, RegisterPubkeyRequest,
-        UserTrustBootstrapError, UserTrustBootstrapOutcome, UserTrustSync,
+        UserServiceAdvertiseAbilitiesPreludeOutcome, UserTrustBootstrapError,
+        UserTrustBootstrapOutcome, UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
@@ -1901,6 +1975,42 @@ mod tests {
         let by_owner = committed_user_service_owner_descriptors(&descriptors, "not-a-user-ura");
 
         assert!(by_owner.is_empty());
+    }
+
+    #[test]
+    fn user_service_projection_conflict_degrades_instead_of_failing_session() {
+        let response = crate::daemon::federation::advertise::AdvertiseAbilitiesResponse {
+            ack: false,
+            count: 0,
+            outcome: Some("rejected_conflict".to_string()),
+        };
+
+        let outcome = classify_user_service_advertise_abilities_response(response, 5)
+            .expect("read-model conflict is a nonfatal Service projection outcome");
+
+        assert_eq!(
+            outcome,
+            UserServiceAdvertiseAbilitiesPreludeOutcome::ReadModelRejected {
+                accepted_count: 0,
+                expected_count: 5,
+                outcome: Some("rejected_conflict".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn user_service_projection_count_mismatch_still_fails_closed() {
+        let response = crate::daemon::federation::advertise::AdvertiseAbilitiesResponse {
+            ack: true,
+            count: 3,
+            outcome: Some("updated".to_string()),
+        };
+
+        let status = classify_user_service_advertise_abilities_response(response, 5)
+            .expect_err("acknowledged partial Service projection must still fail");
+
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert!(status.message().contains("count mismatch"));
     }
 
     fn user_trust_sync_with_key(user_ura: &str) -> UserTrustSync {

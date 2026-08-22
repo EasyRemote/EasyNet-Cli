@@ -150,6 +150,17 @@ impl ProjectionUpsertOutcome {
     pub(crate) fn is_stored(self) -> bool {
         matches!(self, Self::Inserted | Self::Updated | Self::Idempotent)
     }
+
+    #[must_use]
+    pub(crate) fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Inserted => "inserted",
+            Self::Updated => "updated",
+            Self::Idempotent => "idempotent",
+            Self::IgnoredStale => "ignored_stale",
+            Self::RejectedConflict => "rejected_conflict",
+        }
+    }
 }
 
 /// Stores the most recent owner projection row by owner URA. Cheap clone

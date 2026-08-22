@@ -107,6 +107,25 @@ Current frontend lifecycle evidence:
   `federation.advertise_abilities` with `accepted_count=0, expected_count=5`.
   This is now the first concrete cross-device product seam to fix before
   RemoteApp-specific remote target inventory/media evidence can be trusted.
+- 2026-08-22 follow-up diagnosis: that failure is a Hub owner-projection
+  read-model conflict, not an authority rejection. The Hub stores one selected
+  projection per `owner_ura`; when two devices for the same user publish
+  `service/<user>.pages` with the same generation/revision but different
+  host/digest, the second write is a `rejected_conflict`. That Service surface
+  must remain on the already-selected host, but the caller Device session must
+  not reconnect/backoff and appear offline because RemoteApp device-native
+  abilities are independent SystemAgent descriptors. The fix is to expose the
+  Hub projection upsert `outcome` and let the user-scoped Service prelude
+  degrade only on read-model rejection while keeping device-native and
+  hosted-agent projections strict.
+- 2026-08-22 verification after the Service projection fix:
+  response/unit/script gates passed, but an actual
+  `remoteapp-cross-device-product-smoke.sh --run` attempt did not produce
+  authoritative product evidence. The child routing script blocked in
+  `docker info`; after interruption, the harness could not write `result.json`
+  because the local volume was full from regenerated Rust build artifacts.
+  This is external environment evidence only. It does not contradict the unit
+  fix, and it does not prove cross-device product readiness.
 
 Missing or insufficient product evidence:
 
