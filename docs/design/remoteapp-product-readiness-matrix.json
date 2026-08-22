@@ -237,6 +237,7 @@
         "frontend protocol/store/UI coverage for daemon terminal_receipt projection after end_session",
         "frontend permission-revoked recovery synchronizes daemon terminal_receipt through show_session",
         "frontend session details render daemon-projected target recovery status/reason/action",
+        "frontend session details render daemon-projected media_pipeline_support with video-only/H.264/drop-policy/product-blocker visibility",
         "frontend action row executes daemon-guided target refresh recovery",
         "frontend action row executes daemon-guided retry_session recovery by ending then creating a session",
         "frontend share picker exposes host-local remote_desktop.permission_status preflight before create_session",

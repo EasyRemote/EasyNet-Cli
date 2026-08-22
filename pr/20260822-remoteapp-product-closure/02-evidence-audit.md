@@ -365,6 +365,12 @@ Current frontend lifecycle evidence:
   `media 18000kbps · 52.5fps · drops 15 · backpressure 3`. This makes adaptive
   bitrate/drop behavior visible to operators; it does not prove real codec
   negotiation, host audio, soak, or degraded-network E2E.
+- Frontend protocol/UI now parses and renders daemon-projected
+  `media_pipeline_support`: video-only scope, H.264 pipeline identity,
+  bounded stale-frame drop policy, and product blockers such as
+  `host_audio_not_implemented` appear in session details. This keeps frontend
+  product state aligned to daemon capability projection; it does not prove
+  host-audio or degraded-network E2E.
 - Frontend protocol/store/UI code now parses and renders daemon-projected
   RemoteApp `terminal_receipt`. After `end_session`, the store retains the
   closed session view with its terminal receipt while clearing `sessionToken`.

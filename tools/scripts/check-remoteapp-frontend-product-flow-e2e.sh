@@ -256,6 +256,16 @@ require 'target_geometry_revision: 6' "$FRONTEND_STORE_TEST" \
   'frontend stale pointer test must use an explicit stale geometry revision'
 require 'RemoteDesktopAudioSupport' "$FRONTEND_PROTOCOL" \
   'frontend protocol projection must type daemon RemoteApp audio product state'
+require 'RemoteDesktopMediaPipelineSupport' "$FRONTEND_PROTOCOL" \
+  'frontend protocol projection must type daemon RemoteApp media pipeline support state'
+require 'mediaPipelineSupport: remoteDesktopMediaPipelineSupportFromResult\(result\)' "$FRONTEND_PROTOCOL" \
+  'frontend RemoteApp view must consume daemon media_pipeline_support projection'
+require 'remoteapp_media_adaptation_e2e_artifact_missing' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove missing media-adaptation E2E remains visible as a product blocker'
+require 'remoteDesktopMediaPipelineLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected media pipeline support'
+require 'pipeline video_only · h264 · bounded_queue_drop_stale_frames · host_audio_not_implemented' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove media pipeline support is visible in session details'
 require 'audioReady: readiness\.audio_ready === true' "$FRONTEND_PROTOCOL" \
   'frontend production readiness must parse audio readiness separately from video readiness'
 require 'host_audio_not_implemented' "$FRONTEND_UI_TEST" \
@@ -317,6 +327,8 @@ require 'route state' "$AUDIT" \
   'product readiness audit must record frontend route-state visibility evidence'
 require 'media quality' "$AUDIT" \
   'product readiness audit must record frontend media-quality visibility evidence'
+require 'media_pipeline_support' "$AUDIT" \
+  'product readiness audit must record frontend media-pipeline support visibility evidence'
 require 'Retry session' "$AUDIT" \
   'product readiness audit must record executable retry-session evidence'
 require 'input scope display_global' "$AUDIT" \
@@ -348,6 +360,8 @@ require 'route host_only · no NAT/relay' "$PLAN" \
   'product closure plan must record route-state UI evidence'
 require 'media 18000kbps · 52\.5fps · drops 15 · backpressure 3' "$PLAN" \
   'product closure plan must record media-quality summary UI evidence'
+require 'media_pipeline_support' "$PLAN" \
+  'product closure plan must record frontend media-pipeline support visibility evidence'
 require 'Retry session' "$PLAN" \
   'product closure plan must record executable retry-session UI evidence'
 require 'input scope display_global' "$PLAN" \

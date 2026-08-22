@@ -337,6 +337,30 @@ fi
 mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
 
+cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"
+perl -0pi -e 's/pipeline video_only · h264 · bounded_queue_drop_stale_frames · host_audio_not_implemented/pipeline video_only/g' \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted frontend coverage without media pipeline support details"
+fi
+mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+
+cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx.good"
+perl -0pi -e 's/remoteDesktopMediaPipelineLabel/remoteDesktopMediaPipelineHidden/g' \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted frontend UI without media pipeline support rendering"
+fi
+mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx.good" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx"
+
 cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx.good"
 perl -0pi -e 's/Retry session/Retry later/g' \
