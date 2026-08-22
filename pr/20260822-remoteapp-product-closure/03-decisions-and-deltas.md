@@ -856,3 +856,35 @@ Product effect:
 - This still does not prove transport-level `invocation.cancel`,
   long-outage reconnect, crash/restart recovery, consent revoke E2E, or
   cross-device cancel receipt chains.
+
+## 2026-08-23 — Permission revoke needs a live host evidence harness
+
+Decision:
+
+- RemoteApp permission revoke must be proven as a product session terminal
+  outcome observed through public `remote_desktop.show_session`.
+- The E2E must not add or rely on a debug revoke ability. Live product evidence
+  requires a real platform/operator permission revoke; self-test can validate
+  only the harness evidence contract.
+
+Implementation delta:
+
+- Added `host-remoteapp-permission-revoke-e2e.sh`.
+- The harness creates a live-target `remote_desktop.create_session`, waits for
+  real platform permission revocation, and accepts only a public
+  `remote_desktop.show_session` projection with `target_permission_revoked`,
+  revoked consent, ordered `TARGET_PERMISSION_REVOKED`,
+  `MEDIA_SOURCE_LOST`, `SESSION_CLOSED` events, and a terminal receipt bound
+  to the created session id.
+- The E2E acceptance and product-closure gates now require the harness, real
+  platform proof mode, operator/platform revoke requirement, public
+  show-session observation, event evidence, and
+  `terminal_receipt.reason_code`.
+
+Product effect:
+
+- Permission-revoke closure now has an executable host harness that can collect
+  real OS evidence without weakening plugin/runtime boundaries.
+- Product completion still requires an actual live pass report from a real host
+  permission revoke, plus reconnect/resume, crash/restart, and cross-device
+  revoke evidence.

@@ -9,6 +9,7 @@ PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
+PERMISSION_REVOKE="$ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
@@ -42,6 +43,7 @@ reject() {
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
 [[ -f "$SESSION_CANCEL" ]] || fail "missing RemoteApp session cancel E2E harness"
+[[ -f "$PERMISSION_REVOKE" ]] || fail "missing RemoteApp permission revoke E2E harness"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
@@ -170,6 +172,10 @@ require 'host-remoteapp-session-timeout-e2e\.sh' "$AUDIT" \
   'audit must record the host session timeout E2E harness'
 require 'host-remoteapp-session-cancel-e2e\.sh' "$AUDIT" \
   'audit must record the host session cancel E2E harness'
+require 'host-remoteapp-permission-revoke-e2e\.sh' "$AUDIT" \
+  'audit must record the host permission revoke E2E harness'
+require 'real platform permission revoke' "$AUDIT" \
+  'audit must distinguish permission revoke harness from completed real OS evidence'
 
 require 'Full interactive RemoteApp product: incomplete' "$PLAN" \
   'plan evidence audit must keep the goal open'
@@ -177,6 +183,10 @@ require 'host-remoteapp-session-timeout-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the host session timeout E2E harness'
 require 'host-remoteapp-session-cancel-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the host session cancel E2E harness'
+require 'host-remoteapp-permission-revoke-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the host permission revoke E2E harness'
+require 'requires a live run with real platform permission revoke' "$PLAN" \
+  'plan evidence audit must not claim permission revoke product completion from self-test'
 require 'Cross-platform capture implementation/evidence for Windows and Linux' "$PLAN" \
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'Frontend full lifecycle E2E' "$PLAN" \
@@ -222,6 +232,22 @@ require 'end_cancel_again must be idempotent after user cancel' "$SESSION_CANCEL
   'session cancel E2E must inspect repeated end_session idempotency'
 require 'end_cancel_again must preserve the original cancel terminal receipt' "$SESSION_CANCEL" \
   'session cancel E2E must prove repeated end_session preserves the terminal receipt'
+require 'real_platform_permission_revoke' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must require real platform revoke proof mode'
+require 'operator_revoke_required.*True|operator_revoke_required.*true' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must require operator/platform revoke'
+require 'remote_desktop\.show_session' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must observe revoke through public show_session'
+require 'target_permission_revoked' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must prove target_permission_revoked terminal reason'
+require 'TARGET_PERMISSION_REVOKED' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must inspect TARGET_PERMISSION_REVOKED event evidence'
+require 'MEDIA_SOURCE_LOST' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must inspect MEDIA_SOURCE_LOST event evidence'
+require 'SESSION_CLOSED' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must inspect SESSION_CLOSED event evidence'
+require 'terminal_receipt\.reason_code' "$PERMISSION_REVOKE" \
+  'permission revoke E2E must inspect revoke terminal_receipt.reason_code'
 
 require 'terminal_receipt: Option<Value>' "$SESSION" \
   'session aggregate must store a single terminal receipt projection'

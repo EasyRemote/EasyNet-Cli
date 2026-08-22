@@ -331,6 +331,14 @@ Current frontend lifecycle evidence:
   `user_cancelled`, observes the closed state through
   `remote_desktop.show_session`, and invokes `end_session` again to prove
   idempotent terminal receipt preservation.
+- Host permission revoke E2E now has a runnable entrypoint:
+  `host-remoteapp-permission-revoke-e2e.sh`. It creates a live-target session
+  through the public CLI and waits for real platform permission revoke before
+  accepting a public `remote_desktop.show_session` projection with
+  `target_permission_revoked`, revoked consent, ordered
+  `TARGET_PERMISSION_REVOKED` / `MEDIA_SOURCE_LOST` / `SESSION_CLOSED`
+  events, and terminal receipt binding. Its self-test validates the harness
+  contract only; product evidence still requires a live run with real platform permission revoke.
 
 Missing or insufficient product evidence:
 

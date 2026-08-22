@@ -22,6 +22,7 @@ cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-matrix.json" "$SB/docs/design/remoteapp-product-readiness-matrix.json"
@@ -93,6 +94,24 @@ fi
 grep -q "session cancel E2E must inspect cancel terminal_receipt.reason_code" /tmp/check-remoteapp-product-closure-cancel-receipt.out || \
   fail "expected cancel receipt reason_code failure"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
+
+perl -0pi -e 's#real_platform_permission_revoke#synthetic_permission_revoke#g' \
+  "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-permission-revoke-mode.out 2>&1; then
+  fail "checker accepted permission revoke E2E without real platform proof mode"
+fi
+grep -q "permission revoke E2E must require real platform revoke proof mode" /tmp/check-remoteapp-product-closure-permission-revoke-mode.out || \
+  fail "expected permission revoke proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+
+perl -0pi -e 's#target_permission_revoked#target_permission_suspended#g' \
+  "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-permission-revoke-reason.out 2>&1; then
+  fail "checker accepted permission revoke E2E without target_permission_revoked terminal reason"
+fi
+grep -q "permission revoke E2E must prove target_permission_revoked terminal reason" /tmp/check-remoteapp-product-closure-permission-revoke-reason.out || \
+  fail "expected permission revoke terminal reason failure"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 
 python3 - "$SB/docs/design/remoteapp-product-readiness-matrix.json" <<'PY'
 import json

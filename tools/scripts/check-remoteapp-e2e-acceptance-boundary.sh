@@ -13,6 +13,7 @@ WEAK_IDENTITY_AMBIGUITY="$ROOT/tools/scripts/host-remoteapp-weak-identity-ambigu
 VIEW_ONLY_INPUT_SAFETY="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
+PERMISSION_REVOKE="$ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -61,6 +62,7 @@ require_order() {
 [[ -f "$VIEW_ONLY_INPUT_SAFETY" ]] || fail "missing host view-only input safety E2E harness"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing host session timeout E2E harness"
 [[ -f "$SESSION_CANCEL" ]] || fail "missing host session cancel E2E harness"
+[[ -f "$PERMISSION_REVOKE" ]] || fail "missing host permission revoke E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -224,6 +226,29 @@ require 'end_cancel_again must preserve the original cancel terminal receipt' "$
   'host session cancel E2E must prove repeated end_session preserves the terminal receipt'
 require 'create_session args must not carry subject identity' "$SESSION_CANCEL" \
   'host session cancel E2E must keep selected target identity in Invocation.subject, not args'
+
+require 'resource\.refresh_remote_targets' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must select a live target through resource.refresh_remote_targets'
+require 'create-remote-desktop-session' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must create the RemoteApp session through the EasyNet CLI'
+require 'remote_desktop\.show_session' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must observe revoke through public show_session'
+require 'real_platform_permission_revoke' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must require real platform permission revoke evidence'
+require 'operator_revoke_required.*True|operator_revoke_required.*true' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must not silently simulate platform revoke'
+require 'target_permission_revoked' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must require target_permission_revoked terminal reason'
+require 'TARGET_PERMISSION_REVOKED' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must require TARGET_PERMISSION_REVOKED event evidence'
+require 'MEDIA_SOURCE_LOST' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must require MEDIA_SOURCE_LOST event evidence'
+require 'SESSION_CLOSED' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must require SESSION_CLOSED event evidence'
+require 'terminal_receipt\.reason_code' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must verify revoke terminal_receipt.reason_code'
+require 'create_session args must not carry subject identity' "$PERMISSION_REVOKE" \
+  'host permission revoke E2E must keep selected target identity in Invocation.subject, not args'
 
 require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must refresh through resource.refresh_remote_targets'
