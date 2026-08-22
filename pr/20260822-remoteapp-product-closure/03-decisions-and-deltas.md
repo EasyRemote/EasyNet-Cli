@@ -919,3 +919,35 @@ Product effect:
 - Product completion still requires browser/WebRTC rebind after resume,
   long-outage reconnect, crash/restart recovery, and cross-device resume
   evidence.
+
+## 2026-08-23 — Browser/Tauri frontend lifecycle needs an artifact verifier
+
+Decision:
+
+- Component tests, store tests, and host-only CLI probes are not full
+  Browser/Tauri product evidence.
+- The product gate needs a runner-agnostic artifact contract so Playwright,
+  Tauri driver, or another real UI runner can prove the same lifecycle without
+  adding a frontend package dependency here.
+
+Implementation delta:
+
+- Added `tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh`.
+- The verifier accepts either `--evidence-json` or `--runner-cmd` in explicit
+  `--run` mode and emits bounded JSON/Markdown reports.
+- Evidence must state `proof_mode=real_browser_tauri_lifecycle`,
+  `component_mock=false`, `real_backend_runtime=true`, and
+  `product_complete_claim=false`.
+- Evidence must include ordered app/auth/picker/permission/consent/create/
+  attach/watch/media/input/end/terminal-receipt steps, public RemoteApp ability
+  names, host-local `remote_desktop.permission_status`, selected Resource URA
+  binding for session abilities, and a visible terminal receipt.
+- Frontend product-flow and product-closure gates now reject missing verifier
+  coverage, component-mock proof mode, or hidden terminal receipt evidence.
+
+Product effect:
+
+- The repository now has a precise contract for the missing frontend product
+  lifecycle artifact.
+- This still does not prove product completion; a live Browser/Tauri artifact
+  against a real backend/runtime remains required.

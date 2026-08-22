@@ -7,6 +7,7 @@ AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 PERMISSION_REVOKE="$ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
@@ -42,6 +43,7 @@ reject() {
 [[ -f "$MATRIX" ]] || fail "missing RemoteApp product readiness matrix"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
 [[ -f "$SESSION_CANCEL" ]] || fail "missing RemoteApp session cancel E2E harness"
 [[ -f "$PERMISSION_REVOKE" ]] || fail "missing RemoteApp permission revoke E2E harness"
@@ -152,6 +154,8 @@ require 'NAT/relay/WebRTC/direct fallback network paths' "$AUDIT" \
   'audit must cover real network paths'
 require 'Frontend UI can discover, authorize, start, display, control, and end session' "$AUDIT" \
   'audit must cover frontend full lifecycle'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$AUDIT" \
+  'audit must record the Browser/Tauri lifecycle evidence verifier'
 require 'Cross-device E2E smoke/regression exists beyond local provider boundary' "$AUDIT" \
   'audit must cover cross-device proof'
 require 'remoteapp-cross-device-product-smoke.sh' "$AUDIT" \
@@ -201,6 +205,8 @@ require 'Cross-platform capture implementation/evidence for Windows and Linux' "
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'Frontend full lifecycle E2E' "$PLAN" \
   'plan evidence audit must list frontend full lifecycle E2E as missing'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the Browser/Tauri lifecycle verifier'
 require 'remoteapp-cross-device-product-smoke.sh' "$PLAN" \
   'plan evidence audit must record the cross-device smoke gate'
 require 'failed at `cross-device-routing`' "$PLAN" \
@@ -222,6 +228,28 @@ require 'service_owner_projection_failed' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must classify current Service owner projection failures'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
+require 'real_browser_tauri_lifecycle' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require real lifecycle proof mode'
+require 'component_mock.*False|component_mock.*false' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must reject component mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require real backend/runtime evidence'
+require 'target_picker_opened' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect target picker evidence'
+require 'remote_desktop\.permission_status' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect permission_status evidence'
+require 'remote_desktop\.create_session' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect create_session evidence'
+require 'remote_desktop\.attach' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect attach evidence'
+require 'remote_desktop\.watch_events' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect watch_events evidence'
+require 'remote_desktop\.end_session' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect end_session evidence'
+require 'terminal_receipt_visible' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect terminal receipt visibility'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must reject product completion claims'
 require 'remote_desktop\.show_session' "$SESSION_TIMEOUT" \
   'session timeout E2E must observe timeout through public show_session'
 require 'remote_desktop\.end_session' "$SESSION_TIMEOUT" \

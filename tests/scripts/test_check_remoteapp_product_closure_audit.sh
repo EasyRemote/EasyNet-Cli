@@ -20,6 +20,7 @@ mkdir -p \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
@@ -59,6 +60,24 @@ fi
 grep -q "cross-device smoke must preserve product non-claims" /tmp/check-remoteapp-product-closure-cross-device-gate.out || \
   fail "expected cross-device smoke non-claim failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
+perl -0pi -e 's#real_browser_tauri_lifecycle#component_mock_lifecycle#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-mode.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without real lifecycle proof mode"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must require real lifecycle proof mode" /tmp/check-remoteapp-product-closure-browser-lifecycle-mode.out || \
+  fail "expected Browser/Tauri lifecycle proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+perl -0pi -e 's#terminal_receipt_visible#terminal_receipt_hidden#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-terminal.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without terminal receipt visibility"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must inspect terminal receipt visibility" /tmp/check-remoteapp-product-closure-browser-lifecycle-terminal.out || \
+  fail "expected Browser/Tauri terminal receipt visibility failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 
 perl -0pi -e 's#remote_desktop\.show_session#remote_desktop.status#g' \
   "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"

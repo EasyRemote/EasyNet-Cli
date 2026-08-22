@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 FRONTEND_ROOT="${CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT:-$ROOT/../EasyNet/Frontend}"
 HARNESS="$ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 DECODED_FRAME="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
@@ -65,6 +66,8 @@ require_order() {
 
 [[ -f "$HARNESS" ]] || fail "missing frontend RemoteApp product-flow E2E harness"
 [[ -x "$HARNESS" ]] || fail "frontend RemoteApp product-flow E2E harness must be executable"
+[[ -f "$BROWSER_LIFECYCLE" ]] || fail "missing frontend RemoteApp Browser/Tauri lifecycle E2E verifier"
+[[ -x "$BROWSER_LIFECYCLE" ]] || fail "frontend RemoteApp Browser/Tauri lifecycle E2E verifier must be executable"
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
 [[ -f "$TARGET_FRESHNESS" ]] || fail "missing host target picker freshness E2E harness"
 [[ -f "$DECODED_FRAME" ]] || fail "missing host decoded-frame E2E harness"
@@ -81,7 +84,54 @@ require_order() {
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 
 bash "$HARNESS" --self-test >/dev/null
+bash "$BROWSER_LIFECYCLE" --self-test >/dev/null
 bash "$HUB_API_PREFLIGHT" --self-test >/dev/null
+require 'real_browser_tauri_lifecycle' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require real frontend lifecycle proof mode'
+require 'component_mock.*False|component_mock.*false' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must reject component-mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require a real backend/runtime'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must reject product-complete claims'
+require 'target_picker_opened' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require target picker evidence'
+require 'permission_status_checked' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require permission_status preflight evidence'
+require 'remote_desktop\.permission_status' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind permission preflight to remote_desktop.permission_status'
+require 'consent_granted' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require consent grant evidence'
+require 'remote_desktop\.grant_consent' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind consent to remote_desktop.grant_consent'
+require 'session_created' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require session creation evidence'
+require 'remote_desktop\.create_session' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind creation to remote_desktop.create_session'
+require 'webrtc_attached' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require WebRTC attach evidence'
+require 'remote_desktop\.attach' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind attach to remote_desktop.attach'
+require 'watch_events_streaming' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require watch_events evidence'
+require 'remote_desktop\.watch_events' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind event watch to remote_desktop.watch_events'
+require 'media_presented' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require rendered media evidence'
+require 'input_control_attempted_or_policy_blocked' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require input/control or policy-block evidence'
+require 'session_ended' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require session end evidence'
+require 'remote_desktop\.end_session' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind end to remote_desktop.end_session'
+require 'terminal_receipt_visible' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require visible terminal receipt evidence'
+require 'permission_status_checked must be host-local and not target-scoped' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must keep permission_status host-local'
+require '--run requires --evidence-json or --runner-cmd' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require real runner output in --run mode'
+require 'EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_E2E' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require an explicit live-run gate'
 require '/api/v1/health' "$HUB_API_PREFLIGHT" \
   'Hub API readiness preflight must probe the canonical backend health endpoint'
 require 'Docker daemon is not reachable' "$HUB_API_PREFLIGHT" \
@@ -253,10 +303,14 @@ require 'allows creating a new remote desktop session after a terminal receipt i
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
   'product readiness audit must mention the product-flow E2E harness'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$AUDIT" \
+  'product readiness audit must mention the Browser/Tauri lifecycle evidence verifier'
 require 'runnable product-flow harness entrypoint' "$AUDIT" \
   'product readiness audit must classify the harness as an entrypoint, not proof of completion'
-require 'Browser/Tauri E2E for full user flow with real backend/runtime' "$AUDIT" \
+require 'Live Browser/Tauri E2E artifact with real backend/runtime' "$AUDIT" \
   'product readiness audit must retain real Browser/Tauri full-flow evidence as still required'
+require 'visible terminal receipt' "$AUDIT" \
+  'product readiness audit must require visible terminal receipt evidence'
 require 'target recovery' "$AUDIT" \
   'product readiness audit must record frontend target recovery projection evidence'
 require 'route state' "$AUDIT" \
@@ -280,6 +334,8 @@ reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$PLAN" \
   'product closure plan must mention the product-flow E2E harness'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
+  'product closure plan must mention the Browser/Tauri lifecycle evidence verifier'
 require 'explicit --run report remains required' "$PLAN" \
   'product closure plan must require an explicit run report before using harness evidence'
 require 'Frontend full lifecycle E2E across Browser/Tauri surfaces' "$PLAN" \

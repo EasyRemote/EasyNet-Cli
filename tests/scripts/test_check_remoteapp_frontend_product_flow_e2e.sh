@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
 HARNESS="$REPO_ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+BROWSER_LIFECYCLE="$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 
 fail() {
   printf 'test_check_remoteapp_frontend_product_flow_e2e: %s\n' "$1" >&2
@@ -12,10 +13,15 @@ fail() {
 
 "$SCRIPT" >/dev/null
 "$HARNESS" --self-test >/dev/null
+"$BROWSER_LIFECYCLE" --self-test >/dev/null
 EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_OUT_DIR="$REPO_ROOT/target/test/frontend-remoteapp-product-flow-skip" \
   "$HARNESS" >/dev/null
 grep -q '"status": "skipped"' "$REPO_ROOT/target/test/frontend-remoteapp-product-flow-skip/report.json" || \
   fail "harness did not emit skipped report when run gate was absent"
+EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_OUT_DIR="$REPO_ROOT/target/test/frontend-remoteapp-browser-lifecycle-skip" \
+  "$BROWSER_LIFECYCLE" >/dev/null
+grep -q '"status": "skipped"' "$REPO_ROOT/target/test/frontend-remoteapp-browser-lifecycle-skip/report.json" || \
+  fail "browser lifecycle verifier did not emit skipped report when run gate was absent"
 
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
@@ -30,6 +36,7 @@ mkdir -p \
 
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
 cp "$HARNESS" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+cp "$BROWSER_LIFECYCLE" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/hub-api-readiness-preflight.sh" \
   "$SB/tools/scripts/hub-api-readiness-preflight.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh" \
@@ -65,6 +72,42 @@ chmod +x "$SB/tools/scripts/"*.sh
 CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
 CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null
+
+cp "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good"
+perl -0pi -e 's/real_browser_tauri_lifecycle/component_mock_lifecycle/g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without real lifecycle proof mode"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good"
+perl -0pi -e 's/permission_status_checked must be host-local and not target-scoped/permission_status_checked may be target-scoped/g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without host-local permission_status guard"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good"
+perl -0pi -e 's/terminal_receipt_visible/terminal_receipt_hidden/g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without visible terminal receipt evidence"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 
 cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"

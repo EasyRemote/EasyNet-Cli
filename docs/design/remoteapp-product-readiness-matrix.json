@@ -186,16 +186,20 @@
         "frontend action row executes daemon-guided retry_session recovery by ending then creating a session",
         "frontend share picker exposes host-local remote_desktop.permission_status preflight before create_session",
         "frontend denied permission_status stays in the share picker with Request permission recovery instead of becoming a session-level error",
-        "product-flow harness entrypoint"
+        "product-flow harness entrypoint",
+        "frontend-remoteapp-browser-lifecycle-e2e.sh verifier for real Browser/Tauri lifecycle artifacts"
       ],
       "required_evidence_before_product_complete": [
-        "Browser/Tauri E2E with real backend/runtime",
+        "Live Browser/Tauri E2E artifact with real backend/runtime",
         "picker to permission to consent to create_session",
         "WebRTC attach and watch_events recovery",
-        "input/control and end_session"
+        "media presentation",
+        "input/control or policy-block and end_session",
+        "visible terminal receipt"
       ],
       "non_claims": [
-        "component tests do not prove full real frontend product lifecycle"
+        "component tests do not prove full real frontend product lifecycle",
+        "the Browser/Tauri verifier self-test does not prove live frontend product behavior"
       ]
     },
     {
