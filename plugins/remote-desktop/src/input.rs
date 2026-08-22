@@ -1579,8 +1579,7 @@ mod tests {
 
     #[test]
     fn input_frame_applied_payload_preserves_client_timestamp() {
-        let payload =
-            input_frame_applied_payload("pointer", "move", 1, 0, Some(1_787_331_000_123));
+        let payload = input_frame_applied_payload("pointer", "move", 1, 0, Some(1_787_331_000_123));
 
         assert_eq!(payload["kind"], json!("pointer"));
         assert_eq!(payload["action"], json!("move"));
@@ -1692,9 +1691,10 @@ mod tests {
 
     #[test]
     fn parses_key_input_frame() {
-        let frame =
-            parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA","sent_at_ms":1787331000456}"#)
-                .unwrap();
+        let frame = parse_input_frame(
+            r#"{"type":"key","action":"down","code":"KeyA","sent_at_ms":1787331000456}"#,
+        )
+        .unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Key);
         assert_eq!(frame.client_sent_at_ms(), Some(1_787_331_000_456));
     }
@@ -2101,8 +2101,7 @@ mod tests {
             },
         }));
 
-        let missing_outcome =
-            apply_input_frame_with_effective_policy(&policy, &missing_revision);
+        let missing_outcome = apply_input_frame_with_effective_policy(&policy, &missing_revision);
         assert!(!missing_outcome.applied);
         assert_eq!(
             missing_outcome.reason,
@@ -2111,10 +2110,7 @@ mod tests {
 
         let stale_outcome = apply_input_frame_with_effective_policy(&policy, &stale_revision);
         assert!(!stale_outcome.applied);
-        assert_eq!(
-            stale_outcome.reason,
-            Some("stale_pointer_target_geometry")
-        );
+        assert_eq!(stale_outcome.reason, Some("stale_pointer_target_geometry"));
 
         assert_eq!(
             pointer_target_revision_reject_reason(

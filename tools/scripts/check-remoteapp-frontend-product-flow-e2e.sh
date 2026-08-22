@@ -10,6 +10,11 @@ DECODED_FRAME="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 VIEW_ONLY_INPUT="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 HUB_API_PREFLIGHT="$ROOT/tools/scripts/hub-api-readiness-preflight.sh"
 FRONTEND_UI_TEST="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.test.tsx"
+FRONTEND_STORE="$FRONTEND_ROOT/src/store/media-channel-store.ts"
+FRONTEND_STORE_TEST="$FRONTEND_ROOT/src/store/media-channel-store.test.ts"
+FRONTEND_PROTOCOL="$FRONTEND_ROOT/src/lib/api/remote-desktop-protocol.ts"
+REMOTEAPP_NETWORK="$ROOT/plugins/remote-desktop/src/network.rs"
+REMOTEAPP_TRANSPORT_VIEW="$ROOT/plugins/remote-desktop/src/view_transport.rs"
 AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 
@@ -64,6 +69,11 @@ require_order() {
 [[ -f "$VIEW_ONLY_INPUT" ]] || fail "missing host view-only input safety E2E harness"
 [[ -f "$HUB_API_PREFLIGHT" ]] || fail "missing Hub API readiness preflight harness"
 [[ -f "$FRONTEND_UI_TEST" ]] || fail "missing frontend RemoteApp UI flow test"
+[[ -f "$FRONTEND_STORE" ]] || fail "missing frontend RemoteApp media channel store"
+[[ -f "$FRONTEND_STORE_TEST" ]] || fail "missing frontend RemoteApp media channel store test"
+[[ -f "$FRONTEND_PROTOCOL" ]] || fail "missing frontend RemoteApp protocol projection"
+[[ -f "$REMOTEAPP_NETWORK" ]] || fail "missing RemoteApp network route model"
+[[ -f "$REMOTEAPP_TRANSPORT_VIEW" ]] || fail "missing RemoteApp transport view projection"
 [[ -f "$AUDIT" ]] || fail "missing RemoteApp product readiness audit"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 
@@ -139,6 +149,26 @@ require 'runs the remote desktop UI flow from target picker through session end'
   'frontend component test must cover picker-to-session-end user flow'
 require 'watch_events' "$FRONTEND_UI_TEST" \
   'frontend UI flow test must prove watch_events is part of the session lifecycle'
+require 'to_client_ice_server_value' "$REMOTEAPP_NETWORK" \
+  'RemoteApp network route model must project browser-consumable ICE server config'
+require 'DirectWebRtcClientIceServerProjection' "$REMOTEAPP_NETWORK" \
+  'RemoteApp network route model must keep client ICE server projection as a typed product object'
+require '"client_ice_servers": self\.client_ice_servers\.clone\(\)' "$REMOTEAPP_TRANSPORT_VIEW" \
+  'RemoteApp transport view must expose browser client_ice_servers'
+require 'client_ice_server_projection_includes_browser_turn_credentials' "$REMOTEAPP_NETWORK" \
+  'RemoteApp network tests must prove browser TURN credentials are projected to authorized session views'
+require 'client_ice_servers' "$FRONTEND_PROTOCOL" \
+  'frontend protocol projection must parse daemon-projected RemoteApp ICE server config'
+require 'webrtcIceServers: remoteDesktopIceServersFromValue\(transport\?\.client_ice_servers\)' "$FRONTEND_PROTOCOL" \
+  'frontend RemoteApp view must derive browser ICE servers from the session transport view'
+require 'iceServers: view\.webrtcIceServers' "$FRONTEND_STORE" \
+  'frontend WebRTC startup must use session-projected ICE servers'
+reject 'iceServers: \[\]' "$FRONTEND_STORE" \
+  'frontend RemoteApp WebRTC startup must not hard-code an empty ICE server list'
+require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove RTCPeerConnection receives session-projected ICE servers'
+require 'turn:turn\.example\.test:3478\?transport=udp' "$FRONTEND_STORE_TEST" \
+  'frontend store test must cover TURN relay ICE server config, not only host/direct mode'
 
 require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
   'product readiness audit must mention the product-flow E2E harness'

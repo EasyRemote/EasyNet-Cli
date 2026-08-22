@@ -22,8 +22,11 @@ trap 'rm -rf "$SB"' EXIT
 mkdir -p \
   "$SB/tools/scripts" \
   "$SB/docs/design" \
+  "$SB/plugins/remote-desktop/src" \
   "$SB/pr/20260822-remoteapp-product-closure" \
-  "$SB/Frontend/src/components/easynet"
+  "$SB/Frontend/src/components/easynet" \
+  "$SB/Frontend/src/lib/api" \
+  "$SB/Frontend/src/store"
 
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
 cp "$HARNESS" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
@@ -37,12 +40,22 @@ cp "$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SB/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
   "$SB/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+cp "$REPO_ROOT/plugins/remote-desktop/src/network.rs" \
+  "$SB/plugins/remote-desktop/src/network.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/view_transport.rs" \
+  "$SB/plugins/remote-desktop/src/view_transport.rs"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" \
   "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md" \
   "$SB/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+cp "$REPO_ROOT/../EasyNet/Frontend/src/lib/api/remote-desktop-protocol.ts" \
+  "$SB/Frontend/src/lib/api/remote-desktop-protocol.ts"
+cp "$REPO_ROOT/../EasyNet/Frontend/src/store/media-channel-store.ts" \
+  "$SB/Frontend/src/store/media-channel-store.ts"
+cp "$REPO_ROOT/../EasyNet/Frontend/src/store/media-channel-store.test.ts" \
+  "$SB/Frontend/src/store/media-channel-store.test.ts"
 chmod +x "$SB/tools/scripts/"*.sh
 
 CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \

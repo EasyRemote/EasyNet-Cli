@@ -259,6 +259,10 @@ Missing or insufficient product evidence:
 - Multi-display application capture or explicit product unsupported flow.
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
 - Real STUN/TURN/EasyNet relay reachability matrix.
+  Current source/product-path progress: daemon transport views now project
+  browser `client_ice_servers`, and the frontend WebRTC path consumes that
+  session-projected config instead of hard-coding an empty ICE server list.
+  This is required plumbing; it is not real relay reachability evidence.
 - Frontend full lifecycle E2E across Browser/Tauri surfaces.
 - RemoteApp-specific cross-device smoke/regression with remote target
   inventory, real display/window/application capture, input policy, and

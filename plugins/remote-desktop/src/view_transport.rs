@@ -11,6 +11,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::input::INPUT_DATA_CHANNEL_LABEL;
+use crate::daemon::plugins::remote_desktop::network::direct_webrtc_client_ice_server_projection_from_env;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::daemon::plugins::remote_desktop::target::{FrontendAction, TargetResolutionError};
 use crate::daemon::plugins::remote_desktop::transport_blocker::RemoteDesktopTransportBlocker;
@@ -25,6 +26,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTransportView
     unavailable_reason: Value,
     readiness_blocker: Option<RemoteDesktopTransportReadinessBlocker>,
     route_state: Value,
+    client_ice_servers: Value,
+    client_ice_config_error: Value,
     production_route_ready: bool,
     message: &'static str,
 }
@@ -46,6 +49,7 @@ impl RemoteDesktopTransportView {
             .map(RemoteDesktopTransportReadinessBlocker::unavailable_reason_value)
             .unwrap_or_else(|| transport_pending_unavailable_reason(session));
         let route_state = transport_route_state(&route_state_projection);
+        let client_ice_projection = direct_webrtc_client_ice_server_projection_from_env();
         let production_route_ready = route_state_projection.production_remote_ready();
         let message = transport_message(session);
         Self {
@@ -54,6 +58,8 @@ impl RemoteDesktopTransportView {
             unavailable_reason,
             readiness_blocker,
             route_state,
+            client_ice_servers: client_ice_projection.servers_value(),
+            client_ice_config_error: client_ice_projection.configuration_error_value(),
             production_route_ready,
             message,
         }
@@ -101,6 +107,8 @@ impl RemoteDesktopTransportView {
             "unavailable_reason": self.unavailable_reason.clone(),
             "readiness_blocker": self.readiness_blocker(),
             "route_state": self.route_state.clone(),
+            "client_ice_servers": self.client_ice_servers.clone(),
+            "client_ice_config_error": self.client_ice_config_error.clone(),
             "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
             "required_runtime": ["os_capture_stream", "video_encoder", "webrtc_peer_connection", "data_channel_input"]
         })
@@ -129,7 +137,9 @@ impl RemoteDesktopTransportView {
                     "reason_code": self.reason_code.clone(),
                     "unavailable_reason": self.unavailable_reason.clone(),
                     "readiness_blocker": self.readiness_blocker(),
-                    "route_state": self.route_state.clone()
+                    "route_state": self.route_state.clone(),
+                    "client_ice_servers": self.client_ice_servers.clone(),
+                    "client_ice_config_error": self.client_ice_config_error.clone()
                 },
             },
             {
@@ -475,8 +485,11 @@ mod tests {
         let transports = view.transport_list(&session);
 
         assert_eq!(summary["preview_ability"], json!("remote_desktop.attach"));
+        assert_eq!(summary["client_ice_servers"], json!([]));
+        assert_eq!(summary["client_ice_config_error"], Value::Null);
         assert_eq!(transports[1]["endpoint_ura"], Value::Null);
         assert_eq!(transports[2]["endpoint_ura"], Value::Null);
+        assert_eq!(transports[0]["metadata"]["client_ice_servers"], json!([]));
     }
 
     #[test]
