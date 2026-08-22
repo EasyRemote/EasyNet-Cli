@@ -80,6 +80,33 @@ impl RemoteDesktopEventLog {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        events: Vec<Value>,
+        terminal: bool,
+    ) -> anyhow::Result<Self> {
+        let mut retained = VecDeque::with_capacity(MAX_EVENTS_PER_SESSION);
+        let skip = events.len().saturating_sub(MAX_EVENTS_PER_SESSION);
+        let mut max_sequence = 0;
+        for event in events.into_iter().skip(skip) {
+            let sequence = event
+                .get("sequence")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery event is missing sequence"))?;
+            max_sequence = max_sequence.max(sequence);
+            retained.push_back(RemoteDesktopEventRecord::new(event));
+        }
+        let event_tx = if terminal {
+            None
+        } else {
+            Some(broadcast::channel(MAX_EVENTS_PER_SESSION).0)
+        };
+        Ok(Self {
+            events: retained,
+            event_tx,
+            next_sequence: max_sequence.saturating_add(1).max(1),
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn events(&self) -> Vec<Value> {
         self.events
             .iter()

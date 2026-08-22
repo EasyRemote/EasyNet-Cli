@@ -62,6 +62,33 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentGrant 
 }
 
 impl RemoteDesktopConsentGrant {
+    pub(in crate::daemon::plugins::remote_desktop) fn from_recovery_value(
+        value: &Value,
+    ) -> anyhow::Result<Self> {
+        let grant_scope = value
+            .get("grant_scope")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery consent requires grant_scope"))?;
+        let approval_receipt = value
+            .get("approval_receipt")
+            .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery consent requires approval_receipt"))
+            .and_then(|receipt| {
+                RemoteDesktopConsentReceipt::from_value("remote_desktop.rehydrate", receipt)
+                    .map_err(|err| anyhow::anyhow!(err.to_string()))
+            })?;
+        Ok(Self {
+            policy: POLICY_LOCAL_USER_CONSENT,
+            approval_actor_ura: required_string(value, "approval_actor_ura")?,
+            consent_id: required_string(value, "consent_id")?,
+            subject_ura: required_string(value, "subject_ura")?,
+            input_control_granted: grant_scope
+                .get("input_control")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            approval_receipt,
+        })
+    }
+
     /// Capture the approval actor and required receipt link from the creation
     /// invocation envelope.
     ///
@@ -137,6 +164,16 @@ impl RemoteDesktopConsentGrant {
             "approval_receipt": self.approval_receipt.to_value(),
         })
     }
+}
+
+fn required_string(value: &Value, field: &'static str) -> anyhow::Result<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery consent requires non-empty {field}"))
 }
 
 /// Return whether `causal_context` contains `expected`.

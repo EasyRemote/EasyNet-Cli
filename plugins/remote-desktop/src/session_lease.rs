@@ -27,6 +27,24 @@ impl RemoteDesktopLease {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        created_at_ms: u64,
+        updated_at_ms: u64,
+        expires_at_ms: u64,
+    ) -> anyhow::Result<Self> {
+        if updated_at_ms < created_at_ms {
+            anyhow::bail!("RemoteApp recovery lease updated_at_ms must be >= created_at_ms");
+        }
+        if expires_at_ms < created_at_ms {
+            anyhow::bail!("RemoteApp recovery lease expires_at_ms must be >= created_at_ms");
+        }
+        Ok(Self {
+            created_at_ms,
+            updated_at_ms,
+            expires_at_ms,
+        })
+    }
+
     /// Creation timestamp in Unix milliseconds.
     pub(in crate::daemon::plugins::remote_desktop) fn created_at_ms(&self) -> u64 {
         self.created_at_ms

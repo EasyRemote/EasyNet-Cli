@@ -182,8 +182,10 @@
         "frontend preserves non-terminal RemoteApp sessions across device-offline presence drops, validates with remote_desktop.show_session on resume, and rebinds WebRTC without ending the daemon session on failed rebind",
         "canonical SDK cancel/timeout semantics",
         "remoteapp-crash-restart-recovery-e2e.sh verifier for real daemon/plugin crash and restart recovery artifacts",
-        "2026-08-23 live daemon kill/restart probe returned session_not_found for rd-crash-probe-45956, proving active RemoteApp sessions are not yet rehydrated after daemon crash",
-        "RemoteDesktopRecoveryStore and RemoteDesktopRecoverySnapshot now define the daemon-local durable snapshot contract with round-trip and corrupt-snapshot fail-closed tests"
+        "2026-08-23 live daemon kill/restart probe returned session_not_found for rd-crash-probe-45956, proving the historical runtime did not rehydrate active RemoteApp sessions after daemon crash",
+        "RemoteDesktopRecoveryStore and RemoteDesktopRecoverySnapshot now define the daemon-local durable snapshot contract with round-trip and corrupt-snapshot fail-closed tests",
+        "plugin startup now rehydrates snapshots into degraded RemoteDesktopSession rows and preserves session_id, selected Resource URA, caller, consent receipt, daemon-local session token, target binding, event replay, and terminal receipt",
+        "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row"
       ],
       "required_evidence_before_product_complete": [
         "long-outage and network transport reconnect handoff E2E",
@@ -191,8 +193,8 @@
         "live consent revoke termination E2E pass report from a real host permission revoke",
         "canonical Axon cancel/timeout receipt-chain evidence for RemoteApp abilities",
         "live remoteapp-crash-restart-recovery-e2e.sh artifact",
-        "same-session public show_session recovery after daemon restart",
-        "watch_events and media reattachment after restart",
+        "live cross-process same-session public show_session recovery after daemon restart",
+        "watch_events reattachment and media reattachment after restart",
         "recovered WAL/idempotency/replay-guard/lock state",
         "plugin worker and target monitor restart without minting a new public session",
         "original terminal receipt replay after crash during close",
@@ -201,7 +203,7 @@
       "non_claims": [
         "taxonomy and unit coverage do not prove recovery product behavior",
         "the crash/restart recovery verifier self-test does not prove live process recovery",
-        "the recovery snapshot store contract alone does not prove startup rehydration, media reattachment, or full crash/restart recovery"
+        "Stage 1 startup rehydration does not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
       ]
     },
     {

@@ -43,8 +43,10 @@ const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnapshot {
     schema_version: u32,
     session_id: String,
+    session_token: String,
     creator_caller_ura: String,
     selected_resource_ura: String,
+    subject_display_name: String,
     target_binding: Value,
     consent: Value,
     mode: String,
@@ -65,8 +67,10 @@ impl RemoteDesktopRecoverySnapshot {
     ) -> anyhow::Result<Self> {
         Self::new(
             session.session_id().to_string(),
+            session.session_token_for_recovery_snapshot().to_string(),
             session.creator_caller_ura().to_string(),
             session.subject_ura().to_string(),
+            session.subject_display_name().to_string(),
             session.target_binding().to_value(),
             session.consent_state().to_value(),
             session.mode().to_string(),
@@ -85,8 +89,10 @@ impl RemoteDesktopRecoverySnapshot {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::daemon::plugins::remote_desktop) fn new(
         session_id: String,
+        session_token: String,
         creator_caller_ura: String,
         selected_resource_ura: String,
+        subject_display_name: String,
         target_binding: Value,
         consent: Value,
         mode: String,
@@ -103,8 +109,10 @@ impl RemoteDesktopRecoverySnapshot {
         let snapshot = Self {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
             session_id,
+            session_token,
             creator_caller_ura,
             selected_resource_ura,
+            subject_display_name,
             target_binding,
             consent,
             mode,
@@ -131,8 +139,10 @@ impl RemoteDesktopRecoverySnapshot {
             );
         }
         require_non_empty("session_id", &self.session_id)?;
+        require_non_empty("session_token", &self.session_token)?;
         require_non_empty("creator_caller_ura", &self.creator_caller_ura)?;
         require_ura("selected_resource_ura", &self.selected_resource_ura)?;
+        require_non_empty("subject_display_name", &self.subject_display_name)?;
         require_object("target_binding", &self.target_binding)?;
         require_object("consent", &self.consent)?;
         require_non_empty("mode", &self.mode)?;
@@ -153,6 +163,70 @@ impl RemoteDesktopRecoverySnapshot {
 
     pub(in crate::daemon::plugins::remote_desktop) fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn session_token(&self) -> &str {
+        &self.session_token
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn creator_caller_ura(&self) -> &str {
+        &self.creator_caller_ura
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn selected_resource_ura(&self) -> &str {
+        &self.selected_resource_ura
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn subject_display_name(&self) -> &str {
+        &self.subject_display_name
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_binding(&self) -> &Value {
+        &self.target_binding
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn consent(&self) -> &Value {
+        &self.consent
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn mode(&self) -> &str {
+        &self.mode
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn transport_preferences(&self) -> &[String] {
+        &self.transport_preferences
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn video(&self) -> &Value {
+        &self.video
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn input_policy(&self) -> &Value {
+        &self.input_policy
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn created_at_ms(&self) -> u64 {
+        self.created_at_ms
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn updated_at_ms(&self) -> u64 {
+        self.updated_at_ms
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn lease_expires_at_ms(&self) -> u64 {
+        self.lease_expires_at_ms
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn lifecycle_state(&self) -> &str {
+        &self.lifecycle_state
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn terminal_receipt(&self) -> Option<Value> {
+        self.terminal_receipt.clone()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn events(&self) -> Vec<Value> {
+        self.events.clone()
     }
 }
 
@@ -198,6 +272,31 @@ impl RemoteDesktopRecoveryStore {
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn load_all(
+        &self,
+    ) -> anyhow::Result<Vec<RemoteDesktopRecoverySnapshot>> {
+        let root = self.root();
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
+        let mut snapshots = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let body = fs::read(&path)?;
+            let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_slice(&body)?;
+            snapshot.validate()?;
+            snapshots.push(snapshot);
+        }
+        snapshots.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        Ok(snapshots)
     }
 
     fn snapshot_path(&self, session_id: &str) -> anyhow::Result<PathBuf> {
@@ -254,8 +353,10 @@ mod tests {
     fn snapshot() -> RemoteDesktopRecoverySnapshot {
         RemoteDesktopRecoverySnapshot::new(
             "rd-recovery-test".to_string(),
+            "test-session-token".to_string(),
             "easynet:///r/localhost/user/u1".to_string(),
             "easynet:///r/localhost/resource/device.dev/streams/window.1".to_string(),
+            "Recovered window".to_string(),
             json!({"binding_id": "tb_1", "target_kind": "window"}),
             json!({
                 "policy": "local_user_consent",
@@ -336,8 +437,10 @@ mod tests {
     fn recovery_snapshot_requires_a_resource_subject() {
         let err = RemoteDesktopRecoverySnapshot::new(
             "rd-recovery-test".to_string(),
+            "test-session-token".to_string(),
             "easynet:///r/localhost/user/u1".to_string(),
             "not-a-ura".to_string(),
+            "Recovered window".to_string(),
             json!({}),
             json!({}),
             "view_only".to_string(),

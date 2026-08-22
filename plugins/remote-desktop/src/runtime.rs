@@ -35,6 +35,7 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenS
 use crate::daemon::plugins::remote_desktop::config::RemoteDesktopRuntimeConfig;
 use crate::daemon::plugins::remote_desktop::consent_registry::RemoteDesktopConsentRegistry;
 use crate::daemon::plugins::remote_desktop::lease_monitor::RemoteDesktopLeaseMonitor;
+use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::daemon::plugins::remote_desktop::session_creation::{
     PlatformRemoteAppTargetBindingVerifier, RemoteAppTargetBindingVerifier,
 };
@@ -72,19 +73,54 @@ impl RemoteDesktopPlugin {
         screen_backend: Arc<dyn ScreenSnapshotBackend>,
         config: RemoteDesktopRuntimeConfig,
     ) -> Arc<Self> {
-        Self::with_target_binding_verifier(
+        Self::with_target_binding_verifier_inner(
             screen_backend,
             Arc::new(PlatformRemoteAppTargetBindingVerifier),
             config,
+            Arc::new(RemoteDesktopRecoveryStore::daemon_default()),
+            true,
         )
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn with_target_binding_verifier(
         screen_backend: Arc<dyn ScreenSnapshotBackend>,
         target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
         config: RemoteDesktopRuntimeConfig,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Self::with_target_binding_verifier_inner(
+            screen_backend,
+            target_binding_verifier,
+            config,
+            Arc::new(RemoteDesktopRecoveryStore::daemon_default()),
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn with_recovery_store_for_test(
+        screen_backend: Arc<dyn ScreenSnapshotBackend>,
+        target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
+        config: RemoteDesktopRuntimeConfig,
+        recovery: Arc<RemoteDesktopRecoveryStore>,
+    ) -> Arc<Self> {
+        Self::with_target_binding_verifier_inner(
+            screen_backend,
+            target_binding_verifier,
+            config,
+            recovery,
+            true,
+        )
+    }
+
+    fn with_target_binding_verifier_inner(
+        screen_backend: Arc<dyn ScreenSnapshotBackend>,
+        target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
+        config: RemoteDesktopRuntimeConfig,
+        recovery: Arc<RemoteDesktopRecoveryStore>,
+        rehydrate: bool,
+    ) -> Arc<Self> {
+        let plugin = Arc::new(Self {
             sessions: Arc::new(RemoteDesktopSessionStore::new()),
             consent: Arc::new(RemoteDesktopConsentRegistry::new(
                 config.max_sessions().saturating_mul(4),
@@ -92,11 +128,17 @@ impl RemoteDesktopPlugin {
             lease_monitor: Arc::new(RemoteDesktopLeaseMonitor::new()),
             target_monitor: Arc::new(RemoteDesktopTargetMonitor::new()),
             transports: Arc::new(RemoteDesktopTransportManager::new()),
-            recovery: Arc::new(RemoteDesktopRecoveryStore::daemon_default()),
+            recovery,
             screen_backend,
             target_binding_verifier,
             config,
-        })
+        });
+        if rehydrate {
+            if let Err(err) = Self::rehydrate_recovery_snapshots(&plugin) {
+                eprintln!("[remote-desktop] recovery snapshot rehydration failed: {err}");
+            }
+        }
+        plugin
     }
 
     pub(in crate::daemon::plugins::remote_desktop) const fn config(
@@ -175,6 +217,35 @@ impl RemoteDesktopPlugin {
         self.recovery.save(snapshot)
     }
 
+    fn rehydrate_recovery_snapshots(plugin: &Arc<Self>) -> anyhow::Result<()> {
+        let snapshots = plugin.recovery.load_all()?;
+        if snapshots.is_empty() {
+            return Ok(());
+        }
+        let mut restored = Vec::new();
+        for snapshot in snapshots {
+            let session = RemoteDesktopSession::rehydrate(&snapshot)?;
+            let session_id = session.session_id().to_string();
+            let lease_expires_at_ms = session.lease_expires_at_ms();
+            let terminal = session.is_terminal();
+            plugin.session_store().with_sessions(|sessions| {
+                sessions.insert(session_id.clone(), session);
+            });
+            if !terminal {
+                Self::schedule_session_lease(plugin, session_id.clone(), lease_expires_at_ms)?;
+            }
+            restored.push(session_id);
+        }
+        if !restored.is_empty() {
+            eprintln!(
+                "[remote-desktop] rehydrated {} recovery snapshot(s): {}",
+                restored.len(),
+                restored.join(",")
+            );
+        }
+        Ok(())
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn screen_backend(
         &self,
     ) -> Arc<dyn ScreenSnapshotBackend> {
@@ -185,5 +256,118 @@ impl RemoteDesktopPlugin {
         &self,
     ) -> Arc<dyn RemoteAppTargetBindingVerifier> {
         Arc::clone(&self.target_binding_verifier)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use serde_json::json;
+
+    use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
+    use crate::daemon::ability::dispatch::StreamSource;
+    use crate::daemon::persistence::resources::{self, ResourcesFile};
+    use crate::daemon::plugins::remote_desktop::handlers::{
+        end_session, show_session, watch_events,
+    };
+    use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
+    use crate::daemon::plugins::remote_desktop::test_support::{
+        create_test_session, env_for, reset_store, seed_display, test_lock, test_runtime_limits,
+        TestRemoteAppTargetBindingVerifier,
+    };
+
+    #[test]
+    fn plugin_startup_rehydrates_recovery_snapshot_for_public_show_session() {
+        let _lock = test_lock();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let temp = tempfile::tempdir().expect("temp recovery dir");
+        let recovery = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
+        let source = RemoteDesktopPlugin::with_target_binding_verifier(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+        );
+        reset_store(&source);
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-startup-rehydrate-display");
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+        let created = create_test_session(
+            Arc::clone(&source),
+            env.clone(),
+            json!({"session_id": "rd-startup-rehydrate", "mode": "view_only"}),
+        )
+        .expect("source session creates");
+        let token = created["session_token"]
+            .as_str()
+            .expect("create_session returns token")
+            .to_string();
+        let snapshot = source
+            .session_store()
+            .with_sessions(|sessions| {
+                RemoteDesktopRecoverySnapshot::from_session(
+                    sessions
+                        .get("rd-startup-rehydrate")
+                        .expect("source session exists"),
+                )
+            })
+            .expect("snapshot derives from source session");
+        recovery.save(&snapshot).expect("snapshot saves");
+
+        let recovered = RemoteDesktopPlugin::with_recovery_store_for_test(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+            Arc::clone(&recovery),
+        );
+
+        let shown = show_session::handle(
+            Arc::clone(&recovered),
+            env.clone(),
+            json!({
+                "session_id": "rd-startup-rehydrate",
+                "session_token": token,
+            }),
+        )
+        .expect("show_session must use the rehydrated session row");
+        assert_eq!(shown["session_id"], json!("rd-startup-rehydrate"));
+        assert_eq!(shown["state"], json!("degraded"));
+        assert_eq!(shown["media_transport_ready"], json!(false));
+        assert!(shown["events"].as_array().unwrap().iter().any(|event| {
+            event["event_type"] == json!("SESSION_REHYDRATED")
+                && event["recoverability"] == json!("retry_session")
+        }));
+
+        let events = watch_events::handle(
+            Arc::clone(&recovered),
+            env.clone(),
+            json!({
+                "session_id": "rd-startup-rehydrate",
+                "session_token": token,
+                "from_sequence": 0,
+            }),
+        )
+        .expect("watch_events must replay the rehydrated session row");
+        let replayed = match events {
+            StreamSource::SnapshotThenLive(events, _) => events,
+            _ => panic!("rehydrated non-terminal session must replay then remain live"),
+        };
+        assert!(replayed
+            .iter()
+            .any(|event| event["event_type"] == json!("SESSION_REHYDRATED")));
+
+        let ended = end_session::handle(
+            Arc::clone(&recovered),
+            env,
+            json!({
+                "session_id": "rd-startup-rehydrate",
+                "session_token": created["session_token"],
+                "reason": "rehydrate_test_cleanup",
+            }),
+        )
+        .expect("end_session must close the rehydrated session row");
+        assert_eq!(ended["state"], json!("closed"));
+        assert_eq!(ended["end_reason"], json!("rehydrate_test_cleanup"));
     }
 }

@@ -214,6 +214,24 @@ impl RemoteDesktopInputPolicy {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn from_value(
+        value: &Value,
+    ) -> anyhow::Result<Self> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery input_policy must be an object"))?;
+        Ok(Self {
+            keyboard_enabled: object
+                .get("keyboard_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            pointer_enabled: object
+                .get("pointer_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "keyboard_enabled": self.keyboard_enabled,

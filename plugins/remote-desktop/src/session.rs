@@ -18,6 +18,7 @@ use crate::daemon::plugins::remote_desktop::event_log::{
 };
 use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints;
+use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::session_events;
 pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remote_desktop::session_identity::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_identity::RemoteDesktopSessionProfile;
@@ -29,6 +30,7 @@ use crate::daemon::plugins::remote_desktop::session_signaling::RemoteDesktopSign
 use crate::daemon::plugins::remote_desktop::session_state::{
     InputActivationGate, RemoteDesktopSessionPhase, RemoteDesktopSessionStateMachine,
 };
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopState;
 use crate::daemon::plugins::remote_desktop::session_transport_state::{
     PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
@@ -115,6 +117,85 @@ impl RemoteDesktopSession {
         session
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        snapshot: &RemoteDesktopRecoverySnapshot,
+    ) -> anyhow::Result<Self> {
+        let target_binding = RemoteAppTargetBinding::from_recovery_value(
+            snapshot.target_binding(),
+            snapshot.subject_display_name(),
+        )?;
+        if target_binding.subject_ura() != snapshot.selected_resource_ura() {
+            anyhow::bail!(
+                "RemoteApp recovery snapshot subject does not match target binding subject"
+            );
+        }
+        let consent_grant = RemoteDesktopConsentGrant::from_recovery_value(snapshot.consent())?;
+        let consent_epoch = target_binding.consent_epoch();
+        let (profile, _, target_binding, _) =
+            RemoteDesktopSessionProfile::from_init(RemoteDesktopSessionInit {
+                session_id: snapshot.session_id().to_string(),
+                session_token: snapshot.session_token().to_string(),
+                creator_caller_ura: snapshot.creator_caller_ura().to_string(),
+                consent: consent_grant.clone(),
+                target_binding,
+                mode: snapshot.mode().to_string(),
+                lease_ttl_ms: 1,
+                transport_preferences: snapshot.transport_preferences().to_vec(),
+                video: RemoteDesktopVideoConstraints::from_value(snapshot.video())?,
+                input_policy: RemoteDesktopInputPolicy::from_value(snapshot.input_policy())?,
+            });
+        let terminal_receipt = snapshot.terminal_receipt();
+        let terminal =
+            terminal_receipt.is_some() || matches!(snapshot.lifecycle_state(), "closed" | "failed");
+        let lifecycle = if terminal {
+            let public_state = match snapshot.lifecycle_state() {
+                "failed" => RemoteDesktopState::Failed,
+                _ => RemoteDesktopState::Closed,
+            };
+            RemoteDesktopSessionStateMachine::rehydrate_terminal(
+                public_state,
+                recovery_terminal_reason(terminal_receipt.as_ref()),
+            )?
+        } else {
+            RemoteDesktopSessionStateMachine::rehydrate_degraded()
+        };
+        let consent =
+            RemoteDesktopConsentState::rehydrate(consent_grant.clone(), snapshot.consent())
+                .unwrap_or_else(|_| {
+                    RemoteDesktopConsentState::active(consent_grant, consent_epoch)
+                });
+        let mut session = Self {
+            target: RemoteAppTargetBindingStateMachine::from_binding(target_binding),
+            consent,
+            profile,
+            lifecycle,
+            lease: RemoteDesktopLease::rehydrate(
+                snapshot.created_at_ms(),
+                snapshot.updated_at_ms(),
+                snapshot.lease_expires_at_ms(),
+            )?,
+            signaling: RemoteDesktopSignalingState::new(),
+            transport: RemoteDesktopTransportState::new(),
+            event_log: RemoteDesktopEventLog::rehydrate(snapshot.events(), terminal)?,
+            terminal_receipt,
+        };
+        if !terminal {
+            session.push_event(
+                "SESSION_REHYDRATED",
+                json!({
+                    "reason_code": "daemon_restart_rehydrated",
+                    "recoverability": "retry_session",
+                    "failure_domain": "daemon_restart",
+                    "frontend_action": "retry_session",
+                    "media_transport_ready": false,
+                    "client_media_ready": false,
+                    "previous_lifecycle_state": snapshot.lifecycle_state(),
+                }),
+            );
+        }
+        Ok(session)
+    }
+
     /// Stable opaque identifier for this remote desktop session.
     pub(in crate::daemon::plugins::remote_desktop) fn session_id(&self) -> &str {
         self.profile.session_id()
@@ -132,6 +213,12 @@ impl RemoteDesktopSession {
 
     /// Opaque token returned only by create-session responses.
     pub(in crate::daemon::plugins::remote_desktop) fn session_token_for_create_response(
+        &self,
+    ) -> &str {
+        self.profile.session_token_for_create_response()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn session_token_for_recovery_snapshot(
         &self,
     ) -> &str {
         self.profile.session_token_for_create_response()
@@ -1086,6 +1173,14 @@ impl RemoteDesktopSession {
         self.event_log.close();
         preview_stop
     }
+}
+
+fn recovery_terminal_reason(terminal_receipt: Option<&Value>) -> String {
+    terminal_receipt
+        .and_then(|receipt| receipt.get("reason_code").or_else(|| receipt.get("reason")))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| "daemon_restart_rehydrated_terminal".to_string())
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {

@@ -89,6 +89,28 @@ impl RemoteDesktopSessionStateMachine {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate_degraded() -> Self {
+        Self {
+            phase: RemoteDesktopSessionPhase::Suspended,
+            public_state: RemoteDesktopState::Degraded,
+            end_reason: None,
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate_terminal(
+        public_state: RemoteDesktopState,
+        reason: String,
+    ) -> anyhow::Result<Self> {
+        if !public_state.is_terminal() {
+            anyhow::bail!("RemoteApp recovery terminal state must be closed or failed");
+        }
+        Ok(Self {
+            phase: RemoteDesktopSessionPhase::Terminated,
+            public_state,
+            end_reason: Some(reason),
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) const fn phase(
         &self,
     ) -> RemoteDesktopSessionPhase {

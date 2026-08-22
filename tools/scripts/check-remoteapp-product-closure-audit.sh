@@ -753,6 +753,10 @@ require 'from_session' "$SESSION_RECOVERY" \
   'session recovery snapshot must be derived from the canonical session aggregate'
 require 'daemon_default' "$SESSION_RECOVERY" \
   'session recovery store must have a daemon-local default state path'
+require 'load_all' "$SESSION_RECOVERY" \
+  'session recovery store must enumerate snapshots for plugin startup rehydration'
+require 'session_token' "$SESSION_RECOVERY" \
+  'session recovery snapshot must preserve daemon-local session token for post-restart control access'
 require 'schema_version' "$SESSION_RECOVERY" \
   'session recovery snapshot must be schema-versioned'
 require 'selected_resource_ura' "$SESSION_RECOVERY" \
@@ -761,6 +765,14 @@ require 'terminal_receipt' "$SESSION_RECOVERY" \
   'session recovery snapshot must preserve terminal receipt projection'
 require 'persist_recovery_snapshot' "$RUNTIME" \
   'RemoteApp runtime must expose a plugin-owned recovery snapshot write boundary'
+require 'rehydrate_recovery_snapshots' "$RUNTIME" \
+  'RemoteApp runtime must load recovery snapshots into the plugin session store at startup'
+require 'plugin_startup_rehydrates_recovery_snapshot_for_public_show_session' "$RUNTIME" \
+  'RemoteApp runtime must have regression coverage for startup rehydrate show/watch/end behavior'
+require 'SESSION_REHYDRATED' "$SESSION" \
+  'RemoteApp session aggregate must emit SESSION_REHYDRATED for non-terminal startup recovery'
+require 'fn rehydrate\(' "$SESSION" \
+  'RemoteApp session aggregate must own snapshot-to-session rehydration'
 for recovery_writer in \
   "$CREATE_SESSION_HANDLER" \
   "$REFRESH_LEASE_HANDLER" \

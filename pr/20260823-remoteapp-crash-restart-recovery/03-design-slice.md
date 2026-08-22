@@ -88,8 +88,18 @@ Stage 2 can reattach watch/media transport and satisfy the stricter
   - `create_session` writing a non-terminal recovery snapshot;
   - `end_session` overwriting that snapshot with terminal receipt and bounded
     event-log projection.
+- Added Stage 1 startup rehydration:
+  - daemon startup loads recovery snapshots back into `RemoteDesktopSessionStore`;
+  - non-terminal snapshots rehydrate as degraded/suspended sessions with
+    `SESSION_REHYDRATED`;
+  - recovered rows preserve `session_id`, selected Resource URA, caller,
+    consent receipt, session token, target binding, event replay, and terminal
+    receipt;
+  - public `show_session`, `watch_events`, and `end_session` operate through the
+    normal session access/lifecycle path after rehydration.
 
-This slice is intentionally not marked as product recovery. Startup rehydration
-is still missing: after daemon restart, snapshots are durable but not yet loaded
-back into `RemoteDesktopSessionStore`, so the live crash/restart verifier must
-remain a product blocker until rehydration and cross-process E2E evidence pass.
+This slice is intentionally not marked as full product recovery. Stage 1
+control-plane rehydration exists, but media/input transports are deliberately
+not marked ready after process restart. The live crash/restart verifier remains
+a product blocker until media reattachment, frame rendering after restart,
+cross-process evidence, and endpoint cleanup all pass.

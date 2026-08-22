@@ -54,6 +54,15 @@ impl RemoteDesktopTargetKind {
             Self::Application => "display_scoped_application_window_set",
         }
     }
+
+    fn from_recovery_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "display" => Ok(Self::Display),
+            "window" => Ok(Self::Window),
+            "application" => Ok(Self::Application),
+            other => anyhow::bail!("unsupported RemoteApp recovery target_kind {other:?}"),
+        }
+    }
 }
 
 impl TryFrom<ResourceType> for RemoteDesktopTargetKind {
@@ -92,6 +101,15 @@ impl CaptureScope {
             Self::AppSurface => "AppSurface",
         }
     }
+
+    fn from_recovery_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "DisplaySurface" => Ok(Self::DisplaySurface),
+            "WindowSurface" => Ok(Self::WindowSurface),
+            "AppSurface" => Ok(Self::AppSurface),
+            other => anyhow::bail!("unsupported RemoteApp recovery capture_scope {other:?}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +126,15 @@ impl InputScope {
             Self::ViewOnly => "view_only",
             Self::TargetLocal => "target_local",
             Self::DisplayGlobal => "display_global",
+        }
+    }
+
+    fn from_recovery_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "view_only" => Ok(Self::ViewOnly),
+            "target_local" => Ok(Self::TargetLocal),
+            "display_global" => Ok(Self::DisplayGlobal),
+            other => anyhow::bail!("unsupported RemoteApp recovery input_scope {other:?}"),
         }
     }
 }
@@ -133,6 +160,16 @@ impl InputScopeReason {
             Self::InputControlGranted => "input_control_granted",
             Self::InputConsentRequired => "input_consent_required",
             Self::TargetScopedInputUnsafe => "target_scoped_keyboard_pointer_dispatch_unsafe",
+        }
+    }
+
+    fn from_recovery_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "requested_view_only" => Ok(Self::RequestedViewOnly),
+            "input_control_granted" => Ok(Self::InputControlGranted),
+            "input_consent_required" => Ok(Self::InputConsentRequired),
+            "target_scoped_keyboard_pointer_dispatch_unsafe" => Ok(Self::TargetScopedInputUnsafe),
+            other => anyhow::bail!("unsupported RemoteApp recovery input_scope_reason {other:?}"),
         }
     }
 }
@@ -462,6 +499,15 @@ impl TargetGeometry {
             "height": self.height,
         })
     }
+
+    fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
+        Ok(Self {
+            x: optional_f64(value, "x")?,
+            y: optional_f64(value, "y")?,
+            width: optional_f64(value, "width")?,
+            height: optional_f64(value, "height")?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -500,6 +546,19 @@ impl TargetIdentity {
             "bundle_id": self.bundle_id,
             "app_name": self.app_name,
             "title": self.title,
+        })
+    }
+
+    fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
+        Ok(Self {
+            hardware_id: required_owned_string(value, "hardware_id")?,
+            display_id: optional_u64(value, "display_id")?,
+            window_id: optional_u64(value, "window_id")?,
+            pid: optional_i64(value, "pid")?,
+            app_identity: optional_string(value, "app_identity")?,
+            bundle_id: optional_string(value, "bundle_id")?,
+            app_name: optional_string(value, "app_name")?,
+            title: optional_string(value, "title")?,
         })
     }
 }
@@ -612,6 +671,31 @@ impl AppWindowSetProof {
         })
     }
 
+    fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
+        let resolved_window_ids = value
+            .get("resolved_window_ids")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                anyhow::anyhow!("RemoteApp recovery app_window_set requires resolved_window_ids")
+            })?
+            .iter()
+            .map(|item| {
+                item.as_u64().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "RemoteApp recovery app_window_set resolved_window_ids must be integers"
+                    )
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Self {
+            display_id: required_u64(value, "display_id")?,
+            bundle_id: optional_string(value, "bundle_id")?,
+            primary_pid: optional_i64(value, "primary_pid")?,
+            resolved_window_ids,
+            window_set_epoch: required_u64(value, "window_set_epoch")?,
+        })
+    }
+
     #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn resolved_window_count(&self) -> usize {
         self.resolved_window_ids.len()
@@ -697,6 +781,27 @@ impl ResolvedCaptureTargetProof {
             "native_width": self.native_width,
             "native_height": self.native_height,
             "verified_at_ms": self.verified_at_ms,
+        })
+    }
+
+    fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
+        Ok(Self {
+            backend: required_owned_string(value, "backend")?,
+            target_kind: RemoteDesktopTargetKind::from_recovery_str(required_string(
+                value,
+                "target_kind",
+            )?)?,
+            display_id: optional_u64(value, "display_id")?,
+            window_id: optional_u64(value, "window_id")?,
+            pid: optional_i64(value, "pid")?,
+            app_identity: optional_string(value, "app_identity")?,
+            bundle_id: optional_string(value, "bundle_id")?,
+            app_window_set: optional_object_value(value, "app_window_set")
+                .map(AppWindowSetProof::from_recovery_value)
+                .transpose()?,
+            native_width: optional_u64(value, "native_width")?.map(|value| value as usize),
+            native_height: optional_u64(value, "native_height")?.map(|value| value as usize),
+            verified_at_ms: required_u64(value, "verified_at_ms")?,
         })
     }
 
@@ -990,6 +1095,25 @@ impl NativeTargetLocator {
             "title": self.title,
         })
     }
+
+    fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
+        Ok(Self {
+            platform: required_owned_string(value, "platform")?,
+            discovery_backend: required_owned_string(value, "discovery_backend")?,
+            capture_backend: required_owned_string(value, "capture_backend")?,
+            primary_display: value
+                .get("primary_display")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            display_id: optional_u64(value, "display_id")?,
+            window_id: optional_u64(value, "window_id")?,
+            pid: optional_i64(value, "pid")?,
+            app_identity: optional_string(value, "app_identity")?,
+            bundle_id: optional_string(value, "bundle_id")?,
+            app_name: optional_string(value, "app_name")?,
+            title: optional_string(value, "title")?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1095,6 +1219,101 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteAppTargetBinding {
 }
 
 impl RemoteAppTargetBinding {
+    pub(in crate::daemon::plugins::remote_desktop) fn from_recovery_value(
+        value: &Value,
+        subject_display_name: &str,
+    ) -> anyhow::Result<Self> {
+        let target_kind =
+            RemoteDesktopTargetKind::from_recovery_str(required_string(value, "target_kind")?)?;
+        let capture_scope =
+            CaptureScope::from_recovery_str(required_string(value, "capture_scope")?)?;
+        let input_scope = InputScope::from_recovery_str(required_string(value, "input_scope")?)?;
+        let input_scope_reason =
+            InputScopeReason::from_recovery_str(required_string(value, "input_scope_reason")?)?;
+        let native_locator = NativeTargetLocator::from_recovery_value(required_object_value(
+            value,
+            "native_locator",
+        )?)?;
+        let resolved_identity = TargetIdentity::from_recovery_value(required_object_value(
+            value,
+            "resolved_identity",
+        )?)?;
+        let geometry =
+            TargetGeometry::from_recovery_value(required_object_value(value, "bounds")?)?;
+        let app_window_set = optional_object_value(value, "app_window_set")
+            .map(AppWindowSetProof::from_recovery_value)
+            .transpose()?;
+        let capture_proof = optional_object_value(value, "capture_proof")
+            .map(ResolvedCaptureTargetProof::from_recovery_value)
+            .transpose()?;
+        let scope_ready = value
+            .get("scope_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| {
+                value
+                    .get("binding_ready")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true)
+            });
+        let subject_ura = required_owned_string(value, "subject_ura")?;
+        let platform = required_owned_string(value, "platform")?;
+        let backend = required_owned_string(value, "backend")?;
+        let diagnostic = json!({
+            "status": "rehydrated",
+            "reason_code": "daemon_restart_rehydrated",
+            "recoverability": "retry_session",
+            "frontend_action": FrontendAction::RetrySession.as_str(),
+            "subject_ura": subject_ura,
+            "target_kind": target_kind.as_str(),
+            "binding_id": required_string(value, "binding_id")?,
+        });
+        Ok(Self {
+            diagnostic_capture_subject: DiagnosticCaptureSubject {
+                resource_ura: subject_ura.clone(),
+                owner_agent: "easynet:///r/local/agent/remote-desktop.recovered".to_string(),
+                kind: target_kind.resource_type(),
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: resolved_identity.hardware_id.clone(),
+                display_name: subject_display_name.to_string(),
+                metadata: json!({
+                    "recovered": true,
+                    "platform": platform,
+                    "backend": backend,
+                    "native_locator": native_locator.to_value(),
+                }),
+                first_seen_at: String::new(),
+            },
+            scope_audit: ScopeAudit {
+                requested_target_kind: target_kind,
+                effective_target_kind: target_kind,
+                capture_scope,
+                input_scope,
+                input_scope_reason,
+                scope_widened: !scope_ready,
+                display_fallback_used: false,
+            },
+            subject_ura,
+            subject_display_name: subject_display_name.to_string(),
+            target_kind,
+            binding_id: required_owned_string(value, "binding_id")?,
+            binding_epoch: required_u64(value, "binding_epoch")?,
+            target_identity_epoch: required_u64(value, "target_identity_epoch")?,
+            target_geometry_revision: required_u64(value, "target_geometry_revision")?,
+            media_source_epoch: required_u64(value, "media_source_epoch")?,
+            consent_epoch: required_u64(value, "consent_epoch")?,
+            platform,
+            backend,
+            capture_scope,
+            input_scope,
+            native_locator,
+            resolved_identity,
+            app_window_set,
+            geometry,
+            diagnostic,
+            capture_proof,
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn subject_ura(&self) -> &str {
         &self.subject_ura
     }
@@ -1904,6 +2123,87 @@ fn metadata_u64_array(entry: &ResourceEntry, key: &str) -> Vec<u64> {
     values.sort_unstable();
     values.dedup();
     values
+}
+
+fn required_object_value<'a>(value: &'a Value, field: &'static str) -> anyhow::Result<&'a Value> {
+    let child = value
+        .get(field)
+        .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery target_binding requires {field}"))?;
+    if !child.is_object() {
+        anyhow::bail!("RemoteApp recovery target_binding {field} must be an object");
+    }
+    Ok(child)
+}
+
+fn optional_object_value<'a>(value: &'a Value, field: &'static str) -> Option<&'a Value> {
+    value.get(field).filter(|child| child.is_object())
+}
+
+fn required_string<'a>(value: &'a Value, field: &'static str) -> anyhow::Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("RemoteApp recovery target_binding requires non-empty {field}")
+        })
+}
+
+fn required_owned_string(value: &Value, field: &'static str) -> anyhow::Result<String> {
+    required_string(value, field).map(str::to_string)
+}
+
+fn optional_string(value: &Value, field: &'static str) -> anyhow::Result<Option<String>> {
+    match value.get(field) {
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
+        }
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => anyhow::bail!("RemoteApp recovery target_binding {field} must be a string"),
+    }
+}
+
+fn required_u64(value: &Value, field: &'static str) -> anyhow::Result<u64> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery target_binding requires u64 {field}"))
+}
+
+fn optional_u64(value: &Value, field: &'static str) -> anyhow::Result<Option<u64>> {
+    match value.get(field) {
+        Some(Value::Number(number)) => number.as_u64().map(Some).ok_or_else(|| {
+            anyhow::anyhow!("RemoteApp recovery target_binding {field} must be a u64")
+        }),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => anyhow::bail!("RemoteApp recovery target_binding {field} must be a u64"),
+    }
+}
+
+fn optional_i64(value: &Value, field: &'static str) -> anyhow::Result<Option<i64>> {
+    match value.get(field) {
+        Some(Value::Number(number)) => number.as_i64().map(Some).ok_or_else(|| {
+            anyhow::anyhow!("RemoteApp recovery target_binding {field} must be an i64")
+        }),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => anyhow::bail!("RemoteApp recovery target_binding {field} must be an i64"),
+    }
+}
+
+fn optional_f64(value: &Value, field: &'static str) -> anyhow::Result<Option<f64>> {
+    match value.get(field) {
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!("RemoteApp recovery target_binding {field} must be a finite f64")
+            }),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => anyhow::bail!("RemoteApp recovery target_binding {field} must be a number"),
+    }
 }
 
 fn mint_binding_id(entry: &ResourceEntry, locator: &NativeTargetLocator) -> String {

@@ -37,6 +37,12 @@ pub(crate) struct RemoteDesktopVideoConstraints {
 }
 
 impl RemoteDesktopVideoConstraints {
+    pub(in crate::daemon::plugins::remote_desktop) fn from_value(
+        value: &Value,
+    ) -> anyhow::Result<Self> {
+        parse_video_constraints(&json!({ "video": value }))
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "max_width": self.max_width,
