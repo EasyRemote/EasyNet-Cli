@@ -22,6 +22,12 @@ use crate::daemon::plugins::remote_desktop::media::{
 
 pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &str =
     "host_audio_not_implemented";
+const PLATFORM_REASON_MACOS_NATIVE_BACKEND_READY: &str =
+    "macos_screencapturekit_videotoolbox_ready";
+const PLATFORM_REASON_LINUX_DISPLAY_DIAGNOSTIC_ONLY: &str = "linux_display_diagnostic_only";
+const PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED: &str =
+    "linux_app_window_native_backend_not_implemented";
+const PLATFORM_REASON_WINDOWS_UNSUPPORTED: &str = "windows_native_backend_not_implemented";
 
 /// Build media quality targets from create-session video constraints.
 pub(in crate::daemon::plugins::remote_desktop) fn quality_targets(video: &Value) -> Value {
@@ -138,6 +144,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     } else {
         "current builtin backend is capped by xcap macOS recorder; 144Hz requires the ScreenCaptureKit/VideoToolbox plugin backend"
     };
+    let platform_support = platform_support_view(production_ready, &production_backend);
     json!({
         "capture_backends": capture_backends,
         "media_sdk": sdk_contract_view(),
@@ -210,6 +217,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
                     .unavailable_reason()
                     .unwrap_or("production_backend_not_ready"))
             },
+            "platform_support": platform_support,
             "capture_target_models": capture_target_models,
             "display_capture_source": display_capture_source,
             "display_capture_api": display_capture_api,
@@ -217,6 +225,72 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             "next_required_backend": MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
             "reason": reason,
         }
+    })
+}
+
+fn target_support(status: &str, backend: Value, reason: &str) -> Value {
+    json!({
+        "status": status,
+        "backend": backend,
+        "reason": reason,
+    })
+}
+
+fn platform_support_view(
+    production_ready: bool,
+    production_backend: &crate::daemon::plugins::remote_desktop::media::RemoteDesktopMediaBackendDescriptor,
+) -> Value {
+    let macos_status = if production_ready {
+        "production_ready"
+    } else {
+        "blocked"
+    };
+    let macos_backend = if production_ready {
+        json!(MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID)
+    } else {
+        Value::Null
+    };
+    let macos_reason = if production_ready {
+        PLATFORM_REASON_MACOS_NATIVE_BACKEND_READY
+    } else {
+        production_backend
+            .unavailable_reason()
+            .unwrap_or("production_backend_not_ready")
+    };
+
+    json!({
+        "schema_version": 1,
+        "current_host_os": std::env::consts::OS,
+        "platforms": {
+            "macos": {
+                "display": target_support(macos_status, macos_backend.clone(), macos_reason),
+                "window": target_support(macos_status, macos_backend.clone(), macos_reason),
+                "application": target_support(macos_status, macos_backend, macos_reason),
+            },
+            "linux": {
+                "display": target_support(
+                    "diagnostic_only",
+                    json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
+                    PLATFORM_REASON_LINUX_DISPLAY_DIAGNOSTIC_ONLY
+                ),
+                "window": target_support(
+                    "unsupported",
+                    Value::Null,
+                    PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED
+                ),
+                "application": target_support(
+                    "unsupported",
+                    Value::Null,
+                    PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED
+                ),
+            },
+            "windows": {
+                "display": target_support("unsupported", Value::Null, PLATFORM_REASON_WINDOWS_UNSUPPORTED),
+                "window": target_support("unsupported", Value::Null, PLATFORM_REASON_WINDOWS_UNSUPPORTED),
+                "application": target_support("unsupported", Value::Null, PLATFORM_REASON_WINDOWS_UNSUPPORTED),
+            },
+        },
+        "non_claim": "platform support metadata does not replace live cross-platform capture E2E evidence",
     })
 }
 
@@ -356,5 +430,44 @@ mod tests {
         assert!(capabilities["metadata"]["reason"]
             .as_str()
             .is_some_and(|message| message.contains("display/window/application")));
+    }
+
+    #[test]
+    fn device_capabilities_project_cross_platform_support_matrix() {
+        let capabilities = device_capabilities_view();
+        let platform_support = &capabilities["metadata"]["platform_support"];
+
+        assert_eq!(platform_support["schema_version"], json!(1));
+        assert_eq!(
+            platform_support["platforms"]["linux"]["display"]["status"],
+            json!("diagnostic_only")
+        );
+        assert_eq!(
+            platform_support["platforms"]["linux"]["display"]["backend"],
+            json!("builtin.xcap.openh264.webrtc.v1")
+        );
+        assert_eq!(
+            platform_support["platforms"]["linux"]["window"]["status"],
+            json!("unsupported")
+        );
+        assert_eq!(
+            platform_support["platforms"]["linux"]["application"]["reason"],
+            json!("linux_app_window_native_backend_not_implemented")
+        );
+        assert_eq!(
+            platform_support["platforms"]["windows"]["display"]["status"],
+            json!("unsupported")
+        );
+        assert_eq!(
+            platform_support["platforms"]["windows"]["window"]["reason"],
+            json!("windows_native_backend_not_implemented")
+        );
+        assert_eq!(
+            platform_support["platforms"]["windows"]["application"]["status"],
+            json!("unsupported")
+        );
+        assert!(platform_support["non_claim"]
+            .as_str()
+            .is_some_and(|message| message.contains("live cross-platform capture E2E")));
     }
 }

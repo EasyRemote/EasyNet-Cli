@@ -190,6 +190,12 @@ require 'production_target_subjects' "$AUDIT" \
   'audit must record production target subject projection semantics'
 require 'diagnostic_target_subjects' "$AUDIT" \
   'audit must record diagnostic target subject projection semantics'
+require 'platform_support' "$AUDIT" \
+  'audit must record platform support projection semantics'
+require 'Linux display is diagnostic-only' "$AUDIT" \
+  'audit must record Linux display diagnostic-only support state'
+require 'Windows display/window/application are unsupported' "$AUDIT" \
+  'audit must record Windows unsupported capture state'
 require 'governed Hub routing, cross-device ability visibility/invocation' "$AUDIT" \
   'audit must scope cross-device smoke to routing and synthetic media evidence'
 require 'does not prove real' "$AUDIT" \
@@ -251,6 +257,10 @@ require 'production-vs-diagnostic target-subject' "$PLAN" \
   'plan evidence audit must record production-vs-diagnostic target-subject projection coverage'
 require 'diagnostic_target_subjects' "$MATRIX" \
   'product readiness matrix must record diagnostic target subject projection evidence'
+require 'platform_support' "$MATRIX" \
+  'product readiness matrix must record platform support projection evidence'
+require 'Linux app/window and Windows capture explicitly unsupported' "$MATRIX" \
+  'product readiness matrix must record explicit Linux/Windows unsupported capture state'
 require 'Windows/Linux capture or explicit product unsupported state' "$PLAN" \
   'plan evidence audit must preserve Windows/Linux capture or unsupported requirement'
 require 'Real input injection E2E for pointer/keyboard using' "$PLAN" \

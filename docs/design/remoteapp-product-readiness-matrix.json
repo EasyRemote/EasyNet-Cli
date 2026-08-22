@@ -26,6 +26,7 @@
         "frontend action row executes daemon-guided refresh_targets recovery by refetching target inventory",
         "check-remoteapp-main-crate-implementation-tests.sh runs main-crate app/window target observation and fail-closed implementation tests",
         "device capability projection advertises production_target_subjects only when the production gate is ready and keeps diagnostic_target_subjects display-only",
+        "device capability projection exposes platform_support for macOS/Linux/Windows with Linux app/window and Windows capture explicitly unsupported",
         "remoteapp-cross-platform-capture-e2e.sh verifier for real macOS/Windows/Linux capture or explicit unsupported artifacts"
       ],
       "required_evidence_before_product_complete": [

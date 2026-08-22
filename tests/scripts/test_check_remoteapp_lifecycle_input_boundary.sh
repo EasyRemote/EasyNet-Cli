@@ -1004,6 +1004,7 @@ fn device_capabilities_view() {
         json!([])
     };
     let diagnostic_target_subjects = XCAP_OPENH264_WEBRTC_BACKEND.supported_subjects_value();
+    let platform_support = platform_support_view(production_ready, &production_backend);
     json!({
         "unsupported_input_types": unsupported_input_channel_types_value(),
         "unsupported_capabilities": [
@@ -1029,6 +1030,7 @@ fn device_capabilities_view() {
             } else {
                 json!(production_backend.unavailable_reason().unwrap_or("production_backend_not_ready"))
             },
+            "platform_support": platform_support,
             "capture_target_models": [
                 "display_surface",
                 "window_surface",
@@ -1039,6 +1041,23 @@ fn device_capabilities_view() {
     });
 }
 
+fn platform_support_view(production_ready: bool, production_backend: &Backend) {
+    json!({
+        "platforms": {
+            "linux": {
+                "display": {"status": "diagnostic_only"},
+                "window": {"status": "unsupported", "reason": "linux_app_window_native_backend_not_implemented"},
+                "application": {"status": "unsupported", "reason": "linux_app_window_native_backend_not_implemented"}
+            },
+            "windows": {
+                "display": {"status": "unsupported", "reason": "windows_native_backend_not_implemented"},
+                "window": {"status": "unsupported", "reason": "windows_native_backend_not_implemented"},
+                "application": {"status": "unsupported", "reason": "windows_native_backend_not_implemented"}
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1046,6 +1065,9 @@ mod tests {
 
     #[test]
     fn device_capabilities_project_native_target_subject_matrix() {}
+
+    #[test]
+    fn device_capabilities_project_cross_platform_support_matrix() {}
 }
 RS
 
@@ -2780,6 +2802,31 @@ perl -0pi -e 's/"production_target_subjects_source": if production_ready \{\s*MA
 run_fail 'device capabilities must expose the source backend for production target subjects'
 
 write_fixture
+perl -0pi -e 's/"platform_support": platform_support,//' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose product-visible platform support matrix'
+
+write_fixture
+perl -0pi -e 's/platform_support_view\(production_ready, &production_backend\)/platform_support_view(false, &production_backend)/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must derive platform support from runtime production readiness'
+
+write_fixture
+perl -0pi -e 's/linux_app_window_native_backend_not_implemented/linux_capture_available/g' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must mark Linux app/window capture unsupported'
+
+write_fixture
+perl -0pi -e 's/windows_native_backend_not_implemented/windows_capture_available/g' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must mark Windows capture unsupported'
+
+write_fixture
+perl -0pi -e 's/"diagnostic_only"/"production_ready"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must distinguish Linux display diagnostic-only support from production capture'
+
+write_fixture
 perl -0pi -e 's/"display_scoped_application_window_set"/"application"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must expose the application target model instead of flattening applications to display capture'
@@ -2793,6 +2840,11 @@ write_fixture
 perl -0pi -e 's/device_capabilities_project_native_target_subject_matrix/device_capabilities_hide_native_target_subject_matrix/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capability tests must prove the native target subject matrix is projected'
+
+write_fixture
+perl -0pi -e 's/device_capabilities_project_cross_platform_support_matrix/device_capabilities_hide_cross_platform_support_matrix/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capability tests must prove the cross-platform support matrix is projected'
 
 write_fixture
 perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value\(\),/"unsupported_input_types": json!(["clipboard"]),/' \

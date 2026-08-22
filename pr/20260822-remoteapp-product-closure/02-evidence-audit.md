@@ -210,6 +210,12 @@ Current frontend lifecycle evidence:
   now pin that production-vs-diagnostic target-subject projection. Removing the
   runtime-native descriptor, production-ready gate, display-only diagnostic
   subjects, blocked reason, or production subject source fails the boundary.
+- RemoteApp device capability projection now exposes
+  `metadata.platform_support` for macOS, Linux, and Windows. macOS target rows
+  follow the native production gate, Linux display is diagnostic-only, Linux
+  window/application are unsupported, and Windows display/window/application are
+  unsupported until native backends exist. This is explicit unsupported product
+  state, not cross-platform capture completion.
 - RemoteApp session views now expose `input_readiness` as a single
   machine-readable projection for requested mode, effective mode,
   `interactive_ready`, input scope, and blocked reason. This improves frontend

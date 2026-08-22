@@ -1133,6 +1133,16 @@ require '"production_target_subjects_blocked_reason"' "$VIEW_DEVICE" \
   'device capabilities must expose why production app/window subjects are not claimable'
 require '"production_target_subjects_source"' "$VIEW_DEVICE" \
   'device capabilities must expose the source backend for production target subjects'
+require '"platform_support": platform_support' "$VIEW_DEVICE" \
+  'device capabilities must expose product-visible platform support matrix'
+require 'platform_support_view\(production_ready, &production_backend\)' "$VIEW_DEVICE" \
+  'device capabilities must derive platform support from runtime production readiness'
+require '"linux_app_window_native_backend_not_implemented"' "$VIEW_DEVICE" \
+  'device capabilities must mark Linux app/window capture unsupported'
+require '"windows_native_backend_not_implemented"' "$VIEW_DEVICE" \
+  'device capabilities must mark Windows capture unsupported'
+require '"diagnostic_only"' "$VIEW_DEVICE" \
+  'device capabilities must distinguish Linux display diagnostic-only support from production capture'
 require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
   'device capabilities must expose the application target model instead of flattening applications to display capture'
 require 'display/window/application target capture' "$VIEW_DEVICE" \
@@ -1141,5 +1151,7 @@ reject 'available for display capture' "$VIEW_DEVICE" \
   'device capabilities must not describe the native targeted backend as display-only'
 require 'device_capabilities_project_native_target_subject_matrix' "$VIEW_DEVICE" \
   'device capability tests must prove the native target subject matrix is projected'
+require 'device_capabilities_project_cross_platform_support_matrix' "$VIEW_DEVICE" \
+  'device capability tests must prove the cross-platform support matrix is projected'
 
 printf 'check-remoteapp-lifecycle-input-boundary: ok\n'
