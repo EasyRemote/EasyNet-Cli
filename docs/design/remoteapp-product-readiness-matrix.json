@@ -142,7 +142,8 @@
         "typed host/STUN/TURN/EasyNet relay route evidence",
         "source-level provider gates",
         "daemon transport view projects browser client_ice_servers",
-        "frontend RTCPeerConnection consumes session-projected ICE servers"
+        "frontend RTCPeerConnection consumes session-projected ICE servers",
+        "frontend session details render daemon route state such as host_only with no NAT/relay"
       ],
       "required_evidence_before_product_complete": [
         "real direct route report",

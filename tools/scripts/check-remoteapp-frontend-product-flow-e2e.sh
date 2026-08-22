@@ -167,6 +167,12 @@ require 'iceServers: view\.webrtcIceServers' "$FRONTEND_STORE" \
   'frontend WebRTC startup must use session-projected ICE servers'
 reject 'iceServers: \[\]' "$FRONTEND_STORE" \
   'frontend RemoteApp WebRTC startup must not hard-code an empty ICE server list'
+require 'remoteDesktopRouteStatusLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected network route state'
+require 'transportRouteState' "$FRONTEND_UI" \
+  'frontend RemoteApp route UI must derive from daemon transportRouteState'
+require 'route host_only · no NAT/relay' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove host-only RemoteApp routes are visible as not NAT/relay ready'
 require 'frame\.target_geometry_revision !== expectedRevision' "$FRONTEND_PROTOCOL" \
   'frontend RemoteApp input gating must reject stale or missing pointer target geometry revisions before send'
 require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
@@ -214,6 +220,8 @@ require 'Browser/Tauri E2E for full user flow with real backend/runtime' "$AUDIT
   'product readiness audit must retain real Browser/Tauri full-flow evidence as still required'
 require 'target recovery' "$AUDIT" \
   'product readiness audit must record frontend target recovery projection evidence'
+require 'route state' "$AUDIT" \
+  'product readiness audit must record frontend route-state visibility evidence'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
@@ -229,5 +237,7 @@ require 'target lost · target_not_found · refresh_targets' "$PLAN" \
   'product closure plan must record the target recovery UI evidence'
 require 'Refresh targets' "$PLAN" \
   'product closure plan must record the executable target recovery CTA evidence'
+require 'route host_only · no NAT/relay' "$PLAN" \
+  'product closure plan must record route-state UI evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'

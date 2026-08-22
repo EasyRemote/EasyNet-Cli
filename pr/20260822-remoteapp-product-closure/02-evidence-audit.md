@@ -227,6 +227,11 @@ Current frontend lifecycle evidence:
   existing `resource.refresh_remote_targets` query path. This still requires the
   user to end/create a new session when the daemon reports
   `new_session_required`; it does not mutate session lifecycle in the browser.
+- Frontend session details now render daemon-projected WebRTC route state. A
+  host-only route appears as `route host_only · no NAT/relay`, which makes the
+  NAT/relay gap visible instead of letting `webrtc ready` imply production
+  network readiness. This is route observability evidence, not real
+  direct/STUN/TURN/EasyNet relay deployment evidence.
 - Frontend protocol/store/UI code now parses and renders daemon-projected
   RemoteApp `terminal_receipt`. After `end_session`, the store retains the
   closed session view with its terminal receipt while clearing `sessionToken`.
