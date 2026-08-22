@@ -38,6 +38,9 @@ use crate::daemon::plugins::remote_desktop::lease_monitor::RemoteDesktopLeaseMon
 use crate::daemon::plugins::remote_desktop::session_creation::{
     PlatformRemoteAppTargetBindingVerifier, RemoteAppTargetBindingVerifier,
 };
+use crate::daemon::plugins::remote_desktop::session_recovery::{
+    RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore,
+};
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
 use crate::daemon::plugins::remote_desktop::transport::{
@@ -58,6 +61,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopPlugin {
     lease_monitor: Arc<RemoteDesktopLeaseMonitor>,
     target_monitor: Arc<RemoteDesktopTargetMonitor>,
     transports: Arc<RemoteDesktopTransportManager>,
+    recovery: Arc<RemoteDesktopRecoveryStore>,
     screen_backend: Arc<dyn ScreenSnapshotBackend>,
     target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
     config: RemoteDesktopRuntimeConfig,
@@ -88,6 +92,7 @@ impl RemoteDesktopPlugin {
             lease_monitor: Arc::new(RemoteDesktopLeaseMonitor::new()),
             target_monitor: Arc::new(RemoteDesktopTargetMonitor::new()),
             transports: Arc::new(RemoteDesktopTransportManager::new()),
+            recovery: Arc::new(RemoteDesktopRecoveryStore::daemon_default()),
             screen_backend,
             target_binding_verifier,
             config,
@@ -154,6 +159,20 @@ impl RemoteDesktopPlugin {
         &self,
     ) -> Arc<RemoteDesktopTransportManager> {
         Arc::clone(&self.transports)
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn recovery_store(
+        &self,
+    ) -> Arc<RemoteDesktopRecoveryStore> {
+        Arc::clone(&self.recovery)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn persist_recovery_snapshot(
+        &self,
+        snapshot: &RemoteDesktopRecoverySnapshot,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        self.recovery.save(snapshot)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn screen_backend(

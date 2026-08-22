@@ -22,8 +22,14 @@ CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e
 LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_RECOVERY="$ROOT/plugins/remote-desktop/src/session_recovery.rs"
+SESSION_LIFECYCLE="$ROOT/plugins/remote-desktop/src/session_lifecycle.rs"
+RUNTIME="$ROOT/plugins/remote-desktop/src/runtime.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
+CREATE_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/create_session.rs"
+REFRESH_LEASE_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/refresh_lease.rs"
+SHOW_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/show_session.rs"
+END_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/end_session.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 
 fail() {
@@ -67,8 +73,14 @@ reject() {
 [[ -f "$LIFECYCLE_HARNESS_LIB" ]] || fail "missing RemoteApp lifecycle harness helper library"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$SESSION_RECOVERY" ]] || fail "missing RemoteApp session recovery snapshot store"
+[[ -f "$SESSION_LIFECYCLE" ]] || fail "missing RemoteApp session lifecycle module"
+[[ -f "$RUNTIME" ]] || fail "missing RemoteApp runtime module"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
+[[ -f "$CREATE_SESSION_HANDLER" ]] || fail "missing RemoteApp create_session handler"
+[[ -f "$REFRESH_LEASE_HANDLER" ]] || fail "missing RemoteApp refresh_lease handler"
+[[ -f "$SHOW_SESSION_HANDLER" ]] || fail "missing RemoteApp show_session handler"
+[[ -f "$END_SESSION_HANDLER" ]] || fail "missing RemoteApp end_session handler"
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
 
 for lifecycle_harness in "$SESSION_TIMEOUT" "$SESSION_CANCEL" "$SESSION_RESUME"; do
@@ -737,18 +749,40 @@ require 'RemoteDesktopRecoverySnapshot' "$SESSION_RECOVERY" \
   'session recovery store must define a versioned durable snapshot contract'
 require 'RemoteDesktopRecoveryStore' "$SESSION_RECOVERY" \
   'session recovery store must define the daemon-local durable store'
+require 'from_session' "$SESSION_RECOVERY" \
+  'session recovery snapshot must be derived from the canonical session aggregate'
+require 'daemon_default' "$SESSION_RECOVERY" \
+  'session recovery store must have a daemon-local default state path'
 require 'schema_version' "$SESSION_RECOVERY" \
   'session recovery snapshot must be schema-versioned'
 require 'selected_resource_ura' "$SESSION_RECOVERY" \
   'session recovery snapshot must bind the selected Resource URA'
 require 'terminal_receipt' "$SESSION_RECOVERY" \
   'session recovery snapshot must preserve terminal receipt projection'
+require 'persist_recovery_snapshot' "$RUNTIME" \
+  'RemoteApp runtime must expose a plugin-owned recovery snapshot write boundary'
+for recovery_writer in \
+  "$CREATE_SESSION_HANDLER" \
+  "$REFRESH_LEASE_HANDLER" \
+  "$SHOW_SESSION_HANDLER" \
+  "$END_SESSION_HANDLER"; do
+  require 'RemoteDesktopRecoverySnapshot::from_session' "$recovery_writer" \
+    "RemoteApp handler must derive recovery snapshots from the session aggregate: $recovery_writer"
+  require 'persist_recovery_snapshot' "$recovery_writer" \
+    "RemoteApp handler must persist recovery snapshots after lifecycle mutation: $recovery_writer"
+done
+require 'persist_recovery_snapshot' "$SESSION_LIFECYCLE" \
+  'RemoteApp lease watchdog must persist recovery snapshots for timeout transitions'
 require 'recovery_store_round_trips_valid_snapshot' "$SESSION_RECOVERY" \
   'session recovery store must have snapshot round-trip coverage'
 require 'recovery_store_fails_closed_for_corrupt_snapshot' "$SESSION_RECOVERY" \
   'session recovery store must fail closed for corrupt snapshots'
 require 'recovery_store_rejects_path_unsafe_session_ids' "$SESSION_RECOVERY" \
   'session recovery store must reject path-unsafe session ids'
+require 'create_session_persists_recovery_snapshot' "$CREATE_SESSION_HANDLER" \
+  'RemoteApp create_session must have regression coverage for recovery snapshot persistence'
+require 'end_session_persists_terminal_recovery_snapshot' "$END_SESSION_HANDLER" \
+  'RemoteApp end_session must have regression coverage for terminal recovery snapshot persistence'
 
 require 'terminal_receipt: Option<Value>' "$SESSION" \
   'session aggregate must store a single terminal receipt projection'

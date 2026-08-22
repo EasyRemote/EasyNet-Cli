@@ -66,7 +66,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn env_for(subject: &str) -> Enve
 pub(in crate::daemon::plugins::remote_desktop) fn with_consent_ticket(
     plugin: &RemoteDesktopPlugin,
     env: &EnvelopeContext,
-    mut args: serde_json::Value,
+    args: serde_json::Value,
 ) -> serde_json::Value {
     with_consent_ticket_grants(plugin, env, args, false)
 }

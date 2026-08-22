@@ -214,8 +214,7 @@ impl RemoteDesktopInputPolicy {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn to_test_value(&self) -> Value {
+    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "keyboard_enabled": self.keyboard_enabled,
             "pointer_enabled": self.pointer_enabled,
@@ -223,6 +222,11 @@ impl RemoteDesktopInputPolicy {
             "file_drop_enabled": false,
             "unsupported_input_types": unsupported_input_channel_types_value(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_test_value(&self) -> Value {
+        self.to_value()
     }
 }
 

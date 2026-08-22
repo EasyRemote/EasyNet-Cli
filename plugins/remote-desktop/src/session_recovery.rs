@@ -34,6 +34,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::daemon::persistence::config;
+use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,6 +60,28 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnaps
 }
 
 impl RemoteDesktopRecoverySnapshot {
+    pub(in crate::daemon::plugins::remote_desktop) fn from_session(
+        session: &RemoteDesktopSession,
+    ) -> anyhow::Result<Self> {
+        Self::new(
+            session.session_id().to_string(),
+            session.creator_caller_ura().to_string(),
+            session.subject_ura().to_string(),
+            session.target_binding().to_value(),
+            session.consent_state().to_value(),
+            session.mode().to_string(),
+            session.transport_preferences().to_vec(),
+            session.video().to_value(),
+            session.input_policy().to_value(),
+            session.created_at_ms(),
+            session.updated_at_ms(),
+            session.lease_expires_at_ms(),
+            session.state().json_name().to_string(),
+            session.terminal_receipt(),
+            session.events(),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in crate::daemon::plugins::remote_desktop) fn new(
         session_id: String,
@@ -133,12 +158,16 @@ impl RemoteDesktopRecoverySnapshot {
 
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoveryStore {
-    root: PathBuf,
+    root: Option<PathBuf>,
 }
 
 impl RemoteDesktopRecoveryStore {
+    pub(in crate::daemon::plugins::remote_desktop) fn daemon_default() -> Self {
+        Self { root: None }
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self { root: Some(root) }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn save(
@@ -146,7 +175,7 @@ impl RemoteDesktopRecoveryStore {
         snapshot: &RemoteDesktopRecoverySnapshot,
     ) -> anyhow::Result<PathBuf> {
         snapshot.validate()?;
-        fs::create_dir_all(&self.root)?;
+        fs::create_dir_all(self.root())?;
         let path = self.snapshot_path(snapshot.session_id())?;
         let tmp_path = path.with_extension("json.tmp");
         let body = serde_json::to_vec_pretty(snapshot)?;
@@ -173,7 +202,13 @@ impl RemoteDesktopRecoveryStore {
 
     fn snapshot_path(&self, session_id: &str) -> anyhow::Result<PathBuf> {
         validate_session_id_for_path(session_id)?;
-        Ok(self.root.join(format!("{session_id}.json")))
+        Ok(self.root().join(format!("{session_id}.json")))
+    }
+
+    fn root(&self) -> PathBuf {
+        self.root
+            .clone()
+            .unwrap_or_else(|| config::state_dir().join("remote-desktop").join("sessions"))
     }
 }
 

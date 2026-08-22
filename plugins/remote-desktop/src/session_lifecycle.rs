@@ -15,6 +15,7 @@ use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSessi
 use crate::daemon::plugins::remote_desktop::session_access::{
     ensure_session_control_identity, ensure_session_resource_identity,
 };
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_access(
@@ -119,22 +120,33 @@ pub(in crate::daemon::plugins::remote_desktop) fn expire_session_from_watchdog(
     session_id: &str,
     expected_lease_expires_at_ms: u64,
 ) {
-    plugin.session_store().with_sessions(|sessions| {
+    let recovery_snapshot = plugin.session_store().with_sessions(|sessions| {
         let Some(session) = sessions.get_mut(session_id) else {
-            return;
+            return None;
         };
         if session.lease_expires_at_ms() != expected_lease_expires_at_ms {
-            return;
+            return None;
         }
-        let _ = expire_session_if_needed(plugin, session, now_ms());
+        if expire_session_if_needed(plugin, session, now_ms()) {
+            return RemoteDesktopRecoverySnapshot::from_session(session).ok();
+        }
+        None
     });
+    if let Some(recovery_snapshot) = recovery_snapshot {
+        if let Err(err) = plugin.persist_recovery_snapshot(&recovery_snapshot) {
+            eprintln!(
+                "[remote-desktop] failed to persist lease-watchdog recovery snapshot for {session_id}: {err}"
+            );
+        }
+    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn prune_inactive_sessions(
     plugin: &RemoteDesktopPlugin,
     sessions: &mut HashMap<String, RemoteDesktopSession>,
     now: u64,
-) {
+) -> Vec<RemoteDesktopRecoverySnapshot> {
+    let mut recovery_snapshots = Vec::new();
     let expired: Vec<String> = sessions
         .iter()
         .filter(|(_, session)| !session.is_terminal() && session.is_expired_at(now))
@@ -144,10 +156,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn prune_inactive_sessions(
         if let Some(session) = sessions.get_mut(&session_id) {
             stop_session_transports(plugin, &session_id, session);
             session.expire(now);
+            if let Ok(recovery_snapshot) = RemoteDesktopRecoverySnapshot::from_session(session) {
+                recovery_snapshots.push(recovery_snapshot);
+            }
         }
     }
 
     let _ = RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
+    recovery_snapshots
 }
 
 #[cfg(test)]

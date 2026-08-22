@@ -13,6 +13,7 @@ use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteDesktopSessionCreationWorkflow;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
 
 /// Handle `remote_desktop.create_session`.
@@ -36,11 +37,18 @@ fn insert_created_session(
 ) -> anyhow::Result<Value> {
     let session_id = workflow.session_id().to_string();
     let session = RemoteDesktopSession::new(workflow.into_session_init()?);
+    let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)?;
     let now = now_ms();
-    let (watchdog_session_id, tracker_session_id, lease_expires_at_ms, view) = plugin
+    let (
+        pruned_recovery_snapshots,
+        watchdog_session_id,
+        tracker_session_id,
+        lease_expires_at_ms,
+        view,
+    ) = plugin
         .session_store()
         .with_sessions(|sessions| -> anyhow::Result<_> {
-            prune_inactive_sessions(&plugin, sessions, now);
+            let pruned_recovery_snapshots = prune_inactive_sessions(&plugin, sessions, now);
             ensure_session_insertable(plugin.config().max_sessions(), sessions, &session_id)?;
             let watchdog_session_id = session_id.clone();
             let tracker_session_id = session_id.clone();
@@ -48,12 +56,17 @@ fn insert_created_session(
             let view = serialize_session_with_token(&session);
             sessions.insert(session_id, session);
             Ok((
+                pruned_recovery_snapshots,
                 watchdog_session_id,
                 tracker_session_id,
                 lease_expires_at_ms,
                 view,
             ))
         })?;
+    if let Err(err) = persist_recovery_snapshots(&plugin, &pruned_recovery_snapshots) {
+        remove_inserted_session(&plugin, &tracker_session_id);
+        return Err(err);
+    }
     if let Err(err) = RemoteDesktopPlugin::schedule_session_lease(
         &plugin,
         watchdog_session_id.clone(),
@@ -68,7 +81,23 @@ fn insert_created_session(
         remove_inserted_session(&plugin, &tracker_session_id);
         return Err(err);
     }
+    if let Err(err) = plugin.persist_recovery_snapshot(&recovery_snapshot) {
+        plugin.cancel_session_lease(&watchdog_session_id);
+        plugin.cancel_session_target_tracking(&tracker_session_id);
+        remove_inserted_session(&plugin, &tracker_session_id);
+        return Err(err);
+    }
     Ok(view)
+}
+
+fn persist_recovery_snapshots(
+    plugin: &RemoteDesktopPlugin,
+    snapshots: &[RemoteDesktopRecoverySnapshot],
+) -> anyhow::Result<()> {
+    for snapshot in snapshots {
+        plugin.persist_recovery_snapshot(snapshot)?;
+    }
+    Ok(())
 }
 
 fn remove_inserted_session(plugin: &RemoteDesktopPlugin, session_id: &str) {
@@ -82,12 +111,14 @@ fn preflight_session_insert(
     session_id: &str,
 ) -> anyhow::Result<()> {
     let now = now_ms();
-    plugin
-        .session_store()
-        .with_sessions(|sessions| -> anyhow::Result<()> {
-            prune_inactive_sessions(plugin, sessions, now);
-            ensure_session_insertable(plugin.config().max_sessions(), sessions, session_id)
-        })
+    let (recovery_snapshots, insertable) = plugin.session_store().with_sessions(|sessions| {
+        let recovery_snapshots = prune_inactive_sessions(plugin, sessions, now);
+        let insertable =
+            ensure_session_insertable(plugin.config().max_sessions(), sessions, session_id);
+        (recovery_snapshots, insertable)
+    });
+    persist_recovery_snapshots(plugin, &recovery_snapshots)?;
+    insertable
 }
 
 fn ensure_session_insertable(
@@ -215,6 +246,40 @@ mod tests {
             response["latest_target_diagnostic"]["status"],
             json!("resolved")
         );
+    }
+
+    #[test]
+    fn create_session_persists_recovery_snapshot() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-recovery-create-display");
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+
+        handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            with_consent_ticket(
+                &plugin,
+                &env,
+                json!({"session_id": "rd-recovery-create", "mode": "view_only"}),
+            ),
+        )
+        .expect("create_session persists an active recovery snapshot");
+
+        let snapshot = plugin
+            .recovery_store()
+            .load("rd-recovery-create")
+            .expect("recovery snapshot load succeeds")
+            .expect("create_session must write a recovery snapshot");
+        let snapshot = serde_json::to_value(snapshot).expect("snapshot serializes");
+        assert_eq!(snapshot["session_id"], json!("rd-recovery-create"));
+        assert_eq!(snapshot["selected_resource_ura"], json!(ura));
+        assert_eq!(snapshot["lifecycle_state"], json!("negotiating"));
+        assert_eq!(snapshot["terminal_receipt"], Value::Null);
     }
 
     #[test]

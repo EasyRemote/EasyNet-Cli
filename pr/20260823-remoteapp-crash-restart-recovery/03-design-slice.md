@@ -64,11 +64,32 @@ Stage 2 can reattach watch/media transport and satisfy the stricter
   projection contract.
 - Added `RemoteDesktopRecoveryStore` with atomic snapshot save/load and
   path-safe session id validation.
+- Wired the store into the plugin runtime through
+  `RemoteDesktopPlugin::persist_recovery_snapshot`, keeping persistence owned by
+  the remote-desktop plugin instead of Axon, frontend state, or a generic daemon
+  session registry.
+- Added `RemoteDesktopRecoverySnapshot::from_session` so durable state is
+  derived from the canonical `RemoteDesktopSession` aggregate rather than from
+  ad hoc handler projections.
+- Persisted recovery snapshots at the current session mutation write
+  boundaries:
+  - `remote_desktop.create_session`;
+  - `remote_desktop.refresh_lease`;
+  - `remote_desktop.show_session` after audit reads that may expire a session;
+  - `remote_desktop.end_session`;
+  - lease watchdog timeout expiry;
+  - create-session preflight/insert pruning of already-expired sessions.
 - Added unit coverage for:
   - valid snapshot round-trip;
   - corrupt snapshot fail-closed behavior;
   - path-unsafe session id rejection;
   - selected Resource URA validation.
+- Added handler regression coverage for:
+  - `create_session` writing a non-terminal recovery snapshot;
+  - `end_session` overwriting that snapshot with terminal receipt and bounded
+    event-log projection.
 
-This slice is intentionally not marked as product recovery. The store still
-needs to be wired to session mutation boundaries and plugin startup rehydration.
+This slice is intentionally not marked as product recovery. Startup rehydration
+is still missing: after daemon restart, snapshots are durable but not yet loaded
+back into `RemoteDesktopSessionStore`, so the live crash/restart verifier must
+remain a product blocker until rehydration and cross-process E2E evidence pass.
