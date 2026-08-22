@@ -953,6 +953,28 @@ require 'binding\.target_bound_event_payload\(\)\["consent_epoch"\]' "$TARGET" \
   'target binding tests must prove consent epoch is externally visible in TARGET_BOUND'
 require 'application_interactive_downgrade_projects_input_scope_reason' "$TARGET" \
   'target binding tests must prove app/window interactive downgrade reason is visible'
+require '"input_readiness": input_readiness\.clone\(\)' "$VIEW" \
+  'session view must expose a single machine-readable input readiness projection'
+require '"readiness": input_readiness' "$VIEW" \
+  'input plane must carry the same input readiness projection as the top-level session view'
+require 'fn input_readiness_view\(' "$VIEW" \
+  'session view must centralize requested/effective input readiness projection'
+require '"requested_mode": session\.mode\(\)' "$VIEW" \
+  'input readiness must expose the caller requested mode'
+require '"effective_mode": if any_input_enabled \{ "interactive" \} else \{ "view_only" \}' "$VIEW" \
+  'input readiness must expose effective interactive capability separately from requested mode'
+require '"interactive_ready": interactive_ready' "$VIEW" \
+  'input readiness must expose whether interactive input is actually ready'
+require '"blocked_reason": blocked_reason' "$VIEW" \
+  'input readiness must expose a stable blocked reason when requested interactive is downgraded'
+require 'session\.target_binding\(\)\.input_scope_reason\(\)' "$VIEW" \
+  'input readiness must reuse the committed target binding input scope reason'
+require 'view\["input_readiness"\]\["requested_mode"\]' "$VIEW" \
+  'session view tests must assert requested input mode in input_readiness'
+require 'view\["input_readiness"\]\["effective_mode"\]' "$VIEW" \
+  'session view tests must assert effective input mode in input_readiness'
+require 'view\["input_readiness"\]\["blocked_reason"\]' "$VIEW" \
+  'session view tests must assert input downgrade blocked reason in input_readiness'
 require 'display_interactive_without_input_consent_remains_view_only' "$INPUT" \
   'input policy tests must prove display interactive cannot enable key/pointer without input consent'
 require 'struct EffectiveRemoteDesktopInputPolicy' "$INPUT" \

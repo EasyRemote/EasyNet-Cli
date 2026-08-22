@@ -38,7 +38,8 @@
       "current_evidence": [
         "app/window sessions downgrade to view_only",
         "pointer/key frames are policy-gated",
-        "clipboard/file-drop are unsupported"
+        "clipboard/file-drop are unsupported",
+        "session view projects requested/effective input readiness and blocked reason"
       ],
       "required_evidence_before_product_complete": [
         "focus validation E2E",

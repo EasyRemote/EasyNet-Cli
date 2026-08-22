@@ -922,8 +922,13 @@ RS
   cat >"$SANDBOX/plugins/remote-desktop/src/view.rs" <<'RS'
 fn serialize_session() {
     let transport_route_state = transport_view.route_state();
+    let input_readiness = input_readiness_view(session, &effective_input_policy);
     json!({
         "consent": session.consent_state().to_value(),
+        "input_readiness": input_readiness.clone(),
+        "input_plane": {
+            "readiness": input_readiness,
+        },
         "signaling": {
             "route_state": transport_route_state.clone(),
         },
@@ -951,6 +956,24 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value 
     } else {
         json!("production_readiness_incomplete")
     }
+}
+
+fn input_readiness_view(session: &RemoteDesktopSession, input_policy: &EffectiveRemoteDesktopInputPolicy) -> Value {
+    let blocked_reason = json!(session.target_binding().input_scope_reason());
+    let interactive_ready = false;
+    json!({
+        "requested_mode": session.mode(),
+        "effective_mode": if any_input_enabled { "interactive" } else { "view_only" },
+        "interactive_ready": interactive_ready,
+        "blocked_reason": blocked_reason,
+        "input_scope": input_policy.input_scope().as_str(),
+    })
+}
+
+fn session_view_projects_effective_view_only_input_scope() {
+    assert_eq!(view["input_readiness"]["requested_mode"], json!("interactive"));
+    assert_eq!(view["input_readiness"]["effective_mode"], json!("view_only"));
+    assert_eq!(view["input_readiness"]["blocked_reason"], json!("target_scoped_keyboard_pointer_dispatch_unsafe"));
 }
 RS
 
@@ -2455,6 +2478,16 @@ write_fixture
 perl -0pi -e 's/"input_scope_reason": self\.scope_audit\.input_scope_reason\.as_str\(\),//g' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 run_fail 'target binding and TARGET_BOUND projection must expose the committed input scope reason'
+
+write_fixture
+perl -0pi -e 's/"input_readiness": input_readiness\.clone\(\),//g' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'session view must expose a single machine-readable input readiness projection'
+
+write_fixture
+perl -0pi -e 's/view\["input_readiness"\]\["blocked_reason"\]/view["scope_audit"]["input_scope_reason"]/g' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'session view tests must assert input downgrade blocked reason in input_readiness'
 
 write_fixture
 perl -0pi -e 's/PrimaryMediaPhase::MediaSourceLost => [^\n]+/PrimaryMediaPhase::MediaSourceLost => false/' \

@@ -83,3 +83,31 @@ Product effect:
 - This does not implement the missing product capabilities; it prevents
   architectural drift and false product-complete claims while those
   capabilities are built.
+
+## 2026-08-22 — Input readiness must be projected as one product state
+
+Decision:
+
+- A session that was requested as `interactive` but is effectively `view_only`
+  must not require callers to infer that state from scattered `mode`,
+  `scope_audit`, and `input_policy` fields.
+- The RemoteApp plugin should project a single product-level input readiness
+  object while keeping actual OS input injection disabled until focus,
+  coordinate, permission, and target-epoch proofs exist.
+
+Implementation delta:
+
+- Session views now include top-level `input_readiness`.
+- The input plane carries the same readiness object next to its data-channel
+  policy.
+- The readiness projection reports requested mode, effective mode,
+  `interactive_ready`, input scope, pointer/keyboard booleans, and a stable
+  blocked reason.
+- The lifecycle/input boundary gate and mutation tests now pin this projection.
+
+Product effect:
+
+- Frontend and E2E harnesses can distinguish "user requested interactive but
+  product correctly downgraded to view-only" from a truly interactive session.
+- This does not complete input injection; it makes the missing interactive
+  capability explicit and machine-readable.

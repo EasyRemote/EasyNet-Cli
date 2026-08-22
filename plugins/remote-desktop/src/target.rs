@@ -1135,6 +1135,10 @@ impl RemoteAppTargetBinding {
         self.input_scope
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn input_scope_reason(&self) -> &'static str {
+        self.scope_audit.input_scope_reason.as_str()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn native_locator(
         &self,
     ) -> &NativeTargetLocator {

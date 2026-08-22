@@ -306,6 +306,18 @@ impl EffectiveRemoteDesktopInputPolicy {
         self.pointer_target
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) const fn keyboard_enabled(&self) -> bool {
+        self.keyboard_enabled
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn pointer_enabled(&self) -> bool {
+        self.pointer_enabled
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn input_scope(&self) -> InputScope {
+        self.input_scope
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("keyboard_enabled".to_string(), json!(self.keyboard_enabled));

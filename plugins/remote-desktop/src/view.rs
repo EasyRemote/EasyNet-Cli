@@ -28,12 +28,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
 ) -> Value {
     let transport_view = RemoteDesktopTransportView::from_session(session);
     let video = session.video().to_value();
-    let input_policy = EffectiveRemoteDesktopInputPolicy::for_target_state(
+    let effective_input_policy = EffectiveRemoteDesktopInputPolicy::for_target_state(
         session.input_policy(),
         session.target_snapshot(),
         session.target_binding().input_scope(),
-    )
-    .to_value();
+    );
+    let input_policy = effective_input_policy.to_value();
+    let input_readiness = input_readiness_view(session, &effective_input_policy);
+    let input_injection_ready = input_injection_available();
     let media_stats = session.media_stats();
     let production_media_ready = session.production_media_ready();
     let transport_route_state = transport_view.route_state();
@@ -58,6 +60,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "end_reason": session.end_reason(),
         "video": video.clone(),
         "input_policy": input_policy.clone(),
+        "input_readiness": input_readiness.clone(),
         "consent": session.consent_state().to_value(),
         "media_transport_ready": session.media_transport_ready(),
         "client_media_ready": session.client_media_ready(),
@@ -67,7 +70,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
             "kind": "webrtc_data_channel",
             "label": INPUT_DATA_CHANNEL_LABEL,
             "policy": input_policy,
-            "input_injection_available": input_injection_available(),
+            "readiness": input_readiness,
+            "input_injection_available": input_injection_ready,
         },
         "quality": quality_targets(&video),
         "media_sdk": sdk_contract_view(),
@@ -94,6 +98,37 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         map.insert("production_readiness".to_string(), production_readiness);
     }
     view
+}
+
+fn input_readiness_view(
+    session: &RemoteDesktopSession,
+    input_policy: &EffectiveRemoteDesktopInputPolicy,
+) -> Value {
+    let requested_interactive = session.mode() == "interactive";
+    let pointer_enabled = input_policy.pointer_enabled();
+    let keyboard_enabled = input_policy.keyboard_enabled();
+    let any_input_enabled = pointer_enabled || keyboard_enabled;
+    let blocked_reason = if !requested_interactive {
+        Value::Null
+    } else if input_policy.input_scope().as_str() == "view_only" {
+        json!(session.target_binding().input_scope_reason())
+    } else if !input_injection_available() {
+        json!("input_injection_unavailable")
+    } else if !any_input_enabled {
+        json!("input_policy_denied")
+    } else {
+        Value::Null
+    };
+    let interactive_ready = requested_interactive && any_input_enabled && blocked_reason.is_null();
+    json!({
+        "requested_mode": session.mode(),
+        "effective_mode": if any_input_enabled { "interactive" } else { "view_only" },
+        "interactive_ready": interactive_ready,
+        "blocked_reason": blocked_reason,
+        "input_scope": input_policy.input_scope().as_str(),
+        "pointer_enabled": pointer_enabled,
+        "keyboard_enabled": keyboard_enabled,
+    })
 }
 
 fn production_readiness_view(
@@ -208,6 +243,21 @@ mod tests {
             json!("view_only")
         );
         assert_eq!(view["input_plane"]["policy"], view["input_policy"]);
+        assert_eq!(
+            view["input_readiness"]["requested_mode"],
+            json!("interactive")
+        );
+        assert_eq!(
+            view["input_readiness"]["effective_mode"],
+            json!("view_only")
+        );
+        assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
+        assert_eq!(
+            view["input_readiness"]["blocked_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(view["input_readiness"]["input_scope"], json!("view_only"));
+        assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);
     }
 
     #[test]

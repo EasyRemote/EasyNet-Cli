@@ -143,6 +143,12 @@ Current frontend lifecycle evidence:
   frontend lifecycle, and cross-device E2E. The product closure audit gate
   rejects missing rows, unsupported statuses, empty evidence fields, and any
   premature `product_complete=true` claim.
+- RemoteApp session views now expose `input_readiness` as a single
+  machine-readable projection for requested mode, effective mode,
+  `interactive_ready`, input scope, and blocked reason. This improves frontend
+  and E2E diagnosability for the input-injection row, but the row remains
+  incomplete until real focus-safe pointer/keyboard injection and latency
+  evidence exists.
 
 Missing or insufficient product evidence:
 
