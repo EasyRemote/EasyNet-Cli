@@ -181,6 +181,12 @@ require 'input scope display_global · pointer\+keyboard' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove display-global pointer/keyboard enablement is visible in session details'
 require 'input scope display_global · no controls' "$FRONTEND_UI_TEST" \
   'frontend UI tests must prove blocked input scope is visible as no controls'
+require 'remoteDesktopPermissionActionRecommended\(session\)' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must offer permission recovery from daemon input permission blockers'
+require 'offers permission recovery when daemon input injection is unavailable' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove input-injection blockers expose Request permission recovery'
+require 'rdRequestPermission' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Request permission recovery executes the store action'
 require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
   'frontend store tests must prove RTCPeerConnection receives session-projected ICE servers'
 require 'turn:turn\.example\.test:3478\?transport=udp' "$FRONTEND_STORE_TEST" \
@@ -252,6 +258,8 @@ require 'Retry session' "$AUDIT" \
   'product readiness audit must record executable retry-session evidence'
 require 'input scope display_global' "$AUDIT" \
   'product readiness audit must record input-scope visibility evidence'
+require 'Accessibility/input-injection permission' "$AUDIT" \
+  'product readiness audit must record input-permission recovery evidence'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
@@ -275,5 +283,7 @@ require 'Retry session' "$PLAN" \
   'product closure plan must record executable retry-session UI evidence'
 require 'input scope display_global' "$PLAN" \
   'product closure plan must record input-scope visibility evidence'
+require 'Accessibility/input-injection permission' "$PLAN" \
+  'product closure plan must record input-permission recovery evidence'
 
 printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'

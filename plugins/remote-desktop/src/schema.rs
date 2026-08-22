@@ -291,9 +291,10 @@ pub fn permission_status_input_schema() -> Value {
 
 /// Human-readable contract for `remote_desktop.request_permission`.
 pub fn request_permission_description() -> &'static str {
-    "Ask the operating system for the screen-capture permission required by \
-     native remote desktop. On macOS this calls CoreGraphics' Screen Recording \
-     TCC request API from the daemon-side ability process."
+    "Ask the operating system for the host permissions required by native \
+     remote desktop. On macOS this requests Screen Recording for capture and \
+     Accessibility for pointer/keyboard input injection from the daemon-side \
+     ability process."
 }
 
 /// JSON input schema for `remote_desktop.request_permission`.

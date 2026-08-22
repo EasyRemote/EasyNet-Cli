@@ -59,13 +59,27 @@ fn host_local_permission_subject_contract() {
 fn screen_capture_permission_status() {
     json!({
         "subject_contract": host_local_permission_subject_contract(),
+        "input_permission": {
+            "permission": "accessibility",
+        },
     });
 }
 
 fn request_screen_capture_permission() {
+    request_input_injection_permission();
     json!({
         "subject_contract": host_local_permission_subject_contract(),
+        "input_permission": {
+            "permission": "accessibility",
+        },
     });
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/schema.rs" <<'RS'
+pub fn request_permission_description() -> &'static str {
+    "Ask the operating system for host permissions. On macOS this requests \
+     Accessibility for pointer/keyboard input injection."
 }
 RS
 
@@ -115,6 +129,7 @@ scope_subjects_uras = ["agent", "resource", "user"]
 TOML
 
 cat >"$SB/plugins/remote-desktop/abilities/remote_desktop.request_permission.ability.toml" <<'TOML'
+description = "Ask the operating system for host permissions. On macOS this requests Accessibility for pointer/keyboard input injection."
 subject_contract_ura = "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject"
 scope_subjects_uras = ["agent", "resource", "user"]
 TOML
@@ -243,12 +258,19 @@ fn host_local_permission_subject_contract() {
 fn screen_capture_permission_status() {
     json!({
         "subject_contract": host_local_permission_subject_contract(),
+        "input_permission": {
+            "permission": "accessibility",
+        },
     });
 }
 
 fn request_screen_capture_permission() {
+    request_input_injection_permission();
     json!({
         "subject_contract": host_local_permission_subject_contract(),
+        "input_permission": {
+            "permission": "accessibility",
+        },
     });
 }
 RS

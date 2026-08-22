@@ -204,6 +204,13 @@ Current frontend lifecycle evidence:
   focus/activation proof. Missing macOS Accessibility permission still reports
   `input_injection_unavailable` in `input_readiness`, so this is a consent and
   policy closure, not successful input-injection E2E evidence.
+- `remote_desktop.request_permission` describes and reports both host
+  permission axes it handles: Screen Recording for capture and
+  Accessibility/input-injection permission for pointer/keyboard control. The
+  frontend parses `input_permission` and shows an executable `Request
+  permission` recovery action when daemon input readiness reports
+  `input_injection_unavailable`. This improves permission correctness and user
+  recovery, but still does not prove successful OS input injection.
 - Frontend RemoteApp creation now sends the same input intent through
   `grant_consent.args.input_control`, `create_session.args.mode`, and
   `create_session.args.input_policy`. The default Interactive path requests

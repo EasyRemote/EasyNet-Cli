@@ -268,7 +268,7 @@ export const actions = {
       deviceUra: entry.deviceUra,
       args: {},
     })
-    return result
+    return remoteDesktopPermissionRequestResult(result)
   },
   rdEnd: async (key: string) => {
     const session = entries[key]?.session
@@ -318,6 +318,15 @@ function assertRemoteDesktopCreateSessionIdentity(result: Record<string, unknown
   }
   if (!stringField(result, 'subject_ura')) {
     throw new Error('remote_desktop.create_session response did not include subject_ura')
+  }
+}
+
+function remoteDesktopPermissionRequestResult(result: Record<string, unknown> | undefined) {
+  const inputPermission = objectField(result, 'input_permission')
+  return {
+    message: inputPermission
+      ? 'Accessibility input permission requested but still unavailable for pointer/keyboard control.'
+      : 'Screen Recording permission is still unavailable.',
   }
 }
 TS
@@ -669,6 +678,10 @@ it('surfaces remote desktop recovery events from the session watcher', async () 
   expect(useMediaChannelStore.getState().entries[key].session?.sessionToken).toBeUndefined()
 })
 
+it('surfaces RemoteApp input permission results from request_permission', async () => {
+  expect(entry.webrtcStatus).toContain('Accessibility input permission requested but still unavailable')
+})
+
 it('preserves and rebinds remote desktop sessions across device offline resume', async () => {
   expect(useMediaChannelStore.getState().entries[key].session.sessionId).toBe('rd-1')
   expect(useMediaChannelStore.getState().entries[key].session.sessionToken).toBe('session-token')
@@ -793,6 +806,33 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
 fi
 perl -0pi -e "s/\\n      subjectURA: selectedTarget\\.resource_ura,//" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/objectField\\(result, 'input_permission'\\)/objectField(result, 'permission')/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted request_permission without input_permission parsing" >&2
+  exit 1
+fi
+perl -0pi -e "s/objectField\\(result, 'permission'\\)/objectField(result, 'input_permission')/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/Accessibility input permission/Input permission/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted request_permission status without Accessibility input wording" >&2
+  exit 1
+fi
+perl -0pi -e 's/Input permission/Accessibility input permission/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/surfaces RemoteApp input permission results from request_permission/surfaces RemoteApp screen permission results from request_permission/' \
+  "$FRONTEND_SRC/store/media-channel-store.test.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted tests without input permission request coverage" >&2
+  exit 1
+fi
+perl -0pi -e 's/surfaces RemoteApp screen permission results from request_permission/surfaces RemoteApp input permission results from request_permission/' \
+  "$FRONTEND_SRC/store/media-channel-store.test.ts"
 
 perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura === selectedScreenURA\)/screenResources[0]/' \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"

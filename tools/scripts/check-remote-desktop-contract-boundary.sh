@@ -14,6 +14,7 @@ PERMISSIONS="plugins/remote-desktop/src/permissions.rs"
 PERMISSION_STATUS="plugins/remote-desktop/src/handlers/permission_status.rs"
 REQUEST_PERMISSION="plugins/remote-desktop/src/handlers/request_permission.rs"
 REGISTRATION="plugins/remote-desktop/src/registration.rs"
+SCHEMA="plugins/remote-desktop/src/schema.rs"
 PERMISSION_STATUS_TOML="plugins/remote-desktop/abilities/remote_desktop.permission_status.ability.toml"
 REQUEST_PERMISSION_TOML="plugins/remote-desktop/abilities/remote_desktop.request_permission.ability.toml"
 HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA='easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject'
@@ -23,6 +24,7 @@ HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA='easynet:///r/_system/resource/abilit
 [[ -f "$PERMISSION_STATUS" ]] || fail "missing $PERMISSION_STATUS"
 [[ -f "$REQUEST_PERMISSION" ]] || fail "missing $REQUEST_PERMISSION"
 [[ -f "$REGISTRATION" ]] || fail "missing $REGISTRATION"
+[[ -f "$SCHEMA" ]] || fail "missing $SCHEMA"
 [[ -f "$PERMISSION_STATUS_TOML" ]] || fail "missing $PERMISSION_STATUS_TOML"
 [[ -f "$REQUEST_PERMISSION_TOML" ]] || fail "missing $REQUEST_PERMISSION_TOML"
 
@@ -67,6 +69,18 @@ fi
 
 if ! rg -n '"target_resource_subjects_allowed": false' "$PERMISSIONS" >/dev/null; then
   fail "remote-desktop permission responses must explicitly reject target resource subjects"
+fi
+
+if ! rg -n '"input_permission":' "$PERMISSIONS" >/dev/null; then
+  fail "remote-desktop permission responses must expose host input/accessibility permission state"
+fi
+
+if ! rg -n 'request_input_injection_permission' "$PERMISSIONS" >/dev/null; then
+  fail "remote-desktop request_permission must request input injection permission when needed"
+fi
+
+if ! rg -n 'Accessibility.*pointer/keyboard input injection|pointer/keyboard input injection.*Accessibility' "$SCHEMA" "$REQUEST_PERMISSION_TOML" >/dev/null; then
+  fail "remote-desktop request_permission contract must describe Accessibility input injection permission"
 fi
 
 if ! rg -n '"allowed_subjects": \[' "$PERMISSIONS" >/dev/null; then

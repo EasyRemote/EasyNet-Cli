@@ -246,6 +246,18 @@ mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.tsx.good" \
 
 cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"
+perl -0pi -e 's/offers permission recovery when daemon input injection is unavailable/offers generic permission recovery/' \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted frontend coverage without input permission recovery"
+fi
+mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
+
+cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
+  "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"
 perl -0pi -e 's/media 18000kbps · 52\.5fps · drops 15 · backpressure 3/media 18000kbps/g' \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \

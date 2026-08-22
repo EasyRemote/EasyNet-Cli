@@ -131,6 +131,12 @@ require_multiline '/rdRequestPermission:[\s\S]*invokeMediaUnary\('\''remote_desk
   'frontend request_permission must invoke the host-local permission probe without a target subjectURA'
 reject_multiline '/remote_desktop\.request_permission(?:(?!\}\)).)*subjectURA:/s' "$STORE" \
   'frontend request_permission must not scope host-local permission probes to the selected remote desktop resource'
+require 'remoteDesktopPermissionRequestResult\(result\)' "$STORE" \
+  'frontend request_permission must format the daemon structured permission result'
+require 'objectField\(result, '\''input_permission'\''\)' "$STORE" \
+  'frontend request_permission must parse daemon input/accessibility permission state'
+require 'Accessibility input permission' "$STORE" \
+  'frontend request_permission status must expose macOS Accessibility/input permission'
 require "invokeMediaUnary\\('remote_desktop\\.report_client_state'" "$STORE" \
   'frontend must report browser/client media presentation through remote_desktop.report_client_state'
 require 'subjectURA: currentView\.subjectUra' "$STORE" \
@@ -335,6 +341,8 @@ require 'stale_pointer_target_geometry' "$STORE_TEST" \
   'frontend store tests must prove daemon input rejection reasons are visible'
 require 'input_injection_unavailable' "$STORE_TEST" \
   'frontend store tests must prove daemon input activation block reasons are visible'
+require 'surfaces RemoteApp input permission results from request_permission' "$STORE_TEST" \
+  'frontend store tests must prove request_permission exposes input/accessibility permission results'
 require 'preserves and rebinds remote desktop sessions across device offline resume' "$STORE_TEST" \
   'frontend store tests must prove RemoteApp offline resume preserves and rebinds daemon sessions'
 require 'target_permission_revoked' "$STORE_TEST" \

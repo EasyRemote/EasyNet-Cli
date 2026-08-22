@@ -373,6 +373,34 @@ Product effect:
 - This is not an OS input injection completion claim; it keeps the input row
   incomplete until successful focus-safe injection and latency evidence exists.
 
+## 2026-08-22 — Permission recovery must include input injection
+
+Decision:
+
+- `remote_desktop.request_permission` is a host-local permission recovery
+  ability for RemoteApp, not a target-resource action.
+- Its daemon result includes both Screen Recording and
+  Accessibility/input-injection permission state, so the public descriptor and
+  frontend status must not present it as Screen Recording-only.
+
+Implementation delta:
+
+- Updated the request-permission descriptor/schema description to include
+  Accessibility for pointer/keyboard input injection.
+- Frontend `rdRequestPermission` now parses daemon `input_permission` and
+  includes the input permission outcome in visible status/error text.
+- The RemoteApp action row now offers `Request permission` when session
+  `inputReadiness.blockedReason` reports `input_injection_unavailable`.
+- Frontend invocation and product-flow gates reject dropping the structured
+  input permission handling or the executable recovery CTA.
+
+Product effect:
+
+- Users can recover from input-permission blockers from the session UI instead
+  of seeing only a passive `input_injection_unavailable` badge.
+- This remains permission-recovery evidence only; focus-safe OS injection,
+  coordinate mapping, and latency E2E remain required.
+
 ## 2026-08-22 — Frontend must preserve RemoteApp terminal receipts
 
 Decision:
