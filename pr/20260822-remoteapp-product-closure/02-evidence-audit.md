@@ -164,6 +164,12 @@ Current frontend lifecycle evidence:
   focus/activation proof. Missing macOS Accessibility permission still reports
   `input_injection_unavailable` in `input_readiness`, so this is a consent and
   policy closure, not successful input-injection E2E evidence.
+- Frontend RemoteApp creation now sends the same input intent through
+  `grant_consent.args.input_control`, `create_session.args.mode`, and
+  `create_session.args.input_policy`. The default Interactive path requests
+  `input_control=true`; explicit view-only requests carry `input_control=false`
+  and disabled keyboard/pointer policy. The CLI frontend boundary gate now
+  rejects drift away from this shared-intent contract.
 
 Missing or insufficient product evidence:
 

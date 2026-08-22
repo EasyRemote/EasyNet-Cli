@@ -98,6 +98,22 @@ require "invokeMediaUnary\\('remote_desktop\\.create_session'" "$STORE" \
   'frontend remote desktop creation must call remote_desktop.create_session'
 require 'subjectURA: resource\.resource_ura' "$STORE" \
   'frontend grant_consent/create_session must use the selected resource URA as Invocation.subject'
+require 'remoteDesktopSessionInputIntent\(entry\)' "$STORE" \
+  'frontend grant_consent/create_session must share one remote desktop input intent object'
+require 'inputControlRequested: boolean' "$STORE" \
+  'frontend remote desktop input intent must model explicit input-control consent scope'
+require 'input_control: sessionInputIntent\.inputControlRequested' "$STORE" \
+  'frontend grant_consent must request input_control from the same session input intent used for create_session'
+require 'mode: sessionInputIntent\.mode' "$STORE" \
+  'frontend create_session mode must come from the shared remote desktop input intent'
+require 'input_policy: sessionInputIntent\.inputPolicy' "$STORE" \
+  'frontend create_session input_policy must come from the shared remote desktop input intent'
+reject 'mode: entry\.interactive \?' "$STORE" \
+  'frontend create_session mode must not independently derive from entry.interactive'
+reject 'keyboard_enabled: entry\.interactive' "$STORE" \
+  'frontend create_session keyboard policy must not independently derive from entry.interactive'
+reject 'pointer_enabled: entry\.interactive' "$STORE" \
+  'frontend create_session pointer policy must not independently derive from entry.interactive'
 require 'assertRemoteDesktopCreateSessionIdentity\(result\)' "$STORE" \
   'frontend create_session response must be identity-checked before projection'
 require 'remote_desktop\.create_session response did not include subject_ura' "$STORE" \
@@ -235,6 +251,14 @@ require 'reports missing remote desktop session subject before projection fallba
   'frontend store tests must prove create_session subject_ura is checked before projection'
 require 'runs remote desktop WebRTC sessions with a target-scoped event watcher' "$STORE_TEST" \
   'frontend store tests must prove watch_events is bound to the negotiated session subject'
+require 'input_control: true' "$STORE_TEST" \
+  'frontend store tests must prove interactive RemoteApp creation requests input_control consent'
+require 'keeps remote desktop consent and session input policy view-only when interactive is disabled' "$STORE_TEST" \
+  'frontend store tests must prove view-only RemoteApp creation does not request input-control authority'
+require 'input_control: false' "$STORE_TEST" \
+  'frontend store tests must prove disabled interactive mode keeps consent input_control=false'
+require "mode: 'view_only'" "$STORE_TEST" \
+  'frontend store tests must prove disabled interactive mode creates a view-only session'
 require 'surfaces remote desktop recovery events from the session watcher' "$STORE_TEST" \
   'frontend store tests must prove watch_events recovery events affect UI/transport state'
 require 'projects target diagnostics and tracking state from the runtime session view' "$PROTOCOL_TEST" \
@@ -255,6 +279,8 @@ require 'runs the remote desktop UI flow from target picker through session end'
   'frontend access tests must prove picker-to-session-to-end remote desktop UI flow'
 require 'remote_desktop\.grant_consent' "$ACCESS_TEST" \
   'frontend access tests must prove UI flow grants target-scoped consent'
+require 'input_control: true' "$ACCESS_TEST" \
+  'frontend access tests must prove UI flow requests input_control consent for default interactive RemoteApp sessions'
 require 'remote_desktop\.create_session' "$ACCESS_TEST" \
   'frontend access tests must prove UI flow creates a remote desktop session'
 require 'remote_desktop\.watch_events' "$ACCESS_TEST" \

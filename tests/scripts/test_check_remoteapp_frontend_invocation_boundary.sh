@@ -59,12 +59,41 @@ TS
 cat >"$FRONTEND_SRC/store/media-channel-store.ts" <<'TS'
 import { remoteDesktopInputFrameAllowed } from '@/lib/api/remote-desktop-protocol'
 
+type RemoteDesktopSessionInputIntent = {
+  inputControlRequested: boolean
+  mode: 'interactive' | 'view_only'
+  inputPolicy: {
+    keyboard_enabled: boolean
+    pointer_enabled: boolean
+    clipboard_enabled: false
+    file_drop_enabled: false
+  }
+}
+
+function remoteDesktopSessionInputIntent(entry: Entry): RemoteDesktopSessionInputIntent {
+  const inputControlRequested = entry.interactive === true
+  return {
+    inputControlRequested,
+    mode: inputControlRequested ? 'interactive' : 'view_only',
+    inputPolicy: {
+      keyboard_enabled: inputControlRequested,
+      pointer_enabled: inputControlRequested,
+      clipboard_enabled: false,
+      file_drop_enabled: false,
+    },
+  }
+}
+
 export async function rdCreate(entry: Entry, env: { resource?: { resource_ura: string } }) {
   const resource = env.resource
   if (!resource) return
+  const sessionInputIntent = remoteDesktopSessionInputIntent(entry)
   const consent = await invokeMediaUnaryResponse('remote_desktop.grant_consent', {
     subjectURA: resource.resource_ura,
-    args: { intent: 'remote_desktop_session' },
+    args: {
+      intent: 'remote_desktop_session',
+      input_control: sessionInputIntent.inputControlRequested,
+    },
   })
   const causalContext = remoteDesktopConsentCausalContext(consent)
   const consentTicket = remoteDesktopConsentTicket(consent)
@@ -73,7 +102,8 @@ export async function rdCreate(entry: Entry, env: { resource?: { resource_ura: s
     causalContext,
     args: {
       consent_ticket: consentTicket,
-      mode: 'view_only',
+      mode: sessionInputIntent.mode,
+      input_policy: sessionInputIntent.inputPolicy,
     },
   })
   assertRemoteDesktopCreateSessionIdentity(result)
@@ -405,6 +435,26 @@ it('reports missing remote desktop session subject before projection fallback', 
 })
 
 it('runs remote desktop WebRTC sessions with a target-scoped event watcher', async () => {
+  expect(mocks.invokeMediaUnaryResponse).toHaveBeenCalledWith('remote_desktop.grant_consent', {
+    args: {
+      intent: 'remote_desktop_session',
+      input_control: true,
+    },
+  })
+  expect(mocks.invokeMediaUnary).toHaveBeenCalledWith(
+    'remote_desktop.create_session',
+    expect.objectContaining({
+      args: expect.objectContaining({
+        mode: 'interactive',
+        input_policy: {
+          keyboard_enabled: true,
+          pointer_enabled: true,
+          clipboard_enabled: false,
+          file_drop_enabled: false,
+        },
+      }),
+    }),
+  )
   expect(mocks.invokeMediaStream).toHaveBeenCalledWith(
     'remote_desktop.watch_events',
     expect.objectContaining({
@@ -413,6 +463,29 @@ it('runs remote desktop WebRTC sessions with a target-scoped event watcher', asy
       timeoutMs: 0,
     }),
     expect.anything(),
+  )
+})
+
+it('keeps remote desktop consent and session input policy view-only when interactive is disabled', async () => {
+  expect(mocks.invokeMediaUnaryResponse).toHaveBeenCalledWith('remote_desktop.grant_consent', {
+    args: {
+      intent: 'remote_desktop_session',
+      input_control: false,
+    },
+  })
+  expect(mocks.invokeMediaUnary).toHaveBeenCalledWith(
+    'remote_desktop.create_session',
+    expect.objectContaining({
+      args: expect.objectContaining({
+        mode: 'view_only',
+        input_policy: {
+          keyboard_enabled: false,
+          pointer_enabled: false,
+          clipboard_enabled: false,
+          file_drop_enabled: false,
+        },
+      }),
+    }),
   )
 })
 
@@ -432,10 +505,23 @@ it('runs the remote desktop UI flow from target picker through session end', asy
   expect(mocks.invokeAbility).toHaveBeenCalledWith(expect.objectContaining({
     ability: 'remote_desktop.grant_consent',
     subject_ura: screenResource.resource_ura,
+    arguments: expect.objectContaining({
+      intent: 'remote_desktop_session',
+      input_control: true,
+    }),
   }))
   expect(mocks.invokeAbility).toHaveBeenCalledWith(expect.objectContaining({
     ability: 'remote_desktop.create_session',
     subject_ura: screenResource.resource_ura,
+    arguments: expect.objectContaining({
+      mode: 'interactive',
+      input_policy: {
+        keyboard_enabled: true,
+        pointer_enabled: true,
+        clipboard_enabled: false,
+        file_drop_enabled: false,
+      },
+    }),
   }))
   expect(mocks.invokeAbilityStream).toHaveBeenCalledWith(expect.objectContaining({
     ability: 'remote_desktop.watch_events',
@@ -449,6 +535,33 @@ it('runs the remote desktop UI flow from target picker through session end', asy
 TSX
 
 CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e "s/      input_control: sessionInputIntent\\.inputControlRequested,\\n//" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted grant_consent without input_control intent binding" >&2
+  exit 1
+fi
+perl -0pi -e "s/      intent: 'remote_desktop_session',\\n/      intent: 'remote_desktop_session',\\n      input_control: sessionInputIntent.inputControlRequested,\\n/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/mode: sessionInputIntent\\.mode,/mode: entry.interactive ? 'interactive' : 'view_only',/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted create_session mode outside the shared input intent" >&2
+  exit 1
+fi
+perl -0pi -e "s/mode: entry\\.interactive \\? 'interactive' : 'view_only',/mode: sessionInputIntent.mode,/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/input_policy: sessionInputIntent\\.inputPolicy,/input_policy: { keyboard_enabled: entry.interactive, pointer_enabled: entry.interactive, clipboard_enabled: false, file_drop_enabled: false },/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted create_session input_policy outside the shared input intent" >&2
+  exit 1
+fi
+perl -0pi -e "s/input_policy: \\{ keyboard_enabled: entry\\.interactive, pointer_enabled: entry\\.interactive, clipboard_enabled: false, file_drop_enabled: false \\},/input_policy: sessionInputIntent.inputPolicy,/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e "s/  'remote_desktop\\.create_session',\\n//" \
   "$FRONTEND_SRC/store/media-channel-invocation.ts"
@@ -468,7 +581,7 @@ fi
 perl -0pi -e "s/\\n  'remote_desktop\\.request_permission',//" \
   "$FRONTEND_SRC/store/media-channel-invocation.ts"
 
-perl -0pi -e "s/mode: 'view_only',/mode: 'view_only',\\n      subject_ura: resource.resource_ura,/" \
+perl -0pi -e "s/mode: sessionInputIntent\\.mode,/mode: sessionInputIntent.mode,\\n      subject_ura: resource.resource_ura,/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted create_session args.subject_ura" >&2

@@ -177,3 +177,37 @@ Product effect:
   evidence: macOS Accessibility permission E2E, pointer/wheel/key application
   E2E, latency measurements, target epoch checks on the execution path, and a
   separate safe design for window/application focus-scoped input.
+
+## 2026-08-22 — Frontend must request the input-control consent scope it intends
+
+Decision:
+
+- The frontend's Interactive toggle is a session intent, not proof that input
+  is available.
+- That intent must still be carried consistently into `grant_consent` and
+  `create_session`; otherwise the daemon can support scoped input-control
+  consent while browser-created sessions continue to mint media-only tickets.
+- Runtime `input_readiness` remains the authority for whether pointer/keyboard
+  frames may actually be sent.
+
+Implementation delta:
+
+- The EasyNet frontend now derives a single RemoteApp session input intent and
+  uses it for `grant_consent.args.input_control`, `create_session.args.mode`,
+  and `create_session.args.input_policy`.
+- Frontend store/UI tests assert default interactive sessions request
+  `input_control=true`.
+- Frontend store tests assert disabled Interactive mode requests
+  `input_control=false` and creates a view-only keyboard/pointer policy.
+- `check-remoteapp-frontend-invocation-boundary.sh` now gates this contract and
+  its mutation self-test rejects drift back to independently-derived grant and
+  create parameters.
+
+Product effect:
+
+- Browser-created display RemoteApp sessions can now present the daemon with
+  the explicit input-control consent needed to unlock display-global
+  interactivity when OS input injection is ready.
+- View-only remains safe and explicit.
+- This does not claim product-level input injection completion; real OS
+  pointer/keyboard E2E and latency evidence remain required.
