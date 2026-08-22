@@ -53,20 +53,46 @@ into Axon SDKs; protocol logic must not be duplicated in EasyRemote.
 
 ## Build and operator startup SOP
 
-Development build:
+The canonical local development deployment is the repository-owned installer,
+not a hand-written `cargo build && sudo install` sequence:
 
 ```bash
-cargo check --locked -p easynet
-cargo test --features axon-pb --no-run
-cargo test --features axon-pb --lib
-uv sync --project sdk/python --extra dev
-uv run --project sdk/python pytest -q sdk/python/tests
+# Fast local iteration: build and install CLI, daemon, keyring, and native bridge
+packaging/release/dev-install-local.sh --debug
+
+# Release-profile local bytes
+packaging/release/dev-install-local.sh
+
+# Build only; do not overwrite /usr/local/bin
+packaging/release/dev-install-local.sh --debug --no-install
 ```
 
-Install and start the operator Runtime:
+`dev-install-local.sh` mirrors the production install layout: it installs
+`easynet`, `easynet-daemon`, and `easynet-keyring` under `/usr/local/bin`, and
+installs the sibling EasyNet-Axon Dendrite bridge under the invoking user's
+`~/.easynet/dendrite-bridge/native`. It intentionally requests `sudo` only for
+the `/usr/local/bin` writes. Set `EASYNET_BRIDGE_CRATE` only for a non-standard
+sibling checkout. If the bridge checkout is absent, CLI-only builds may proceed,
+but native Runtime/SDK behavior is not certified.
+
+Use the paired Runtime audit as the normal post-install loop:
 
 ```bash
-cargo install --path .
+# Install local debug bytes, restart the daemon, and wait for product-online
+packaging/release/dev-check-local-runtime.sh \
+  --install-local --debug --restart --wait-online 30
+
+# Read-only diagnosis of the currently installed Runtime
+packaging/release/dev-check-local-runtime.sh --json --no-fail
+```
+
+The audit reads public CLI surfaces and sanitized local state; it does not
+replace daemon lifecycle state machines. Do not duplicate its checks in ad hoc
+scripts.
+
+For first-time operator identity and startup after installing local bytes:
+
+```bash
 easynet login
 easynet device join <pairing-token>   # autostarts unless --boot no
 easynet runtime start                 # safe explicit start/attach
@@ -81,6 +107,17 @@ owns only its provider host.
 
 For a foreground/container process use `easynet runtime connect`. Do not use it
 as a background-daemon substitute in examples.
+
+Use raw build/test commands for verification, not as a substitute for installing
+the complete local product shape:
+
+```bash
+cargo check --locked -p easynet
+cargo test --features axon-pb --no-run
+cargo test --features axon-pb --lib
+uv sync --project sdk/python --extra dev
+uv run --project sdk/python pytest -q sdk/python/tests
+```
 
 ## Version coordinates
 
