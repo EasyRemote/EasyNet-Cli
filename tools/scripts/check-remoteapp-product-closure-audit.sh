@@ -186,6 +186,10 @@ require 'remoteapp-cross-device-product-smoke.sh' "$AUDIT" \
   'audit must name the cross-device product smoke gate'
 require 'check-remoteapp-main-crate-implementation-tests.sh' "$AUDIT" \
   'audit must name the main-crate implementation test gate'
+require 'production_target_subjects' "$AUDIT" \
+  'audit must record production target subject projection semantics'
+require 'diagnostic_target_subjects' "$AUDIT" \
+  'audit must record diagnostic target subject projection semantics'
 require 'governed Hub routing, cross-device ability visibility/invocation' "$AUDIT" \
   'audit must scope cross-device smoke to routing and synthetic media evidence'
 require 'does not prove real' "$AUDIT" \
@@ -243,6 +247,10 @@ require 'remoteapp-cross-platform-capture-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the cross-platform capture verifier'
 require 'check-remoteapp-main-crate-implementation-tests\.sh' "$PLAN" \
   'plan evidence audit must record the main-crate implementation test gate'
+require 'production-vs-diagnostic target-subject' "$PLAN" \
+  'plan evidence audit must record production-vs-diagnostic target-subject projection coverage'
+require 'diagnostic_target_subjects' "$MATRIX" \
+  'product readiness matrix must record diagnostic target subject projection evidence'
 require 'Windows/Linux capture or explicit product unsupported state' "$PLAN" \
   'plan evidence audit must preserve Windows/Linux capture or unsupported requirement'
 require 'Real input injection E2E for pointer/keyboard using' "$PLAN" \

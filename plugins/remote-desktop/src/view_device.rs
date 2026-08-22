@@ -15,8 +15,9 @@ use crate::daemon::plugins::remote_desktop::input::{
     input_injection_available, unsupported_input_channel_types_value, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
-    backend_catalog_view, production_gate_view, sdk_contract_view, MACOS_SCK_VIDEOTOOLBOX_BACKEND,
-    MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID, XCAP_MACOS_RECORDER_MAX_FPS, XCAP_OPENH264_BACKEND_ID,
+    backend_catalog_view, native_webrtc_backend_runtime_descriptor, production_gate_view,
+    sdk_contract_view, MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID, XCAP_MACOS_RECORDER_MAX_FPS,
+    XCAP_OPENH264_BACKEND_ID, XCAP_OPENH264_WEBRTC_BACKEND,
 };
 
 pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &str =
@@ -49,7 +50,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn quality_targets(video: &Value)
 
 /// Build device/media capability projection for session responses.
 pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> Value {
-    let production_backend = MACOS_SCK_VIDEOTOOLBOX_BACKEND;
+    let production_backend = native_webrtc_backend_runtime_descriptor();
     let production_ready = production_backend.production_ready();
     let max_fps = if production_ready {
         production_backend.effective_fps(MAX_ATTACH_FPS)
@@ -121,7 +122,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "xcap.avcapture_screen_input"
     };
     let audio = audio_support_view();
-    let production_target_subjects = production_backend.supported_subjects_value();
+    let production_target_subjects = if production_ready {
+        production_backend.supported_subjects_value()
+    } else {
+        json!([])
+    };
+    let diagnostic_target_subjects = XCAP_OPENH264_WEBRTC_BACKEND.supported_subjects_value();
     let capture_target_models = json!([
         "display_surface",
         "window_surface",
@@ -191,6 +197,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             "production_media_endpoint": "direct_webrtc_h264",
             "diagnostic_media_endpoint": "builtin_openh264_annexb",
             "production_target_subjects": production_target_subjects,
+            "diagnostic_target_subjects": diagnostic_target_subjects,
+            "production_target_subjects_source": if production_ready {
+                MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
+            } else {
+                "none"
+            },
+            "production_target_subjects_blocked_reason": if production_ready {
+                Value::Null
+            } else {
+                json!(production_backend
+                    .unavailable_reason()
+                    .unwrap_or("production_backend_not_ready"))
+            },
             "capture_target_models": capture_target_models,
             "display_capture_source": display_capture_source,
             "display_capture_api": display_capture_api,
@@ -293,9 +312,38 @@ mod tests {
     fn device_capabilities_project_native_target_subject_matrix() {
         let capabilities = device_capabilities_view();
 
+        if capabilities["production_gate"]["ready"] == json!(true) {
+            assert_eq!(
+                capabilities["metadata"]["production_target_subjects"],
+                json!(["display", "window", "application"])
+            );
+            assert_eq!(
+                capabilities["metadata"]["production_target_subjects_source"],
+                json!("plugin.macos.screencapturekit.videotoolbox.webrtc.v1")
+            );
+            assert_eq!(
+                capabilities["metadata"]["production_target_subjects_blocked_reason"],
+                json!(null)
+            );
+        } else {
+            assert_eq!(
+                capabilities["metadata"]["production_target_subjects"],
+                json!([])
+            );
+            assert_eq!(
+                capabilities["metadata"]["production_target_subjects_source"],
+                json!("none")
+            );
+            assert!(
+                capabilities["metadata"]["production_target_subjects_blocked_reason"]
+                    .as_str()
+                    .is_some_and(|reason| !reason.is_empty()),
+                "closed production gate must expose why production app/window subjects are not claimable"
+            );
+        }
         assert_eq!(
-            capabilities["metadata"]["production_target_subjects"],
-            json!(["display", "window", "application"])
+            capabilities["metadata"]["diagnostic_target_subjects"],
+            json!(["display"])
         );
         assert_eq!(
             capabilities["metadata"]["capture_target_models"],

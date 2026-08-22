@@ -195,8 +195,17 @@ Current frontend lifecycle evidence:
   remote-desktop crate remains a provider shim, then runs main-crate
   implementation tests for app/window target observation, fail-closed
   non-macOS app/window observation, WebRTC media fallback rejection, native
-  plugin platform catalogue state, and current-session input policy. This is
-  implementation evidence only; it does not prove live product completion.
+  plugin platform catalogue state, production-vs-diagnostic target-subject
+  projection, and current-session input policy. This is implementation evidence
+  only; it does not prove live product completion.
+- RemoteApp device capability projection now separates
+  `metadata.production_target_subjects` from
+  `metadata.diagnostic_target_subjects`. Unavailable or permission-blocked
+  production backends no longer project app/window/application as current
+  production subjects, while the xcap diagnostic fallback stays display-only.
+  The projection uses the same runtime native backend descriptor as
+  `production_gate_view`, so macOS permission denial and non-macOS
+  `not_installed` state are represented consistently.
 - RemoteApp session views now expose `input_readiness` as a single
   machine-readable projection for requested mode, effective mode,
   `interactive_ready`, input scope, and blocked reason. This improves frontend

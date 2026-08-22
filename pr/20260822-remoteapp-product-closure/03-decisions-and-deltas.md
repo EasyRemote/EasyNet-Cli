@@ -211,7 +211,8 @@ Implementation delta:
 - The script verifies the provider-shim boundary and runs main-crate tests for
   app/window target observation, explicit rebind policy, non-macOS app/window
   fail-closed behavior, WebRTC app/window display-fallback rejection, native
-  plugin platform catalogue state, and current-session input policy.
+  plugin platform catalogue state, production-vs-diagnostic target-subject
+  projection, and current-session input policy.
 - The product-closure audit now requires this gate and records it in the plan
   pack.
 

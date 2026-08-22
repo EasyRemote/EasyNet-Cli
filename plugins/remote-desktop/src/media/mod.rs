@@ -402,7 +402,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_backend_for_b
     None
 }
 
-fn native_webrtc_backend_runtime_descriptor() -> RemoteDesktopMediaBackendDescriptor {
+pub(in crate::daemon::plugins::remote_desktop) fn native_webrtc_backend_runtime_descriptor(
+) -> RemoteDesktopMediaBackendDescriptor {
     let mut backend = MACOS_SCK_VIDEOTOOLBOX_BACKEND;
     if cfg!(target_os = "macos") && !platform_screen_capture_permission_granted() {
         backend.status = "permission_denied";
