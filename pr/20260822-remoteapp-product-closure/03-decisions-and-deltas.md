@@ -1021,3 +1021,41 @@ Product effect:
   capture artifact.
 - This still does not prove product completion; live macOS/Windows/Linux host
   artifacts remain required.
+
+## 2026-08-23 — Input injection needs live host effect verification
+
+Decision:
+
+- Input readiness, input-control consent, stale-geometry rejection, and
+  telemetry are necessary, but they do not prove that pointer/keyboard input is
+  actually applied by the host OS.
+- Product evidence must prove permission correctness, focus safety, coordinate
+  mapping, target geometry revision binding, bounded latency, observed OS input
+  effect, and deterministic session terminal state.
+
+Implementation delta:
+
+- Added `tools/scripts/remoteapp-input-injection-e2e.sh`.
+- The verifier accepts `--evidence-json` or `--runner-cmd` only in explicit
+  `--run` mode and emits bounded JSON/Markdown reports.
+- Evidence must state `proof_mode=real_input_injection_matrix`,
+  `component_mock=false`, `real_backend_runtime=true`, and
+  `product_complete_claim=false`.
+- macOS must pass pointer and keyboard input injection with granted OS input
+  permission, `input_control` consent, `display_global` input scope, focus
+  validation, coordinate mapping validation, positive target geometry revision,
+  public RemoteApp session abilities, selected Resource URA subject binding,
+  `INPUT_FRAME_APPLIED` events, bounded latency, observed OS effects, and
+  visible terminal receipt.
+- Windows/Linux must either pass or report `explicit_product_unsupported` with
+  `show_unsupported=true`.
+- Product-closure gates now require this verifier and reject missing keyboard
+  or pointer evidence, missing permission, high latency, and product-complete
+  claims.
+
+Product effect:
+
+- The repository now has a precise contract for the missing real input
+  injection artifact.
+- This still does not prove product completion; live host input artifacts remain
+  required.

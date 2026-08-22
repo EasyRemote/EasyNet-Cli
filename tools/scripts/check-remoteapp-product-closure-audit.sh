@@ -8,6 +8,7 @@ MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
 FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -46,6 +47,7 @@ reject() {
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
 [[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
+[[ -f "$INPUT_INJECTION" ]] || fail "missing RemoteApp input injection verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
 [[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
@@ -150,6 +152,8 @@ require 'remoteapp-cross-platform-capture-e2e\.sh' "$AUDIT" \
   'audit must record the cross-platform capture evidence verifier'
 require 'Mouse/keyboard input injection is controllable' "$AUDIT" \
   'audit must cover product input injection'
+require 'remoteapp-input-injection-e2e\.sh' "$AUDIT" \
+  'audit must record the input injection evidence verifier'
 require 'Audio/video codec, frame rate, bitrate adaptation' "$AUDIT" \
   'audit must cover media codec/adaptation'
 require 'Multi-window/multi-application independent tracking' "$AUDIT" \
@@ -215,6 +219,10 @@ require 'remoteapp-cross-platform-capture-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the cross-platform capture verifier'
 require 'Windows/Linux capture or explicit product unsupported state' "$PLAN" \
   'plan evidence audit must preserve Windows/Linux capture or unsupported requirement'
+require 'Real input injection E2E for pointer/keyboard using' "$PLAN" \
+  'plan evidence audit must list missing live input injection evidence'
+require 'remoteapp-input-injection-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the input injection verifier'
 require 'Frontend full lifecycle E2E' "$PLAN" \
   'plan evidence audit must list frontend full lifecycle E2E as missing'
 require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
@@ -272,6 +280,38 @@ require 'terminal_receipt' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must reject product completion claims'
+require 'real_input_injection_matrix' "$INPUT_INJECTION" \
+  'input injection verifier must require real input injection proof mode'
+require 'component_mock.*False|component_mock.*false' "$INPUT_INJECTION" \
+  'input injection verifier must reject component mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$INPUT_INJECTION" \
+  'input injection verifier must require real backend/runtime evidence'
+require 'macos must pass pointer/keyboard input injection' "$INPUT_INJECTION" \
+  'input injection verifier must require macOS live input pass'
+require 'input_control' "$INPUT_INJECTION" \
+  'input injection verifier must require input-control consent'
+require 'display_global' "$INPUT_INJECTION" \
+  'input injection verifier must require display_global input scope'
+require 'focus_validated' "$INPUT_INJECTION" \
+  'input injection verifier must require focus validation'
+require 'coordinate_mapping_validated' "$INPUT_INJECTION" \
+  'input injection verifier must require coordinate mapping validation'
+require 'target_geometry_revision' "$INPUT_INJECTION" \
+  'input injection verifier must inspect target geometry revision'
+require 'INPUT_FRAME_APPLIED' "$INPUT_INJECTION" \
+  'input injection verifier must inspect input-applied events'
+require 'client_sequence' "$INPUT_INJECTION" \
+  'input injection verifier must preserve client_sequence evidence'
+require 'client_sent_at_ms' "$INPUT_INJECTION" \
+  'input injection verifier must preserve client_sent_at_ms evidence'
+require 'latency_ms must be within threshold' "$INPUT_INJECTION" \
+  'input injection verifier must reject high latency'
+require 'observed_effect' "$INPUT_INJECTION" \
+  'input injection verifier must require observed OS input effect'
+require 'terminal_receipt' "$INPUT_INJECTION" \
+  'input injection verifier must inspect terminal receipt evidence'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$INPUT_INJECTION" \
+  'input injection verifier must reject product completion claims'
 require 'real_network_fallback_matrix' "$NETWORK_FALLBACK" \
   'network fallback verifier must require real network fallback proof mode'
 require 'component_mock.*False|component_mock.*false' "$NETWORK_FALLBACK" \

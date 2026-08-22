@@ -228,6 +228,15 @@ Current frontend lifecycle evidence:
   permission` recovery action when daemon input readiness reports
   `input_injection_unavailable`. This improves permission correctness and user
   recovery, but still does not prove successful OS input injection.
+- `tools/scripts/remoteapp-input-injection-e2e.sh` now provides the input
+  injection evidence verifier. It accepts evidence from real host runners and
+  requires OS input permission, `input_control` consent, `display_global`
+  input scope, focus validation, coordinate mapping validation, positive
+  target geometry revision, public RemoteApp session abilities, selected
+  Resource URA subject binding, `INPUT_FRAME_APPLIED` pointer/key events with
+  `client_sequence` and `client_sent_at_ms`, bounded host-applied latency,
+  observed OS pointer/key effects, and visible terminal receipts. Self-test
+  validates only the contract; a live host artifact remains required.
 - The RemoteApp share picker now exposes a non-prompting `Check permissions`
   action before `create_session`. It invokes `remote_desktop.permission_status`
   without a target `subjectURA` and displays Screen Recording plus
@@ -377,7 +386,8 @@ Missing or insufficient product evidence:
 - Cross-platform capture implementation/evidence using
   `remoteapp-cross-platform-capture-e2e.sh`: macOS display/window/application
   live pass plus Windows/Linux capture or explicit product unsupported state.
-- Real input injection E2E for pointer/keyboard.
+- Real input injection E2E for pointer/keyboard using
+  `remoteapp-input-injection-e2e.sh` with a live artifact.
   Current source/product-path progress: frontend input sending now rejects
   missing or stale pointer `target_geometry_revision` before WebRTC
   data-channel send, while daemon stale-revision rejection remains the

@@ -21,6 +21,7 @@ mkdir -p \
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -89,6 +90,33 @@ fi
 grep -q "cross-platform capture verifier must inspect first-display fallback evidence" /tmp/check-remoteapp-product-closure-capture-fallback.out || \
   fail "expected first-display fallback evidence failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
+perl -0pi -e 's#real_input_injection_matrix#policy_only_input_matrix#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-proof-mode.out 2>&1; then
+  fail "checker accepted input injection verifier without real input proof mode"
+fi
+grep -q "input injection verifier must require real input injection proof mode" /tmp/check-remoteapp-product-closure-input-proof-mode.out || \
+  fail "expected input injection proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#macos must pass pointer/keyboard input injection#macos may skip input injection#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-macos.out 2>&1; then
+  fail "checker accepted input injection verifier without macOS pass requirement"
+fi
+grep -q "input injection verifier must require macOS live input pass" /tmp/check-remoteapp-product-closure-input-macos.out || \
+  fail "expected macOS input pass requirement failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#latency_ms must be within threshold#latency_ms may exceed threshold#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-latency.out 2>&1; then
+  fail "checker accepted input injection verifier without latency bound"
+fi
+grep -q "input injection verifier must reject high latency" /tmp/check-remoteapp-product-closure-input-latency.out || \
+  fail "expected input injection latency-bound failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 
 perl -0pi -e 's#real_network_fallback_matrix#route_model_source_check#g' \
   "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
