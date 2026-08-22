@@ -69,6 +69,7 @@ main() {
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo "    easynet_cli.h                → $INCLUDE_DIR/"
     echo "    easynet_cli.exports.v7       → $INCLUDE_DIR/"
+    echo "    easynet_cli.exports.v8       → $INCLUDE_DIR/"
     echo "    ffi-abi-v7.md                → $DOC_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
@@ -195,12 +196,15 @@ download_and_install() {
     mv "${TMPDIR}/easynet-keyring" "${INSTALL_DIR}/easynet-keyring"
     chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring"
 
-    # Install the generic C ABI v7 contract alongside the runtime artefacts.
+    # Install the generic C ABI contract alongside the runtime artefacts.
     # Language bindings compile against the header; release/CI tooling uses
-    # the exact export allowlist; the spec carries ownership rules.
+    # the exact export allowlists; the spec carries ownership rules. The v8
+    # allowlist is an additive raw-stream extension; runtime_abi_version()
+    # remains 7.
     mkdir -p "$INCLUDE_DIR" "$DOC_DIR"
     mv "${TMPDIR}/include/easynet_cli.h" "${INCLUDE_DIR}/easynet_cli.h"
     mv "${TMPDIR}/include/easynet_cli.exports.v7" "${INCLUDE_DIR}/easynet_cli.exports.v7"
+    mv "${TMPDIR}/include/easynet_cli.exports.v8" "${INCLUDE_DIR}/easynet_cli.exports.v8"
     mv "${TMPDIR}/docs/spec/ffi-abi-v7.md" "${DOC_DIR}/ffi-abi-v7.md"
 
     # Install dendrite bridge library under the REAL user's home so

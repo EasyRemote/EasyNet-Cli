@@ -10,6 +10,10 @@ HEADER="include/easynet_cli.h"
 ALLOWLIST="include/easynet_cli.exports.v7"
 ALLOWLIST_V8="include/easynet_cli.exports.v8"
 SPEC="docs/spec/ffi-abi-v7.md"
+RELEASE_TARBALL_SCRIPT="packaging/release/build-release-tarball.sh"
+RELEASE_INSTALL_E2E_SCRIPT="packaging/release/e2e-release-install.sh"
+RELEASE_INSTALL_SCRIPT="packaging/release/install.sh"
+WINDOWS_RELEASE_SCRIPT="packaging/release/build-windows-cli.ps1"
 EXPECTED_COUNT=56
 violations=0
 tmp="$(mktemp -d)"
@@ -247,9 +251,23 @@ done
 if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
     require_literal "$SPEC" "include/easynet_cli.exports.v7"
+    require_literal "$SPEC" "include/easynet_cli.exports.v8"
     require_literal "$SPEC" 'exactly `56`'
+    require_literal "$SPEC" 'exactly `57`'
+    require_literal "$SPEC" "runtime_invocation_stream_open_v8"
     require_literal "$SPEC" 'ABI version: `7`'
 fi
+
+for release_script in \
+    "$RELEASE_TARBALL_SCRIPT" \
+    "$RELEASE_INSTALL_E2E_SCRIPT" \
+    "$RELEASE_INSTALL_SCRIPT" \
+    "$WINDOWS_RELEASE_SCRIPT"
+do
+    if require_file "$release_script"; then
+        require_literal "$release_script" "easynet_cli.exports.v8"
+    fi
+done
 
 lib="${EASYNET_FFI_DYLIB:-}"
 if [[ -z "$lib" ]]; then

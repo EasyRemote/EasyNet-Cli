@@ -459,3 +459,32 @@ Product effect:
   dispatch and prevents stale client coordinates from reaching CGEvent/X11/etc.
 - The input-injection product row remains incomplete until real OS E2E and
   latency evidence exist.
+
+## 2026-08-22 — v8 raw-stream ABI must ship in release shape
+
+Decision:
+
+- `runtime_invocation_stream_open_v8` is an additive raw-payload transport
+  representation for high-frequency media streams, not a new Invocation
+  semantic.
+- If the header and feature discovery expose v8, release packages must ship the
+  v8 export allowlist beside the base v7 allowlist. Otherwise downstream SDKs
+  can compile against a source-tree contract that is not auditable after
+  installation.
+- `runtime_abi_version()` remains `7`; bindings must feature-detect the v8
+  symbol before using it.
+
+Implementation delta:
+
+- Release tarball staging now includes `include/easynet_cli.exports.v8`.
+- Unix installer, sandbox release-install E2E, and Windows staging now install
+  or stage the v8 allowlist.
+- ABI, release-package, SDK scaffold, and project-structure gates now require
+  the v8 allowlist where the release contract is asserted.
+
+Product effect:
+
+- RemoteApp/EasyRemote raw media stream consumers can verify the installed ABI
+  extension contract instead of relying on source-tree-only evidence.
+- This closes a distribution seam only; it does not prove codec negotiation,
+  host audio, relay behavior, or cross-device RemoteApp media readiness.

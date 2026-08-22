@@ -10,12 +10,13 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/include" "$sandbox/src" "$sandbox/docs/spec"
+    mkdir -p "$sandbox/include" "$sandbox/src" "$sandbox/docs/spec" "$sandbox/packaging"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
     cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
     cp -R "$REPO_ROOT/src/ffi" "$sandbox/src/ffi"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
+    cp -R "$REPO_ROOT/packaging/release" "$sandbox/packaging/release"
     echo "$sandbox"
 }
 
@@ -76,6 +77,12 @@ rm -rf "$SB"
 SB="$(make_sandbox)"
 printf 'runtime_string_free\n' >>"$SB/include/easynet_cli.exports.v7"
 expect_failure "duplicate allowlist entry" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/easynet_cli\.exports\.v8/easynet_cli_exports_v8_missing/g' \
+    "$SB/packaging/release/build-release-tarball.sh"
+expect_failure "release tarball missing v8 allowlist" "$SB"
 rm -rf "$SB"
 
 if command -v cc >/dev/null 2>&1 && command -v nm >/dev/null 2>&1; then

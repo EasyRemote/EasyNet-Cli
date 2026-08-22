@@ -48,6 +48,7 @@ ABI v7 is a hard major cut. The authoritative header and export list are:
 
 - [`../include/easynet_cli.h`](../include/easynet_cli.h)
 - [`../include/easynet_cli.exports.v7`](../include/easynet_cli.exports.v7)
+- [`../include/easynet_cli.exports.v8`](../include/easynet_cli.exports.v8)
 - [`../docs/spec/ffi-abi-v7.md`](../docs/spec/ffi-abi-v7.md)
 
 There is no v4 domain-symbol compatibility path.

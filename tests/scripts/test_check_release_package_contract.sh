@@ -20,6 +20,7 @@ make_sandbox() {
     cp "$REPO_ROOT/packaging/release/dev-install-local.sh" "$sandbox/packaging/release/dev-install-local.sh"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
     echo "$sandbox"
 }
@@ -77,6 +78,22 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing ABI export allowlist should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's#include/easynet_cli\.exports\.v8#include/missing_exports.v8#g' \
+    "$SB/packaging/release/build-release-tarball.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing ABI v8 export allowlist should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/runtime_invocation_stream_open_v8/runtime_invocation_stream_open_v8_missing/' \
+    "$SB/include/easynet_cli.exports.v8"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "wrong ABI v8 additive symbol should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's#e2e-release-install\.sh#e2e-release-packaging/release/install.sh#g' \

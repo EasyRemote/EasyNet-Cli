@@ -74,12 +74,14 @@ event presentation belong in EasyNet backend, EasyRemote or another downstream
 product. Those projections must not introduce another transport, URA grammar,
 principal lifecycle, trust store or canonical model.
 
-The current native surface is generic C ABI v7 with an exact 56-symbol
-allowlist. Go and Python expose the same product-neutral capability-state
-matrix. Node, Java and Swift expose supported subsets; they do not publish
-placeholder product clients. Product-specific profiles are removed only after
-their generic capability has been extracted and consumers have migrated; no
-binding probes a retired C symbol.
+The current native surface is generic C ABI v7 with an exact 56-symbol base
+allowlist and a feature-detected v8 raw-stream extension allowlist containing
+the same base symbols plus `runtime_invocation_stream_open_v8`. Go and Python
+expose the same product-neutral capability-state matrix. Node, Java and Swift
+expose supported subsets; they do not publish placeholder product clients.
+Product-specific profiles are removed only after their generic capability has
+been extracted and consumers have migrated; no binding probes a retired C
+symbol.
 
 The normative SDK contract is
 [`spec/daemon-sdk-requirements-v1.md`](spec/daemon-sdk-requirements-v1.md); the

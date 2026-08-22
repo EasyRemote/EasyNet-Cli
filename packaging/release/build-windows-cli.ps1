@@ -191,6 +191,7 @@ else {
 
 $Header = Join-Path $Root "include\easynet_cli.h"
 $AbiExports = Join-Path $Root "include\easynet_cli.exports.v7"
+$AbiExportsV8 = Join-Path $Root "include\easynet_cli.exports.v8"
 $AbiSpec = Join-Path $Root "docs\spec\ffi-abi-v7.md"
 if (Test-Path $Header) {
     $HeaderOut = Join-Path $StageDir "include"
@@ -201,6 +202,11 @@ if (Test-Path $AbiExports) {
     $HeaderOut = Join-Path $StageDir "include"
     New-Item -ItemType Directory -Path $HeaderOut -Force | Out-Null
     Copy-Item $AbiExports (Join-Path $HeaderOut "easynet_cli.exports.v7") -Force
+}
+if (Test-Path $AbiExportsV8) {
+    $HeaderOut = Join-Path $StageDir "include"
+    New-Item -ItemType Directory -Path $HeaderOut -Force | Out-Null
+    Copy-Item $AbiExportsV8 (Join-Path $HeaderOut "easynet_cli.exports.v8") -Force
 }
 if (Test-Path $AbiSpec) {
     $SpecOut = Join-Path $StageDir "docs\spec"

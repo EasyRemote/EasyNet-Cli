@@ -36,8 +36,8 @@ target, not an active root. Native Rust product behavior and product-specific
 projections live with their semantic owners under `src/daemon/`; generic C ABI
 projection lives under `src/ffi/`.
 The C binding contract lives in `include/easynet_cli.h` and
-`docs/spec/ffi-abi-v7.md` and the exact export allowlist
-`include/easynet_cli.exports.v7`.
+`docs/spec/ffi-abi-v7.md` with exact export allowlists
+`include/easynet_cli.exports.v7` and `include/easynet_cli.exports.v8`.
 
 ## Structural Rules
 

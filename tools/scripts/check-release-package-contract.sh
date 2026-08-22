@@ -7,7 +7,8 @@
 # packaging/release/build-release-tarball.sh, packaging/release/install.sh,
 # and packaging/release/e2e-release-install.sh must agree on every required
 # artefact. This catches drift before a release tarball reaches a real
-# installer or a language binding misses part of the generic ABI v7 contract.
+# installer or a language binding misses part of the generic ABI v7 contract
+# and its feature-detected v8 raw-stream extension allowlist.
 
 set -euo pipefail
 
@@ -17,6 +18,8 @@ cd "$ROOT"
 echo "== check-release-package-contract.sh =="
 
 violations=0
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
 
 record_violation() {
     local title="$1"
@@ -56,6 +59,7 @@ if require_file "packaging/release/build-release-tarball.sh"; then
         "--bin easynet-keyring" \
         "include/easynet_cli.h" \
         "include/easynet_cli.exports.v7" \
+        "include/easynet_cli.exports.v8" \
         "docs/spec/ffi-abi-v7.md" \
         "easynet-keyring" \
         "libaxon_dendrite_bridge"
@@ -71,6 +75,7 @@ if require_file "packaging/release/install.sh"; then
         "easynet-keyring" \
         "include/easynet_cli.h" \
         "easynet_cli.exports.v7" \
+        "easynet_cli.exports.v8" \
         "ffi-abi-v7.md"
     do
         require_literal "packaging/release/install.sh" "$literal"
@@ -93,6 +98,7 @@ if require_file "packaging/release/e2e-release-install.sh"; then
         "easynet-keyring" \
         "include/easynet_cli.h" \
         "include/easynet_cli.exports.v7" \
+        "include/easynet_cli.exports.v8" \
         "docs/spec/ffi-abi-v7.md" \
         "#define RUNTIME_ABI_VERSION 7u" \
         "c abi:"
@@ -117,9 +123,30 @@ if require_file "include/easynet_cli.exports.v7"; then
     fi
 fi
 
+if require_file "include/easynet_cli.exports.v8"; then
+    require_literal "include/easynet_cli.exports.v8" "runtime_abi_version"
+    require_literal "include/easynet_cli.exports.v8" "runtime_invocation_stream_open_v8"
+    if [[ "$(wc -l < include/easynet_cli.exports.v8 | tr -d ' ')" != "57" ]]; then
+        record_violation "v8 export allowlist must contain exactly 57 symbols" "include/easynet_cli.exports.v8"
+    fi
+    if ! comm -23 include/easynet_cli.exports.v7 include/easynet_cli.exports.v8 | sed '/^$/d' > "$tmp/v8-missing-v7"; then
+        true
+    fi
+    if [[ -s "$tmp/v8-missing-v7" ]]; then
+        record_violation "v8 export allowlist must include every v7 symbol" "$(cat "$tmp/v8-missing-v7")"
+    fi
+    if ! comm -13 include/easynet_cli.exports.v7 include/easynet_cli.exports.v8 > "$tmp/v8-added"; then
+        true
+    fi
+    if [[ "$(cat "$tmp/v8-added")" != "runtime_invocation_stream_open_v8" ]]; then
+        record_violation "v8 export allowlist must add only runtime_invocation_stream_open_v8" "$(cat "$tmp/v8-added")"
+    fi
+fi
+
 if require_file "docs/spec/ffi-abi-v7.md"; then
     require_literal "docs/spec/ffi-abi-v7.md" "include/easynet_cli.h"
     require_literal "docs/spec/ffi-abi-v7.md" "include/easynet_cli.exports.v7"
+    require_literal "docs/spec/ffi-abi-v7.md" "include/easynet_cli.exports.v8"
 fi
 
 if [[ "$violations" -eq 0 ]]; then

@@ -220,6 +220,13 @@ Current frontend lifecycle evidence:
   public session view aligned with the actual input execution path, which
   already rejects frames when the latest target snapshot has
   `input_enabled=false`.
+- The ABI v8 raw-stream metadata contract now reaches release-shape packaging:
+  tarball staging, Unix install, sandbox release-install E2E, Windows staging,
+  ABI gates, SDK scaffold, and release-package gates all carry
+  `include/easynet_cli.exports.v8` beside the base v7 allowlist. This proves
+  installed SDK consumers can verify the raw-stream extension contract. It
+  does not prove codec negotiation, host audio, relay behavior, or
+  cross-device RemoteApp media readiness.
 
 Missing or insufficient product evidence:
 
