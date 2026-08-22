@@ -284,6 +284,24 @@ impl JoinConnectionSnapshot {
         }
     }
 
+    pub fn from_prior_context(
+        state: JoinConnectionState,
+        transition: Option<JoinTransition>,
+        prior: &JoinConnectionSnapshot,
+        source: impl Into<String>,
+    ) -> Self {
+        let mut snapshot = Self::from_parts(
+            state,
+            transition,
+            prior.realm.clone(),
+            prior.node_id.clone(),
+            prior.hub_endpoint.clone(),
+            source,
+        );
+        snapshot.hub_api_endpoint = prior.hub_api_endpoint.clone();
+        snapshot
+    }
+
     pub fn failed_from_credentials(
         failure_code: JoinFailureCode,
         transition: JoinTransition,
@@ -548,6 +566,38 @@ mod tests {
         assert_eq!(
             loaded.transition_id.as_deref(),
             Some("T05_WIRE_LOCAL_TRUST")
+        );
+    }
+
+    #[test]
+    fn session_projection_preserves_hub_api_endpoint_context() {
+        let prior = JoinConnectionSnapshot::from_credentials(
+            JoinConnectionState::LocalTrustWired,
+            Some(JoinTransition::WireLocalTrust),
+            &creds(),
+            "test.prior",
+        );
+
+        let projected = JoinConnectionSnapshot::from_prior_context(
+            JoinConnectionState::ConnectedOnline,
+            Some(JoinTransition::RefetchReadModel),
+            &prior,
+            "test.projected",
+        );
+
+        assert_eq!(projected.state, "FRONTEND_CONNECTED");
+        assert_eq!(projected.state_code, "J800");
+        assert_eq!(
+            projected.transition_id.as_deref(),
+            Some("T11_REFETCH_READ_MODEL")
+        );
+        assert_eq!(
+            projected.hub_endpoint.as_deref(),
+            Some("https://127.0.0.1:50443")
+        );
+        assert_eq!(
+            projected.hub_api_endpoint.as_deref(),
+            Some("http://127.0.0.1:8080")
         );
     }
 

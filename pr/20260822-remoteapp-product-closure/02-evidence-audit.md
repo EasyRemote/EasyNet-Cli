@@ -69,12 +69,28 @@ Current frontend lifecycle evidence:
   product gate: runtime status must expose the Hub API endpoint, Docker must be
   reachable, and `${hub_api_endpoint}/api/v1/health` must respond before daemon,
   frontend, host capture, media, or input evidence can run.
-- Latest local `--run` after adding the Hub API preflight now fails at
-  `hub-api-readiness-preflight` only. The nested report shows
-  `hub_api_endpoint=http://localhost:8080`, `docker.status=unreachable`, and
-  `health=null`; no daemon, frontend, host capture, media, or input evidence is
-  recorded. This is the current correct product evidence shape while Docker and
-  the local Hub API remain unavailable.
+- 2026-08-22 runtime diagnosis found two upstream product-readiness failures
+  before RemoteApp evidence could be trusted:
+  - Docker was initially unavailable, then recovered after Docker Desktop
+    started.
+  - The Hub compose default `HUB_REALM=easynet.run` conflicted with persisted
+    `localhost` hosted-Agent inventory rows. Restarting the existing
+    `easynet-dev` Hub with `HUB_REALM=localhost HUB_HTTP_PORT=8080` restored
+    `/api/v1/health` for the paired local credentials.
+- The device session connection-state projector now preserves the prior
+  `hub_api_endpoint` when it promotes the read model to `FRONTEND_CONNECTED`.
+  Without that fix, the running state dropped the Hub API endpoint that
+  failure states exposed, and the product-flow harness could not deterministically
+  perform the Hub API readiness gate after daemon recovery.
+- Latest local product-flow evidence:
+  `target/e2e/frontend-remoteapp-product-flow/20260822-044248-69775/report.md`
+  passed all bounded local steps:
+  Hub API readiness, product runtime readiness, frontend typecheck,
+  `DeviceMediaAccess` UI flow, host permission-subject preflight, target picker
+  freshness, decoded-frame WebRTC for window and application targets, and
+  view-only input safety for window and application targets. This is strong
+  local product-flow evidence, not cross-platform/cross-device product
+  completion evidence.
 
 Missing or insufficient product evidence:
 

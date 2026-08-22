@@ -43,6 +43,12 @@ runtime readiness for daemon control/invocation, then composes frontend
 typecheck/UI flow coverage with host permission-subject, target-freshness,
 decoded-frame, and view-only input E2E harnesses. A skipped/self-test report
 from that entrypoint is only harness evidence, not product completion.
+The latest local run,
+`target/e2e/frontend-remoteapp-product-flow/20260822-044248-69775/report.md`,
+passed the bounded single-machine product-flow bundle after the local Hub was
+restarted with the paired `localhost` realm and the device connection-state
+projector preserved `hub_api_endpoint` across the
+`FRONTEND_CONNECTED` projection.
 They do not prove every operating system, network topology, input mode, codec
 path, and frontend lifecycle is product-ready.
 
