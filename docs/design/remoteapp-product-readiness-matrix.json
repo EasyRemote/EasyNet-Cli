@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "product": "RemoteApp interactive desktop",
+  "status": "incomplete",
+  "product_complete": false,
+  "updated_at": "2026-08-22",
+  "architecture_invariants": [
+    "User Principal is the caller/accountability root, not an Agent.",
+    "Device is the execution substrate and key custodian, not the public callee.",
+    "SystemAgent owns device-native remote_desktop.* AbilityDescriptors.",
+    "RemoteDesktopPlugin is the AbilityImpl.",
+    "Display/window/application Resource URA is the Invocation subject.",
+    "WebRTC/native media is a session transport, not a second Invocation model."
+  ],
+  "requirements": [
+    {
+      "id": "application_window_capture",
+      "requirement": "Application/window selection and stable capture across macOS/Windows/Linux",
+      "status": "partial",
+      "current_evidence": [
+        "macOS ScreenCaptureKit target model",
+        "host decoded-frame harnesses",
+        "non-macOS app/window target observation fails closed"
+      ],
+      "required_evidence_before_product_complete": [
+        "real macOS host E2E for display/window/application capture",
+        "real Windows host E2E or explicit product unsupported state",
+        "real Linux host E2E or explicit product unsupported state"
+      ],
+      "non_claims": [
+        "source contracts do not prove real cross-platform capture"
+      ]
+    },
+    {
+      "id": "input_injection",
+      "requirement": "Mouse/keyboard input injection is controllable, low-latency, and permission-correct",
+      "status": "incomplete",
+      "current_evidence": [
+        "app/window sessions downgrade to view_only",
+        "pointer/key frames are policy-gated",
+        "clipboard/file-drop are unsupported"
+      ],
+      "required_evidence_before_product_complete": [
+        "focus validation E2E",
+        "coordinate mapping E2E",
+        "target epoch checks on execution path",
+        "OS permission checks",
+        "latency measurements",
+        "successful input injection E2E"
+      ],
+      "non_claims": [
+        "view_only safety does not prove interactive input"
+      ]
+    },
+    {
+      "id": "audio_video_adaptation",
+      "requirement": "Audio/video codec, frame rate, bitrate adaptation, and drop policy are product-ready",
+      "status": "partial",
+      "current_evidence": [
+        "macOS H.264/WebRTC path",
+        "VideoToolbox descriptor",
+        "adaptive bitrate helper",
+        "queue/drop boundary tests"
+      ],
+      "required_evidence_before_product_complete": [
+        "end-to-end codec negotiation reports",
+        "host audio path report",
+        "frame-rate/bitrate soak under load",
+        "degraded network/drop policy E2E"
+      ],
+      "non_claims": [
+        "synthetic media carrier does not prove host audio/video product readiness"
+      ]
+    },
+    {
+      "id": "multi_window_tracking",
+      "requirement": "Multi-window/multi-application independent tracking works as an execution effect",
+      "status": "partial",
+      "current_evidence": [
+        "target tracker state machine",
+        "move/resize/loss/rebind events",
+        "same-display application window-set rebind"
+      ],
+      "required_evidence_before_product_complete": [
+        "multi-display MultiAppSurface implementation or explicit product unsupported report",
+        "real app/window churn E2E with independent tracked streams"
+      ],
+      "non_claims": [
+        "data structures alone do not prove independent tracking execution"
+      ]
+    },
+    {
+      "id": "session_recovery_lifecycle",
+      "requirement": "Disconnect/reconnect, session resume, consent revoke, cancel, timeout are complete",
+      "status": "partial",
+      "current_evidence": [
+        "lease monitor",
+        "refresh/end session",
+        "target loss and transport failure taxonomy",
+        "frontend watch_events degraded/revoked recovery handling",
+        "canonical SDK cancel/timeout semantics"
+      ],
+      "required_evidence_before_product_complete": [
+        "session resume after transport loss",
+        "reconnect handoff",
+        "consent revoke termination E2E",
+        "cancel/timeout receipts",
+        "crash/restart recovery E2E"
+      ],
+      "non_claims": [
+        "taxonomy and unit coverage do not prove recovery product behavior"
+      ]
+    },
+    {
+      "id": "network_fallback",
+      "requirement": "NAT/relay/WebRTC/direct fallback network paths are verified",
+      "status": "partial",
+      "current_evidence": [
+        "typed host/STUN/TURN/EasyNet relay route evidence",
+        "source-level provider gates"
+      ],
+      "required_evidence_before_product_complete": [
+        "real direct route report",
+        "real STUN srflx route report",
+        "real TURN relay route report",
+        "real EasyNet relay deployment report",
+        "redacted credential/reachability evidence"
+      ],
+      "non_claims": [
+        "route type source checks do not prove real NAT/relay reachability"
+      ]
+    },
+    {
+      "id": "frontend_lifecycle",
+      "requirement": "Frontend UI can discover, authorize, start, display, control, and end session",
+      "status": "partial",
+      "current_evidence": [
+        "frontend subject boundary",
+        "component coverage for picker to consent to create to WebRTC attach to watch_events to end",
+        "target-scoped WebRTC lifecycle unit coverage",
+        "product-flow harness entrypoint"
+      ],
+      "required_evidence_before_product_complete": [
+        "Browser/Tauri E2E with real backend/runtime",
+        "picker to permission to consent to create_session",
+        "WebRTC attach and watch_events recovery",
+        "input/control and end_session"
+      ],
+      "non_claims": [
+        "component tests do not prove full real frontend product lifecycle"
+      ]
+    },
+    {
+      "id": "cross_device_e2e",
+      "requirement": "Cross-device E2E smoke/regression exists beyond local provider boundary",
+      "status": "partial",
+      "current_evidence": [
+        "remoteapp-cross-device-product-smoke.sh composes Docker two-node routing",
+        "synthetic media/bidi carrier gate",
+        "host-local decoded-frame scripts cover local capture/render decode"
+      ],
+      "required_evidence_before_product_complete": [
+        "RemoteApp-specific two-device or network namespace E2E",
+        "remote target inventory",
+        "remote WebRTC/media from actual display/window/application capture",
+        "input policy",
+        "teardown evidence"
+      ],
+      "non_claims": [
+        "cross-device routing and synthetic media do not prove real RemoteApp product behavior"
+      ]
+    }
+  ]
+}

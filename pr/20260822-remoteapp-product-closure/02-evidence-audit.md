@@ -136,6 +136,13 @@ Current frontend lifecycle evidence:
   `target/e2e/remoteapp-cross-device-product-smoke/20260822-051119-57565/report.json`
   failed before child E2Es with reason `docker info timed out after 3s` and
   both cross-device routing and synthetic media coverage marked false.
+- `docs/design/remoteapp-product-readiness-matrix.json` now records the
+  machine-readable product closure state for the eight explicit requirements:
+  application/window capture, input injection, audio/video adaptation,
+  multi-window tracking, session recovery lifecycle, network fallback,
+  frontend lifecycle, and cross-device E2E. The product closure audit gate
+  rejects missing rows, unsupported statuses, empty evidence fields, and any
+  premature `product_complete=true` claim.
 
 Missing or insufficient product evidence:
 

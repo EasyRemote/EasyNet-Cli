@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
+MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 
@@ -30,8 +31,79 @@ reject() {
 
 [[ -f "$SPEC" ]] || fail "missing RemoteApp targeted-session SPEC"
 [[ -f "$AUDIT" ]] || fail "missing RemoteApp product readiness audit"
+[[ -f "$MATRIX" ]] || fail "missing RemoteApp product readiness matrix"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+
+python3 - "$MATRIX" <<'PY' || fail "RemoteApp product readiness matrix is invalid"
+import json
+import sys
+
+path = sys.argv[1]
+matrix = json.load(open(path, encoding="utf-8"))
+
+required_ids = {
+    "application_window_capture",
+    "input_injection",
+    "audio_video_adaptation",
+    "multi_window_tracking",
+    "session_recovery_lifecycle",
+    "network_fallback",
+    "frontend_lifecycle",
+    "cross_device_e2e",
+}
+allowed_statuses = {"incomplete", "partial"}
+
+errors = []
+if matrix.get("schema_version") != 1:
+    errors.append("schema_version must be 1")
+if matrix.get("status") != "incomplete":
+    errors.append("matrix status must remain incomplete")
+if matrix.get("product_complete") is not False:
+    errors.append("product_complete must be false until every row is proven")
+
+requirements = matrix.get("requirements")
+if not isinstance(requirements, list):
+    errors.append("requirements must be a list")
+    requirements = []
+
+seen = {row.get("id") for row in requirements if isinstance(row, dict)}
+missing = sorted(required_ids - seen)
+extra = sorted(seen - required_ids)
+if missing:
+    errors.append("missing requirement ids: " + ", ".join(missing))
+if extra:
+    errors.append("unexpected requirement ids: " + ", ".join(extra))
+
+for row in requirements:
+    if not isinstance(row, dict):
+        errors.append("requirement rows must be objects")
+        continue
+    row_id = row.get("id", "<missing>")
+    status = row.get("status")
+    if status not in allowed_statuses:
+        errors.append(f"{row_id}: status must be one of {sorted(allowed_statuses)}")
+    for key in (
+        "requirement",
+        "current_evidence",
+        "required_evidence_before_product_complete",
+        "non_claims",
+    ):
+        value = row.get(key)
+        if isinstance(value, str):
+            ok = bool(value.strip())
+        elif isinstance(value, list):
+            ok = bool(value) and all(isinstance(item, str) and item.strip() for item in value)
+        else:
+            ok = False
+        if not ok:
+            errors.append(f"{row_id}: {key} must be non-empty")
+
+if errors:
+    for error in errors:
+        print(error, file=sys.stderr)
+    raise SystemExit(1)
+PY
 
 reject 'full acceptance verified' "$SPEC" \
   'targeted-session SPEC must not claim full product acceptance'
@@ -80,6 +152,8 @@ require 'benchmark, or SPEC statement is insufficient' "$AUDIT" \
   'audit must define authoritative product evidence strictly'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'audit must preserve the current product status'
+require 'remoteapp-product-readiness-matrix.json' "$AUDIT" \
+  'audit must name the machine-readable product readiness matrix'
 
 require 'Full interactive RemoteApp product: incomplete' "$PLAN" \
   'plan evidence audit must keep the goal open'

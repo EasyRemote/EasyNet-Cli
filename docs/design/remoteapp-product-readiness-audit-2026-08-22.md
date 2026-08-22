@@ -6,6 +6,11 @@ This audit separates verified targeted-session architecture from full
 interactive RemoteApp product readiness. Passing the current boundary gates
 does not mean RemoteApp is product-complete.
 
+The machine-readable gate source for this audit is
+`docs/design/remoteapp-product-readiness-matrix.json`. The Markdown table below
+is explanatory; the JSON matrix is the product-closure status contract consumed
+by `tools/scripts/check-remoteapp-product-closure-audit.sh`.
+
 ## Architecture boundary
 
 RemoteApp remains an EasyNet-Cli device plugin capability:

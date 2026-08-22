@@ -54,3 +54,32 @@ Product effect:
   the product path.
 - This closes an evidence-chain seam only; it does not complete real capture,
   input, audio/video, relay, or frontend lifecycle coverage.
+
+## 2026-08-22 — Product closure state must be machine-readable
+
+Decision:
+
+- RemoteApp product completion cannot be inferred from Markdown prose, local
+  source gates, or synthetic reports.
+- The eight product requirements are now represented as an explicit readiness
+  matrix with row ids, current evidence, required evidence, and non-claims.
+- The matrix is allowed to contain only `partial` or `incomplete` rows until
+  real authoritative product evidence exists for every requirement.
+
+Implementation delta:
+
+- Added `docs/design/remoteapp-product-readiness-matrix.json`.
+- Extended `check-remoteapp-product-closure-audit.sh` to reject missing matrix
+  rows, empty evidence, unsupported statuses, and premature
+  `product_complete=true`.
+- Extended the audit script tests to mutate the matrix and prove those failure
+  modes are caught.
+
+Product effect:
+
+- Future RemoteApp work has a concrete acceptance ledger for real OS capture,
+  input, audio/video, multi-window tracking, recovery, network fallback,
+  frontend lifecycle, and cross-device E2E.
+- This does not implement the missing product capabilities; it prevents
+  architectural drift and false product-complete claims while those
+  capabilities are built.
