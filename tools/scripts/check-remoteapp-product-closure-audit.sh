@@ -19,6 +19,7 @@ SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 PERMISSION_REVOKE="$ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 SESSION_RESUME="$ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
@@ -62,10 +63,44 @@ reject() {
 [[ -f "$PERMISSION_REVOKE" ]] || fail "missing RemoteApp permission revoke E2E harness"
 [[ -f "$SESSION_RESUME" ]] || fail "missing RemoteApp session resume E2E harness"
 [[ -f "$CRASH_RESTART_RECOVERY" ]] || fail "missing RemoteApp crash/restart recovery evidence verifier"
+[[ -f "$LIFECYCLE_HARNESS_LIB" ]] || fail "missing RemoteApp lifecycle harness helper library"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
+
+for lifecycle_harness in "$SESSION_TIMEOUT" "$SESSION_CANCEL" "$SESSION_RESUME"; do
+  require 'remoteapp-lifecycle-harness-lib\.sh' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must share lifecycle helper logic: $lifecycle_harness"
+  require 'ABILITY_CATALOG_JSON' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must persist ability catalog evidence: $lifecycle_harness"
+  require 'ability list --format json' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must resolve public Ability URAs from the committed catalog: $lifecycle_harness"
+  require 'remoteapp_resolve_rpc_ability_ura' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must require exactly one rpc Ability URA: $lifecycle_harness"
+  require 'remoteapp_session_approval_causal_context_json' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must use the session approval receipt as causal context: $lifecycle_harness"
+  require '--causal-context-json "\$SESSION_CAUSAL_CONTEXT_JSON"' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must pass the session approval receipt causal context: $lifecycle_harness"
+  require 'ability invoke "\$END_SESSION_ABILITY_URA"' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must invoke end_session by full Ability URA: $lifecycle_harness"
+  reject '--causal-root' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must not use root causal context for session lifecycle calls: $lifecycle_harness"
+  reject 'ability invoke remote_desktop\.end_session' "$lifecycle_harness" \
+    "RemoteApp lifecycle harness must not invoke end_session through short ability name: $lifecycle_harness"
+done
+
+require 'REFRESH_LEASE_ABILITY_URA' "$SESSION_RESUME" \
+  'RemoteApp resume harness must resolve refresh_lease through a full Ability URA'
+require 'ability invoke "\$REFRESH_LEASE_ABILITY_URA"' "$SESSION_RESUME" \
+  'RemoteApp resume harness must invoke refresh_lease by full Ability URA'
+reject 'ability invoke remote_desktop\.refresh_lease' "$SESSION_RESUME" \
+  'RemoteApp resume harness must not invoke refresh_lease through short ability name'
+
+require 'remoteapp_resolve_rpc_ability_ura' "$LIFECYCLE_HARNESS_LIB" \
+  'RemoteApp lifecycle helper must implement catalog Ability URA resolution'
+require 'remoteapp_session_approval_causal_context_json' "$LIFECYCLE_HARNESS_LIB" \
+  'RemoteApp lifecycle helper must implement approval receipt causal context projection'
 
 python3 - "$MATRIX" <<'PY' || fail "RemoteApp product readiness matrix is invalid"
 import json

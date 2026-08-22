@@ -16,6 +16,7 @@ set -euo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 BUNDLED_SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+source "$SELF_DIR/remoteapp-lifecycle-harness-lib.sh"
 
 MODE=run
 TARGET_KIND=window
@@ -90,6 +91,7 @@ CREATE_SESSION_JSON="$OUT_DIR/create-session.json"
 END_CANCEL_JSON="$OUT_DIR/end-cancel.json"
 SHOW_AFTER_CANCEL_JSON="$OUT_DIR/show-after-cancel.json"
 END_CANCEL_AGAIN_JSON="$OUT_DIR/end-cancel-again.json"
+ABILITY_CATALOG_JSON="$OUT_DIR/ability-catalog.json"
 SESSION_ID="rd-session-cancel-e2e-$$"
 
 die() {
@@ -469,6 +471,7 @@ if not isinstance(token, str) or not token:
 print(token)
 PY
 )"
+SESSION_CAUSAL_CONTEXT_JSON="$(remoteapp_session_approval_causal_context_json "$CREATE_SESSION_JSON")"
 
 END_ARGS="$(python3 - "$SESSION_ID" "$SESSION_TOKEN" "$CANCEL_REASON" <<'PY'
 import json
@@ -486,10 +489,12 @@ print(secrets.token_hex(16))
 PY
 )"
 END_RAW_JSON="$OUT_DIR/end-cancel-raw.txt"
-run_easynet ability invoke remote_desktop.end_session \
+run_easynet ability list --format json >"$ABILITY_CATALOG_JSON"
+END_SESSION_ABILITY_URA="$(remoteapp_resolve_rpc_ability_ura "$ABILITY_CATALOG_JSON" remote_desktop.end_session)"
+run_easynet ability invoke "$END_SESSION_ABILITY_URA" \
   --subject "$SELECTED_RESOURCE_URA" \
   --nonce-hex "$END_NONCE_HEX" \
-  --causal-root \
+  --causal-context-json "$SESSION_CAUSAL_CONTEXT_JSON" \
   --args "$END_ARGS" >"$END_RAW_JSON"
 json_first_value_to_file "$END_RAW_JSON" "$END_CANCEL_JSON"
 
@@ -503,10 +508,10 @@ print(secrets.token_hex(16))
 PY
 )"
 END_AGAIN_RAW_JSON="$OUT_DIR/end-cancel-again-raw.txt"
-run_easynet ability invoke remote_desktop.end_session \
+run_easynet ability invoke "$END_SESSION_ABILITY_URA" \
   --subject "$SELECTED_RESOURCE_URA" \
   --nonce-hex "$END_AGAIN_NONCE_HEX" \
-  --causal-root \
+  --causal-context-json "$SESSION_CAUSAL_CONTEXT_JSON" \
   --args "$END_ARGS" >"$END_AGAIN_RAW_JSON"
 json_first_value_to_file "$END_AGAIN_RAW_JSON" "$END_CANCEL_AGAIN_JSON"
 

@@ -252,6 +252,20 @@ path, and frontend lifecycle is product-ready.
 | Frontend UI can discover, authorize, start, display, control, and end session | Partial | Frontend subject boundary, dedicated surface gates, component coverage for picker → permission_status preflight → consent → create → WebRTC attach → watch_events → end, denied permission_status remains in the picker with Request permission recovery instead of becoming a session error, target-scoped WebRTC lifecycle unit coverage, watch_events recovery-state coverage, daemon `input_readiness`, executable target refresh recovery, executable retry-session recovery, `media_pipeline_support` session detail projection with video-only/H.264/drop-policy/product-blocker visibility, and `terminal_receipt` session detail projection coverage, permission-revoked terminal sync coverage, product-flow harness entrypoint for combined frontend/host evidence, and `frontend-remoteapp-browser-lifecycle-e2e.sh` verifier for real Browser/Tauri lifecycle artifacts | Live Browser/Tauri E2E artifact with real backend/runtime proving picker → permission → consent → create_session → WebRTC attach → watch_events recovery → media presentation → input/control or policy-block → end_session → visible terminal receipt |
 | Cross-device E2E smoke/regression exists beyond local provider boundary | Partial | `remoteapp-cross-device-product-smoke.sh` composes Docker two-node routing and synthetic media/bidi carrier gates; host-local decoded-frame scripts cover local capture/render decode | RemoteApp-specific two-device or equivalent network namespace E2E with remote target inventory, remote WebRTC/media from actual display/window/application capture, input policy, and teardown evidence |
 
+Latest bounded lifecycle evidence on 2026-08-23: local macOS window and
+application live runs passed through public catalog-resolved lifecycle Ability
+URAs and session approval receipt causal context:
+`target/e2e/host-remoteapp-session-timeout/20260823-live-window-causal-222646-11519/report.md`,
+`target/e2e/host-remoteapp-session-cancel/20260823-live-window-causal-222700-12564/report.md`,
+`target/e2e/host-remoteapp-session-resume/20260823-live-window-stable-222830-19233/report.md`,
+`target/e2e/host-remoteapp-session-timeout/20260823-live-application-causal-222846-20408/report.md`,
+`target/e2e/host-remoteapp-session-cancel/20260823-live-application-causal-222859-21255/report.md`,
+and
+`target/e2e/host-remoteapp-session-resume/20260823-live-application-stable-222859-21261/report.md`.
+This evidence is host-local lifecycle proof only; it does not prove real
+permission revoke, long-outage reconnect, browser/WebRTC rebind, crash/restart
+recovery, cross-device transport, or cross-platform OS support.
+
 ## Product-complete definition
 
 RemoteApp may be called product-complete only when every row above has current

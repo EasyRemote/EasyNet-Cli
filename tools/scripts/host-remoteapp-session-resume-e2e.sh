@@ -15,16 +15,17 @@ set -euo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 BUNDLED_SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+source "$SELF_DIR/remoteapp-lifecycle-harness-lib.sh"
 
 MODE=run
 TARGET_KIND=window
 OUT_DIR=""
 SENTINEL_FIXTURE=0
 SENTINEL_FIXTURE_CMD="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD:-}"
-INITIAL_LEASE_TTL_MS="${EASYNET_REMOTEAPP_RESUME_E2E_INITIAL_LEASE_TTL_MS:-800}"
-REFRESH_LEASE_TTL_MS="${EASYNET_REMOTEAPP_RESUME_E2E_REFRESH_LEASE_TTL_MS:-3000}"
-WAIT_BEFORE_REFRESH_MS="${EASYNET_REMOTEAPP_RESUME_E2E_WAIT_BEFORE_REFRESH_MS:-100}"
-WAIT_AFTER_ORIGINAL_LEASE_MS="${EASYNET_REMOTEAPP_RESUME_E2E_WAIT_AFTER_ORIGINAL_LEASE_MS:-1000}"
+INITIAL_LEASE_TTL_MS="${EASYNET_REMOTEAPP_RESUME_E2E_INITIAL_LEASE_TTL_MS:-2000}"
+REFRESH_LEASE_TTL_MS="${EASYNET_REMOTEAPP_RESUME_E2E_REFRESH_LEASE_TTL_MS:-6000}"
+WAIT_BEFORE_REFRESH_MS="${EASYNET_REMOTEAPP_RESUME_E2E_WAIT_BEFORE_REFRESH_MS:-250}"
+WAIT_AFTER_ORIGINAL_LEASE_MS="${EASYNET_REMOTEAPP_RESUME_E2E_WAIT_AFTER_ORIGINAL_LEASE_MS:-2500}"
 
 usage() {
   cat <<'USAGE'
@@ -44,16 +45,16 @@ Options:
                         EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR and must write
                         env.sh plus cleanup.sh.
   --initial-lease-ttl-ms MS
-                        Initial short lease. Default: 800.
+                        Initial short lease. Default: 2000.
   --refresh-lease-ttl-ms MS
                         Lease requested by remote_desktop.refresh_lease.
-                        Default: 3000.
+                        Default: 6000.
   --wait-before-refresh-ms MS
-                        Wait after create before refresh. Default: 100.
+                        Wait after create before refresh. Default: 250.
   --wait-after-original-lease-ms MS
                         Wait after create before resume validation show_session.
                         Must be greater than initial lease and less than the
-                        refreshed expiry window. Default: 1000.
+                        refreshed expiry window. Default: 2500.
   --out-dir DIR         Report directory. Defaults under target/e2e.
 
 Environment:
@@ -105,6 +106,7 @@ CREATE_SESSION_JSON="$OUT_DIR/create-session.json"
 REFRESH_LEASE_JSON="$OUT_DIR/refresh-lease.json"
 SHOW_AFTER_ORIGINAL_LEASE_JSON="$OUT_DIR/show-after-original-lease.json"
 END_AFTER_RESUME_JSON="$OUT_DIR/end-after-resume.json"
+ABILITY_CATALOG_JSON="$OUT_DIR/ability-catalog.json"
 SESSION_ID="rd-session-resume-e2e-$$"
 
 die() {
@@ -347,9 +349,9 @@ evidence = {
     "status": "passed",
     "proof_mode": "lease_refresh_resume",
     "target_kind": "window",
-    "initial_lease_ttl_ms": 800,
-    "refresh_lease_ttl_ms": 3000,
-    "wait_after_original_lease_ms": 1000,
+    "initial_lease_ttl_ms": 2000,
+    "refresh_lease_ttl_ms": 6000,
+    "wait_after_original_lease_ms": 2500,
     "selected_from_live_refresh": True,
     "selected_resource": {
         "resource_ura": subject,
@@ -368,7 +370,7 @@ evidence = {
             "session_id": "rd-session-resume-e2e-self-test",
             "mode": "view_only",
             "transport_preferences": ["webrtc"],
-            "lease_ttl_ms": 800,
+            "lease_ttl_ms": 2000,
         },
         "session": created_session,
     },
@@ -379,7 +381,7 @@ evidence = {
         "args": {
             "session_id": "rd-session-resume-e2e-self-test",
             "session_token": "redacted",
-            "lease_ttl_ms": 3000,
+            "lease_ttl_ms": 6000,
         },
         "session": refreshed_session,
     },
@@ -418,6 +420,7 @@ for pair in \
   (( value >= 1 )) || die "$name must be >= 1"
 done
 (( REFRESH_LEASE_TTL_MS > INITIAL_LEASE_TTL_MS )) || die "--refresh-lease-ttl-ms must be greater than --initial-lease-ttl-ms"
+(( WAIT_BEFORE_REFRESH_MS < INITIAL_LEASE_TTL_MS )) || die "--wait-before-refresh-ms must be less than --initial-lease-ttl-ms"
 (( WAIT_AFTER_ORIGINAL_LEASE_MS > INITIAL_LEASE_TTL_MS )) || die "--wait-after-original-lease-ms must be greater than --initial-lease-ttl-ms"
 (( WAIT_AFTER_ORIGINAL_LEASE_MS < REFRESH_LEASE_TTL_MS )) || die "--wait-after-original-lease-ms must be less than --refresh-lease-ttl-ms"
 
@@ -504,6 +507,10 @@ with open(sys.argv[1], encoding="utf-8") as f:
 PY
 )"
 
+run_easynet ability list --format json >"$ABILITY_CATALOG_JSON"
+REFRESH_LEASE_ABILITY_URA="$(remoteapp_resolve_rpc_ability_ura "$ABILITY_CATALOG_JSON" remote_desktop.refresh_lease)"
+END_SESSION_ABILITY_URA="$(remoteapp_resolve_rpc_ability_ura "$ABILITY_CATALOG_JSON" remote_desktop.end_session)"
+
 run_easynet ability create-remote-desktop-session \
   --subject "$SELECTED_RESOURCE_URA" \
   --session-id "$SESSION_ID" \
@@ -523,6 +530,7 @@ if not isinstance(token, str) or not token:
 print(token)
 PY
 )"
+SESSION_CAUSAL_CONTEXT_JSON="$(remoteapp_session_approval_causal_context_json "$CREATE_SESSION_JSON")"
 
 python3 - "$WAIT_BEFORE_REFRESH_MS" <<'PY'
 import sys
@@ -546,10 +554,10 @@ print(secrets.token_hex(16))
 PY
 )"
 REFRESH_RAW_JSON="$OUT_DIR/refresh-lease-raw.txt"
-run_easynet ability invoke remote_desktop.refresh_lease \
+run_easynet ability invoke "$REFRESH_LEASE_ABILITY_URA" \
   --subject "$SELECTED_RESOURCE_URA" \
   --nonce-hex "$REFRESH_NONCE_HEX" \
-  --causal-root \
+  --causal-context-json "$SESSION_CAUSAL_CONTEXT_JSON" \
   --args "$REFRESH_ARGS" >"$REFRESH_RAW_JSON"
 json_first_value_to_file "$REFRESH_RAW_JSON" "$REFRESH_LEASE_JSON"
 
@@ -580,10 +588,10 @@ print(secrets.token_hex(16))
 PY
 )"
 END_RAW_JSON="$OUT_DIR/end-after-resume-raw.txt"
-run_easynet ability invoke remote_desktop.end_session \
+run_easynet ability invoke "$END_SESSION_ABILITY_URA" \
   --subject "$SELECTED_RESOURCE_URA" \
   --nonce-hex "$END_NONCE_HEX" \
-  --causal-root \
+  --causal-context-json "$SESSION_CAUSAL_CONTEXT_JSON" \
   --args "$END_ARGS" >"$END_RAW_JSON"
 json_first_value_to_file "$END_RAW_JSON" "$END_AFTER_RESUME_JSON"
 

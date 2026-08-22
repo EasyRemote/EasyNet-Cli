@@ -14,6 +14,7 @@ set -euo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 BUNDLED_SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+source "$SELF_DIR/remoteapp-lifecycle-harness-lib.sh"
 
 MODE=run
 TARGET_KIND=window
@@ -92,6 +93,7 @@ SENTINEL_MANIFEST_JSON="$OUT_DIR/sentinel-manifest.json"
 CREATE_SESSION_JSON="$OUT_DIR/create-session.json"
 SHOW_AFTER_TIMEOUT_JSON="$OUT_DIR/show-after-timeout.json"
 END_AFTER_TIMEOUT_JSON="$OUT_DIR/end-after-timeout.json"
+ABILITY_CATALOG_JSON="$OUT_DIR/ability-catalog.json"
 SESSION_ID="rd-session-timeout-e2e-$$"
 
 die() {
@@ -468,6 +470,7 @@ if not isinstance(token, str) or not token:
 print(token)
 PY
 )"
+SESSION_CAUSAL_CONTEXT_JSON="$(remoteapp_session_approval_causal_context_json "$CREATE_SESSION_JSON")"
 END_ARGS="$(python3 - "$SESSION_ID" "$SESSION_TOKEN" <<'PY'
 import json
 import sys
@@ -484,10 +487,12 @@ print(secrets.token_hex(16))
 PY
 )"
 END_RAW_JSON="$OUT_DIR/end-after-timeout-raw.txt"
-run_easynet ability invoke remote_desktop.end_session \
+run_easynet ability list --format json >"$ABILITY_CATALOG_JSON"
+END_SESSION_ABILITY_URA="$(remoteapp_resolve_rpc_ability_ura "$ABILITY_CATALOG_JSON" remote_desktop.end_session)"
+run_easynet ability invoke "$END_SESSION_ABILITY_URA" \
   --subject "$SELECTED_RESOURCE_URA" \
   --nonce-hex "$END_NONCE_HEX" \
-  --causal-root \
+  --causal-context-json "$SESSION_CAUSAL_CONTEXT_JSON" \
   --args "$END_ARGS" >"$END_RAW_JSON"
 json_first_value_to_file "$END_RAW_JSON" "$END_AFTER_TIMEOUT_JSON"
 

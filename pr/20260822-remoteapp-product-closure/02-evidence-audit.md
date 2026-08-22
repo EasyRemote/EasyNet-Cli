@@ -489,6 +489,19 @@ Current frontend lifecycle evidence:
   This proves daemon/session lease refresh survival; browser/WebRTC rebind,
   long-outage reconnect, crash/restart recovery, and cross-device resume remain
   missing.
+- Latest bounded local lifecycle live evidence on 2026-08-23 passed for both
+  window and application targets using catalog-resolved full Ability URAs and
+  the session approval receipt as scalar causal context:
+  `target/e2e/host-remoteapp-session-timeout/20260823-live-window-causal-222646-11519/report.md`,
+  `target/e2e/host-remoteapp-session-cancel/20260823-live-window-causal-222700-12564/report.md`,
+  `target/e2e/host-remoteapp-session-resume/20260823-live-window-stable-222830-19233/report.md`,
+  `target/e2e/host-remoteapp-session-timeout/20260823-live-application-causal-222846-20408/report.md`,
+  `target/e2e/host-remoteapp-session-cancel/20260823-live-application-causal-222859-21255/report.md`,
+  and
+  `target/e2e/host-remoteapp-session-resume/20260823-live-application-stable-222859-21261/report.md`.
+  This is local daemon lifecycle evidence only; permission revoke,
+  long-outage reconnect, browser/WebRTC rebind, crash/restart recovery,
+  cross-device transport, and cross-platform OS behavior remain open.
 - `tools/scripts/remoteapp-crash-restart-recovery-e2e.sh` now provides the
   crash/restart recovery evidence verifier. It accepts evidence from real
   daemon/plugin recovery runners and requires daemon restart of an active
