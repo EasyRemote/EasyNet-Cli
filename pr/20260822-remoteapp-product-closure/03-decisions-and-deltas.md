@@ -1059,3 +1059,47 @@ Product effect:
   injection artifact.
 - This still does not prove product completion; live host input artifacts remain
   required.
+
+## 2026-08-23 — Media adaptation needs live audio/video data-plane evidence
+
+Decision:
+
+- Existing H.264/WebRTC implementation, frontend media stats, ABI v8 raw stream
+  packaging, and synthetic media carrier tests are necessary but insufficient
+  for RemoteApp product readiness.
+- Product evidence must prove the observed audio/video data plane: negotiated
+  video codec, payload content type, transport, FPS, bitrate, host audio,
+  bounded queue/backpressure behavior, stale-frame drop policy, adaptation
+  under degraded network, rendered media after adaptation, and deterministic
+  terminal state.
+
+Implementation delta:
+
+- Added `tools/scripts/remoteapp-media-adaptation-e2e.sh`.
+- The verifier accepts `--evidence-json` or `--runner-cmd` only in explicit
+  `--run` mode and emits bounded JSON/Markdown reports.
+- Evidence must state `proof_mode=real_media_adaptation_matrix`,
+  `component_mock=false`, `real_backend_runtime=true`, and
+  `product_complete_claim=false`.
+- Required scenarios are `baseline`, `degraded_network`, and `backpressure`.
+- Each scenario must bind public `remote_desktop.create_session`,
+  `remote_desktop.attach`, `remote_desktop.watch_events`, and
+  `remote_desktop.end_session` to the selected Resource URA and session id.
+- Video evidence must include negotiated codec, payload content type,
+  transport, encoded/rendered frame counts, duration, requested/effective/
+  measured FPS, target/observed bitrate, keyframe interval, and bounded frame
+  latency.
+- Audio evidence must pass with negotiated codec, sample rate, channels, and
+  rendered packets or samples; `host_audio_not_implemented` is explicitly not
+  accepted as product media evidence.
+- Degraded-network evidence must include bitrate downshift plus FPS downshift
+  or frame drop and rendered frames after adaptation.
+- Backpressure evidence must include backpressure detection and positive frame
+  drops while queue depth remains bounded.
+
+Product effect:
+
+- The repository now has a precise contract for the missing real audio/video
+  media artifact.
+- This still does not prove product completion; live media artifacts remain
+  required.

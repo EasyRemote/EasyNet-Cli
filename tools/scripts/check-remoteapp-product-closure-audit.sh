@@ -9,6 +9,7 @@ PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
+MEDIA_ADAPTATION="$ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
 FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -48,6 +49,7 @@ reject() {
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
 [[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
 [[ -f "$INPUT_INJECTION" ]] || fail "missing RemoteApp input injection verifier"
+[[ -f "$MEDIA_ADAPTATION" ]] || fail "missing RemoteApp media adaptation evidence verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
 [[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
@@ -156,6 +158,8 @@ require 'remoteapp-input-injection-e2e\.sh' "$AUDIT" \
   'audit must record the input injection evidence verifier'
 require 'Audio/video codec, frame rate, bitrate adaptation' "$AUDIT" \
   'audit must cover media codec/adaptation'
+require 'remoteapp-media-adaptation-e2e\.sh' "$AUDIT" \
+  'audit must record the media adaptation evidence verifier'
 require 'Multi-window/multi-application independent tracking' "$AUDIT" \
   'audit must cover multi-window/application tracking as execution effect'
 require 'Disconnect/reconnect, session resume, consent revoke, cancel, timeout' "$AUDIT" \
@@ -223,6 +227,10 @@ require 'Real input injection E2E for pointer/keyboard using' "$PLAN" \
   'plan evidence audit must list missing live input injection evidence'
 require 'remoteapp-input-injection-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the input injection verifier'
+require 'Audio/video media adaptation E2E' "$PLAN" \
+  'plan evidence audit must list missing live audio/video media evidence'
+require 'remoteapp-media-adaptation-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the media adaptation verifier'
 require 'Frontend full lifecycle E2E' "$PLAN" \
   'plan evidence audit must list frontend full lifecycle E2E as missing'
 require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
@@ -312,6 +320,56 @@ require 'terminal_receipt' "$INPUT_INJECTION" \
   'input injection verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$INPUT_INJECTION" \
   'input injection verifier must reject product completion claims'
+require 'real_media_adaptation_matrix' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require real media adaptation proof mode'
+require 'component_mock.*False|component_mock.*false' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must reject component mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require real backend/runtime evidence'
+require 'baseline' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require baseline scenario evidence'
+require 'degraded_network' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require degraded-network evidence'
+require 'backpressure' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require backpressure evidence'
+require 'codec_negotiated' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect codec negotiation'
+require 'payload_content_type' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must preserve payload content type'
+require 'requested_fps' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect requested FPS'
+require 'effective_fps' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect effective FPS'
+require 'measured_fps' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect measured FPS'
+require 'target_bitrate_kbps' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect target bitrate'
+require 'observed_bitrate_kbps' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect observed bitrate'
+require 'bitrate_downshift' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require bitrate downshift evidence'
+require 'backpressure_detected' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require backpressure detection evidence'
+require 'frames_dropped' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require frame drop evidence'
+require 'audio.status must be passed' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require live host audio evidence'
+require 'host audio unsupported state is not product media evidence' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must reject host-audio unsupported evidence'
+require 'queue.observed_max_depth must not exceed max_depth' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must reject unbounded queue evidence'
+require 'remote_desktop\.create_session' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect create_session evidence'
+require 'remote_desktop\.attach' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect attach evidence'
+require 'remote_desktop\.watch_events' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect watch_events evidence'
+require 'remote_desktop\.end_session' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect end_session evidence'
+require 'terminal_receipt' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect terminal receipt evidence'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must reject product completion claims'
 require 'real_network_fallback_matrix' "$NETWORK_FALLBACK" \
   'network fallback verifier must require real network fallback proof mode'
 require 'component_mock.*False|component_mock.*false' "$NETWORK_FALLBACK" \

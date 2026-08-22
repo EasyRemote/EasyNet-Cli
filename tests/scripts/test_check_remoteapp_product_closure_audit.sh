@@ -22,6 +22,7 @@ cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
@@ -117,6 +118,42 @@ fi
 grep -q "input injection verifier must reject high latency" /tmp/check-remoteapp-product-closure-input-latency.out || \
   fail "expected input injection latency-bound failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#real_media_adaptation_matrix#source_only_media_matrix#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-proof-mode.out 2>&1; then
+  fail "checker accepted media adaptation verifier without real media proof mode"
+fi
+grep -q "media adaptation verifier must require real media adaptation proof mode" /tmp/check-remoteapp-product-closure-media-proof-mode.out || \
+  fail "expected media adaptation proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#bitrate_downshift#bitrate_hint#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-bitrate.out 2>&1; then
+  fail "checker accepted media adaptation verifier without bitrate downshift evidence"
+fi
+grep -q "media adaptation verifier must require bitrate downshift evidence" /tmp/check-remoteapp-product-closure-media-bitrate.out || \
+  fail "expected media adaptation bitrate-downshift failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#audio.status must be passed#audio.status may be unsupported#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-audio.out 2>&1; then
+  fail "checker accepted media adaptation verifier without host audio pass requirement"
+fi
+grep -q "media adaptation verifier must require live host audio evidence" /tmp/check-remoteapp-product-closure-media-audio.out || \
+  fail "expected media adaptation host-audio failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#queue.observed_max_depth must not exceed max_depth#queue may grow beyond max_depth#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-queue.out 2>&1; then
+  fail "checker accepted media adaptation verifier without bounded queue evidence"
+fi
+grep -q "media adaptation verifier must reject unbounded queue evidence" /tmp/check-remoteapp-product-closure-media-queue.out || \
+  fail "expected media adaptation bounded-queue failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 
 perl -0pi -e 's#real_network_fallback_matrix#route_model_source_check#g' \
   "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"

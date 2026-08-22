@@ -96,17 +96,27 @@
         "frontend session details surface host_audio_not_implemented from daemon audio readiness projection",
         "frontend session details surface media bitrate, FPS, drops, and backpressure from daemon/browser media stats",
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",
-        "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract"
+        "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract",
+        "remoteapp-media-adaptation-e2e.sh verifier for real audio/video codec, FPS, bitrate, adaptation, drop, and backpressure artifacts"
       ],
       "required_evidence_before_product_complete": [
-        "end-to-end codec negotiation reports",
+        "live remoteapp-media-adaptation-e2e.sh artifact",
+        "end-to-end video codec negotiation report",
+        "payload content type and transport report",
         "host audio path report",
+        "requested/effective/measured FPS report",
+        "target and observed bitrate report",
         "frame-rate/bitrate soak under load",
-        "degraded network/drop policy E2E"
+        "baseline/degraded-network/backpressure scenarios",
+        "bounded queue depth and explicit stale-frame drop policy",
+        "degraded network adaptation/drop policy E2E",
+        "rendered media after adaptation",
+        "visible terminal receipt"
       ],
       "non_claims": [
         "explicit host audio unsupported state does not implement audio capture",
-        "synthetic media carrier does not prove host audio/video product readiness"
+        "synthetic media carrier does not prove host audio/video product readiness",
+        "the media adaptation verifier self-test does not prove live media product behavior"
       ]
     },
     {

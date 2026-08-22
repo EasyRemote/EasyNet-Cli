@@ -237,6 +237,17 @@ Current frontend lifecycle evidence:
   `client_sequence` and `client_sent_at_ms`, bounded host-applied latency,
   observed OS pointer/key effects, and visible terminal receipts. Self-test
   validates only the contract; a live host artifact remains required.
+- `tools/scripts/remoteapp-media-adaptation-e2e.sh` now provides the media
+  adaptation evidence verifier. It accepts evidence from real media runners and
+  requires baseline, degraded-network, and backpressure scenarios with
+  negotiated video codec, payload content type, transport,
+  requested/effective/measured FPS, target and observed bitrate, keyframe
+  cadence, bounded frame latency, real host audio, bounded queue depth,
+  explicit stale-frame drop policy, bitrate/FPS adaptation or frame-drop
+  evidence under impairment, rendered media after adaptation, public RemoteApp
+  session abilities, selected Resource URA subject binding, and visible
+  terminal receipts. Self-test validates only the contract; a live media
+  artifact remains required.
 - The RemoteApp share picker now exposes a non-prompting `Check permissions`
   action before `create_session`. It invokes `remote_desktop.permission_status`
   without a target `subjectURA` and displays Screen Recording plus
@@ -392,7 +403,11 @@ Missing or insufficient product evidence:
   missing or stale pointer `target_geometry_revision` before WebRTC
   data-channel send, while daemon stale-revision rejection remains the
   authoritative execution boundary.
-- Audio path and codec/adaptation soak reports.
+- Audio/video media adaptation E2E using
+  `remoteapp-media-adaptation-e2e.sh` with a live artifact proving negotiated
+  codec, host audio, FPS, bitrate, bounded queues, backpressure, drop policy,
+  adaptation under degraded network, rendered media after adaptation, and
+  terminal receipts.
   Current source/product-path progress: frontend protocol projection now parses
   daemon `audio` and `production_readiness.audio_*` fields, and session details
   show `audio blocked · host_audio_not_implemented`. This is product
