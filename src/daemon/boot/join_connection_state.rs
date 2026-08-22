@@ -387,6 +387,23 @@ impl JoinConnectionSnapshot {
             observed_at_unix_ms: Utc::now().timestamp_millis(),
         }
     }
+
+    fn hydrate_from_credentials(mut self, creds: &Credentials) -> Self {
+        if self.realm != creds.realm || self.node_id != creds.node_id {
+            return self;
+        }
+        if let Some(hub_endpoint) = self.hub_endpoint.as_deref() {
+            if hub_endpoint != creds.hub_endpoint {
+                return self;
+            }
+        } else {
+            self.hub_endpoint = Some(creds.hub_endpoint.clone());
+        }
+        if self.hub_api_endpoint.is_none() {
+            self.hub_api_endpoint = Some(creds.api_base());
+        }
+        self
+    }
 }
 
 impl fmt::Display for JoinConnectionSnapshot {
@@ -429,7 +446,10 @@ pub fn record_snapshot(snapshot: JoinConnectionSnapshot) {
 
 pub fn latest_snapshot() -> JoinConnectionSnapshot {
     if let Ok(snapshot) = load_snapshot() {
-        return snapshot;
+        return match config::load_credentials_optional() {
+            Ok(Some(creds)) => snapshot.hydrate_from_credentials(&creds),
+            _ => snapshot,
+        };
     }
     match config::load_credentials() {
         Ok(creds) => JoinConnectionSnapshot::from_credentials(
@@ -599,6 +619,89 @@ mod tests {
             projected.hub_api_endpoint.as_deref(),
             Some("http://127.0.0.1:8080")
         );
+    }
+
+    #[test]
+    fn latest_snapshot_hydrates_missing_hub_api_endpoint_from_current_credentials() {
+        let _home = HomeGuard::new();
+        config::save_credentials(&creds()).expect("save credentials");
+        let legacy = JoinConnectionSnapshot::failed_from_parts(JoinFailureParts {
+            failure_code: JoinFailureCode::StartFailedCredentialVerify,
+            transition: JoinTransition::VerifyCredential,
+            realm: "localhost".to_string(),
+            node_id: "node-1".to_string(),
+            hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
+            message: "Hub credential verification is unavailable".to_string(),
+            retryable: true,
+            source: "test.legacy".to_string(),
+        });
+        assert_eq!(legacy.hub_api_endpoint, None);
+        save_snapshot(&legacy).expect("save legacy snapshot");
+
+        let hydrated = latest_snapshot();
+
+        assert_eq!(hydrated.state, "START_FAILED_CREDENTIAL_VERIFY");
+        assert_eq!(hydrated.state_code, "F520");
+        assert_eq!(
+            hydrated.hub_api_endpoint.as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
+        assert_eq!(
+            hydrated
+                .failure
+                .as_ref()
+                .map(|failure| failure.stage.as_str()),
+            Some("T06_VERIFY_CREDENTIAL")
+        );
+        assert_eq!(hydrated.source, "test.legacy");
+        assert_eq!(hydrated.observed_at_unix_ms, legacy.observed_at_unix_ms);
+    }
+
+    #[test]
+    fn latest_snapshot_does_not_hydrate_different_device_context() {
+        let _home = HomeGuard::new();
+        config::save_credentials(&creds()).expect("save credentials");
+        let legacy = JoinConnectionSnapshot::failed_from_parts(JoinFailureParts {
+            failure_code: JoinFailureCode::StartFailedCredentialVerify,
+            transition: JoinTransition::VerifyCredential,
+            realm: "localhost".to_string(),
+            node_id: "node-2".to_string(),
+            hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
+            message: "Hub credential verification is unavailable".to_string(),
+            retryable: true,
+            source: "test.legacy".to_string(),
+        });
+        save_snapshot(&legacy).expect("save legacy snapshot");
+
+        let loaded = latest_snapshot();
+
+        assert_eq!(loaded.node_id, "node-2");
+        assert_eq!(loaded.hub_api_endpoint, None);
+    }
+
+    #[test]
+    fn latest_snapshot_does_not_hydrate_different_hub_endpoint_context() {
+        let _home = HomeGuard::new();
+        config::save_credentials(&creds()).expect("save credentials");
+        let legacy = JoinConnectionSnapshot::failed_from_parts(JoinFailureParts {
+            failure_code: JoinFailureCode::StartFailedCredentialVerify,
+            transition: JoinTransition::VerifyCredential,
+            realm: "localhost".to_string(),
+            node_id: "node-1".to_string(),
+            hub_endpoint: Some("https://other-hub.example:50443".to_string()),
+            message: "Hub credential verification is unavailable".to_string(),
+            retryable: true,
+            source: "test.legacy".to_string(),
+        });
+        save_snapshot(&legacy).expect("save legacy snapshot");
+
+        let loaded = latest_snapshot();
+
+        assert_eq!(
+            loaded.hub_endpoint.as_deref(),
+            Some("https://other-hub.example:50443")
+        );
+        assert_eq!(loaded.hub_api_endpoint, None);
     }
 
     #[test]

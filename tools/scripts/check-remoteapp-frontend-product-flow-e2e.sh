@@ -152,6 +152,8 @@ require 'details\["preflight_error"\]' "$HUB_API_PREFLIGHT" \
   'Hub API readiness preflight must record runtime-status preflight errors in evidence'
 require 'Docker daemon is not reachable' "$HUB_API_PREFLIGHT" \
   'Hub API readiness preflight must classify Docker-daemon unreachability explicitly'
+require 'write_report "failed" "Hub API health is not reachable"' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must write a standard report for failed health probes'
 require 'does not start Docker' "$HUB_API_PREFLIGHT" \
   'Hub API readiness preflight must stay read-only and never start Docker implicitly'
 

@@ -98,6 +98,15 @@ Current frontend lifecycle evidence:
   credential-verification diagnostics into the product-flow report. No
   frontend, host capture, media, or input product evidence ran after that
   upstream gate failed.
+- 2026-08-23 hydrated runtime-status follow-up:
+  `target/e2e/hub-api-readiness/20260823-hydrated-health-report-21626/report.md`
+  and
+  `target/e2e/frontend-remoteapp-product-flow/20260823-hydrated-health-report-21627/report.md`
+  resolve `hub_api_endpoint=http://localhost:8080` from current credentials and
+  then fail on the real Hub API health probe:
+  `http://localhost:8080/api/v1/health` returns connection refused. Docker is
+  reachable, but product-flow still stops before frontend, host capture, media,
+  or input evidence.
 - 2026-08-22 runtime diagnosis found two upstream product-readiness failures
   before RemoteApp evidence could be trusted:
   - Docker was initially unavailable, then recovered after Docker Desktop

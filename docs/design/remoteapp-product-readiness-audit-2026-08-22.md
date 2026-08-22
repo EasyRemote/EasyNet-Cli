@@ -195,6 +195,15 @@ failed at the first `hub-api-readiness-preflight` step and propagated the same
 credential-verification diagnostics into the product-flow report. No frontend,
 host capture, media, or input product evidence was executed after that failed
 upstream gate.
+After read-time runtime-status credential hydration, the next local attempts,
+`target/e2e/hub-api-readiness/20260823-hydrated-health-report-21626/report.md`
+and
+`target/e2e/frontend-remoteapp-product-flow/20260823-hydrated-health-report-21627/report.md`,
+resolved `hub_api_endpoint=http://localhost:8080` and failed on the actual
+health probe: `http://localhost:8080/api/v1/health` returned
+`connection refused`. Docker was reachable in that preflight. Product-flow still stopped at
+the first upstream gate, so no frontend, host capture, media, or input evidence
+ran.
 The cross-device smoke entrypoint composes the existing two-node EasyRemote CLI
 E2E and synthetic media/bidi Docker E2E. Its evidence scope is intentionally
 narrow: governed Hub routing, cross-device ability visibility/invocation, and

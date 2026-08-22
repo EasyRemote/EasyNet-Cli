@@ -124,6 +124,7 @@ if [[ "$MODE" == "self-test" ]]; then
   grep -q 'hub_api_endpoint' "$0"
   grep -q 'connection_failure' "$0"
   grep -q '/api/v1/health' "$0"
+  grep -q 'Hub API health is not reachable' "$0"
   grep -q 'Docker daemon is not reachable' "$0"
   grep -q 'does not start Docker' "$0"
   echo "hub-api-readiness-preflight self-test ok"
@@ -241,7 +242,7 @@ if [[ "$docker_status" != "reachable" ]]; then
   exit 1
 fi
 
-python3 - "$DETAILS_JSON" <<'PY'
+if python3 - "$DETAILS_JSON" <<'PY'
 import json
 import pathlib
 import sys
@@ -279,6 +280,10 @@ if health["status"] != "reachable":
     raise SystemExit(1)
 print(f"Hub API health reachable: {url}")
 PY
-
-write_report "passed" "Hub API health reachable"
-echo "[hub-api-readiness-preflight] PASS: $OUT_DIR/report.md"
+then
+  write_report "passed" "Hub API health reachable"
+  echo "[hub-api-readiness-preflight] PASS: $OUT_DIR/report.md"
+else
+  write_report "failed" "Hub API health is not reachable"
+  exit 1
+fi

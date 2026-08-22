@@ -159,6 +159,18 @@ mv "$SB/tools/scripts/hub-api-readiness-preflight.sh.good" \
 
 cp "$SB/tools/scripts/hub-api-readiness-preflight.sh" \
   "$SB/tools/scripts/hub-api-readiness-preflight.sh.good"
+perl -0pi -e 's/write_report "failed" "Hub API health is not reachable"/echo "Hub API health is not reachable"/g' \
+  "$SB/tools/scripts/hub-api-readiness-preflight.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Hub API preflight without standard report for failed health probes"
+fi
+mv "$SB/tools/scripts/hub-api-readiness-preflight.sh.good" \
+  "$SB/tools/scripts/hub-api-readiness-preflight.sh"
+
+cp "$SB/tools/scripts/hub-api-readiness-preflight.sh" \
+  "$SB/tools/scripts/hub-api-readiness-preflight.sh.good"
 perl -0pi -e 's/connection_failure/connection_failure_hidden/g' \
   "$SB/tools/scripts/hub-api-readiness-preflight.sh"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \

@@ -224,6 +224,12 @@ require '20260823-rich-failure-check-70909' "$AUDIT" \
   'audit must record the latest Hub API readiness diagnostic artifact'
 require '20260823-live-preflight-82429' "$AUDIT" \
   'audit must record the latest full product-flow preflight failure artifact'
+require '20260823-hydrated-health-report-21626' "$AUDIT" \
+  'audit must record the hydrated Hub API readiness health-failure artifact'
+require '20260823-hydrated-health-report-21627' "$AUDIT" \
+  'audit must record the hydrated full product-flow health-failure artifact'
+require 'connection refused' "$AUDIT" \
+  'audit must preserve the current Hub API health connection-refused blocker'
 require 'START_FAILED_CREDENTIAL_VERIFY' "$AUDIT" \
   'audit must preserve the current credential-verification blocker'
 require 'T06_VERIFY_CREDENTIAL' "$AUDIT" \
@@ -319,6 +325,12 @@ require '20260823-rich-failure-check-70909' "$PLAN" \
   'plan evidence audit must record the latest Hub API readiness diagnostic artifact'
 require '20260823-live-preflight-82429' "$PLAN" \
   'plan evidence audit must record the latest full product-flow preflight failure artifact'
+require '20260823-hydrated-health-report-21626' "$PLAN" \
+  'plan evidence audit must record the hydrated Hub API readiness health-failure artifact'
+require '20260823-hydrated-health-report-21627' "$PLAN" \
+  'plan evidence audit must record the hydrated full product-flow health-failure artifact'
+require 'connection refused' "$PLAN" \
+  'plan evidence audit must preserve the current Hub API health connection-refused blocker'
 require 'START_FAILED_CREDENTIAL_VERIFY' "$PLAN" \
   'plan evidence audit must preserve the current credential-verification blocker'
 require 'hub_api_endpoint=null' "$PLAN" \
