@@ -482,8 +482,12 @@ Missing or insufficient product evidence:
   terminal receipts.
   Current source/product-path progress: frontend protocol projection now parses
   daemon `audio` and `production_readiness.audio_*` fields, and session details
-  show `audio blocked · host_audio_not_implemented`. This is product
-  transparency, not host-audio implementation evidence.
+  show `audio blocked · host_audio_not_implemented`. Device capabilities now
+  expose `media_pipeline_support` with video-only scope, H.264 payload
+  metadata, bounded queue stale-frame drop policy, native adaptation policy,
+  diagnostic stale-frame policy, `host_audio_not_implemented`, and missing
+  media-adaptation E2E as a product blocker. This is product transparency, not
+  host-audio or degraded-network implementation evidence.
 - Multi-window tracking E2E using
   `remoteapp-multi-window-tracking-e2e.sh` with a live artifact proving
   independent concurrent window streams, non-interleaved frames, move/resize

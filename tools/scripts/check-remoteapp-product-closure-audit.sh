@@ -194,6 +194,16 @@ require 'platform_support' "$AUDIT" \
   'audit must record platform support projection semantics'
 require 'input_control_support' "$AUDIT" \
   'audit must record input control support projection semantics'
+require 'media_pipeline_support' "$AUDIT" \
+  'audit must record media pipeline support projection semantics'
+require 'video-only scope' "$AUDIT" \
+  'audit must record that current media pipeline support is video-only'
+require 'missing media-adaptation E2E as a product blocker' "$AUDIT" \
+  'audit must record missing media-adaptation E2E as a product blocker'
+require 'media_pipeline_support' "$MATRIX" \
+  'matrix must record media pipeline support projection evidence'
+require 'media_pipeline_support' "$PLAN" \
+  'plan evidence audit must record media pipeline support projection evidence'
 require 'Linux display is diagnostic-only' "$AUDIT" \
   'audit must record Linux display diagnostic-only support state'
 require 'Windows display/window/application are unsupported' "$AUDIT" \

@@ -153,6 +153,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     let platform_support = platform_support_view(production_ready, &production_backend);
     let input_available = input_injection_available();
     let input_control_support = input_control_support_view(input_available);
+    let media_pipeline_support =
+        media_pipeline_support_view(production_ready, &production_backend, max_fps, &audio);
     json!({
         "capture_backends": capture_backends,
         "media_sdk": sdk_contract_view(),
@@ -227,6 +229,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             },
             "platform_support": platform_support,
             "input_control_support": input_control_support,
+            "media_pipeline_support": media_pipeline_support,
             "capture_target_models": capture_target_models,
             "display_capture_source": display_capture_source,
             "display_capture_api": display_capture_api,
@@ -234,6 +237,66 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             "next_required_backend": MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
             "reason": reason,
         }
+    })
+}
+
+fn media_pipeline_support_view(
+    production_ready: bool,
+    production_backend: &crate::daemon::plugins::remote_desktop::media::RemoteDesktopMediaBackendDescriptor,
+    max_fps: u32,
+    audio: &Value,
+) -> Value {
+    let video_backend = if production_ready {
+        *production_backend
+    } else {
+        XCAP_OPENH264_WEBRTC_BACKEND
+    };
+    let video_status = if production_ready {
+        "production_ready"
+    } else {
+        "diagnostic_only"
+    };
+    let max_bitrate_kbps = if production_ready {
+        NATIVE_MAX_BITRATE_KBPS
+    } else {
+        DEFAULT_VIDEO_STREAM_BITRATE_KBPS
+    };
+    let adaptation_policy = if production_ready {
+        "native_bitrate_adaptation_from_webrtc_stats_and_encoder_pressure"
+    } else {
+        "static_bitrate_with_bounded_stale_frame_drop"
+    };
+
+    json!({
+        "schema_version": 1,
+        "media_scope": "video_only",
+        "product_ready": false,
+        "product_blockers": [
+            AUDIO_UNSUPPORTED_REASON,
+            "remoteapp_media_adaptation_e2e_artifact_missing"
+        ],
+        "video": {
+            "status": video_status,
+            "backend_id": video_backend.backend_id(),
+            "codec": "h264",
+            "payload_content_type": "video/h264",
+            "transport": video_backend.carrier(),
+            "capture_api": video_backend.capture_api(),
+            "encoder": video_backend.encoder(),
+            "transport_ready": video_backend.transport_ready(),
+            "production_ready": production_ready,
+            "max_capture_fps": max_fps,
+            "requested_fps_ceiling": MAX_ATTACH_FPS,
+            "target_bitrate_kbps": DEFAULT_TARGET_BITRATE_KBPS,
+            "max_bitrate_kbps": max_bitrate_kbps,
+            "max_frame_queue_depth": DEFAULT_FRAME_QUEUE_DEPTH,
+            "drop_stale_frames": true,
+            "backpressure_policy": "bounded_queue_drop_stale_frames",
+            "adaptation_policy": adaptation_policy,
+            "runtime_stats_required": true,
+        },
+        "audio": audio,
+        "non_claim": "media pipeline support metadata does not replace live codec/audio/adaptation E2E evidence",
     })
 }
 
@@ -382,6 +445,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn empty_pipeline_metrics() -> Va
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    use crate::daemon::plugins::remote_desktop::constants::{
+        DEFAULT_FRAME_QUEUE_DEPTH, DEFAULT_TARGET_BITRATE_KBPS,
+    };
 
     use super::device_capabilities_view;
 
@@ -575,5 +642,69 @@ mod tests {
         assert!(input_support["non_claim"]
             .as_str()
             .is_some_and(|message| message.contains("live OS input injection E2E")));
+    }
+
+    #[test]
+    fn device_capabilities_project_media_pipeline_support_matrix() {
+        let capabilities = device_capabilities_view();
+        let media_support = &capabilities["metadata"]["media_pipeline_support"];
+
+        assert_eq!(media_support["schema_version"], json!(1));
+        assert_eq!(media_support["media_scope"], json!("video_only"));
+        assert_eq!(media_support["product_ready"], json!(false));
+        assert_eq!(
+            media_support["product_blockers"][0],
+            json!("host_audio_not_implemented")
+        );
+        assert_eq!(
+            media_support["product_blockers"][1],
+            json!("remoteapp_media_adaptation_e2e_artifact_missing")
+        );
+        assert_eq!(media_support["video"]["codec"], json!("h264"));
+        assert_eq!(
+            media_support["video"]["payload_content_type"],
+            json!("video/h264")
+        );
+        assert_eq!(
+            media_support["video"]["target_bitrate_kbps"],
+            json!(DEFAULT_TARGET_BITRATE_KBPS)
+        );
+        assert_eq!(
+            media_support["video"]["max_frame_queue_depth"],
+            json!(DEFAULT_FRAME_QUEUE_DEPTH)
+        );
+        assert_eq!(media_support["video"]["drop_stale_frames"], json!(true));
+        assert_eq!(
+            media_support["video"]["backpressure_policy"],
+            json!("bounded_queue_drop_stale_frames")
+        );
+        if capabilities["production_gate"]["ready"] == json!(true) {
+            assert_eq!(media_support["video"]["status"], json!("production_ready"));
+            assert_eq!(
+                media_support["video"]["backend_id"],
+                json!("plugin.macos.screencapturekit.videotoolbox.webrtc.v1")
+            );
+            assert_eq!(
+                media_support["video"]["adaptation_policy"],
+                json!("native_bitrate_adaptation_from_webrtc_stats_and_encoder_pressure")
+            );
+        } else {
+            assert_eq!(media_support["video"]["status"], json!("diagnostic_only"));
+            assert_eq!(
+                media_support["video"]["backend_id"],
+                json!("builtin.xcap.openh264.webrtc.v1")
+            );
+            assert_eq!(
+                media_support["video"]["adaptation_policy"],
+                json!("static_bitrate_with_bounded_stale_frame_drop")
+            );
+        }
+        assert_eq!(
+            media_support["audio"]["blocked_reason"],
+            json!("host_audio_not_implemented")
+        );
+        assert!(media_support["non_claim"]
+            .as_str()
+            .is_some_and(|message| { message.contains("live codec/audio/adaptation E2E") }));
     }
 }

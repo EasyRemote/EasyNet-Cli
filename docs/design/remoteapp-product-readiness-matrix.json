@@ -98,6 +98,7 @@
         "adaptive bitrate helper",
         "queue/drop boundary tests",
         "session/device capability view explicitly reports host_audio_not_implemented",
+        "device capability projection exposes media_pipeline_support with video-only scope, H.264 payload metadata, bounded queue stale-frame drop policy, native adaptation policy, diagnostic stale-frame policy, host_audio_not_implemented, and missing media-adaptation E2E as a product blocker",
         "frontend session details surface host_audio_not_implemented from daemon audio readiness projection",
         "frontend session details surface media bitrate, FPS, drops, and backpressure from daemon/browser media stats",
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",

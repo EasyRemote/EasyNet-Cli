@@ -246,8 +246,29 @@ fn audio_support_view() {
     });
 }
 
+fn media_pipeline_support_view() {
+    json!({
+        "media_pipeline_support": media_pipeline_support,
+        "product_ready": false,
+        "product_blockers": [
+            "host_audio_not_implemented",
+            "remoteapp_media_adaptation_e2e_artifact_missing"
+        ],
+        "video": {
+            "backpressure_policy": "bounded_queue_drop_stale_frames",
+            "adaptation_policy": "native_bitrate_adaptation_from_webrtc_stats_and_encoder_pressure",
+        },
+        "diagnostic": {
+            "adaptation_policy": "static_bitrate_with_bounded_stale_frame_drop",
+        }
+    });
+}
+
 #[test]
 fn device_capabilities_report_host_audio_as_explicitly_unsupported() {}
+
+#[test]
+fn device_capabilities_project_media_pipeline_support_matrix() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/view.rs" <<'RS'
@@ -415,6 +436,37 @@ grep -q "session view tests must pin explicit host-audio unsupported state" /tmp
 
 perl -0pi -e 's/session_view_omits_audio_product_state/session_view_reports_audio_as_explicitly_unsupported_product_state/' \
   "$SB/plugins/remote-desktop/src/view.rs"
+
+perl -0pi -e 's/"product_ready": false/"product_ready": true/' \
+  "$SB/plugins/remote-desktop/src/view_device.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-media-ready.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "misreported media product readiness should exit 1 (got $rc)"
+grep -q "must not report full audio/video product readiness" /tmp/check-remoteapp-performance-boundary-media-ready.out || fail "expected media product readiness failure"
+
+perl -0pi -e 's/"product_ready": true/"product_ready": false/' \
+  "$SB/plugins/remote-desktop/src/view_device.rs"
+perl -0pi -e 's/device_capabilities_project_media_pipeline_support_matrix/device_capabilities_omits_media_pipeline_support_matrix/' \
+  "$SB/plugins/remote-desktop/src/view_device.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-media-test.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing media pipeline support regression should exit 1 (got $rc)"
+grep -q "must pin media pipeline support projection" /tmp/check-remoteapp-performance-boundary-media-test.out || fail "expected media pipeline support regression failure"
+
+perl -0pi -e 's/device_capabilities_omits_media_pipeline_support_matrix/device_capabilities_project_media_pipeline_support_matrix/' \
+  "$SB/plugins/remote-desktop/src/view_device.rs"
 
 perl -0pi -e 's/Reserved\(DirectWebRtcEndpoint\)/Reserved/' \
   "$SB/plugins/remote-desktop/src/handlers/add_ice_candidate.rs"

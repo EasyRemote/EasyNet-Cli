@@ -187,6 +187,22 @@ require '"capability": "host_audio"' "$VIEW_DEVICE" \
   'RemoteApp unsupported capability list must include host_audio'
 require 'device_capabilities_report_host_audio_as_explicitly_unsupported' "$VIEW_DEVICE" \
   'RemoteApp device capability tests must pin explicit host-audio unsupported state'
+require 'media_pipeline_support_view' "$VIEW_DEVICE" \
+  'RemoteApp device view must expose a canonical media pipeline support projection'
+require '"media_pipeline_support": media_pipeline_support' "$VIEW_DEVICE" \
+  'RemoteApp device metadata must include media_pipeline_support'
+require '"product_ready": false' "$VIEW_DEVICE" \
+  'RemoteApp media pipeline support must not report full audio/video product readiness while host audio and live E2E are missing'
+require 'remoteapp_media_adaptation_e2e_artifact_missing' "$VIEW_DEVICE" \
+  'RemoteApp media pipeline support must expose missing live media-adaptation E2E as a product blocker'
+require 'bounded_queue_drop_stale_frames' "$VIEW_DEVICE" \
+  'RemoteApp media pipeline support must publish bounded queue stale-frame drop policy'
+require 'native_bitrate_adaptation_from_webrtc_stats_and_encoder_pressure' "$VIEW_DEVICE" \
+  'RemoteApp media pipeline support must publish native bitrate adaptation policy'
+require 'static_bitrate_with_bounded_stale_frame_drop' "$VIEW_DEVICE" \
+  'RemoteApp media pipeline support must publish diagnostic stale-frame drop policy'
+require 'device_capabilities_project_media_pipeline_support_matrix' "$VIEW_DEVICE" \
+  'RemoteApp device capability tests must pin media pipeline support projection'
 require '"audio": audio\.clone\(\)' "$VIEW" \
   'RemoteApp public session view must expose explicit audio product state'
 require '"media_scope": "video_only"' "$VIEW" \
