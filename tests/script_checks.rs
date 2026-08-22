@@ -274,6 +274,13 @@ fn remoteapp_product_closure_audit_script_holds() {
 }
 
 #[test]
+fn remoteapp_frontend_product_flow_e2e_script_holds() {
+    // Pins the runnable frontend/host product-flow harness entrypoint while
+    // preserving the distinction between harness existence and product proof.
+    run_bash_script("tests/scripts/test_check_remoteapp_frontend_product_flow_e2e.sh");
+}
+
+#[test]
 fn frontend_ability_contract_boundary_script_holds() {
     // Pins every governed ability descriptor to one explicit execution surface
     // and subject-construction owner. Remote desktop abilities must stay on

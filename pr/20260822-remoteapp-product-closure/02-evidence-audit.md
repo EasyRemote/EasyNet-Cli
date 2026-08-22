@@ -18,6 +18,7 @@ Current verified boundary gates:
 - `check-remoteapp-performance-boundary.sh`
 - `check-remoteapp-picker-subject-boundary.sh`
 - `check-remoteapp-session-subject-boundary.sh`
+- `check-remoteapp-frontend-product-flow-e2e.sh`
 
 Current frontend lifecycle evidence:
 
@@ -32,6 +33,12 @@ Current frontend lifecycle evidence:
   transport.
 - `check-remoteapp-frontend-invocation-boundary.sh` now gates both the
   watch_events subscription and the recovery-event consumption contract.
+- `tools/scripts/frontend-remoteapp-product-flow-e2e.sh` now provides the
+  combined frontend/host product-flow harness entrypoint: frontend typecheck,
+  `DeviceMediaAccess` UI flow, host permission-subject preflight, target
+  picker freshness, decoded-frame WebRTC, and view-only input safety. An
+  explicit --run report remains required before treating it as environment
+  evidence; the default skipped report only proves the harness contract exists.
 
 Missing or insufficient product evidence:
 
