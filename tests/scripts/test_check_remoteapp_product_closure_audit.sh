@@ -30,6 +30,7 @@ cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SB/tools/s
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-matrix.json" "$SB/docs/design/remoteapp-product-readiness-matrix.json"
@@ -299,6 +300,42 @@ fi
 grep -q "session resume E2E must prove same-session survival after original lease" /tmp/check-remoteapp-product-closure-session-resume-survival.out || \
   fail "expected session resume survival failure"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+
+perl -0pi -e 's#real_crash_restart_recovery_matrix#source_only_crash_restart_matrix#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-proof-mode.out 2>&1; then
+  fail "checker accepted crash/restart verifier without real recovery proof mode"
+fi
+grep -q "crash/restart recovery verifier must require real recovery proof mode" /tmp/check-remoteapp-product-closure-crash-proof-mode.out || \
+  fail "expected crash/restart proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
+perl -0pi -e 's#replay_guard_recovered must be true#replay_guard_recovered may be false#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-replay-guard.out 2>&1; then
+  fail "checker accepted crash/restart verifier without replay guard recovery"
+fi
+grep -q "crash/restart recovery verifier must require replay guard recovery" /tmp/check-remoteapp-product-closure-crash-replay-guard.out || \
+  fail "expected crash/restart replay-guard failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
+perl -0pi -e 's#must remain stable across restart#may be replaced across restart#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-session-stability.out 2>&1; then
+  fail "checker accepted crash/restart verifier without stable public session requirement"
+fi
+grep -q "crash/restart recovery verifier must reject public session replacement" /tmp/check-remoteapp-product-closure-crash-session-stability.out || \
+  fail "expected crash/restart session-stability failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
+perl -0pi -e 's#terminal receipt id must be replayed#terminal receipt id may be replaced#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-terminal-replay.out 2>&1; then
+  fail "checker accepted crash/restart verifier without terminal receipt replay"
+fi
+grep -q "crash/restart recovery verifier must require original terminal receipt replay" /tmp/check-remoteapp-product-closure-crash-terminal-replay.out || \
+  fail "expected crash/restart terminal-replay failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 
 python3 - "$SB/docs/design/remoteapp-product-readiness-matrix.json" <<'PY'
 import json

@@ -1146,3 +1146,48 @@ Product effect:
   churn and stream-isolation artifact.
 - This still does not prove product completion; live tracking artifacts remain
   required.
+
+## 2026-08-23 — Crash/restart recovery needs live runtime recovery evidence
+
+Decision:
+
+- Timeout, cancel, permission revoke, and lease refresh harnesses do not prove
+  daemon/plugin crash recovery.
+- Product evidence must prove that restart recovery is deterministic through
+  public RemoteApp abilities: the same session or the same terminal receipt is
+  visible after restart, replay/idempotency/lock guards are restored, and stale
+  sockets do not require manual cleanup.
+
+Implementation delta:
+
+- Added `tools/scripts/remoteapp-crash-restart-recovery-e2e.sh`.
+- The verifier accepts `--evidence-json` or `--runner-cmd` only in explicit
+  `--run` mode and emits bounded JSON/Markdown reports.
+- Evidence must state `proof_mode=real_crash_restart_recovery_matrix`,
+  `component_mock=false`, `real_backend_runtime=true`, and
+  `product_complete_claim=false`.
+- Required scenarios are `daemon_restart_active_session`,
+  `plugin_worker_restart`, `terminal_receipt_replay_after_crash`, and
+  `stale_socket_restart_cleanup`.
+- Daemon restart evidence must prove unclean process stop, restart,
+  `SESSION_REHYDRATED`, stable session id, selected Resource URA, descriptor
+  version, target binding epoch, transport epoch, public `show_session`,
+  `watch_events` reattach, media reattach, post-restart rendered frames, and a
+  cleanup terminal receipt.
+- Recovery guards must prove WAL replay, idempotency state recovery, replay
+  guard recovery, lock-owner recovery, no duplicate invocation replay, and
+  increasing restart epoch.
+- Plugin worker restart evidence must prove worker/target-monitor restart,
+  same public session, media source epoch advancement, post-restart frames, and
+  no new consent minting.
+- Terminal-receipt crash evidence must prove original terminal receipt replay,
+  closed `show_session` state, and idempotent repeated `end_session`.
+- Stale socket evidence must prove explicit stale control/invocation socket
+  detection, endpoint readiness after restart, and no manual cleanup.
+
+Product effect:
+
+- The repository now has a precise contract for the missing live runtime
+  crash/restart recovery artifact.
+- This still does not prove product completion; live recovery artifacts remain
+  required.

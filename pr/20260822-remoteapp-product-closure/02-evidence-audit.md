@@ -403,6 +403,18 @@ Current frontend lifecycle evidence:
   This proves daemon/session lease refresh survival; browser/WebRTC rebind,
   long-outage reconnect, crash/restart recovery, and cross-device resume remain
   missing.
+- `tools/scripts/remoteapp-crash-restart-recovery-e2e.sh` now provides the
+  crash/restart recovery evidence verifier. It accepts evidence from real
+  daemon/plugin recovery runners and requires daemon restart of an active
+  session, plugin worker restart, terminal receipt replay after crash during
+  close, and stale control/invocation socket cleanup. Evidence must prove
+  public RemoteApp abilities, selected Resource URA subject binding,
+  same-session `show_session` recovery, watch-events/media reattachment,
+  recovered WAL/idempotency/replay-guard/lock state, no duplicate invocation
+  replay, plugin worker/target-monitor recovery without minting a new public
+  session, original terminal receipt replay, endpoint readiness, and visible
+  terminal receipts. Self-test validates only the contract; a live recovery
+  artifact remains required.
 
 Missing or insufficient product evidence:
 
@@ -430,6 +442,12 @@ Missing or insufficient product evidence:
   geometry revisions, same-display application window-set rebind, target loss
   rebind/failure behavior, multi-display application pass or explicit product
   unsupported state, and terminal receipts.
+- Crash/restart recovery E2E using
+  `remoteapp-crash-restart-recovery-e2e.sh` with a live artifact proving
+  daemon/plugin restart recovery, same-session `show_session`, watch/media
+  reattachment, recovered WAL/idempotency/replay-guard/lock state, original
+  terminal receipt replay, stale socket cleanup, endpoint readiness, and
+  terminal receipts.
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
 - Real direct/STUN/TURN/EasyNet relay reachability matrix using
   `remoteapp-network-fallback-e2e.sh` with a live artifact.

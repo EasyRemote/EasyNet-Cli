@@ -168,17 +168,25 @@
         "frontend watch_events degraded/revoked recovery handling",
         "frontend exposes Retry session for daemon retry_session guidance and allows create_session after retained terminal receipts",
         "frontend preserves non-terminal RemoteApp sessions across device-offline presence drops, validates with remote_desktop.show_session on resume, and rebinds WebRTC without ending the daemon session on failed rebind",
-        "canonical SDK cancel/timeout semantics"
+        "canonical SDK cancel/timeout semantics",
+        "remoteapp-crash-restart-recovery-e2e.sh verifier for real daemon/plugin crash and restart recovery artifacts"
       ],
       "required_evidence_before_product_complete": [
         "long-outage and network transport reconnect handoff E2E",
         "browser/WebRTC rebind E2E after daemon-session lease refresh",
         "live consent revoke termination E2E pass report from a real host permission revoke",
         "canonical Axon cancel/timeout receipt-chain evidence for RemoteApp abilities",
-        "crash/restart recovery E2E"
+        "live remoteapp-crash-restart-recovery-e2e.sh artifact",
+        "same-session public show_session recovery after daemon restart",
+        "watch_events and media reattachment after restart",
+        "recovered WAL/idempotency/replay-guard/lock state",
+        "plugin worker and target monitor restart without minting a new public session",
+        "original terminal receipt replay after crash during close",
+        "explicit stale control/invocation socket cleanup and endpoint readiness"
       ],
       "non_claims": [
-        "taxonomy and unit coverage do not prove recovery product behavior"
+        "taxonomy and unit coverage do not prove recovery product behavior",
+        "the crash/restart recovery verifier self-test does not prove live process recovery"
       ]
     },
     {

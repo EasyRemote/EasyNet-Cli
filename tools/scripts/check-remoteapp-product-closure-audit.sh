@@ -17,6 +17,7 @@ SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 PERMISSION_REVOKE="$ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 SESSION_RESUME="$ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
@@ -58,6 +59,7 @@ reject() {
 [[ -f "$SESSION_CANCEL" ]] || fail "missing RemoteApp session cancel E2E harness"
 [[ -f "$PERMISSION_REVOKE" ]] || fail "missing RemoteApp permission revoke E2E harness"
 [[ -f "$SESSION_RESUME" ]] || fail "missing RemoteApp session resume E2E harness"
+[[ -f "$CRASH_RESTART_RECOVERY" ]] || fail "missing RemoteApp crash/restart recovery evidence verifier"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
@@ -206,6 +208,8 @@ require 'host-remoteapp-session-resume-e2e\.sh' "$AUDIT" \
   'audit must record the host session resume E2E harness'
 require 'lease refresh' "$AUDIT" \
   'audit must describe session resume as lease refresh evidence'
+require 'remoteapp-crash-restart-recovery-e2e\.sh' "$AUDIT" \
+  'audit must record the crash/restart recovery evidence verifier'
 
 require 'Full interactive RemoteApp product: incomplete' "$PLAN" \
   'plan evidence audit must keep the goal open'
@@ -221,6 +225,10 @@ require 'host-remoteapp-session-resume-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the host session resume E2E harness'
 require 'waits past the original lease' "$PLAN" \
   'plan evidence audit must record session resume original-lease survival evidence'
+require 'Crash/restart recovery E2E' "$PLAN" \
+  'plan evidence audit must list missing live crash/restart recovery evidence'
+require 'remoteapp-crash-restart-recovery-e2e\.sh' "$PLAN" \
+  'plan evidence audit must record the crash/restart recovery verifier'
 require 'Cross-platform capture implementation/evidence using' "$PLAN" \
   'plan evidence audit must list missing Windows/Linux evidence'
 require 'remoteapp-cross-platform-capture-e2e\.sh' "$PLAN" \
@@ -536,6 +544,64 @@ require 'show_after_original_lease must prove the refreshed session survived' "$
   'session resume E2E must prove same-session survival after original lease'
 require 'resume_e2e_cleanup' "$SESSION_RESUME" \
   'session resume E2E must clean up with explicit terminal reason'
+require 'real_crash_restart_recovery_matrix' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require real recovery proof mode'
+require 'component_mock.*False|component_mock.*false' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must reject component mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require real backend/runtime evidence'
+require 'daemon_restart_active_session' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require daemon active-session restart scenario'
+require 'plugin_worker_restart' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require plugin worker restart scenario'
+require 'terminal_receipt_replay_after_crash' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require terminal receipt replay scenario'
+require 'stale_socket_restart_cleanup' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require stale socket cleanup scenario'
+require 'PROCESS_STOPPED_UNCLEAN' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect unclean process stop evidence'
+require 'DAEMON_RESTARTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect daemon restart evidence'
+require 'SESSION_REHYDRATED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect session rehydration evidence'
+require 'PLUGIN_WORKER_RESTARTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect plugin worker restart evidence'
+require 'TERMINAL_RECEIPT_REPLAYED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect terminal receipt replay evidence'
+require 'STALE_CONTROL_SOCKET_DETECTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect stale control socket evidence'
+require 'STALE_INVOCATION_SOCKET_DETECTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect stale invocation socket evidence'
+require 'idempotency_state_recovered' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require idempotency recovery evidence'
+require 'replay_guard_recovered must be true' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require replay guard recovery'
+require 'lock_owner_recovered' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require lock owner recovery'
+require 'must remain stable across restart' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must reject public session replacement'
+require 'watch_events_reattached' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require watch_events reattachment'
+require 'media_reattached' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require media reattachment'
+require 'frames_rendered_after_restart must be positive' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require post-restart rendered media'
+require 'terminal receipt id must be replayed' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require original terminal receipt replay'
+require 'manual_cleanup_required.*False|manual_cleanup_required.*false' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must reject manual stale-socket cleanup'
+require 'remote_desktop\.create_session' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect create_session evidence'
+require 'remote_desktop\.show_session' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect show_session evidence'
+require 'remote_desktop\.watch_events' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect watch_events evidence'
+require 'remote_desktop\.end_session' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect end_session evidence'
+require 'terminal_receipt' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must inspect terminal receipt evidence'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must reject product completion claims'
 
 require 'terminal_receipt: Option<Value>' "$SESSION" \
   'session aggregate must store a single terminal receipt projection'
