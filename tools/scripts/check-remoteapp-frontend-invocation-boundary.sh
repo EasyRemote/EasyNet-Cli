@@ -143,6 +143,8 @@ reject_multiline '/remote_desktop\.permission_status(?:(?!\}\)).)*subjectURA:/s'
   'frontend permission_status must not scope host-local permission probes to the selected remote desktop resource'
 require 'remoteDesktopPermissionStatusResult\(result\)' "$STORE" \
   'frontend permission_status must format the daemon structured permission preflight result'
+reject_multiline '/rdCheckPermission:[\s\S]*error:\s*permissionResult\.message/s' "$STORE" \
+  'frontend permission_status preflight must not promote denied readiness to a session-level error'
 require "invokeMediaUnary\\('remote_desktop\\.report_client_state'" "$STORE" \
   'frontend must report browser/client media presentation through remote_desktop.report_client_state'
 require 'subjectURA: currentView\.subjectUra' "$STORE" \
@@ -351,6 +353,8 @@ require 'surfaces RemoteApp input permission results from request_permission' "$
   'frontend store tests must prove request_permission exposes input/accessibility permission results'
 require 'checks RemoteApp host permissions without target-scoped subject' "$STORE_TEST" \
   'frontend store tests must prove permission_status preflight stays host-local'
+require 'expect\(entry\.error\)\.toBeUndefined\(\)' "$STORE_TEST" \
+  'frontend store tests must prove denied permission_status preflight stays in picker state'
 require 'preserves and rebinds remote desktop sessions across device offline resume' "$STORE_TEST" \
   'frontend store tests must prove RemoteApp offline resume preserves and rebinds daemon sessions'
 require 'target_permission_revoked' "$STORE_TEST" \

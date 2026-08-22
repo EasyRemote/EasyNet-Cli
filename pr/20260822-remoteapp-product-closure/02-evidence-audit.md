@@ -217,6 +217,10 @@ Current frontend lifecycle evidence:
   Accessibility/input-injection readiness inside the picker. This closes a
   frontend authorization-preflight seam, while real OS permission and input E2E
   evidence remain required.
+- Denied `permission_status` now remains picker-local: it updates visible
+  preflight status and offers `Request permission`, but does not set
+  `entry.error` or eject the user from the share picker. This preserves the
+  intended picker → preflight → request-permission → consent → create flow.
 - Frontend RemoteApp creation now sends the same input intent through
   `grant_consent.args.input_control`, `create_session.args.mode`, and
   `create_session.args.input_policy`. The default Interactive path requests

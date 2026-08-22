@@ -704,6 +704,7 @@ it('checks RemoteApp host permissions without target-scoped subject', async () =
     args: {},
   })
   expect(entry.webrtcStatus).toContain('Accessibility input permission is not granted')
+  expect(entry.error).toBeUndefined()
 })
 
 it('preserves and rebinds remote desktop sessions across device offline resume', async () => {
@@ -887,6 +888,15 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e 's/checks generic RemoteApp permissions/checks RemoteApp host permissions without target-scoped subject/' \
+  "$FRONTEND_SRC/store/media-channel-store.test.ts"
+
+perl -0pi -e 's/expect\(entry\.error\)\.toBeUndefined\(\)/expect(entry.error).toContain('\''permission'\'')/' \
+  "$FRONTEND_SRC/store/media-channel-store.test.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted tests that treat permission_status as session error" >&2
+  exit 1
+fi
+perl -0pi -e 's/expect\(entry\.error\)\.toContain\('\''permission'\''\)/expect(entry.error).toBeUndefined()/' \
   "$FRONTEND_SRC/store/media-channel-store.test.ts"
 
 perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura === selectedScreenURA\)/screenResources[0]/' \

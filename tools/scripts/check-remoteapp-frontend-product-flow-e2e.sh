@@ -194,6 +194,8 @@ require 'Check permissions' "$FRONTEND_SHARE_PICKER" \
   'frontend share picker must expose a non-prompting RemoteApp permission preflight action'
 require 'remote_desktop\.permission_status' "$FRONTEND_UI_TEST" \
   'frontend UI flow tests must prove permission_status is part of the pre-share authorization flow'
+require 'keeps the remote desktop picker open after denied permission preflight' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove denied permission_status does not eject the user from the picker'
 require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
   'frontend store tests must prove RTCPeerConnection receives session-projected ICE servers'
 require 'turn:turn\.example\.test:3478\?transport=udp' "$FRONTEND_STORE_TEST" \
@@ -269,6 +271,8 @@ require 'Accessibility/input-injection permission' "$AUDIT" \
   'product readiness audit must record input-permission recovery evidence'
 require 'permission_status preflight' "$AUDIT" \
   'product readiness audit must record frontend permission preflight evidence'
+require 'Denied `permission_status` now remains picker-local' "$PLAN" \
+  'product closure plan must record denied permission preflight picker retention'
 require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
   'product readiness audit must keep product status incomplete'
 reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \

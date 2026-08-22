@@ -427,6 +427,31 @@ Product effect:
 - This remains preflight evidence only; successful OS input injection and real
   Browser/Tauri E2E are still required for product completion.
 
+## 2026-08-22 — Denied permission preflight must stay in picker
+
+Decision:
+
+- `permission_status` is an authorization preflight, not a session creation
+  failure.
+- A denied preflight must not set the global RemoteApp entry error because that
+  exits the picker and breaks the user path to `request_permission`.
+
+Implementation delta:
+
+- `rdCheckPermission` now writes visible status but leaves `entry.error`
+  undefined.
+- The share picker displays denied preflight status and an inline
+  `Request permission` action.
+- Component/store tests and product-flow gates prove denied preflight keeps the
+  picker open.
+
+Product effect:
+
+- Users stay in the same picker context after a failed permission preflight and
+  can immediately request the missing host permission.
+- This improves authorization flow correctness only; product completion still
+  requires real OS and cross-device E2E evidence.
+
 ## 2026-08-22 — Frontend must preserve RemoteApp terminal receipts
 
 Decision:

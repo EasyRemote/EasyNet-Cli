@@ -176,6 +176,7 @@
         "frontend action row executes daemon-guided target refresh recovery",
         "frontend action row executes daemon-guided retry_session recovery by ending then creating a session",
         "frontend share picker exposes host-local remote_desktop.permission_status preflight before create_session",
+        "frontend denied permission_status stays in the share picker with Request permission recovery instead of becoming a session-level error",
         "product-flow harness entrypoint"
       ],
       "required_evidence_before_product_complete": [
