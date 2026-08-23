@@ -291,6 +291,35 @@ report = {
     "session_id": get("create_session.session.session_id"),
     "proof_mode": evidence.get("proof_mode"),
     "waited_past_original_lease": get("show_after_original_lease.waited_past_original_lease"),
+    "lifecycle_summary": {
+        "kind": "session_resume",
+        "proof_mode": evidence.get("proof_mode"),
+        "lease_extended": (
+            isinstance(get("create_session.session.lease_expires_at_ms"), int)
+            and isinstance(get("refresh_lease.session.lease_expires_at_ms"), int)
+            and get("refresh_lease.session.lease_expires_at_ms")
+            > get("create_session.session.lease_expires_at_ms")
+        ),
+        "waited_past_original_lease": (
+            get("show_after_original_lease.waited_past_original_lease") is True
+        ),
+        "survived_original_lease": get("show_after_original_lease.session.state") != "closed",
+        "same_session_after_refresh": (
+            get("refresh_lease.session.session_id")
+            == get("create_session.session.session_id")
+        ),
+        "non_terminal_after_refresh": get("refresh_lease.session.terminal_receipt") is None,
+        "non_terminal_after_original_lease": (
+            get("show_after_original_lease.session.terminal_receipt") is None
+        ),
+        "cleanup_terminal_reason": get("end_after_resume.session.terminal_receipt.reason_code"),
+        "cleanup_terminal_receipt_visible": get("end_after_resume.session.terminal_receipt.terminal") is True,
+        "cleanup_terminal_receipt_session_bound": (
+            get("end_after_resume.session.terminal_receipt.session_id")
+            == get("create_session.session.session_id")
+        ),
+        "selected_from_live_refresh": evidence.get("selected_from_live_refresh") is True,
+    },
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",

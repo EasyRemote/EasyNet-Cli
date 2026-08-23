@@ -248,6 +248,22 @@ report = {
     "lease_ttl_ms": evidence.get("lease_ttl_ms"),
     "timeout_reason": get("show_after_timeout.session.terminal_receipt.reason_code"),
     "idempotent_end": get("end_after_timeout.session.already_ended"),
+    "lifecycle_summary": {
+        "kind": "session_timeout",
+        "terminal_state": get("show_after_timeout.session.state"),
+        "terminal_reason": get("show_after_timeout.session.end_reason"),
+        "terminal_receipt_visible": get("show_after_timeout.session.terminal_receipt.terminal") is True,
+        "terminal_receipt_session_bound": (
+            get("show_after_timeout.session.terminal_receipt.session_id")
+            == get("create_session.session.session_id")
+        ),
+        "idempotent_end": get("end_after_timeout.session.already_ended") is True,
+        "idempotent_end_preserved_receipt": (
+            get("end_after_timeout.session.terminal_receipt")
+            == get("show_after_timeout.session.terminal_receipt")
+        ),
+        "selected_from_live_refresh": evidence.get("selected_from_live_refresh") is True,
+    },
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",

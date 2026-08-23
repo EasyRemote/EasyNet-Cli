@@ -133,6 +133,12 @@ grep -q "self-test accepted missing evidence_json artifact" "$SCRIPT" || \
   fail "completion gate self-test must cover missing evidence_json artifacts"
 grep -q "self-test accepted wrong lifecycle target_kind" "$SCRIPT" || \
   fail "completion gate self-test must cover wrong lifecycle target kinds"
+grep -q "requires_lifecycle_summary" "$SCRIPT" || \
+  fail "completion gate must require lifecycle summary reports"
+grep -q "lifecycle_summary must be an object" "$SCRIPT" || \
+  fail "completion gate must reject lifecycle reports without summaries"
+grep -q "self-test accepted lifecycle report without summary" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing lifecycle summaries"
 grep -q "self-test accepted missing frontend product-flow step" "$SCRIPT" || \
   fail "completion gate self-test must cover missing product-flow steps"
 grep -q "self-test accepted product-flow target_kind other than both" "$SCRIPT" || \

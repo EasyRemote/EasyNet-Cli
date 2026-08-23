@@ -86,6 +86,7 @@ def lifecycle_required(item_prefix, env_prefix, expected_script):
             "expected_target_kind": target_kind,
             "coverage_keys": [],
             "requires_evidence_json": True,
+            "requires_lifecycle_summary": item_prefix,
         }
         for target_kind in lifecycle_targets
     ]
@@ -1053,6 +1054,122 @@ def validate_crash_restart_recovery_scenarios(item_id, check, report):
                 check["errors"].append(message)
                 add_error(item_id, message)
 
+def validate_lifecycle_summary(item_id, check, report, expected_kind):
+    summary = report.get("lifecycle_summary")
+    check["required_lifecycle_summary"] = expected_kind
+    if not isinstance(summary, dict):
+        message = "lifecycle_summary must be an object"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+    check["lifecycle_summary"] = summary
+    if summary.get("kind") != expected_kind:
+        message = f"lifecycle_summary.kind is {summary.get('kind')!r}, expected {expected_kind!r}"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if summary.get("selected_from_live_refresh") is not True:
+        message = "lifecycle_summary.selected_from_live_refresh must be true"
+        check["errors"].append(message)
+        add_error(item_id, message)
+
+    if expected_kind == "session_timeout":
+        expected_reason = "session_expired"
+        if summary.get("terminal_state") != "closed":
+            message = "lifecycle_summary.terminal_state must be closed"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("terminal_reason") != expected_reason:
+            message = f"lifecycle_summary.terminal_reason must be {expected_reason}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        for field in (
+            "terminal_receipt_visible",
+            "terminal_receipt_session_bound",
+            "idempotent_end",
+            "idempotent_end_preserved_receipt",
+        ):
+            if summary.get(field) is not True:
+                message = f"lifecycle_summary.{field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+    if expected_kind == "session_cancel":
+        expected_reason = "user_cancelled"
+        if summary.get("terminal_state") != "closed":
+            message = "lifecycle_summary.terminal_state must be closed"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("terminal_reason") != expected_reason:
+            message = f"lifecycle_summary.terminal_reason must be {expected_reason}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        for field in (
+            "terminal_receipt_visible",
+            "terminal_receipt_session_bound",
+            "show_session_preserved_receipt",
+            "idempotent_cancel",
+            "idempotent_cancel_preserved_receipt",
+        ):
+            if summary.get(field) is not True:
+                message = f"lifecycle_summary.{field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+    if expected_kind == "permission_revoke":
+        if summary.get("proof_mode") != "real_platform_permission_revoke":
+            message = "lifecycle_summary.proof_mode must be real_platform_permission_revoke"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("operator_revoke_required") is not True:
+            message = "lifecycle_summary.operator_revoke_required must be true"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("terminal_state") != "closed":
+            message = "lifecycle_summary.terminal_state must be closed"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("terminal_reason") != "target_permission_revoked":
+            message = "lifecycle_summary.terminal_reason must be target_permission_revoked"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("consent_phase") != "revoked":
+            message = "lifecycle_summary.consent_phase must be revoked"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        for field in ("terminal_receipt_visible", "terminal_receipt_session_bound"):
+            if summary.get(field) is not True:
+                message = f"lifecycle_summary.{field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+        if summary.get("event_order") != "target_permission_revoked_before_media_lost_before_closed":
+            message = "lifecycle_summary.event_order must prove revoke before media loss before close"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+    if expected_kind == "session_resume":
+        if summary.get("proof_mode") != "lease_refresh_resume":
+            message = "lifecycle_summary.proof_mode must be lease_refresh_resume"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        for field in (
+            "lease_extended",
+            "waited_past_original_lease",
+            "survived_original_lease",
+            "same_session_after_refresh",
+            "non_terminal_after_refresh",
+            "non_terminal_after_original_lease",
+            "cleanup_terminal_receipt_visible",
+            "cleanup_terminal_receipt_session_bound",
+        ):
+            if summary.get(field) is not True:
+                message = f"lifecycle_summary.{field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+        if summary.get("cleanup_terminal_reason") != "resume_e2e_cleanup":
+            message = "lifecycle_summary.cleanup_terminal_reason must be resume_e2e_cleanup"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
 for item in required:
     item_id = item["id"]
     env_name = item["env"]
@@ -1141,6 +1258,8 @@ for item in required:
         validate_cross_device_remoteapp_scenarios(item_id, check, report)
     if item.get("requires_crash_restart_recovery_scenarios"):
         validate_crash_restart_recovery_scenarios(item_id, check, report)
+    if item.get("requires_lifecycle_summary"):
+        validate_lifecycle_summary(item_id, check, report, item["requires_lifecycle_summary"])
     if item.get("requires_platforms_passed"):
         platform_entries = report.get("platforms")
         check["required_passed_platforms"] = item["requires_platforms_passed"]
@@ -1584,6 +1703,66 @@ if item_id == "frontend_product_flow":
     ]
 if item_id in lifecycle_target_by_id:
     report["target_kind"] = lifecycle_target_by_id[item_id]
+    lifecycle_kind = item_id.rsplit("_", 1)[0]
+    if lifecycle_kind == "session_timeout":
+        report["selected_resource_ura"] = "easynet:///r/localhost/resource/device.synthetic/window.timeout"
+        report["session_id"] = "rd-product-timeout"
+        report["lifecycle_summary"] = {
+            "kind": lifecycle_kind,
+            "terminal_state": "closed",
+            "terminal_reason": "session_expired",
+            "terminal_receipt_visible": True,
+            "terminal_receipt_session_bound": True,
+            "idempotent_end": True,
+            "idempotent_end_preserved_receipt": True,
+            "selected_from_live_refresh": True,
+        }
+    if lifecycle_kind == "session_cancel":
+        report["selected_resource_ura"] = "easynet:///r/localhost/resource/device.synthetic/window.cancel"
+        report["session_id"] = "rd-product-cancel"
+        report["lifecycle_summary"] = {
+            "kind": lifecycle_kind,
+            "terminal_state": "closed",
+            "terminal_reason": "user_cancelled",
+            "terminal_receipt_visible": True,
+            "terminal_receipt_session_bound": True,
+            "show_session_preserved_receipt": True,
+            "idempotent_cancel": True,
+            "idempotent_cancel_preserved_receipt": True,
+            "selected_from_live_refresh": True,
+        }
+    if lifecycle_kind == "permission_revoke":
+        report["selected_resource_ura"] = "easynet:///r/localhost/resource/device.synthetic/window.revoked"
+        report["session_id"] = "rd-product-revoke"
+        report["lifecycle_summary"] = {
+            "kind": lifecycle_kind,
+            "proof_mode": "real_platform_permission_revoke",
+            "operator_revoke_required": True,
+            "terminal_state": "closed",
+            "terminal_reason": "target_permission_revoked",
+            "consent_phase": "revoked",
+            "terminal_receipt_visible": True,
+            "terminal_receipt_session_bound": True,
+            "event_order": "target_permission_revoked_before_media_lost_before_closed",
+            "selected_from_live_refresh": True,
+        }
+    if lifecycle_kind == "session_resume":
+        report["selected_resource_ura"] = "easynet:///r/localhost/resource/device.synthetic/window.resume"
+        report["session_id"] = "rd-product-resume"
+        report["lifecycle_summary"] = {
+            "kind": lifecycle_kind,
+            "proof_mode": "lease_refresh_resume",
+            "lease_extended": True,
+            "waited_past_original_lease": True,
+            "survived_original_lease": True,
+            "same_session_after_refresh": True,
+            "non_terminal_after_refresh": True,
+            "non_terminal_after_original_lease": True,
+            "cleanup_terminal_reason": "resume_e2e_cleanup",
+            "cleanup_terminal_receipt_visible": True,
+            "cleanup_terminal_receipt_session_bound": True,
+            "selected_from_live_refresh": True,
+        }
 if item_id == "cross_platform_capture":
     report["platforms"] = [
         {
@@ -2036,6 +2215,32 @@ PY
     exit 1
   fi
   write_synthetic_report "$tmp/session_timeout_application.json" session_timeout_application
+
+  python3 - "$tmp/session_cancel_window.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+del report["lifecycle_summary"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-lifecycle-summary" >/dev/null 2>&1; then
+    echo "self-test accepted lifecycle report without summary" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/session_cancel_window.json" session_cancel_window
 
   python3 - "$tmp/frontend_product_flow.json" <<'PY'
 import json
@@ -2703,6 +2908,8 @@ case "$MODE" in
     grep -q 'requires_network_route_scenarios' "$0"
     grep -q 'requires_cross_device_remoteapp_scenarios' "$0"
     grep -q 'requires_crash_restart_recovery_scenarios' "$0"
+    grep -q 'requires_lifecycle_summary' "$0"
+    grep -q 'lifecycle_summary must be an object' "$0"
     grep -q 'media adaptation scenarios summary must be a non-empty list' "$0"
     grep -q 'multi-window tracking scenarios summary must be a non-empty list' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
@@ -2730,6 +2937,7 @@ case "$MODE" in
     grep -q 'self-test accepted wrong report script identity' "$0"
     grep -q 'self-test accepted missing evidence_json artifact' "$0"
     grep -q 'self-test accepted wrong lifecycle target_kind' "$0"
+    grep -q 'self-test accepted lifecycle report without summary' "$0"
     grep -q 'self-test accepted missing frontend product-flow step' "$0"
     grep -q 'self-test accepted product-flow target_kind other than both' "$0"
     grep -q 'self-test accepted missing product-flow step result artifact' "$0"

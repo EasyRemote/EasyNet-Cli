@@ -143,6 +143,15 @@ grep -q "product-completion gate must reject local-provider-only cross-device re
   fail "expected product-completion local-provider-only rejection failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 
+perl -0pi -e 's#requires_lifecycle_summary#requires_lifecycle_detail#g' \
+  "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-lifecycle-summary.out 2>&1; then
+  fail "checker accepted product-completion gate without lifecycle summary requirement"
+fi
+grep -q "product-completion gate must require lifecycle summary evidence" /tmp/check-remoteapp-product-closure-completion-lifecycle-summary.out || \
+  fail "expected product-completion lifecycle summary failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+
 perl -0pi -e 's#real_cross_platform_capture_matrix#source_only_capture_matrix#g' \
   "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-proof-mode.out 2>&1; then

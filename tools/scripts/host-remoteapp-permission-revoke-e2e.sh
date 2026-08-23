@@ -242,6 +242,28 @@ report = {
     "session_id": get("create_session.session.session_id"),
     "terminal_reason": get("show_after_revoke.session.terminal_receipt.reason_code"),
     "proof_mode": evidence.get("proof_mode"),
+    "lifecycle_summary": {
+        "kind": "permission_revoke",
+        "proof_mode": evidence.get("proof_mode"),
+        "operator_revoke_required": evidence.get("operator_revoke_required") is True,
+        "terminal_state": get("show_after_revoke.session.state"),
+        "terminal_reason": get("show_after_revoke.session.end_reason"),
+        "consent_phase": get("show_after_revoke.session.consent_phase"),
+        "terminal_receipt_visible": get("show_after_revoke.session.terminal_receipt.terminal") is True,
+        "terminal_receipt_session_bound": (
+            get("show_after_revoke.session.terminal_receipt.session_id")
+            == get("create_session.session.session_id")
+        ),
+        "event_order": (
+            "target_permission_revoked_before_media_lost_before_closed"
+            if permission_event is not None
+            and media_lost_event is not None
+            and closed_event is not None
+            and permission_event < media_lost_event < closed_event
+            else None
+        ),
+        "selected_from_live_refresh": evidence.get("selected_from_live_refresh") is True,
+    },
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",

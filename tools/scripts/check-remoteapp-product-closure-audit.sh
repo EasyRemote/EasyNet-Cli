@@ -563,6 +563,12 @@ require 'self-test accepted missing evidence_json artifact' "$PRODUCT_COMPLETION
   'product-completion gate self-test must reject missing evidence_json artifacts'
 require 'self-test accepted wrong lifecycle target_kind' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject wrong lifecycle target kinds'
+require 'requires_lifecycle_summary' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require lifecycle summary evidence'
+require 'lifecycle_summary must be an object' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject lifecycle reports without summaries'
+require 'self-test accepted lifecycle report without summary' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing lifecycle summaries'
 require 'self-test accepted missing frontend product-flow step' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject incomplete frontend product-flow reports'
 require 'self-test accepted product-flow target_kind other than both' "$PRODUCT_COMPLETION" \

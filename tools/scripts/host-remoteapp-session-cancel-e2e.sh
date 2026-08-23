@@ -258,6 +258,26 @@ report = {
     "session_id": get("create_session.session.session_id"),
     "cancel_reason": cancel_reason,
     "idempotent_cancel": get("end_cancel_again.session.already_ended"),
+    "lifecycle_summary": {
+        "kind": "session_cancel",
+        "terminal_state": get("end_cancel.session.state"),
+        "terminal_reason": get("end_cancel.session.end_reason"),
+        "terminal_receipt_visible": get("end_cancel.session.terminal_receipt.terminal") is True,
+        "terminal_receipt_session_bound": (
+            get("end_cancel.session.terminal_receipt.session_id")
+            == get("create_session.session.session_id")
+        ),
+        "show_session_preserved_receipt": (
+            get("show_after_cancel.session.terminal_receipt")
+            == get("end_cancel.session.terminal_receipt")
+        ),
+        "idempotent_cancel": get("end_cancel_again.session.already_ended") is True,
+        "idempotent_cancel_preserved_receipt": (
+            get("end_cancel_again.session.terminal_receipt")
+            == get("end_cancel.session.terminal_receipt")
+        ),
+        "selected_from_live_refresh": evidence.get("selected_from_live_refresh") is True,
+    },
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",
