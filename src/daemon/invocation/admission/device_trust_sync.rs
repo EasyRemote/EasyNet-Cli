@@ -85,6 +85,7 @@ pub(crate) enum DeviceTrustSyncStatus {
     HubReturnedNoKeys,
     ResolveFailed(String),
     ImportDidNotTrust,
+    LocalAuthorityNotTrusted,
 }
 
 impl DeviceTrustSyncStatus {
@@ -105,6 +106,10 @@ impl DeviceTrustSyncStatus {
                 "hub-attested key import completed but trust anchor still misses caller"
                     .to_string(),
             ),
+            Self::LocalAuthorityNotTrusted => Some(
+                "same-realm Authority key is absent from or does not match the local trust anchor"
+                    .to_string(),
+            ),
         }
     }
 }
@@ -117,6 +122,12 @@ enum SyncableCaller {
     LocalUser {
         presented_pubkey_b64: Option<String>,
     },
+    /// The current realm Authority is the session peer that forwards the
+    /// invocation. Its key is provisioned in the durable realm trust anchor.
+    /// Resolving it over that same session would wait on its own reply path.
+    LocalAuthority {
+        presented_pubkey_b64: Option<String>,
+    },
     ExternalCaller {
         presented_pubkey_b64: String,
     },
@@ -127,6 +138,7 @@ impl SyncableCaller {
         match self {
             Self::Device { .. } => "device",
             Self::LocalUser { .. } => "user",
+            Self::LocalAuthority { .. } => "authority",
             Self::ExternalCaller { .. } => "external",
         }
     }
@@ -135,7 +147,7 @@ impl SyncableCaller {
         match self {
             Self::Device { .. } => Some(TrustAnchorRole::Device),
             Self::LocalUser { .. } => Some(TrustAnchorRole::User),
-            Self::ExternalCaller { .. } => None,
+            Self::LocalAuthority { .. } | Self::ExternalCaller { .. } => None,
         }
     }
 
@@ -153,6 +165,12 @@ impl SyncableCaller {
                 Some(pk) => format!("user:{caller_ura}:{pk}"),
                 None => format!("user:{caller_ura}:*"),
             },
+            Self::LocalAuthority {
+                presented_pubkey_b64,
+            } => match presented_pubkey_b64 {
+                Some(pk) => format!("authority:{caller_ura}:{pk}"),
+                None => format!("authority:{caller_ura}:*"),
+            },
             Self::ExternalCaller {
                 presented_pubkey_b64,
             } => format!("external-caller:{caller_ura}:{presented_pubkey_b64}"),
@@ -165,6 +183,9 @@ impl SyncableCaller {
                 presented_pubkey_b64,
             } => presented_pubkey_b64.as_deref(),
             Self::LocalUser {
+                presented_pubkey_b64,
+            } => presented_pubkey_b64.as_deref(),
+            Self::LocalAuthority {
                 presented_pubkey_b64,
             } => presented_pubkey_b64.as_deref(),
             Self::ExternalCaller {
@@ -270,6 +291,9 @@ impl DeviceTrustSync {
         };
         if self.anchor_has_caller_key(caller_ura, &role) {
             return DeviceTrustSyncStatus::AlreadyTrusted;
+        }
+        if matches!(role, SyncableCaller::LocalAuthority { .. }) {
+            return DeviceTrustSyncStatus::LocalAuthorityNotTrusted;
         }
         let cache_key = role.cache_key(caller_ura);
 
@@ -388,6 +412,13 @@ impl DeviceTrustSync {
                         .map(str::to_string),
                 }))
             }
+            crate::core::ura::URAKind::Authority if parsed.realm == self.daemon_realm => {
+                Ok(Some(SyncableCaller::LocalAuthority {
+                    presented_pubkey_b64: presented_pubkey_b64
+                        .filter(|pk| !pk.is_empty())
+                        .map(str::to_string),
+                }))
+            }
             crate::core::ura::URAKind::User | crate::core::ura::URAKind::Authority => {
                 let presented_pubkey_b64 = presented_pubkey_b64
                     .map(str::trim)
@@ -422,6 +453,15 @@ impl DeviceTrustSync {
             SyncableCaller::LocalUser {
                 presented_pubkey_b64: None,
             } => !anchor.lookup_user_all(caller_ura).is_empty(),
+            SyncableCaller::LocalAuthority {
+                presented_pubkey_b64: Some(pk),
+            } => anchor
+                .lookup(caller_ura)
+                .map(|entry| entry.public_key_b64 == *pk)
+                .unwrap_or(false),
+            SyncableCaller::LocalAuthority {
+                presented_pubkey_b64: None,
+            } => anchor.lookup(caller_ura).is_some(),
             SyncableCaller::ExternalCaller {
                 presented_pubkey_b64,
             } => self
@@ -1035,6 +1075,77 @@ mod tests {
         let anchor = sync.cell.snapshot();
         assert_eq!(anchor.lookup_user_all(user_ura).len(), 2);
         assert!(anchor.lookup_user_by_pubkey(user_ura, &presented).is_some());
+    }
+
+    #[tokio::test]
+    async fn same_realm_authority_uses_exact_local_anchor_without_session_resolution() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            panic!("same-realm Authority must not resolve over its own session");
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let authority_ura = "easynet:///r/test-realm/authority";
+        let presented = B64.encode(resolver_key_bytes(0x75));
+        let cell = SharedTrustAnchor::new(Arc::new(
+            RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                agent_ura: authority_ura.to_string(),
+                public_key_b64: presented.clone(),
+                role: TrustAnchorRole::Hub,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            }])
+            .expect("same-realm Authority anchor"),
+        ));
+        let sync = DeviceTrustSync::with_source(
+            "test-realm".into(),
+            dir.path().join("realm-trust.toml"),
+            cell,
+            KeySource::Static(resolver),
+            SharedHubAttestedCallerKeys::new(),
+        );
+
+        let status = sync
+            .ensure_caller_key_status(authority_ura, Some(&presented))
+            .await;
+
+        assert_eq!(status, DeviceTrustSyncStatus::AlreadyTrusted);
+    }
+
+    #[tokio::test]
+    async fn same_realm_authority_key_mismatch_fails_closed_without_session_resolution() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            panic!("same-realm Authority mismatch must fail locally");
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let authority_ura = "easynet:///r/test-realm/authority";
+        let anchored = B64.encode(resolver_key_bytes(0x75));
+        let presented = B64.encode(resolver_key_bytes(0x76));
+        let cell = SharedTrustAnchor::new(Arc::new(
+            RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                agent_ura: authority_ura.to_string(),
+                public_key_b64: anchored,
+                role: TrustAnchorRole::Hub,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            }])
+            .expect("same-realm Authority anchor"),
+        ));
+        let sync = DeviceTrustSync::with_source(
+            "test-realm".into(),
+            dir.path().join("realm-trust.toml"),
+            cell,
+            KeySource::Static(resolver),
+            SharedHubAttestedCallerKeys::new(),
+        );
+
+        let status = sync
+            .ensure_caller_key_status(authority_ura, Some(&presented))
+            .await;
+
+        assert_eq!(status, DeviceTrustSyncStatus::LocalAuthorityNotTrusted);
     }
 
     #[tokio::test]
