@@ -830,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_bidi_display_global_target_loss_reports_not_ready() {
+    fn diagnostic_bidi_input_rechecks_session_target_snapshot() {
         let entry = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/device.01/streams/display.interactive"
                 .to_string(),

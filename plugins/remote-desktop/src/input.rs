@@ -518,6 +518,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
 ) {
     let mut accepted_count = 0_u64;
     let mut rejected_count = 0_u64;
+    let mut sequence_gate = InputSequenceGate::default();
     let mut reject_diagnostics = InputRejectCoalescer::default();
     while let Some(event) = data_channel.poll().await {
         match event {
@@ -602,6 +603,21 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 let kind = frame.kind().as_policy_key();
                 let client_sent_at_ms = frame.client_sent_at_ms();
                 let client_sequence = frame.client_sequence();
+                if let Some(reason) = sequence_gate.reject_reason(client_sequence) {
+                    rejected_count = rejected_count.saturating_add(1);
+                    record_input_rejection(
+                        &mut reject_diagnostics,
+                        &sessions,
+                        &session_id,
+                        epoch,
+                        InputRejectSample::new(reason, rejected_count)
+                            .kind(kind)
+                            .action(frame.action())
+                            .client_sent_at_ms(client_sent_at_ms)
+                            .client_sequence(client_sequence),
+                    );
+                    continue;
+                }
                 let Some(effective_input_policy) = current_session_effective_input_policy(
                     &sessions,
                     &session_id,
@@ -670,6 +686,27 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
         }
     }
     flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
+}
+
+#[derive(Debug, Default)]
+struct InputSequenceGate {
+    last_client_sequence: Option<u64>,
+}
+
+impl InputSequenceGate {
+    fn reject_reason(&mut self, client_sequence: Option<u64>) -> Option<&'static str> {
+        let Some(client_sequence) = client_sequence else {
+            return None;
+        };
+        if self
+            .last_client_sequence
+            .is_some_and(|last| client_sequence <= last)
+        {
+            return Some("stale_client_sequence");
+        }
+        self.last_client_sequence = Some(client_sequence);
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1671,6 +1708,27 @@ mod tests {
         assert_eq!(payload["rejected_count"], json!(0));
         assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_123_u64));
         assert_eq!(payload["client_sequence"], json!(7));
+    }
+
+    #[test]
+    fn input_sequence_gate_rejects_replayed_or_out_of_order_frames() {
+        let mut gate = InputSequenceGate::default();
+
+        assert_eq!(gate.reject_reason(Some(10)), None);
+        assert_eq!(gate.reject_reason(Some(11)), None);
+        assert_eq!(gate.reject_reason(Some(11)), Some("stale_client_sequence"));
+        assert_eq!(gate.reject_reason(Some(9)), Some("stale_client_sequence"));
+        assert_eq!(gate.reject_reason(Some(12)), None);
+    }
+
+    #[test]
+    fn input_sequence_gate_preserves_legacy_missing_sequence_compatibility() {
+        let mut gate = InputSequenceGate::default();
+
+        assert_eq!(gate.reject_reason(None), None);
+        assert_eq!(gate.reject_reason(Some(3)), None);
+        assert_eq!(gate.reject_reason(None), None);
+        assert_eq!(gate.reject_reason(Some(3)), Some("stale_client_sequence"));
     }
 
     #[test]

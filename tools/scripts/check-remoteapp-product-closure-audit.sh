@@ -33,6 +33,7 @@ SHOW_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/show_session.rs"
 END_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/end_session.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
+INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
 
 fail() {
   printf 'check-remoteapp-product-closure-audit: %s\n' "$1" >&2
@@ -86,6 +87,7 @@ reject() {
 [[ -f "$END_SESSION_HANDLER" ]] || fail "missing RemoteApp end_session handler"
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
 [[ -f "$TARGET_MONITOR" ]] || fail "missing RemoteApp target monitor"
+[[ -f "$INPUT" ]] || fail "missing RemoteApp input execution plane"
 
 for lifecycle_harness in "$SESSION_TIMEOUT" "$SESSION_CANCEL" "$SESSION_RESUME"; do
   require 'remoteapp-lifecycle-harness-lib\.sh' "$lifecycle_harness" \
@@ -475,6 +477,14 @@ require 'client_sequence' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sequence evidence'
 require 'client_sent_at_ms' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sent_at_ms evidence'
+require 'struct InputSequenceGate' "$INPUT" \
+  'RemoteApp daemon input execution path must have a per-channel client sequence gate'
+require 'sequence_gate\.reject_reason\(client_sequence\)' "$INPUT" \
+  'RemoteApp daemon input data-channel loop must reject stale client sequences before input execution'
+require '"stale_client_sequence"' "$INPUT" \
+  'RemoteApp daemon input sequence gate must expose a stable stale sequence rejection reason'
+require 'input_sequence_gate_rejects_replayed_or_out_of_order_frames' "$INPUT" \
+  'RemoteApp daemon input tests must prove replayed or out-of-order client sequences are rejected'
 require 'latency_ms must be within threshold' "$INPUT_INJECTION" \
   'input injection verifier must reject high latency'
 require 'observed_effect' "$INPUT_INJECTION" \

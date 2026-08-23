@@ -1019,6 +1019,14 @@ require 'validate_client_sequence' "$INPUT" \
   'daemon input frame validation must bound client input sequence telemetry'
 require 'MAX_CLIENT_SEQUENCE' "$INPUT" \
   'daemon input sequence bound must be explicit and centrally named'
+require 'struct InputSequenceGate' "$INPUT" \
+  'daemon input execution path must have a per-channel client sequence gate'
+require 'sequence_gate\.reject_reason\(client_sequence\)' "$INPUT" \
+  'daemon input data-channel loop must reject replayed or out-of-order client input frames before policy execution'
+require '"stale_client_sequence"' "$INPUT" \
+  'daemon input sequence gate must expose a stable stale sequence rejection reason'
+require 'input_sequence_gate_rejects_replayed_or_out_of_order_frames' "$INPUT" \
+  'input tests must prove the daemon rejects replayed or out-of-order client input sequences'
 require 'fn apply_scope\(&mut self, input_scope: InputScope\)' "$INPUT" \
   'input policy must centralize scope-based disablement on the typed effective policy'
 require 'fn reject_reason\(' "$INPUT" \
