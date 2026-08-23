@@ -325,6 +325,24 @@ grep -q "network fallback verifier must inspect selected route-class evidence" /
   fail "expected network fallback selected route-class failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 
+perl -0pi -e 's#route_constraints_applied#route_constraints_described#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-constraints.out 2>&1; then
+  fail "checker accepted network fallback verifier without applied route constraints"
+fi
+grep -q "network fallback verifier must require route constraints to be applied" /tmp/check-remoteapp-product-closure-network-constraints.out || \
+  fail "expected network fallback route-constraints failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
+perl -0pi -e 's#rendered_after_selected_pair#rendered_after_session_start#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-render-order.out 2>&1; then
+  fail "checker accepted network fallback verifier without render-after-selected-pair evidence"
+fi
+grep -q "network fallback verifier must require rendered media after selected pair" /tmp/check-remoteapp-product-closure-network-render-order.out || \
+  fail "expected network fallback render-order failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
 perl -0pi -e 's#selected_candidate_pair.nominated must be true#selected_candidate_pair.nominated may be false#g' \
   "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-nominated-pair.out 2>&1; then

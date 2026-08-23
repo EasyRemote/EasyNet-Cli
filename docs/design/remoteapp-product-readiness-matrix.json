@@ -243,7 +243,8 @@
         "frontend RTCPeerConnection consumes session-projected ICE servers",
         "frontend session details render daemon route state such as host_only with no NAT/relay",
         "native WebRTC media stats project selected candidate-pair local_candidate_type, remote_candidate_type, selected_route_class, and protocol without exposing addresses or credentials",
-        "remoteapp-network-fallback-e2e.sh verifier requires real network fallback artifacts to carry nominated/selected/succeeded candidate-pair evidence with selected_route_class matching direct, STUN/reflexive, and relay route expectations"
+        "remoteapp-network-fallback-e2e.sh verifier requires real network fallback artifacts to carry nominated/selected/succeeded candidate-pair evidence with selected_route_class matching direct, STUN/reflexive, and relay route expectations",
+        "network fallback verifier requires applied network fixture constraints, allowed/blocked route classes, selected-pair observation after constraints, and rendered media after selected-pair observation"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-network-fallback-e2e.sh artifact",
@@ -251,14 +252,18 @@
         "real STUN srflx route report",
         "real TURN relay route report",
         "real EasyNet relay deployment report",
+        "applied network fixture constraints for every route scenario",
+        "allowed and blocked route class evidence for every route scenario",
         "selected/nominated/succeeded WebRTC candidate-pair evidence",
         "selected local and remote candidate id evidence",
-        "rendered media on every route",
+        "selected-pair observation after network constraints on every route",
+        "rendered media after selected-pair observation on every route",
         "redacted credential/reachability evidence",
         "visible terminal receipt on every route"
       ],
       "non_claims": [
         "route type source checks do not prove real NAT/relay reachability",
+        "route class labels without applied network constraints do not prove fallback behavior",
         "the network fallback verifier self-test does not prove live network reachability"
       ]
     },

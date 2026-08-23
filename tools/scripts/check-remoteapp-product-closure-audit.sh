@@ -711,6 +711,20 @@ require 'selected_candidate_pair\.remote_candidate_id must be recorded' "$NETWOR
   'network fallback verifier must require selected remote candidate id evidence'
 require 'selected_route_class' "$NETWORK_FALLBACK" \
   'network fallback verifier must inspect selected route-class evidence'
+require 'network_fixture' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require applied network fixture evidence'
+require 'route_constraints_applied' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require route constraints to be applied'
+require 'allowed_route_classes' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect allowed route classes'
+require 'blocked_route_classes' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect blocked route classes'
+require 'selected_pair_observed_at_ms must be after network constraints' "$NETWORK_FALLBACK" \
+  'network fallback verifier must order selected-pair observation after network constraints'
+require 'rendered_after_selected_pair' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require rendered media after selected pair'
+require 'first_rendered_frame_at_ms must be after selected pair observation' "$NETWORK_FALLBACK" \
+  'network fallback verifier must order rendered media after selected-pair observation'
 require 'local_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs" \
   'native WebRTC stats must project selected local candidate type for network fallback evidence'
 require 'remote_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs" \

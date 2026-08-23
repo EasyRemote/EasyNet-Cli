@@ -47,7 +47,8 @@ Evidence contract:
   source checks:
   direct, stun_srflx, turn_relay, and easynet_relay scenarios, each with
   connected WebRTC candidate-pair evidence, nominated/selected/succeeded ICE
-  pair state, selected route-class evidence, rendered media, public RemoteApp
+  pair state, selected route-class evidence, applied network fixture
+  constraints, rendered media after selected-pair observation, public RemoteApp
   session abilities, selected Resource URA subject binding, session end, and a
   visible terminal receipt.
 
@@ -146,6 +147,24 @@ def expected_selected_route_class(route_kind):
         return "relay"
     return None
 
+def expected_allowed_route_classes(route_kind):
+    if route_kind == "direct":
+        return {"direct"}
+    if route_kind == "stun_srflx":
+        return {"stun_srflx"}
+    if route_kind in {"turn_relay", "easynet_relay"}:
+        return {"relay"}
+    return set()
+
+def expected_blocked_route_classes(route_kind):
+    if route_kind == "direct":
+        return {"relay"}
+    if route_kind == "stun_srflx":
+        return {"direct"}
+    if route_kind in {"turn_relay", "easynet_relay"}:
+        return {"direct", "stun_srflx"}
+    return set()
+
 def sensitive_key_errors(value, path="$"):
     if isinstance(value, dict):
         for key, child in value.items():
@@ -213,6 +232,35 @@ if isinstance(scenarios, list):
         require(is_ura(subject_ura), f"{prefix}: selected_resource_ura must be canonical")
         require(isinstance(session_id, str) and session_id, f"{prefix}: session_id must be recorded")
 
+        network_fixture = scenario.get("network_fixture")
+        require(isinstance(network_fixture, dict),
+                f"{prefix}: network_fixture evidence must be an object")
+        if not isinstance(network_fixture, dict):
+            network_fixture = {}
+        fixture_kind = network_fixture.get("fixture_kind")
+        require(fixture_kind in allowed_runner_kinds,
+                f"{prefix}: network_fixture.fixture_kind must be two_device, network_namespace, or deployment")
+        require(network_fixture.get("route_constraints_applied") is True,
+                f"{prefix}: network_fixture.route_constraints_applied must be true")
+        require(network_fixture.get("expected_route_kind") == route_kind,
+                f"{prefix}: network_fixture.expected_route_kind must match route_kind")
+        allowed_route_classes = {
+            lower(item)
+            for item in network_fixture.get("allowed_route_classes", [])
+            if isinstance(item, str)
+        }
+        blocked_route_classes = {
+            lower(item)
+            for item in network_fixture.get("blocked_route_classes", [])
+            if isinstance(item, str)
+        }
+        require(expected_allowed_route_classes(route_kind).issubset(allowed_route_classes),
+                f"{prefix}: network_fixture.allowed_route_classes must include expected route class")
+        require(expected_blocked_route_classes(route_kind).issubset(blocked_route_classes),
+                f"{prefix}: network_fixture.blocked_route_classes must include forbidden fallback classes")
+        require(int(network_fixture.get("constraints_applied_at_ms", 0)) > 0,
+                f"{prefix}: network_fixture.constraints_applied_at_ms must be positive")
+
         abilities = scenario.get("abilities")
         require(isinstance(abilities, list) and abilities, f"{prefix}: abilities must be non-empty")
         ability_by_name = {}
@@ -268,6 +316,12 @@ if isinstance(scenarios, list):
                 f"{prefix}: candidate pair protocol must be udp or tcp")
         require(float(pair.get("current_round_trip_time_ms", 0)) >= 0,
                 f"{prefix}: candidate pair RTT must be non-negative")
+        require(int(pair.get("selected_pair_observed_at_ms", 0)) > int(network_fixture.get("constraints_applied_at_ms", 0)) > 0,
+                f"{prefix}: selected_pair_observed_at_ms must be after network constraints")
+        require(selected_route_class in allowed_route_classes,
+                f"{prefix}: selected_route_class must be allowed by the network fixture")
+        require(selected_route_class not in blocked_route_classes,
+                f"{prefix}: selected_route_class must not be blocked by the network fixture")
         require(int(webrtc.get("bytes_sent", 0)) > 0 or int(webrtc.get("bytes_received", 0)) > 0,
                 f"{prefix}: WebRTC bytes_sent or bytes_received must be positive")
 
@@ -300,6 +354,10 @@ if isinstance(scenarios, list):
                 f"{prefix}: media.frames_rendered must be positive")
         require(int(media.get("duration_ms", 0)) > 0,
                 f"{prefix}: media.duration_ms must be positive")
+        require(media.get("rendered_after_selected_pair") is True,
+                f"{prefix}: media.rendered_after_selected_pair must be true")
+        require(int(media.get("first_rendered_frame_at_ms", 0)) > int(pair.get("selected_pair_observed_at_ms", 0)),
+                f"{prefix}: media.first_rendered_frame_at_ms must be after selected pair observation")
 
         terminal = scenario.get("terminal_receipt")
         require(isinstance(terminal, dict), f"{prefix}: terminal_receipt must be visible")
@@ -318,6 +376,8 @@ if isinstance(scenarios, list):
             "ice_connection_state": webrtc.get("ice_connection_state"),
             "selected_route_class": selected_route_class,
             "candidate_types": sorted(str(item) for item in candidate_types if item),
+            "allowed_route_classes": sorted(allowed_route_classes),
+            "blocked_route_classes": sorted(blocked_route_classes),
             "frames_rendered": media.get("frames_rendered"),
             "session_id": session_id,
         })
@@ -362,17 +422,17 @@ import sys
 
 subject = "easynet:///r/localhost/resource/device.receiver/streams/display.primary"
 routes = [
-    ("direct", "host", "host", "direct", {}),
-    ("stun_srflx", "srflx", "host", "stun_srflx", {}),
-    ("turn_relay", "relay", "host", "relay", {"turn_relay_uri_redacted": True}),
-    ("easynet_relay", "relay", "relay", "relay", {
+    ("direct", "host", "host", "direct", ["direct"], ["relay"], {}),
+    ("stun_srflx", "srflx", "host", "stun_srflx", ["stun_srflx"], ["direct"], {}),
+    ("turn_relay", "relay", "host", "relay", ["relay"], ["direct", "stun_srflx"], {"turn_relay_uri_redacted": True}),
+    ("easynet_relay", "relay", "relay", "relay", ["relay"], ["direct", "stun_srflx"], {
         "route_provider": "easynet_relay",
         "relay_reachability": True,
         "relay_session_id": "relay-self-test-1",
     }),
 ]
 scenarios = []
-for route_kind, local_type, remote_type, selected_route_class, extra in routes:
+for route_kind, local_type, remote_type, selected_route_class, allowed, blocked, extra in routes:
     session_id = f"rd-network-{route_kind}-self-test"
     scenario = {
         "name": f"{route_kind}-self-test",
@@ -383,6 +443,14 @@ for route_kind, local_type, remote_type, selected_route_class, extra in routes:
         "callee_device_ura": "easynet:///r/localhost/device/receiver",
         "selected_resource_ura": subject,
         "session_id": session_id,
+        "network_fixture": {
+            "fixture_kind": "network_namespace",
+            "route_constraints_applied": True,
+            "expected_route_kind": route_kind,
+            "allowed_route_classes": allowed,
+            "blocked_route_classes": blocked,
+            "constraints_applied_at_ms": 1000,
+        },
         "abilities": [
             {"name": "remote_desktop.create_session", "subject_ura": subject},
             {"name": "remote_desktop.attach", "subject_ura": subject, "session_id": session_id},
@@ -404,11 +472,14 @@ for route_kind, local_type, remote_type, selected_route_class, extra in routes:
                 "remote_candidate_id": f"remote-{route_kind}",
                 "protocol": "udp",
                 "current_round_trip_time_ms": 12.5,
+                "selected_pair_observed_at_ms": 1500,
             },
         },
         "media": {
             "frames_rendered": 5,
             "duration_ms": 1000,
+            "rendered_after_selected_pair": True,
+            "first_rendered_frame_at_ms": 1800,
         },
         "terminal_receipt": {
             "terminal": True,
