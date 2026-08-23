@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 use rtc::statistics::report::RTCStatsReportEntry;
 #[cfg(target_os = "macos")]
+use rtc::statistics::stats::ice_candidate::RTCIceCandidateStats;
+#[cfg(target_os = "macos")]
 use rtc::statistics::StatsSelector;
 #[cfg(target_os = "macos")]
 use serde_json::{json, Value};
@@ -219,6 +221,16 @@ pub(in crate::daemon::plugins::remote_desktop) async fn webrtc_stats_snapshot(
         .as_deref()
         .and_then(|id| report.candidate_pairs().find(|pair| pair.stats.id == id))
         .or_else(|| report.candidate_pairs().find(|pair| pair.nominated));
+    let local_candidate = selected_pair.and_then(|pair| {
+        report
+            .get(&pair.local_candidate_id)
+            .and_then(ice_candidate_stats)
+    });
+    let remote_candidate = selected_pair.and_then(|pair| {
+        report
+            .get(&pair.remote_candidate_id)
+            .and_then(ice_candidate_stats)
+    });
     let outbound = report.outbound_rtp_streams().next();
     let remote_inbound = outbound
         .and_then(|out| report.get(&out.remote_id))
@@ -245,6 +257,11 @@ pub(in crate::daemon::plugins::remote_desktop) async fn webrtc_stats_snapshot(
                 "id": pair.stats.id,
                 "local_candidate_id": pair.local_candidate_id,
                 "remote_candidate_id": pair.remote_candidate_id,
+                "local_candidate_type": candidate_type_value(local_candidate),
+                "remote_candidate_type": candidate_type_value(remote_candidate),
+                "protocol": selected_candidate_protocol(local_candidate, remote_candidate),
+                "local_candidate_stats_found": local_candidate.is_some(),
+                "remote_candidate_stats_found": remote_candidate.is_some(),
                 "state": format!("{:?}", pair.state),
                 "nominated": pair.nominated,
                 "packets_sent": pair.packets_sent,
@@ -280,6 +297,34 @@ pub(in crate::daemon::plugins::remote_desktop) async fn webrtc_stats_snapshot(
         }),
         available_outgoing_bitrate_bps,
     )
+}
+
+#[cfg(target_os = "macos")]
+fn ice_candidate_stats(entry: &RTCStatsReportEntry) -> Option<&RTCIceCandidateStats> {
+    match entry {
+        RTCStatsReportEntry::LocalCandidate(stats)
+        | RTCStatsReportEntry::RemoteCandidate(stats) => Some(stats),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn candidate_type_value(candidate: Option<&RTCIceCandidateStats>) -> Option<String> {
+    candidate
+        .map(|stats| stats.candidate_type.to_string())
+        .filter(|candidate_type| candidate_type != "Unspecified")
+}
+
+#[cfg(target_os = "macos")]
+fn selected_candidate_protocol(
+    local_candidate: Option<&RTCIceCandidateStats>,
+    remote_candidate: Option<&RTCIceCandidateStats>,
+) -> Option<String> {
+    [local_candidate, remote_candidate]
+        .into_iter()
+        .flatten()
+        .map(|stats| stats.protocol.trim().to_ascii_lowercase())
+        .find(|protocol| !protocol.is_empty())
 }
 
 #[cfg(target_os = "macos")]
@@ -397,6 +442,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_cmtime(
 mod tests {
     use super::*;
 
+    use rtc::peer_connection::transport::{
+        RTCIceCandidateType, RTCIceServerTransportProtocol, RTCIceTcpCandidateType,
+    };
+    use rtc::statistics::stats::ice_candidate::RTCIceCandidateStats;
+    use rtc::statistics::stats::{RTCStats, RTCStatsType};
+    use std::time::Instant;
+
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
     use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::EncodedAccessUnit;
 
@@ -408,6 +460,34 @@ mod tests {
             encode_submitted_at_ms: pts_ms,
             encoded_at_ms: pts_ms,
             encode_latency_ms: 0,
+        }
+    }
+
+    fn ice_candidate_stat(
+        id: &str,
+        stats_type: RTCStatsType,
+        candidate_type: RTCIceCandidateType,
+        protocol: &str,
+    ) -> RTCIceCandidateStats {
+        RTCIceCandidateStats {
+            stats: RTCStats {
+                timestamp: Instant::now(),
+                typ: stats_type,
+                id: id.to_string(),
+            },
+            transport_id: "transport".to_string(),
+            address: Some("192.0.2.1".to_string()),
+            port: 3478,
+            protocol: protocol.to_string(),
+            candidate_type,
+            priority: 1,
+            url: "turn:secret.example.test".to_string(),
+            relay_protocol: RTCIceServerTransportProtocol::Unspecified,
+            foundation: "foundation".to_string(),
+            related_address: String::new(),
+            related_port: 0,
+            username_fragment: String::new(),
+            tcp_type: RTCIceTcpCandidateType::Unspecified,
         }
     }
 
@@ -425,6 +505,41 @@ mod tests {
         assert_eq!(dropped, 2);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].pts_ms, 3);
+    }
+
+    #[test]
+    fn selected_candidate_pair_route_evidence_uses_typed_candidate_stats() {
+        let local = ice_candidate_stat(
+            "local",
+            RTCStatsType::LocalCandidate,
+            RTCIceCandidateType::Relay,
+            "UDP",
+        );
+        let remote = ice_candidate_stat(
+            "remote",
+            RTCStatsType::RemoteCandidate,
+            RTCIceCandidateType::Srflx,
+            "udp",
+        );
+
+        assert_eq!(
+            candidate_type_value(Some(&local)),
+            Some("relay".to_string())
+        );
+        assert_eq!(
+            candidate_type_value(Some(&remote)),
+            Some("srflx".to_string())
+        );
+        assert_eq!(
+            selected_candidate_protocol(Some(&local), Some(&remote)),
+            Some("udp".to_string())
+        );
+    }
+
+    #[test]
+    fn selected_candidate_pair_route_evidence_does_not_guess_missing_stats() {
+        assert_eq!(candidate_type_value(None), None);
+        assert_eq!(selected_candidate_protocol(None, None), None);
     }
 
     #[test]
