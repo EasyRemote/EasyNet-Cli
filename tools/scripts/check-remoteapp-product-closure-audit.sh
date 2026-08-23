@@ -745,12 +745,24 @@ require 'easynet_relay' "$NETWORK_FALLBACK" \
   'network fallback verifier must require EasyNet relay route evidence'
 require 'selected_candidate_pair' "$NETWORK_FALLBACK" \
   'network fallback verifier must inspect selected candidate-pair evidence'
+require 'webrtc selected_resource_ura must bind selected Resource URA' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind WebRTC evidence to selected Resource URA'
+require 'webrtc session_id must bind session_id' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind WebRTC evidence to RemoteApp session'
+require 'webrtc caller_device_ura must bind caller device' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind WebRTC evidence to caller device'
+require 'webrtc callee_device_ura must bind callee device' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind WebRTC evidence to callee device'
+require 'webrtc route_kind must match scenario' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind WebRTC evidence to route scenario'
 require 'selected_candidate_pair\.selected must be true' "$NETWORK_FALLBACK" \
   'network fallback verifier must require selected ICE pair evidence'
 require 'selected_candidate_pair\.nominated must be true' "$NETWORK_FALLBACK" \
   'network fallback verifier must require nominated ICE pair evidence'
 require 'selected_candidate_pair\.state must be succeeded' "$NETWORK_FALLBACK" \
   'network fallback verifier must require succeeded ICE pair evidence'
+require 'selected_candidate_pair\.candidate_pair_id must be recorded' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require selected candidate-pair id evidence'
 require 'selected_candidate_pair\.local_candidate_id must be recorded' "$NETWORK_FALLBACK" \
   'network fallback verifier must require selected local candidate id evidence'
 require 'selected_candidate_pair\.remote_candidate_id must be recorded' "$NETWORK_FALLBACK" \
@@ -769,6 +781,14 @@ require 'selected_pair_observed_at_ms must be after network constraints' "$NETWO
   'network fallback verifier must order selected-pair observation after network constraints'
 require 'rendered_after_selected_pair' "$NETWORK_FALLBACK" \
   'network fallback verifier must require rendered media after selected pair'
+require 'media selected_resource_ura must bind selected Resource URA' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind rendered media to selected Resource URA'
+require 'media session_id must bind session_id' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind rendered media to RemoteApp session'
+require 'media route_kind must match scenario' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind rendered media to route scenario'
+require 'media candidate_pair_id must match selected_candidate_pair' "$NETWORK_FALLBACK" \
+  'network fallback verifier must bind rendered media to selected candidate pair'
 require 'first_rendered_frame_at_ms must be after selected pair observation' "$NETWORK_FALLBACK" \
   'network fallback verifier must order rendered media after selected-pair observation'
 require 'local_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs" \

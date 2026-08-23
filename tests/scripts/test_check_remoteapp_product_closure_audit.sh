@@ -487,6 +487,33 @@ grep -q "network fallback verifier must require succeeded ICE pair evidence" /tm
   fail "expected network fallback succeeded ICE pair failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 
+perl -0pi -e 's#webrtc session_id must bind session_id#webrtc session_id may be external#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-webrtc-session.out 2>&1; then
+  fail "checker accepted network fallback verifier without WebRTC session binding"
+fi
+grep -q "network fallback verifier must bind WebRTC evidence to RemoteApp session" /tmp/check-remoteapp-product-closure-network-webrtc-session.out || \
+  fail "expected network fallback WebRTC session binding failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
+perl -0pi -e 's#selected_candidate_pair.candidate_pair_id must be recorded#selected_candidate_pair.candidate_pair_label may be recorded#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-candidate-pair-id.out 2>&1; then
+  fail "checker accepted network fallback verifier without selected candidate-pair id evidence"
+fi
+grep -q "network fallback verifier must require selected candidate-pair id evidence" /tmp/check-remoteapp-product-closure-network-candidate-pair-id.out || \
+  fail "expected network fallback candidate-pair id failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
+perl -0pi -e 's#media candidate_pair_id must match selected_candidate_pair#media candidate_pair_id may differ from selected_candidate_pair#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-media-pair.out 2>&1; then
+  fail "checker accepted network fallback verifier without media candidate-pair binding"
+fi
+grep -q "network fallback verifier must bind rendered media to selected candidate pair" /tmp/check-remoteapp-product-closure-network-media-pair.out || \
+  fail "expected network fallback media candidate-pair binding failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
 perl -0pi -e 's#turn_relay#turn_model_only#g' \
   "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-turn.out 2>&1; then

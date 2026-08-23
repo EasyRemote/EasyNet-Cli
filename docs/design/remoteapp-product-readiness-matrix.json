@@ -253,7 +253,8 @@
         "frontend session details render daemon route state such as host_only with no NAT/relay",
         "native WebRTC media stats project selected candidate-pair local_candidate_type, remote_candidate_type, selected_route_class, and protocol without exposing addresses or credentials",
         "remoteapp-network-fallback-e2e.sh verifier requires real network fallback artifacts to carry nominated/selected/succeeded candidate-pair evidence with selected_route_class matching direct, STUN/reflexive, and relay route expectations",
-        "network fallback verifier requires applied network fixture constraints, allowed/blocked route classes, selected-pair observation after constraints, and rendered media after selected-pair observation"
+        "network fallback verifier requires WebRTC stats bound to selected Resource URA, session id, caller device, callee device, route kind, and stable candidate_pair_id",
+        "network fallback verifier requires applied network fixture constraints, allowed/blocked route classes, selected-pair observation after constraints, and rendered media bound to the selected Resource/session/route/candidate pair after selected-pair observation"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-network-fallback-e2e.sh artifact",
@@ -265,8 +266,10 @@
         "allowed and blocked route class evidence for every route scenario",
         "selected/nominated/succeeded WebRTC candidate-pair evidence",
         "selected local and remote candidate id evidence",
+        "stable selected candidate_pair_id evidence",
+        "WebRTC stats bound to selected Resource URA, session id, caller device, callee device, and route kind",
         "selected-pair observation after network constraints on every route",
-        "rendered media after selected-pair observation on every route",
+        "rendered media bound to the selected Resource URA, session id, route kind, and candidate_pair_id after selected-pair observation on every route",
         "redacted credential/reachability evidence",
         "visible terminal receipt on every route"
       ],

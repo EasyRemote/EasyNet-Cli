@@ -67,4 +67,46 @@ fi
 grep -q "media.frames_rendered must be positive" /tmp/remoteapp-network-fallback-no-media.out || \
   fail "rendered media failure was not explicit"
 
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/wrong-webrtc-session.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+evidence["scenarios"][0]["webrtc"]["session_id"] = "rd-network-unrelated-session"
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/wrong-webrtc-session.json" --out-dir "$OUT_DIR/wrong-webrtc-session" >/tmp/remoteapp-network-fallback-wrong-webrtc-session.out 2>&1; then
+  fail "verifier accepted WebRTC candidate-pair evidence from a different session"
+fi
+grep -q "webrtc session_id must bind session_id" /tmp/remoteapp-network-fallback-wrong-webrtc-session.out || \
+  fail "WebRTC session binding failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/missing-candidate-pair-id.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+del evidence["scenarios"][0]["webrtc"]["selected_candidate_pair"]["candidate_pair_id"]
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/missing-candidate-pair-id.json" --out-dir "$OUT_DIR/missing-candidate-pair-id" >/tmp/remoteapp-network-fallback-missing-pair-id.out 2>&1; then
+  fail "verifier accepted selected candidate-pair evidence without a stable pair id"
+fi
+grep -q "selected_candidate_pair.candidate_pair_id must be recorded" /tmp/remoteapp-network-fallback-missing-pair-id.out || \
+  fail "candidate-pair id failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/wrong-media-pair.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+evidence["scenarios"][0]["media"]["candidate_pair_id"] = "pair-from-unrelated-connection"
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/wrong-media-pair.json" --out-dir "$OUT_DIR/wrong-media-pair" >/tmp/remoteapp-network-fallback-wrong-media-pair.out 2>&1; then
+  fail "verifier accepted rendered media that was not bound to the selected candidate pair"
+fi
+grep -q "media candidate_pair_id must match selected_candidate_pair" /tmp/remoteapp-network-fallback-wrong-media-pair.out || \
+  fail "media candidate-pair binding failure was not explicit"
+
 echo "test_remoteapp_network_fallback_e2e: ok"

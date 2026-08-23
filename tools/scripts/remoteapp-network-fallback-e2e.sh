@@ -47,10 +47,11 @@ Evidence contract:
   source checks:
   direct, stun_srflx, turn_relay, and easynet_relay scenarios, each with
   connected WebRTC candidate-pair evidence, nominated/selected/succeeded ICE
-  pair state, selected route-class evidence, applied network fixture
-  constraints, rendered media after selected-pair observation, public RemoteApp
-  session abilities, selected Resource URA subject binding, session end, and a
-  visible terminal receipt.
+  pair state, selected route-class evidence, WebRTC/session binding to the
+  selected Resource URA and caller/callee devices, applied network fixture
+  constraints, rendered media bound to the selected pair after selected-pair
+  observation, public RemoteApp session abilities, selected Resource URA
+  subject binding, session end, and a visible terminal receipt.
 
 Non-claims:
   A skipped report or self-test does not prove network product readiness.
@@ -287,6 +288,16 @@ if isinstance(scenarios, list):
         require(isinstance(webrtc, dict), f"{prefix}: webrtc evidence must be an object")
         if not isinstance(webrtc, dict):
             webrtc = {}
+        require(webrtc.get("selected_resource_ura") == subject_ura,
+                f"{prefix}: webrtc selected_resource_ura must bind selected Resource URA")
+        require(webrtc.get("session_id") == session_id,
+                f"{prefix}: webrtc session_id must bind session_id")
+        require(webrtc.get("caller_device_ura") == caller_device_ura,
+                f"{prefix}: webrtc caller_device_ura must bind caller device")
+        require(webrtc.get("callee_device_ura") == callee_device_ura,
+                f"{prefix}: webrtc callee_device_ura must bind callee device")
+        require(webrtc.get("route_kind") == route_kind,
+                f"{prefix}: webrtc route_kind must match scenario")
         require(webrtc.get("ice_connection_state") in {"connected", "completed"},
                 f"{prefix}: ice_connection_state must be connected or completed")
         pair = webrtc.get("selected_candidate_pair")
@@ -304,6 +315,8 @@ if isinstance(scenarios, list):
                 f"{prefix}: selected_candidate_pair.nominated must be true")
         require(lower(pair.get("state")) == "succeeded",
                 f"{prefix}: selected_candidate_pair.state must be succeeded")
+        require(isinstance(pair.get("candidate_pair_id"), str) and pair.get("candidate_pair_id"),
+                f"{prefix}: selected_candidate_pair.candidate_pair_id must be recorded")
         require(isinstance(pair.get("local_candidate_id"), str) and pair.get("local_candidate_id"),
                 f"{prefix}: selected_candidate_pair.local_candidate_id must be recorded")
         require(isinstance(pair.get("remote_candidate_id"), str) and pair.get("remote_candidate_id"),
@@ -350,6 +363,14 @@ if isinstance(scenarios, list):
         require(isinstance(media, dict), f"{prefix}: media evidence must be an object")
         if not isinstance(media, dict):
             media = {}
+        require(media.get("selected_resource_ura") == subject_ura,
+                f"{prefix}: media selected_resource_ura must bind selected Resource URA")
+        require(media.get("session_id") == session_id,
+                f"{prefix}: media session_id must bind session_id")
+        require(media.get("route_kind") == route_kind,
+                f"{prefix}: media route_kind must match scenario")
+        require(media.get("candidate_pair_id") == pair.get("candidate_pair_id"),
+                f"{prefix}: media candidate_pair_id must match selected_candidate_pair")
         require(int(media.get("frames_rendered", 0)) > 0,
                 f"{prefix}: media.frames_rendered must be positive")
         require(int(media.get("duration_ms", 0)) > 0,
@@ -375,6 +396,7 @@ if isinstance(scenarios, list):
             "route_kind": route_kind,
             "ice_connection_state": webrtc.get("ice_connection_state"),
             "selected_route_class": selected_route_class,
+            "candidate_pair_id": pair.get("candidate_pair_id"),
             "candidate_types": sorted(str(item) for item in candidate_types if item),
             "allowed_route_classes": sorted(allowed_route_classes),
             "blocked_route_classes": sorted(blocked_route_classes),
@@ -458,10 +480,16 @@ for route_kind, local_type, remote_type, selected_route_class, allowed, blocked,
             {"name": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id},
         ],
         "webrtc": {
+            "selected_resource_ura": subject,
+            "session_id": session_id,
+            "caller_device_ura": "easynet:///r/localhost/device/caller",
+            "callee_device_ura": "easynet:///r/localhost/device/receiver",
+            "route_kind": route_kind,
             "ice_connection_state": "connected",
             "bytes_sent": 4096,
             "bytes_received": 8192,
             "selected_candidate_pair": {
+                "candidate_pair_id": f"pair-{route_kind}",
                 "local_candidate_type": local_type,
                 "remote_candidate_type": remote_type,
                 "selected_route_class": selected_route_class,
@@ -476,6 +504,10 @@ for route_kind, local_type, remote_type, selected_route_class, allowed, blocked,
             },
         },
         "media": {
+            "selected_resource_ura": subject,
+            "session_id": session_id,
+            "route_kind": route_kind,
+            "candidate_pair_id": f"pair-{route_kind}",
             "frames_rendered": 5,
             "duration_ms": 1000,
             "rendered_after_selected_pair": True,
