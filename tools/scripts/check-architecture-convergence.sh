@@ -17292,6 +17292,55 @@ daemon_invocation_service_tests_rs = (
 daemon_invocation_service_unary_tests_rs = (
     cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
 )
+federation_discover_cli_rs = cli_root / "src/cli/commands/federation_discover.rs"
+if federation_discover_cli_rs.exists():
+    raw_text = federation_discover_cli_rs.read_text(
+        encoding="utf-8", errors="replace"
+    )
+    for token, detail in (
+        (
+            "read_federated_directory_for_current_user(",
+            "federation discover CLI must default paired product reads to the current User scope",
+        ),
+        (
+            "pub operator_audit: bool",
+            "unfiltered federation discover must require an explicit operator-audit CLI flag",
+        ),
+        (
+            'conflicts_with = "local_user_id"',
+            "operator-audit and explicit User scopes must be mutually exclusive",
+        ),
+        (
+            "paired_user_scope_is_the_default",
+            "federation discover CLI tests must prove the privacy-preserving default scope",
+        ),
+    ):
+        if token not in raw_text:
+            add(
+                "R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE",
+                federation_discover_cli_rs,
+                1,
+                detail,
+            )
+if remote_invoke_rs.exists():
+    raw_text = remote_invoke_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "federation.discover operator/audit scope requires a local Authority runtime",
+            "operator/audit tuple construction must reject non-Authority local runtimes before I/O",
+        ),
+        (
+            "federation_discover_operator_scope_rejects_device_runtime_before_io",
+            "operator/audit scope tests must prove a Device cannot become an operator principal",
+        ),
+    ):
+        if token not in raw_text:
+            add(
+                "R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE",
+                remote_invoke_rs,
+                1,
+                detail,
+            )
 if unary_dispatcher_rs.exists():
     text = source(unary_dispatcher_rs)
     raw_text = unary_dispatcher_rs.read_text(encoding="utf-8", errors="replace")

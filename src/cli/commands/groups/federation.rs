@@ -48,9 +48,9 @@ pub enum FederationAction {
     /// Read the cross-realm directory federation view from the
     /// running daemon. Calls `federation.discover` over the
     /// daemon's gRPC UDS and renders the returned
-    /// `DirectoryEntry` list. Optional `--user-id` filter
-    /// applies the PR-N4 INV-5 privacy default; optional
-    /// `--agent-ura` filter narrows to a single URA.
+    /// `DirectoryEntry` list. The current paired User is the
+    /// privacy-preserving default; `--operator-audit` explicitly requests an
+    /// Authority-only unfiltered read, and `--agent-ura` narrows to one URA.
     #[cfg(feature = "axon-pb")]
     Discover(federation_discover::DiscoverArgs),
 

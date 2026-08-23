@@ -1878,6 +1878,15 @@ impl FederationDiscoverScope {
         if local_daemon_ura.trim().is_empty() {
             anyhow::bail!("federation.discover operator/audit scope requires local daemon URA");
         }
+        let parsed_daemon = crate::core::ura::parse_ura(local_daemon_ura).map_err(|err| {
+            anyhow!("parse local daemon URA for federation.discover operator/audit scope: {err}")
+        })?;
+        if parsed_daemon.kind != crate::core::ura::URAKind::Authority {
+            anyhow::bail!(
+                "federation.discover operator/audit scope requires a local Authority runtime, got {}",
+                parsed_daemon.kind
+            );
+        }
         Ok(Self {
             query_target_ura: local_daemon_ura.to_string(),
             caller_ura: local_daemon_ura.to_string(),
@@ -3374,6 +3383,19 @@ mod tests {
             "operator/audit reads remain local to their explicitly selected Authority"
         );
         assert_eq!(scope.local_user_id_filter, None);
+    }
+
+    #[test]
+    fn federation_discover_operator_scope_rejects_device_runtime_before_io() {
+        let local_daemon_ura = crate::core::ura::device_ura("acme", "device-a");
+        let error = FederationDiscoverScope::operator_audit(&local_daemon_ura)
+            .expect_err("Device runtime must not acquire unfiltered directory scope");
+        assert!(
+            error
+                .to_string()
+                .contains("requires a local Authority runtime"),
+            "wrong error: {error}"
+        );
     }
 
     #[test]
