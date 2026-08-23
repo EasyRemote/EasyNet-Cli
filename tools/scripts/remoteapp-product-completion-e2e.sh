@@ -872,6 +872,63 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
             message = f"{prefix}: input_policy_mode must be interactive, view_only, or policy_blocked"
             check["errors"].append(message)
             add_error(item_id, message)
+        summary = scenario.get("remoteapp_summary")
+        if not isinstance(summary, dict):
+            message = f"{prefix}: remoteapp_summary must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        for field, expected in (
+            ("caller_device_ura", caller_device_ura),
+            ("provider_device_ura", provider_device_ura),
+            ("selected_resource_ura", selected_resource_ura),
+            ("session_id", session_id),
+        ):
+            if summary.get(field) != expected:
+                message = f"{prefix}: remoteapp_summary.{field} must match scenario"
+                check["errors"].append(message)
+                add_error(item_id, message)
+        for field in (
+            "distinct_devices",
+            "remote_target_inventory_seen",
+            "abilities_bound",
+            "capture_provider_bound",
+            "capture_resource_bound",
+            "capture_target_kind_bound",
+            "capture_remote_target_inventory_seen",
+            "media_provider_bound",
+            "media_resource_bound",
+            "media_session_bound",
+            "rendered_on_caller_device",
+            "input_policy_checked",
+            "input_policy_session_bound",
+            "terminal_receipt_visible",
+            "terminal_receipt_session_bound",
+        ):
+            if summary.get(field) is not True:
+                message = f"{prefix}: remoteapp_summary.{field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+        if not positive_int(summary.get("capture_frames_captured")):
+            message = f"{prefix}: remoteapp_summary.capture_frames_captured must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(summary.get("media_frames_rendered")):
+            message = f"{prefix}: remoteapp_summary.media_frames_rendered must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("media_transport") not in {"webrtc", "easynet_relay_webrtc"}:
+            message = f"{prefix}: remoteapp_summary.media_transport must be WebRTC"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("input_policy_mode") not in {"interactive", "view_only", "policy_blocked"}:
+            message = f"{prefix}: remoteapp_summary.input_policy_mode must be interactive, view_only, or policy_blocked"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("terminal_reason") not in {"caller_ended", "user_cancelled", "cross_device_remoteapp_e2e_cleanup"}:
+            message = f"{prefix}: remoteapp_summary.terminal_reason must be a known cleanup/end reason"
+            check["errors"].append(message)
+            add_error(item_id, message)
 
     observed_targets = sorted(seen_targets)
     check["observed_cross_device_remoteapp_targets"] = observed_targets
@@ -2354,6 +2411,35 @@ if item_id == "cross_device_smoke":
 if item_id == "cross_device_remoteapp":
     caller = "easynet:///r/localhost/device/synthetic-caller"
     provider = "easynet:///r/localhost/device/synthetic-provider"
+    def remoteapp_summary(target_kind):
+        selected_resource_ura = f"easynet:///r/localhost/resource/device.synthetic-provider/{target_kind}.selected"
+        session_id = f"rd-product-cross-device-{target_kind}"
+        return {
+            "caller_device_ura": caller,
+            "provider_device_ura": provider,
+            "selected_resource_ura": selected_resource_ura,
+            "session_id": session_id,
+            "distinct_devices": True,
+            "remote_target_inventory_seen": True,
+            "abilities_bound": True,
+            "capture_provider_bound": True,
+            "capture_resource_bound": True,
+            "capture_target_kind_bound": True,
+            "capture_remote_target_inventory_seen": True,
+            "capture_frames_captured": 12,
+            "media_provider_bound": True,
+            "media_resource_bound": True,
+            "media_session_bound": True,
+            "media_transport": "webrtc",
+            "media_frames_rendered": 10,
+            "rendered_on_caller_device": True,
+            "input_policy_checked": True,
+            "input_policy_mode": "view_only",
+            "input_policy_session_bound": True,
+            "terminal_receipt_visible": True,
+            "terminal_receipt_session_bound": True,
+            "terminal_reason": "cross_device_remoteapp_e2e_cleanup",
+        }
     report["topology"] = {
         "requires_distinct_devices": True,
         "observed_device_pairs": [
@@ -2378,6 +2464,7 @@ if item_id == "cross_device_remoteapp":
             "frames_captured": 12,
             "frames_rendered": 10,
             "input_policy_mode": "view_only",
+            "remoteapp_summary": remoteapp_summary(target_kind),
         }
         for target_kind in ("display", "window", "application")
     ]
@@ -3010,6 +3097,33 @@ PY
   fi
   write_synthetic_report "$tmp/cross_device_remoteapp.json" cross_device_remoteapp
 
+  python3 - "$tmp/cross_device_remoteapp.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+for scenario in report["scenarios"]:
+    del scenario["remoteapp_summary"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-cross-device-remoteapp-summaries" >/dev/null 2>&1; then
+    echo "self-test accepted cross-device RemoteApp report without summaries" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/cross_device_remoteapp.json" cross_device_remoteapp
+
   python3 - "$tmp/cross_platform_capture.json" <<'PY'
 import json
 import pathlib
@@ -3400,6 +3514,7 @@ case "$MODE" in
     grep -q 'input injection .* input_summary must be an object' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-device RemoteApp scenarios summary must be a non-empty list' "$0"
+    grep -q 'cross-device RemoteApp target .* remoteapp_summary must be an object' "$0"
     grep -q 'crash/restart recovery scenarios summary must be a non-empty list' "$0"
     grep -q 'unsupported_targets must be empty' "$0"
     grep -q "expected 'passed'" "$0"
@@ -3434,6 +3549,7 @@ case "$MODE" in
     grep -q 'self-test accepted wrong product-flow host subreport target_kind' "$0"
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'self-test accepted unsupported cross-platform capture as product completion' "$0"
+    grep -q 'self-test accepted cross-device RemoteApp report without summaries' "$0"
     grep -q 'self-test accepted cross-platform capture report without scenarios' "$0"
     grep -q 'self-test accepted unsupported input injection as product completion' "$0"
     grep -q 'self-test accepted input injection report without summaries' "$0"

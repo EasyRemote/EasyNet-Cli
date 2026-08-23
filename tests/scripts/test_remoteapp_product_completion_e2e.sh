@@ -25,6 +25,10 @@ grep -q "requires_cross_device_remoteapp_scenarios" "$SCRIPT" || \
   fail "completion gate must require cross-device RemoteApp target scenarios"
 grep -q "self-test accepted cross-device RemoteApp report without application target" "$SCRIPT" || \
   fail "completion gate self-test must cover incomplete cross-device RemoteApp targets"
+grep -q "cross-device RemoteApp target .* remoteapp_summary must be an object" "$SCRIPT" || \
+  fail "completion gate must reject cross-device RemoteApp reports without per-target summaries"
+grep -q "self-test accepted cross-device RemoteApp report without summaries" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing cross-device RemoteApp summaries"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require cross-platform capture report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON" "$SCRIPT" || \

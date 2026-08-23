@@ -290,6 +290,22 @@ for index, scenario in enumerate(scenarios):
     require(terminal.get("reason_code") in terminal_reasons,
             f"{prefix}: terminal_receipt.reason_code must be a known cleanup/end reason")
 
+    abilities_bound = True
+    for ability_name in (
+        "remote_desktop.create_session",
+        "remote_desktop.attach",
+        "remote_desktop.watch_events",
+        "remote_desktop.end_session",
+    ):
+        ability = ability_by_name.get(ability_name)
+        if not isinstance(ability, dict):
+            abilities_bound = False
+            continue
+        if ability.get("subject_ura") != selected_resource_ura:
+            abilities_bound = False
+        if ability_name != "remote_desktop.create_session" and ability.get("session_id") != session_id:
+            abilities_bound = False
+
     scenario_reports.append({
         "name": name,
         "target_kind": target_kind,
@@ -300,6 +316,32 @@ for index, scenario in enumerate(scenarios):
         "frames_captured": capture.get("frames_captured"),
         "frames_rendered": media.get("frames_rendered"),
         "input_policy_mode": input_policy.get("mode"),
+        "remoteapp_summary": {
+            "caller_device_ura": caller_device_ura,
+            "provider_device_ura": provider_device_ura,
+            "selected_resource_ura": selected_resource_ura,
+            "session_id": session_id,
+            "distinct_devices": caller_device_ura != provider_device_ura,
+            "remote_target_inventory_seen": scenario.get("remote_target_inventory_seen") is True,
+            "abilities_bound": abilities_bound,
+            "capture_provider_bound": capture.get("provider_device_ura") == provider_device_ura,
+            "capture_resource_bound": capture.get("selected_resource_ura") == selected_resource_ura,
+            "capture_target_kind_bound": capture.get("target_kind") == target_kind,
+            "capture_remote_target_inventory_seen": capture.get("remote_target_inventory_seen") is True,
+            "capture_frames_captured": capture.get("frames_captured"),
+            "media_provider_bound": media.get("provider_device_ura") == provider_device_ura,
+            "media_resource_bound": media.get("selected_resource_ura") == selected_resource_ura,
+            "media_session_bound": media.get("session_id") == session_id,
+            "media_transport": media.get("transport"),
+            "media_frames_rendered": media.get("frames_rendered"),
+            "rendered_on_caller_device": media.get("rendered_on_caller_device") is True,
+            "input_policy_checked": input_policy.get("checked") is True,
+            "input_policy_mode": input_policy.get("mode"),
+            "input_policy_session_bound": input_policy.get("session_id") == session_id,
+            "terminal_receipt_visible": terminal.get("terminal") is True,
+            "terminal_receipt_session_bound": terminal.get("session_id") == session_id,
+            "terminal_reason": terminal.get("reason_code"),
+        },
     })
 
 missing_targets = sorted(required_targets - seen_targets)
@@ -527,6 +569,7 @@ case "$MODE" in
     grep -q "real_remoteapp_cross_device_session" "$0"
     grep -q "remote_desktop.create_session" "$0"
     grep -q "remote_target_inventory_seen" "$0"
+    grep -q "remoteapp_summary" "$0"
     grep -q "rendered_on_caller_device" "$0"
     grep -q "input_policy.checked must be true" "$0"
     grep -q "missing target scenarios" "$0"

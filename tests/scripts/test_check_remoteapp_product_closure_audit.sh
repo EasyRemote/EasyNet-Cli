@@ -21,6 +21,7 @@ mkdir -p \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh" "$SB/tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh" "$SB/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
@@ -150,6 +151,15 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "product-completion gate must require input injection summaries" /tmp/check-remoteapp-product-closure-completion-input-scenarios.out || \
   fail "expected product-completion input injection summaries failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+
+perl -0pi -e 's#requires_cross_device_remoteapp_scenarios#requires_cross_device_targets_only#g' \
+  "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-cross-device-remoteapp-scenarios.out 2>&1; then
+  fail "checker accepted product-completion gate without cross-device RemoteApp summaries"
+fi
+grep -q "product-completion gate must require cross-device RemoteApp target summaries" /tmp/check-remoteapp-product-closure-completion-cross-device-remoteapp-scenarios.out || \
+  fail "expected product-completion cross-device RemoteApp summaries failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 
 perl -0pi -e 's#topology.local_provider_boundary_only is not false#topology.local_provider_boundary_only is optional#g' \
@@ -367,6 +377,15 @@ fi
 grep -q "input injection verifier must require keyboard focus/resource binding" /tmp/check-remoteapp-product-closure-input-keyboard-effect.out || \
   fail "expected input injection keyboard focus/resource failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#remoteapp_summary#remoteapp_status_summary#g' \
+  "$SB/tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-cross-device-remoteapp-summary.out 2>&1; then
+  fail "checker accepted cross-device RemoteApp verifier without aggregate summaries"
+fi
+grep -q "cross-device RemoteApp verifier must emit product aggregate summaries" /tmp/check-remoteapp-product-closure-cross-device-remoteapp-summary.out || \
+  fail "expected cross-device RemoteApp summary failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh" "$SB/tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh"
 
 perl -0pi -e 's#real_media_adaptation_matrix#source_only_media_matrix#g' \
   "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"

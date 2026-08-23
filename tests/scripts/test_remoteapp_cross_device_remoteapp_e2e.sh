@@ -21,6 +21,50 @@ grep -q "SKIP" /tmp/remoteapp-cross-device-remoteapp-skip.out || \
   fail "default output must be explicit skipped evidence"
 
 EASYNET_REMOTEAPP_CROSS_DEVICE_REMOTEAPP_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
+EASYNET_REMOTEAPP_CROSS_DEVICE_REMOTEAPP_E2E=1 "$SCRIPT" --run \
+  --evidence-json "$OUT_DIR/good/evidence.json" \
+  --out-dir "$OUT_DIR/good-run" >/dev/null
+
+python3 - "$OUT_DIR/good-run/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+scenarios = {scenario["target_kind"]: scenario for scenario in report["scenarios"]}
+summary = scenarios["application"]["remoteapp_summary"]
+assert summary["caller_device_ura"].startswith("easynet:///")
+assert summary["provider_device_ura"].startswith("easynet:///")
+assert summary["caller_device_ura"] != summary["provider_device_ura"]
+assert summary["selected_resource_ura"].startswith("easynet:///")
+assert summary["session_id"]
+for field in (
+    "distinct_devices",
+    "remote_target_inventory_seen",
+    "abilities_bound",
+    "capture_provider_bound",
+    "capture_resource_bound",
+    "capture_target_kind_bound",
+    "capture_remote_target_inventory_seen",
+    "media_provider_bound",
+    "media_resource_bound",
+    "media_session_bound",
+    "rendered_on_caller_device",
+    "input_policy_checked",
+    "input_policy_session_bound",
+    "terminal_receipt_visible",
+    "terminal_receipt_session_bound",
+):
+    assert summary[field] is True
+assert summary["capture_frames_captured"] > 0
+assert summary["media_transport"] in {"webrtc", "easynet_relay_webrtc"}
+assert summary["media_frames_rendered"] > 0
+assert summary["input_policy_mode"] in {"interactive", "view_only", "policy_blocked"}
+assert summary["terminal_reason"] in {
+    "caller_ended",
+    "user_cancelled",
+    "cross_device_remoteapp_e2e_cleanup",
+}
+PY
 
 python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/missing-window.json" <<'PY'
 import json

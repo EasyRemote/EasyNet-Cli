@@ -7,6 +7,7 @@ AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+CROSS_DEVICE_REMOTEAPP="$ROOT/tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh"
 PRODUCT_COMPLETION="$ROOT/tools/scripts/remoteapp-product-completion-e2e.sh"
 MAIN_CRATE_IMPL_TESTS="$ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
@@ -68,6 +69,7 @@ reject() {
 [[ -f "$MATRIX" ]] || fail "missing RemoteApp product readiness matrix"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -f "$CROSS_DEVICE_REMOTEAPP" ]] || fail "missing RemoteApp cross-device RemoteApp verifier"
 [[ -f "$PRODUCT_COMPLETION" ]] || fail "missing RemoteApp product-completion evidence gate"
 [[ -x "$PRODUCT_COMPLETION" ]] || fail "RemoteApp product-completion evidence gate must be executable"
 [[ -f "$MAIN_CRATE_IMPL_TESTS" ]] || fail "missing RemoteApp main-crate implementation test gate"
@@ -487,6 +489,8 @@ require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON' "$P
   'product-completion gate must require Browser/Tauri lifecycle evidence'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON' "$PRODUCT_COMPLETION" \
   'product-completion gate must require cross-device smoke evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require cross-device RemoteApp product evidence'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON' "$PRODUCT_COMPLETION" \
   'product-completion gate must require cross-platform capture evidence'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON' "$PRODUCT_COMPLETION" \
@@ -595,6 +599,12 @@ require 'self-test accepted failed evidence_json status' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject failed report evidence status'
 require 'self-test accepted missing observed cross-device pairs' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject missing observed cross-device pairs'
+require 'requires_cross_device_remoteapp_scenarios' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require cross-device RemoteApp target summaries'
+require 'cross-device RemoteApp target .* remoteapp_summary must be an object' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject cross-device RemoteApp reports without per-target summaries'
+require 'self-test accepted cross-device RemoteApp report without summaries' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing cross-device RemoteApp summaries'
 require 'self-test accepted unsupported cross-platform capture as product completion' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject unsupported capture product-completion evidence'
 require 'self-test accepted unsupported input injection as product completion' "$PRODUCT_COMPLETION" \
@@ -609,6 +619,18 @@ require 'tools/scripts/remoteapp-network-fallback-e2e.sh' "$PRODUCT_COMPLETION" 
   'product-completion gate must require network fallback report provenance'
 require 'product_complete_claim.*effective_status == "passed"' "$PRODUCT_COMPLETION" \
   'product-completion gate must be the single aggregate product-complete claim'
+require 'real_remoteapp_cross_device_session' "$CROSS_DEVICE_REMOTEAPP" \
+  'cross-device RemoteApp verifier must require real RemoteApp cross-device proof mode'
+require 'remoteapp_summary' "$CROSS_DEVICE_REMOTEAPP" \
+  'cross-device RemoteApp verifier must emit product aggregate summaries'
+require 'remote_target_inventory_seen' "$CROSS_DEVICE_REMOTEAPP" \
+  'cross-device RemoteApp verifier must require remote target inventory evidence'
+require 'remote_desktop.create_session' "$CROSS_DEVICE_REMOTEAPP" \
+  'cross-device RemoteApp verifier must require governed create_session ability evidence'
+require 'rendered_on_caller_device' "$CROSS_DEVICE_REMOTEAPP" \
+  'cross-device RemoteApp verifier must require caller-rendered media evidence'
+require 'terminal_receipt must be visible' "$CROSS_DEVICE_REMOTEAPP" \
+  'cross-device RemoteApp verifier must require terminal receipt evidence'
 require '"script": "tools/scripts/host-remoteapp-session-timeout-e2e.sh"' "$SESSION_TIMEOUT" \
   'session timeout report must expose stable script provenance'
 require '"script": "tools/scripts/host-remoteapp-session-cancel-e2e.sh"' "$SESSION_CANCEL" \
