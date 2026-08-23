@@ -3,28 +3,42 @@
 ## Problem
 
 `remoteapp-product-completion-e2e.sh` aggregates required RemoteApp report JSONs,
-but the first slice primarily checked `status`, selected coverage fields, and
-cross-device topology. That is not enough for a product-completion claim because
-a wrong or synthetic report with compatible shape could be supplied for a domain.
+but the first slices primarily checked `status`, selected coverage fields,
+cross-device topology flags, and stable `script` identity. That is not enough
+for a product-completion claim because an empty-shell report can still copy the
+right script name, coverage keys, and status without pointing to the underlying
+live artifact or exposing the product-flow/cross-device observations.
 
 ## Boundary
 
-The top-level completion gate must validate report identity. It still does not
-own the per-domain evidence semantics; each domain verifier remains the source
-of truth. The completion gate only verifies that the supplied report came from
-the expected verifier before trusting that verifier's `passed` status and
-coverage summary.
+The top-level completion gate must validate report identity and artifact
+traceability. It still does not own the per-domain evidence semantics; each
+domain verifier remains the source of truth. The completion gate only verifies
+that the supplied report came from the expected verifier, names an existing
+evidence artifact where the domain verifier owns one, exposes the required
+frontend product-flow steps, and carries concrete cross-device observed pairs
+before trusting that verifier's `passed` status and coverage summary.
 
 ## Invariants
 
 - Every required report must expose a stable `script` value.
 - The completion gate must compare each report's `script` with the expected
   verifier path.
+- Domain verifier reports that own a live evidence artifact must expose
+  `evidence_json`, and that path must exist when the aggregate gate runs.
+- The frontend product-flow report must include passed steps for Browser/Tauri
+  lifecycle, cross-device product smoke, permission-subject, and target-picker
+  freshness, so an empty passed report cannot stand in for the user-visible
+  lifecycle bundle.
+- The cross-device smoke report must include at least one observed
+  caller/provider device pair where both URAs are present and distinct.
 - Host lifecycle E2E reports must include the same `script` identity field as
   the other RemoteApp verifier reports.
 - A wrong-script report fails closed even if it has `status=passed` and matching
   coverage.
 - Child verifiers still must not set `product_complete_claim=true`.
+- The top-level gate remains the only place that may set
+  `product_complete_claim=true`.
 
 ## Verification
 

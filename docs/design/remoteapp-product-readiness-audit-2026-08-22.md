@@ -345,9 +345,13 @@ cancel, permission revoke, session resume, and crash/restart recovery. Missing
 reports fail closed, child verifiers must not claim product completion, and
 cross-device evidence must not be local-provider-only. The gate also checks the
 stable `script` identity of each report so a wrong or shape-compatible artifact
-cannot stand in for the required domain verifier. This gate is not itself new
-product evidence; it prevents partial evidence from being reported as full
-interactive desktop completion.
+cannot stand in for the required domain verifier. It also requires domain
+reports to name an existing `evidence_json` artifact, requires the frontend
+product-flow report to expose passed Browser/Tauri, cross-device,
+permission-subject, and target-picker steps, and requires cross-device topology
+to include observed caller/provider device pairs with distinct device URAs. This
+gate is not itself new product evidence; it prevents partial or empty-shell
+evidence from being reported as full interactive desktop completion.
 
 ## Product closure matrix
 

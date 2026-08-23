@@ -491,6 +491,20 @@ require 'topology\.local_provider_boundary_only is not false' "$PRODUCT_COMPLETI
   'product-completion gate must reject local-provider-only cross-device reports'
 require 'child verifier must not claim product completion' "$PRODUCT_COMPLETION" \
   'product-completion gate must reject child product-complete claims'
+require 'requires_evidence_json' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require live evidence_json artifacts from domain verifiers'
+require 'evidence_json path does not exist' "$PRODUCT_COMPLETION" \
+  'product-completion gate must fail when a report evidence_json artifact is missing'
+require 'required product-flow step' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require explicit passed frontend product-flow steps'
+require 'topology\.observed_device_pairs must not be empty' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require observed cross-device caller/provider pairs'
+require 'self-test accepted missing evidence_json artifact' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing evidence_json artifacts'
+require 'self-test accepted missing frontend product-flow step' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject incomplete frontend product-flow reports'
+require 'self-test accepted missing observed cross-device pairs' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing observed cross-device pairs'
 require 'expected_script' "$PRODUCT_COMPLETION" \
   'product-completion gate must pin expected report script identities'
 require 'report script is' "$PRODUCT_COMPLETION" \

@@ -35,6 +35,20 @@ grep -q "local-provider-only cross-device evidence" "$SCRIPT" || \
   fail "completion gate self-test must reject local-provider-only evidence"
 grep -q "child verifier must not claim product completion" "$SCRIPT" || \
   fail "completion gate must reject child product-complete claims"
+grep -q "requires_evidence_json" "$SCRIPT" || \
+  fail "completion gate must require live evidence_json artifacts"
+grep -q "evidence_json path does not exist" "$SCRIPT" || \
+  fail "completion gate must reject missing evidence_json artifacts"
+grep -q "required product-flow step" "$SCRIPT" || \
+  fail "completion gate must reject incomplete frontend product-flow reports"
+grep -q "topology.observed_device_pairs must not be empty" "$SCRIPT" || \
+  fail "completion gate must reject cross-device reports without observed pairs"
+grep -q "self-test accepted missing evidence_json artifact" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing evidence_json artifacts"
+grep -q "self-test accepted missing frontend product-flow step" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing product-flow steps"
+grep -q "self-test accepted missing observed cross-device pairs" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing observed cross-device pairs"
 grep -q "expected_script" "$SCRIPT" || \
   fail "completion gate must pin expected report script identities"
 grep -q "report script is" "$SCRIPT" || \

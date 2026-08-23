@@ -64,8 +64,13 @@ Current frontend lifecycle evidence:
   reports, child verifier `product_complete_claim=true`, and cross-device
   reports where `local_provider_boundary_only=true`. It also verifies the
   stable `script` identity for each required report, including the host
-  timeout/cancel/revoke/resume lifecycle reports. This gate is an aggregate
-  completion guard, not a substitute for any live domain artifact.
+  timeout/cancel/revoke/resume lifecycle reports. It now also requires existing
+  `evidence_json` artifacts for the domain verifier reports, explicit passed
+  frontend product-flow steps for Browser/Tauri, cross-device,
+  permission-subject, and target-picker coverage, and non-empty observed
+  caller/provider device pairs with distinct device URAs in the cross-device
+  report. This gate is an aggregate completion guard, not a substitute for any
+  live domain artifact.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:

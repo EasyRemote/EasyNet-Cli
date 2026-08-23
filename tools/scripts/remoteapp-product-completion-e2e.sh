@@ -76,6 +76,12 @@ required = [
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON",
         "expected_script": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
         "coverage_keys": [],
+        "required_steps": [
+            "frontend-browser-lifecycle",
+            "cross-device-product-smoke",
+            "host-permission-subject",
+            "host-target-picker-freshness",
+        ],
         "evidence_contract_contains": [
             "Browser/Tauri RemoteApp lifecycle evidence",
             "cross-device product smoke with distinct device URAs",
@@ -86,6 +92,7 @@ required = [
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON",
         "expected_script": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
         "coverage_keys": [],
+        "requires_evidence_json": True,
     },
     {
         "id": "cross_device_smoke",
@@ -97,24 +104,28 @@ required = [
             "distinct_device_uras_observed",
         ],
         "cross_device": True,
+        "requires_observed_device_pairs": True,
     },
     {
         "id": "cross_platform_capture",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON",
         "expected_script": "tools/scripts/remoteapp-cross-platform-capture-e2e.sh",
         "coverage_keys": ["macos", "windows", "linux"],
+        "requires_evidence_json": True,
     },
     {
         "id": "input_injection",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON",
         "expected_script": "tools/scripts/remoteapp-input-injection-e2e.sh",
         "coverage_keys": ["macos", "windows", "linux"],
+        "requires_evidence_json": True,
     },
     {
         "id": "media_adaptation",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON",
         "expected_script": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
         "coverage_keys": ["baseline", "degraded_network", "backpressure"],
+        "requires_evidence_json": True,
     },
     {
         "id": "multi_window_tracking",
@@ -127,36 +138,42 @@ required = [
             "target_loss_rebind",
             "multi_display_application",
         ],
+        "requires_evidence_json": True,
     },
     {
         "id": "network_fallback",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON",
         "expected_script": "tools/scripts/remoteapp-network-fallback-e2e.sh",
         "coverage_keys": ["direct", "stun_srflx", "turn_relay", "easynet_relay"],
+        "requires_evidence_json": True,
     },
     {
         "id": "session_timeout",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON",
         "expected_script": "tools/scripts/host-remoteapp-session-timeout-e2e.sh",
         "coverage_keys": [],
+        "requires_evidence_json": True,
     },
     {
         "id": "session_cancel",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON",
         "expected_script": "tools/scripts/host-remoteapp-session-cancel-e2e.sh",
         "coverage_keys": [],
+        "requires_evidence_json": True,
     },
     {
         "id": "permission_revoke",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON",
         "expected_script": "tools/scripts/host-remoteapp-permission-revoke-e2e.sh",
         "coverage_keys": [],
+        "requires_evidence_json": True,
     },
     {
         "id": "session_resume",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON",
         "expected_script": "tools/scripts/host-remoteapp-session-resume-e2e.sh",
         "coverage_keys": [],
+        "requires_evidence_json": True,
     },
     {
         "id": "crash_restart_recovery",
@@ -168,6 +185,7 @@ required = [
             "terminal_receipt_replay_after_crash",
             "stale_socket_restart_cleanup",
         ],
+        "requires_evidence_json": True,
     },
 ]
 
@@ -244,6 +262,36 @@ for item in required:
             message = f"evidence_contract missing {expected!r}"
             check["errors"].append(message)
             add_error(item_id, message)
+    if item.get("required_steps"):
+        steps = report.get("steps") if isinstance(report.get("steps"), list) else []
+        passed_steps = {
+            step.get("name")
+            for step in steps
+            if isinstance(step, dict) and step.get("status") == "passed"
+        }
+        check["required_steps"] = item["required_steps"]
+        check["passed_steps"] = sorted(name for name in passed_steps if isinstance(name, str))
+        for step_name in item["required_steps"]:
+            if step_name not in passed_steps:
+                message = f"required product-flow step {step_name!r} did not pass"
+                check["errors"].append(message)
+                add_error(item_id, message)
+    if item.get("requires_evidence_json"):
+        evidence_json = report.get("evidence_json")
+        check["evidence_json"] = evidence_json if isinstance(evidence_json, str) else None
+        if not isinstance(evidence_json, str) or not evidence_json.strip():
+            message = "evidence_json must name a required live evidence artifact"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        else:
+            evidence_path = pathlib.Path(evidence_json)
+            if not evidence_path.is_absolute():
+                evidence_path = report_path.parent / evidence_path
+            check["resolved_evidence_json"] = str(evidence_path)
+            if not evidence_path.exists():
+                message = f"evidence_json path does not exist: {evidence_path}"
+                check["errors"].append(message)
+                add_error(item_id, message)
     if item.get("cross_device"):
         topology = report.get("topology") if isinstance(report.get("topology"), dict) else {}
         check["topology"] = topology
@@ -263,6 +311,38 @@ for item in required:
             message = "coverage.local_provider_boundary_only is not false"
             check["errors"].append(message)
             add_error(item_id, message)
+        if item.get("requires_observed_device_pairs"):
+            observed_device_pairs = topology.get("observed_device_pairs")
+            if not isinstance(observed_device_pairs, list) or not observed_device_pairs:
+                message = "topology.observed_device_pairs must not be empty"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            else:
+                distinct_pairs = []
+                for index, pair in enumerate(observed_device_pairs):
+                    if not isinstance(pair, dict):
+                        message = f"topology.observed_device_pairs[{index}] must be an object"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        continue
+                    caller_ura = pair.get("caller_ura")
+                    provider_ura = pair.get("provider_ura")
+                    distinct = pair.get("distinct_device_uras")
+                    if not isinstance(caller_ura, str) or not caller_ura:
+                        message = f"topology.observed_device_pairs[{index}].caller_ura must be set"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                    if not isinstance(provider_ura, str) or not provider_ura:
+                        message = f"topology.observed_device_pairs[{index}].provider_ura must be set"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                    if distinct is not True or caller_ura == provider_ura:
+                        message = f"topology.observed_device_pairs[{index}] is not a distinct device pair"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                    else:
+                        distinct_pairs.append(pair)
+                check["observed_distinct_device_pair_count"] = len(distinct_pairs)
     checks.append(check)
 
 effective_status = "failed" if errors else "passed"
@@ -355,6 +435,19 @@ script_by_id = {
     "session_resume": "tools/scripts/host-remoteapp-session-resume-e2e.sh",
     "crash_restart_recovery": "tools/scripts/remoteapp-crash-restart-recovery-e2e.sh",
 }
+evidence_json_ids = {
+    "browser_lifecycle",
+    "cross_platform_capture",
+    "input_injection",
+    "media_adaptation",
+    "multi_window_tracking",
+    "network_fallback",
+    "session_timeout",
+    "session_cancel",
+    "permission_revoke",
+    "session_resume",
+    "crash_restart_recovery",
+}
 report = {
     "script": script_by_id[item_id],
     "status": "passed",
@@ -366,13 +459,34 @@ if item_id == "frontend_product_flow":
         "Browser/Tauri RemoteApp lifecycle evidence",
         "cross-device product smoke with distinct device URAs",
     ]
+    report["steps"] = [
+        {"name": "frontend-browser-lifecycle", "status": "passed"},
+        {"name": "cross-device-product-smoke", "status": "passed"},
+        {"name": "host-permission-subject", "status": "passed"},
+        {"name": "host-target-picker-freshness", "status": "passed"},
+    ]
 if item_id == "cross_device_smoke":
     report["topology"] = {
         "requires_distinct_devices": True,
+        "observed_device_pairs": [
+            {
+                "step": "cross-device-routing",
+                "caller_ura": "easynet:///r/localhost/device/synthetic-caller",
+                "provider_ura": "easynet:///r/localhost/device/synthetic-provider",
+                "distinct_device_uras": True,
+            }
+        ],
         "distinct_device_uras_observed": True,
         "local_provider_boundary_only": False,
     }
 path.parent.mkdir(parents=True, exist_ok=True)
+if item_id in evidence_json_ids:
+    evidence_path = path.with_suffix(".evidence.json")
+    evidence_path.write_text(
+        json.dumps({"synthetic": True, "report_id": item_id}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    report["evidence_json"] = str(evidence_path)
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 }
@@ -416,6 +530,99 @@ run_self_test() {
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
     "$0" --check --out-dir "$tmp/pass" >/dev/null
   grep -q '"product_complete_claim": true' "$tmp/pass/report.json"
+
+  python3 - "$tmp/frontend_product_flow.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["steps"] = [
+    step for step in report["steps"]
+    if step.get("name") != "frontend-browser-lifecycle"
+]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-product-flow-step" >/dev/null 2>&1; then
+    echo "self-test accepted missing frontend product-flow step" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
+
+  python3 - "$tmp/browser_lifecycle.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+pathlib.Path(report["evidence_json"]).unlink()
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-evidence-json-artifact" >/dev/null 2>&1; then
+    echo "self-test accepted missing evidence_json artifact" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/browser_lifecycle.json" browser_lifecycle
+
+  python3 - "$tmp/cross_device_smoke.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["topology"]["observed_device_pairs"] = []
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-observed-device-pairs" >/dev/null 2>&1; then
+    echo "self-test accepted missing observed cross-device pairs" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/cross_device_smoke.json" cross_device_smoke
 
   python3 - "$tmp/cross_device_smoke.json" <<'PY'
 import json
@@ -564,8 +771,15 @@ case "$MODE" in
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON' "$0"
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON' "$0"
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
+    grep -q 'requires_evidence_json' "$0"
+    grep -q 'evidence_json path does not exist' "$0"
+    grep -q 'required product-flow step' "$0"
+    grep -q 'topology.observed_device_pairs must not be empty' "$0"
     grep -q 'report script is' "$0"
     grep -q 'self-test accepted wrong report script identity' "$0"
+    grep -q 'self-test accepted missing evidence_json artifact' "$0"
+    grep -q 'self-test accepted missing frontend product-flow step' "$0"
+    grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test
     ;;
