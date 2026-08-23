@@ -17,9 +17,11 @@ mkdir -p \
   "$SB/docs/design" \
   "$SB/pr/20260822-remoteapp-product-closure" \
   "$SB/tools/scripts" \
+  "$SB/plugins/remote-desktop/src/media" \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+cp "$REPO_ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh" "$SB/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
@@ -31,14 +33,27 @@ cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh" "$SB/tools/sc
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh" "$SB/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh" "$SB/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-matrix.json" "$SB/docs/design/remoteapp-product-readiness-matrix.json"
 cp "$REPO_ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md" "$SB/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 cp "$REPO_ROOT/plugins/remote-desktop/src/session.rs" "$SB/plugins/remote-desktop/src/session.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/session_recovery.rs" "$SB/plugins/remote-desktop/src/session_recovery.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/session_state.rs" "$SB/plugins/remote-desktop/src/session_state.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/session_lifecycle.rs" "$SB/plugins/remote-desktop/src/session_lifecycle.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/runtime.rs" "$SB/plugins/remote-desktop/src/runtime.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/view.rs" "$SB/plugins/remote-desktop/src/view.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/event_log.rs" "$SB/plugins/remote-desktop/src/event_log.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/session_events.rs" "$SB/plugins/remote-desktop/src/session_events.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/target_monitor.rs" "$SB/plugins/remote-desktop/src/target_monitor.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SB/plugins/remote-desktop/src/input.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/media/native.rs" "$SB/plugins/remote-desktop/src/media/native.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/mod.rs" "$SB/plugins/remote-desktop/src/handlers/mod.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/create_session.rs" "$SB/plugins/remote-desktop/src/handlers/create_session.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/refresh_lease.rs" "$SB/plugins/remote-desktop/src/handlers/refresh_lease.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/show_session.rs" "$SB/plugins/remote-desktop/src/handlers/show_session.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/end_session.rs" "$SB/plugins/remote-desktop/src/handlers/end_session.rs"
 
 perl -0pi -e 's/full RemoteApp product closure incomplete as of 2026-08-22/implemented; full acceptance verified 2026-08-16/' \
   "$SB/docs/design/remoteapp-targeted-session-spec.md"
@@ -200,6 +215,15 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "network fallback verifier must require real network fallback proof mode" /tmp/check-remoteapp-product-closure-network-proof-mode.out || \
   fail "expected network fallback proof-mode failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
+perl -0pi -e 's#selected_route_class#selected_route_label#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-route-class.out 2>&1; then
+  fail "checker accepted network fallback verifier without selected route-class evidence"
+fi
+grep -q "network fallback verifier must inspect selected route-class evidence" /tmp/check-remoteapp-product-closure-network-route-class.out || \
+  fail "expected network fallback selected route-class failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 
 perl -0pi -e 's#turn_relay#turn_model_only#g' \

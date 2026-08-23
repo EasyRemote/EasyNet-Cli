@@ -643,6 +643,8 @@ require 'easynet_relay' "$NETWORK_FALLBACK" \
   'network fallback verifier must require EasyNet relay route evidence'
 require 'selected_candidate_pair' "$NETWORK_FALLBACK" \
   'network fallback verifier must inspect selected candidate-pair evidence'
+require 'selected_route_class' "$NETWORK_FALLBACK" \
+  'network fallback verifier must inspect selected route-class evidence'
 require 'local_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs" \
   'native WebRTC stats must project selected local candidate type for network fallback evidence'
 require 'remote_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs" \

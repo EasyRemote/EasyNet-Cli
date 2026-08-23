@@ -46,9 +46,9 @@ Evidence contract:
   The evidence JSON must prove a real network fallback matrix, not route-model
   source checks:
   direct, stun_srflx, turn_relay, and easynet_relay scenarios, each with
-  connected WebRTC candidate-pair evidence, rendered media, public RemoteApp
-  session abilities, selected Resource URA subject binding, session end, and a
-  visible terminal receipt.
+  connected WebRTC candidate-pair evidence, selected route-class evidence,
+  rendered media, public RemoteApp session abilities, selected Resource URA
+  subject binding, session end, and a visible terminal receipt.
 
 Non-claims:
   A skipped report or self-test does not prove network product readiness.
@@ -135,6 +135,15 @@ def is_ura(value):
 
 def lower(value):
     return value.lower() if isinstance(value, str) else value
+
+def expected_selected_route_class(route_kind):
+    if route_kind == "direct":
+        return "direct"
+    if route_kind == "stun_srflx":
+        return "stun_srflx"
+    if route_kind in {"turn_relay", "easynet_relay"}:
+        return "relay"
+    return None
 
 def sensitive_key_errors(value, path="$"):
     if isinstance(value, dict):
@@ -237,7 +246,13 @@ if isinstance(scenarios, list):
             pair = {}
         local_type = lower(pair.get("local_candidate_type"))
         remote_type = lower(pair.get("remote_candidate_type"))
+        selected_route_class = lower(pair.get("selected_route_class"))
+        expected_route_class = expected_selected_route_class(route_kind)
         candidate_types = {local_type, remote_type}
+        require(selected_route_class in {"direct", "stun_srflx", "relay"},
+                f"{prefix}: selected_route_class must be direct, stun_srflx, or relay")
+        require(expected_route_class is None or selected_route_class == expected_route_class,
+                f"{prefix}: selected_route_class must be {expected_route_class}")
         require(pair.get("protocol") in {"udp", "tcp", "UDP", "TCP"},
                 f"{prefix}: candidate pair protocol must be udp or tcp")
         require(float(pair.get("current_round_trip_time_ms", 0)) >= 0,
@@ -290,6 +305,7 @@ if isinstance(scenarios, list):
             "name": name,
             "route_kind": route_kind,
             "ice_connection_state": webrtc.get("ice_connection_state"),
+            "selected_route_class": selected_route_class,
             "candidate_types": sorted(str(item) for item in candidate_types if item),
             "frames_rendered": media.get("frames_rendered"),
             "session_id": session_id,
@@ -335,17 +351,17 @@ import sys
 
 subject = "easynet:///r/localhost/resource/device.receiver/streams/display.primary"
 routes = [
-    ("direct", "host", "host", {}),
-    ("stun_srflx", "srflx", "host", {}),
-    ("turn_relay", "relay", "host", {"turn_relay_uri_redacted": True}),
-    ("easynet_relay", "relay", "relay", {
+    ("direct", "host", "host", "direct", {}),
+    ("stun_srflx", "srflx", "host", "stun_srflx", {}),
+    ("turn_relay", "relay", "host", "relay", {"turn_relay_uri_redacted": True}),
+    ("easynet_relay", "relay", "relay", "relay", {
         "route_provider": "easynet_relay",
         "relay_reachability": True,
         "relay_session_id": "relay-self-test-1",
     }),
 ]
 scenarios = []
-for route_kind, local_type, remote_type, extra in routes:
+for route_kind, local_type, remote_type, selected_route_class, extra in routes:
     session_id = f"rd-network-{route_kind}-self-test"
     scenario = {
         "name": f"{route_kind}-self-test",
@@ -369,6 +385,7 @@ for route_kind, local_type, remote_type, extra in routes:
             "selected_candidate_pair": {
                 "local_candidate_type": local_type,
                 "remote_candidate_type": remote_type,
+                "selected_route_class": selected_route_class,
                 "protocol": "udp",
                 "current_round_trip_time_ms": 12.5,
             },
