@@ -573,7 +573,7 @@ func TestCABIPreparedHandleRegistryClaimLifecycle(t *testing.T) {
 }
 
 func TestCABIProviderClosedStateRejectsRuntimeCalls(t *testing.T) {
-	runtime := newCABIRuntimeTransport(cabiRuntimeSymbols{}, 99, false)
+	runtime := newCABIRuntimeTransport(cabiRuntimeSymbols{}, 99, false, cabiRuntimeFeatures{})
 
 	if err := runtime.Close(context.Background()); err != nil {
 		t.Fatalf("Close failed: %v", err)
@@ -669,6 +669,27 @@ func TestCABIRuntimeProviderFallsBackToV7StreamOpen(t *testing.T) {
 	}
 	if len(event.PayloadBytes()) != 0 {
 		t.Fatalf("v7 fallback unexpectedly produced raw payload bytes: %q", event.PayloadBytes())
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("stream close: %v", err)
+	}
+}
+
+func TestCABIRuntimeProviderFallsBackToV7WhenV8FeatureDisabled(t *testing.T) {
+	client := openFakeCABIRuntimeV8FeatureDisabled(t)
+	stream, err := client.InvokeStream(context.Background(), completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	event, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("stream event: %v", err)
+	}
+	if string(event.PayloadJSON()) != `{"step":1}` {
+		t.Fatalf("feature-disabled fallback payload_json = %s", event.PayloadJSON())
+	}
+	if len(event.PayloadBytes()) != 0 {
+		t.Fatalf("feature-disabled fallback unexpectedly produced raw payload bytes: %q", event.PayloadBytes())
 	}
 	if err := stream.Close(context.Background()); err != nil {
 		t.Fatalf("stream close: %v", err)
@@ -1040,6 +1061,11 @@ func openFakeCABIRuntimeV7(t *testing.T) *RuntimeClient {
 	return openFakeCABIRuntimeWithLibrary(t, buildFakeCABIStreamLibraryV7(t))
 }
 
+func openFakeCABIRuntimeV8FeatureDisabled(t *testing.T) *RuntimeClient {
+	t.Helper()
+	return openFakeCABIRuntimeWithLibrary(t, buildFakeCABIStreamLibraryV8FeatureDisabled(t))
+}
+
 func openFakeCABIRuntimeWithLibrary(t *testing.T, library string) *RuntimeClient {
 	t.Helper()
 	transport, err := openCABIRuntimeLifecycleTransport(library)
@@ -1178,6 +1204,19 @@ func buildFakeCABIStreamLibraryV7(t *testing.T) string {
 	return buildFakeCABIStreamLibraryFromSource(t, fakeCABIStreamSource)
 }
 
+func buildFakeCABIStreamLibraryV8FeatureDisabled(t *testing.T) string {
+	source := strings.Replace(
+		fakeCABIStreamSource+fakeCABIStreamV8Extension,
+		"\\\"stream_raw_payload\\\":true",
+		"\\\"stream_raw_payload\\\":false",
+		1,
+	)
+	if source == fakeCABIStreamSource+fakeCABIStreamV8Extension {
+		t.Fatal("fake C ABI v8 feature marker was not replaced")
+	}
+	return buildFakeCABIStreamLibraryFromSource(t, source)
+}
+
 func buildFakeCABIStreamLibraryFromSource(t *testing.T, sourceText string) string {
 	t.Helper()
 	cc, err := exec.LookPath("cc")
@@ -1231,6 +1270,10 @@ static char *dup_json(const char *s) {
 
 uint32_t runtime_abi_version(void) { return 7u; }
 void runtime_string_free(char *s) { free(s); }
+int32_t runtime_feature_discovery(char **out_features_json) {
+	*out_features_json = dup_json("{\"abi_version\":7,\"abi_extensions\":{\"v8\":{\"stream_raw_payload\":true,\"symbol\":\"runtime_invocation_stream_open_v8\"}},\"sdk_version\":\"0.91.30\",\"profiles\":{\"runtime_core\":\"provider-backed\"},\"symbols\":{\"generic_invocation\":true,\"stream_raw_payload_v8\":true},\"axon_pb\":true}");
+	return 0;
+}
 int32_t runtime_last_error_json(char **out_error_json) {
 	*out_error_json = dup_json(last_error_json);
 	return 0;

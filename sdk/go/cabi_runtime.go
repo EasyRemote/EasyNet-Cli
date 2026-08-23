@@ -9,6 +9,7 @@ package easynet
 #include <stdlib.h>
 
 typedef uint32_t (*runtime_cabi_abi_version_fn)(void);
+typedef int32_t (*runtime_cabi_feature_discovery_fn)(char **out_features_json);
 typedef int32_t (*runtime_cabi_last_error_json_fn)(char **out_error_json);
 typedef void (*runtime_cabi_string_free_fn)(char *s);
 typedef int32_t (*runtime_host_start_fn)(const char *config_json, uint64_t *out_host_handle);
@@ -53,6 +54,10 @@ extern void easynetGoBidiCallback(void *user_data, const char *frame_json);
 
 static uint32_t runtime_cabi_call_abi_version(void *fn) {
 	return ((runtime_cabi_abi_version_fn)fn)();
+}
+
+static int32_t runtime_cabi_call_feature_discovery(void *fn, char **out_features_json) {
+	return ((runtime_cabi_feature_discovery_fn)fn)(out_features_json);
 }
 
 static int32_t runtime_cabi_call_last_error_json(void *fn, char **out_error_json) {
@@ -208,6 +213,7 @@ import (
 
 type cabiRuntimeSymbols struct {
 	abiVersion            unsafe.Pointer
+	featureDiscovery      unsafe.Pointer
 	lastErrorJSON         unsafe.Pointer
 	stringFree            unsafe.Pointer
 	runtimeHostStart      unsafe.Pointer
@@ -251,9 +257,14 @@ type cabiRuntimeLifecycleTransport struct {
 	mu       sync.Mutex
 	library  unsafe.Pointer
 	symbols  cabiRuntimeSymbols
+	features cabiRuntimeFeatures
 	handles  map[string]uint64
 	runtimes map[*cabiRuntimeTransport]struct{}
 	closed   bool
+}
+
+type cabiRuntimeFeatures struct {
+	streamRawPayloadV8 bool
 }
 
 // openCABIRuntimeLifecycleTransport loads libeasynet_cli and assembles the
@@ -281,6 +292,7 @@ func openCABIRuntimeLifecycleTransport(path string) (*cabiRuntimeLifecycleTransp
 	return &cabiRuntimeLifecycleTransport{
 		library:  library,
 		symbols:  symbols,
+		features: cabiRuntimeFeatureDiscovery(symbols),
 		handles:  map[string]uint64{},
 		runtimes: map[*cabiRuntimeTransport]struct{}{},
 	}, nil
@@ -389,7 +401,7 @@ func (t *cabiRuntimeLifecycleTransport) OpenRuntime(ctx context.Context, handleI
 	if err != nil {
 		return nil, nil, err
 	}
-	runtime := newCABIRuntimeTransport(t.symbols, runtimeHandle, true)
+	runtime := newCABIRuntimeTransport(t.symbols, runtimeHandle, true, t.features)
 	t.mu.Lock()
 	t.runtimes[runtime] = struct{}{}
 	t.mu.Unlock()
@@ -556,6 +568,7 @@ func (t *cabiRuntimeLifecycleTransport) openClientHandle(runtimeHostHandle uint6
 type cabiRuntimeTransport struct {
 	mu              sync.Mutex
 	symbols         cabiRuntimeSymbols
+	features        cabiRuntimeFeatures
 	handle          uint64
 	ownsHandle      bool
 	preparedHandles *cabiPreparedHandleRegistry
@@ -564,9 +577,10 @@ type cabiRuntimeTransport struct {
 	closed          bool
 }
 
-func newCABIRuntimeTransport(symbols cabiRuntimeSymbols, handle uint64, ownsHandle bool) *cabiRuntimeTransport {
+func newCABIRuntimeTransport(symbols cabiRuntimeSymbols, handle uint64, ownsHandle bool, features cabiRuntimeFeatures) *cabiRuntimeTransport {
 	return &cabiRuntimeTransport{
 		symbols:         symbols,
+		features:        features,
 		handle:          handle,
 		ownsHandle:      ownsHandle,
 		preparedHandles: newCABIPreparedHandleRegistry(),
@@ -754,7 +768,7 @@ func (t *cabiRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 	if err != nil {
 		return nil, nil, err
 	}
-	rawStream := t.symbols.streamOpenV8 != nil
+	rawStream := t.symbols.streamOpenV8 != nil && t.features.streamRawPayloadV8
 	inbox := newCABICallbackInbox(MaxStreamBufferedEvents, rawStream)
 	registration, err := registerCABICallbackInbox(inbox)
 	if err != nil {
@@ -1617,6 +1631,7 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		out  *unsafe.Pointer
 	}{
 		{"runtime_abi_version", &symbols.abiVersion},
+		{"runtime_feature_discovery", &symbols.featureDiscovery},
 		{"runtime_last_error_json", &symbols.lastErrorJSON},
 		{"runtime_string_free", &symbols.stringFree},
 		{"runtime_host_start", &symbols.runtimeHostStart},
@@ -1660,6 +1675,30 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 	}
 	symbols.streamOpenV8 = optionalCABISymbol(library, "runtime_invocation_stream_open_v8")
 	return symbols, nil
+}
+
+func cabiRuntimeFeatureDiscovery(symbols cabiRuntimeSymbols) cabiRuntimeFeatures {
+	var out *C.char
+	code := int32(C.runtime_cabi_call_feature_discovery(symbols.featureDiscovery, &out))
+	if code != 0 || out == nil {
+		return cabiRuntimeFeatures{}
+	}
+	raw := cabiTakeCString(symbols.stringFree, out)
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return cabiRuntimeFeatures{}
+	}
+	extensions, ok := decoded["abi_extensions"].(map[string]any)
+	if !ok {
+		return cabiRuntimeFeatures{}
+	}
+	v8, ok := extensions["v8"].(map[string]any)
+	if !ok {
+		return cabiRuntimeFeatures{}
+	}
+	return cabiRuntimeFeatures{
+		streamRawPayloadV8: v8["stream_raw_payload"] == true,
+	}
 }
 
 func cabiRuntimeLastErrorOrCode(symbols cabiRuntimeSymbols, code int32, operation string) error {

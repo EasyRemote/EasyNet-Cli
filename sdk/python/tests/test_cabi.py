@@ -152,7 +152,9 @@ class CABIEventProjectionTests(unittest.TestCase):
 class FakeRawCABI:
     """Strict generic C ABI fake: product-specific symbol lookups cannot succeed."""
 
-    def __init__(self, *, stream_v8: bool = False) -> None:
+    def __init__(
+        self, *, stream_v8: bool = False, stream_v8_feature: bool | None = None
+    ) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
         self.callback_buffers: list[ctypes.Array[ctypes.c_char]] = []
         self.last_error_json = b"null"
@@ -168,6 +170,7 @@ class FakeRawCABI:
         self.stream_cancels: list[int] = []
         self.stream_callbacks: dict[int, tuple[object, object]] = {}
         self.stream_v8_opens = 0
+        self.stream_v8_feature = stream_v8 if stream_v8_feature is None else stream_v8_feature
         self.bidi_sends: list[dict[str, object]] = []
         self.bidi_close_sends: list[int] = []
         self.bidi_closes: list[int] = []
@@ -265,6 +268,12 @@ class FakeRawCABI:
             json.dumps(
                 {
                     "abi_version": EXPECTED_ABI_VERSION,
+                    "abi_extensions": {
+                        "v8": {
+                            "stream_raw_payload": self.stream_v8_feature,
+                            "symbol": "runtime_invocation_stream_open_v8",
+                        }
+                    },
                     "sdk_version": "0.91.30",
                     "profiles": {"runtime_core": "provider-backed"},
                     "symbols": {"generic_invocation": True},
@@ -711,6 +720,18 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(EXPECTED_ABI_VERSION, 7)
         self.assertEqual(features["abi_version"], 7)
         self.assertEqual(features["profiles"], {"runtime_core": "provider-backed"})
+        self.assertFalse(library.stream_v8_available)
+
+    def test_library_gates_v8_raw_stream_on_feature_discovery(self) -> None:
+        enabled = RuntimeCABILibrary(
+            FakeRawCABI(stream_v8=True, stream_v8_feature=True)
+        )
+        disabled = RuntimeCABILibrary(
+            FakeRawCABI(stream_v8=True, stream_v8_feature=False)
+        )
+
+        self.assertTrue(enabled.stream_v8_available)
+        self.assertFalse(disabled.stream_v8_available)
 
     def test_library_exposes_runtime_host_not_daemon_lifecycle_methods(self) -> None:
         lifecycle_methods = {
@@ -1181,6 +1202,24 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertEqual(raw.stream_v8_opens, 1)
         self.assertEqual(event.payload_base64, "")
+        self.assertEqual(event.payload_bytes, b'{"provider":"cabi"}')
+        self.assertEqual(event.payload_json, {"provider": "cabi"})
+
+    def test_cabi_provider_falls_back_to_v7_when_v8_feature_disabled(self) -> None:
+        raw = FakeRawCABI(stream_v8=True, stream_v8_feature=False)
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_stream(complete_draft())
+        try:
+            event = stream.next()
+        finally:
+            stream.close()
+
+        self.assertEqual(raw.stream_v8_opens, 0)
+        self.assertEqual(event.payload_base64, "eyJwcm92aWRlciI6ImNhYmkifQ==")
         self.assertEqual(event.payload_bytes, b'{"provider":"cabi"}')
         self.assertEqual(event.payload_json, {"provider": "cabi"})
 

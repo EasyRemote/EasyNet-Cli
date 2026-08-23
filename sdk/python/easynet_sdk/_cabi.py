@@ -85,6 +85,9 @@ class RuntimeCABILibrary:
         self._raw = raw
         self.stream_v8_available = False
         self._bind_symbols()
+        self.stream_v8_available = (
+            self.stream_v8_available and self._stream_v8_feature_enabled()
+        )
 
     @classmethod
     def load(cls, path: str | None = None) -> "RuntimeCABILibrary":
@@ -135,6 +138,21 @@ class RuntimeCABILibrary:
 
     def feature_discovery(self) -> bytes:
         return self._call_output(self._raw.runtime_feature_discovery)
+
+    def _stream_v8_feature_enabled(self) -> bool:
+        try:
+            decoded = json.loads(self.feature_discovery().decode("utf-8"))
+        except Exception:
+            return False
+        if not isinstance(decoded, dict):
+            return False
+        extensions = decoded.get("abi_extensions")
+        if not isinstance(extensions, dict):
+            return False
+        v8 = extensions.get("v8")
+        if not isinstance(v8, dict):
+            return False
+        return v8.get("stream_raw_payload") is True
 
     def init(self, control_path: str = "") -> int:
         out_handle = ctypes.c_uint64(0)
