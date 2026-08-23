@@ -427,8 +427,14 @@ for scenario_name in sorted(required_scenarios):
         "media_pipeline_id": media_pipeline_id,
         "render_probe_observed_at_ms": render_probe_observed_at_ms,
         "measured_fps": measured_fps,
+        "effective_fps": number(video.get("effective_fps")),
+        "target_bitrate_kbps": integer(video.get("target_bitrate_kbps")),
         "observed_bitrate_kbps": integer(video.get("observed_bitrate_kbps")),
         "frames_rendered": integer(video.get("frames_rendered")),
+        "audio_packets_rendered": integer(audio.get("packets_rendered")),
+        "audio_samples_rendered": integer(audio.get("samples_rendered")),
+        "frames_dropped": integer(drop_policy.get("frames_dropped")),
+        "adaptation_event_types": sorted(str(event_type) for event_type in event_types if event_type),
     })
 
 baseline = scenario_by_name.get("baseline")

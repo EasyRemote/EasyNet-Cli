@@ -31,6 +31,12 @@ grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON" "$SCR
   fail "completion gate must require input injection report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require media adaptation report"
+grep -q "requires_media_scenarios" "$SCRIPT" || \
+  fail "completion gate must require media adaptation scenario summaries"
+grep -q "media adaptation scenarios summary must be a non-empty list" "$SCRIPT" || \
+  fail "completion gate must reject media reports without scenario summaries"
+grep -q "self-test accepted media adaptation report without scenarios" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing media scenario summaries"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require multi-window tracking report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON" "$SCRIPT" || \

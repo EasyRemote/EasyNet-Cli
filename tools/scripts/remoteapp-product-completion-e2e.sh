@@ -234,6 +234,7 @@ required = [
         "expected_script": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
         "coverage_keys": ["baseline", "degraded_network", "backpressure"],
         "requires_evidence_json": True,
+        "requires_media_scenarios": True,
     },
     {
         "id": "multi_window_tracking",
@@ -323,6 +324,170 @@ def positive_int(value):
         return int(value) > 0
     except Exception:
         return False
+
+def int_value(value):
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+def number_value(value):
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
+def validate_media_scenarios(item_id, check, report):
+    required_scenarios = {"baseline", "degraded_network", "backpressure"}
+    scenarios = report.get("scenarios")
+    check["required_media_scenarios"] = sorted(required_scenarios)
+    if not isinstance(scenarios, list) or not scenarios:
+        message = "media adaptation scenarios summary must be a non-empty list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+
+    scenario_by_name = {}
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            message = f"media adaptation scenarios[{index}] must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        scenario_name = scenario.get("scenario")
+        if scenario_name not in required_scenarios:
+            message = f"media adaptation scenarios[{index}].scenario is {scenario_name!r}, expected one of {sorted(required_scenarios)}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if scenario_name in scenario_by_name:
+            message = f"media adaptation scenario {scenario_name!r} appears more than once"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        scenario_by_name[scenario_name] = scenario
+
+    observed_scenarios = sorted(scenario_by_name)
+    check["observed_media_scenarios"] = observed_scenarios
+    missing_scenarios = sorted(required_scenarios - set(scenario_by_name))
+    if missing_scenarios:
+        message = "media adaptation scenarios missing: " + ", ".join(missing_scenarios)
+        check["errors"].append(message)
+        add_error(item_id, message)
+
+    baseline = scenario_by_name.get("baseline")
+    for scenario_name, scenario in scenario_by_name.items():
+        prefix = f"media adaptation scenario {scenario_name}"
+        if not isinstance(scenario.get("video_codec"), str) or not scenario.get("video_codec"):
+            message = f"{prefix}: video_codec must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if lower(scenario.get("video_transport")) not in {"webrtc", "easynet_relay_webrtc"}:
+            message = f"{prefix}: video_transport must be WebRTC"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("audio_codec"), str) or not scenario.get("audio_codec"):
+            message = f"{prefix}: audio_codec must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("selected_resource_ura"), str) or not scenario.get("selected_resource_ura").startswith("easynet:///"):
+            message = f"{prefix}: selected_resource_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("media_pipeline_id"), str) or not scenario.get("media_pipeline_id"):
+            message = f"{prefix}: media_pipeline_id must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("render_probe_observed_at_ms")):
+            message = f"{prefix}: render_probe_observed_at_ms must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("frames_rendered")):
+            message = f"{prefix}: frames_rendered must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("audio_packets_rendered")) and not positive_int(scenario.get("audio_samples_rendered")):
+            message = f"{prefix}: audio packets or samples must be rendered"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if number_value(scenario.get("measured_fps")) <= 0:
+            message = f"{prefix}: measured_fps must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if number_value(scenario.get("effective_fps")) <= 0:
+            message = f"{prefix}: effective_fps must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("target_bitrate_kbps")):
+            message = f"{prefix}: target_bitrate_kbps must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("observed_bitrate_kbps")):
+            message = f"{prefix}: observed_bitrate_kbps must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if int_value(scenario.get("frames_dropped")) < 0:
+            message = f"{prefix}: frames_dropped must be non-negative"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if scenario_name in {"degraded_network", "backpressure"}:
+            event_types = {
+                event_type
+                for event_type in scenario.get("adaptation_event_types", [])
+                if isinstance(event_type, str)
+            }
+            if scenario_name == "degraded_network":
+                if "bitrate_downshift" not in event_types:
+                    message = f"{prefix}: adaptation_event_types must include bitrate_downshift"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                if not ({"fps_downshift", "frame_drop"} & event_types):
+                    message = f"{prefix}: adaptation_event_types must include fps_downshift or frame_drop"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if scenario_name == "backpressure":
+                if "backpressure_detected" not in event_types:
+                    message = f"{prefix}: adaptation_event_types must include backpressure_detected"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                if "frame_drop" not in event_types:
+                    message = f"{prefix}: adaptation_event_types must include frame_drop"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+
+    if isinstance(baseline, dict):
+        for scenario_name in sorted(required_scenarios - {"baseline"}):
+            scenario = scenario_by_name.get(scenario_name)
+            if not isinstance(scenario, dict):
+                continue
+            prefix = f"media adaptation scenario {scenario_name}"
+            for field in ("selected_resource_ura", "media_pipeline_id", "video_codec", "video_transport", "audio_codec"):
+                if scenario.get(field) != baseline.get(field):
+                    message = f"{prefix}: {field} must match baseline"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+        degraded = scenario_by_name.get("degraded_network")
+        if isinstance(degraded, dict):
+            if int_value(degraded.get("target_bitrate_kbps")) >= int_value(baseline.get("target_bitrate_kbps")):
+                message = "media adaptation degraded_network target_bitrate_kbps must be lower than baseline"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if int_value(degraded.get("observed_bitrate_kbps")) >= int_value(baseline.get("observed_bitrate_kbps")):
+                message = "media adaptation degraded_network observed_bitrate_kbps must be lower than baseline"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not (
+                number_value(degraded.get("effective_fps")) < number_value(baseline.get("effective_fps"))
+                or int_value(degraded.get("frames_dropped")) > int_value(baseline.get("frames_dropped"))
+            ):
+                message = "media adaptation degraded_network must reduce effective_fps or drop frames versus baseline"
+                check["errors"].append(message)
+                add_error(item_id, message)
+        backpressure = scenario_by_name.get("backpressure")
+        if isinstance(backpressure, dict):
+            if int_value(backpressure.get("frames_dropped")) <= int_value(baseline.get("frames_dropped")):
+                message = "media adaptation backpressure frames_dropped must exceed baseline"
+                check["errors"].append(message)
+                add_error(item_id, message)
 
 def validate_network_route_scenarios(item_id, check, report):
     required_routes = {
@@ -610,6 +775,8 @@ for item in required:
             add_error(item_id, message)
     if item.get("requires_network_route_scenarios"):
         validate_network_route_scenarios(item_id, check, report)
+    if item.get("requires_media_scenarios"):
+        validate_media_scenarios(item_id, check, report)
     if item.get("requires_cross_device_remoteapp_scenarios"):
         validate_cross_device_remoteapp_scenarios(item_id, check, report)
     if item.get("requires_platforms_passed"):
@@ -1068,6 +1235,42 @@ if item_id == "input_injection":
     report["platforms"] = [
         {"platform": platform, "status": "passed"}
         for platform in ("linux", "macos", "windows")
+    ]
+if item_id == "media_adaptation":
+    media_scenarios = [
+        ("baseline", 6000, 5800, 60.0, 59.5, 0, ["steady_state"]),
+        ("degraded_network", 2500, 2400, 30.0, 29.2, 12, ["bitrate_downshift", "fps_downshift"]),
+        ("backpressure", 6000, 5600, 60.0, 57.0, 18, ["backpressure_detected", "frame_drop"]),
+    ]
+    report["scenario_count"] = len(media_scenarios)
+    report["scenarios"] = [
+        {
+            "scenario": scenario_name,
+            "video_codec": "h264",
+            "video_transport": "webrtc",
+            "audio_codec": "opus",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/display.primary",
+            "media_pipeline_id": "remoteapp-media-h264-opus-webrtc",
+            "render_probe_observed_at_ms": 1787332006600,
+            "measured_fps": measured_fps,
+            "effective_fps": effective_fps,
+            "target_bitrate_kbps": target_bitrate_kbps,
+            "observed_bitrate_kbps": observed_bitrate_kbps,
+            "frames_rendered": 238,
+            "audio_packets_rendered": 380,
+            "audio_samples_rendered": 384000,
+            "frames_dropped": frames_dropped,
+            "adaptation_event_types": adaptation_event_types,
+        }
+        for (
+            scenario_name,
+            target_bitrate_kbps,
+            observed_bitrate_kbps,
+            effective_fps,
+            measured_fps,
+            frames_dropped,
+            adaptation_event_types,
+        ) in media_scenarios
     ]
 if item_id == "network_fallback":
     network_routes = [
@@ -1737,6 +1940,32 @@ PY
   fi
   write_synthetic_report "$tmp/media_adaptation.json" media_adaptation
 
+  python3 - "$tmp/media_adaptation.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+del report["scenarios"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-media-scenarios" >/dev/null 2>&1; then
+    echo "self-test accepted media adaptation report without scenarios" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/media_adaptation.json" media_adaptation
+
   python3 - "$tmp/input_injection.json" <<'PY'
 import json
 import pathlib
@@ -1867,8 +2096,10 @@ case "$MODE" in
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
     grep -q 'requires_evidence_json' "$0"
     grep -q 'requires_platforms_passed' "$0"
+    grep -q 'requires_media_scenarios' "$0"
     grep -q 'requires_network_route_scenarios' "$0"
     grep -q 'requires_cross_device_remoteapp_scenarios' "$0"
+    grep -q 'media adaptation scenarios summary must be a non-empty list' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-device RemoteApp scenarios summary must be a non-empty list' "$0"
     grep -q 'unsupported_targets must be empty' "$0"
@@ -1904,6 +2135,7 @@ case "$MODE" in
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'self-test accepted unsupported cross-platform capture as product completion' "$0"
     grep -q 'self-test accepted unsupported input injection as product completion' "$0"
+    grep -q 'self-test accepted media adaptation report without scenarios' "$0"
     grep -q 'self-test accepted network fallback report without route scenarios' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test

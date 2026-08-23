@@ -22,6 +22,28 @@ grep -q "skipped" /tmp/remoteapp-media-adaptation-skip.out || \
 
 EASYNET_REMOTEAPP_MEDIA_ADAPTATION_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
 
+python3 - "$OUT_DIR/good/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+scenarios = {scenario["scenario"]: scenario for scenario in report["scenarios"]}
+assert set(scenarios) == {"baseline", "degraded_network", "backpressure"}
+for scenario in scenarios.values():
+    assert scenario["video_codec"] == "h264"
+    assert scenario["video_transport"] == "webrtc"
+    assert scenario["audio_codec"] == "opus"
+    assert scenario["audio_packets_rendered"] > 0 or scenario["audio_samples_rendered"] > 0
+    assert scenario["target_bitrate_kbps"] > 0
+    assert scenario["observed_bitrate_kbps"] > 0
+    assert scenario["render_probe_observed_at_ms"] > 0
+assert scenarios["degraded_network"]["target_bitrate_kbps"] < scenarios["baseline"]["target_bitrate_kbps"]
+assert scenarios["degraded_network"]["observed_bitrate_kbps"] < scenarios["baseline"]["observed_bitrate_kbps"]
+assert "bitrate_downshift" in scenarios["degraded_network"]["adaptation_event_types"]
+assert "backpressure_detected" in scenarios["backpressure"]["adaptation_event_types"]
+assert scenarios["backpressure"]["frames_dropped"] > scenarios["baseline"]["frames_dropped"]
+PY
+
 python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-codec.json" <<'PY'
 import json
 import sys
