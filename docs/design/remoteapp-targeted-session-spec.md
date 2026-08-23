@@ -680,8 +680,11 @@ window:
 
 application:
   app_name alone is not stable identity.
-  production capture requires primary_pid, bundle identity, or another stable
-  native identity plus the display-scoped app window set.
+  capture requires primary_pid, bundle identity, or another stable native
+  identity plus an exact committed app window set.
+  macOS ScreenCaptureKit uses a display-scoped app window set.
+  Windows/Linux xcap baseline uses a process-scoped app window set and MUST NOT
+  invent a display identity.
 
 display:
   require monitor_id/display_id match unless the subject explicitly means
@@ -1270,6 +1273,29 @@ RemoteApp launch reference:
 
 ```text
 FreeRDP RAIL model
+```
+
+### Windows/Linux executable baseline
+
+Before the native product backends above are certified, the xcap/OpenH264
+baseline may execute display, exact window, and exact application capture under
+these constraints:
+
+```text
+window:
+  resolve by committed window_id and owner pid/app identity
+  reject missing, minimized, or owner-drifted targets
+  never substitute a similarly named window and never fall back to display
+
+application:
+  bind a process-stable identity and exact resolved_window_ids
+  capture and alpha-composite only that committed set into a bounded union
+  reject missing/minimized members and oversized unions
+  observe live process window-set drift and require an explicit rebind
+
+capability claim:
+  baseline_ready, not production_ready
+  promotion requires live Windows and Linux decoded-frame/leakage/rebind E2E
 ```
 
 ## 16. External reference boundaries

@@ -14,8 +14,10 @@
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::media::RemoteDesktopMediaBackendDescriptor;
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::target::RemoteDesktopTargetKind;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind, TargetResolutionError,
+    RemoteAppTargetBinding, RemoteAppTargetError, TargetResolutionError,
 };
 
 /// Immutable request metadata for selecting a media source from a committed
@@ -29,7 +31,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct MediaStartRequest<'a> {
 pub(in crate::daemon::plugins::remote_desktop) enum RemoteAppMediaSource {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     NativeProduction,
-    DisplayBaseline,
+    XcapBaseline,
 }
 
 /// Factory boundary required by the remote-app targeted session model.
@@ -88,16 +90,21 @@ impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
             }
         }
 
-        if binding.target_kind() == RemoteDesktopTargetKind::Display {
-            return Ok(RemoteAppMediaSource::DisplayBaseline);
+        if binding.supports_xcap_adapter()
+            && request
+                .config
+                .backend
+                .supports_subject(binding.target_kind().resource_type())
+        {
+            return Ok(RemoteAppMediaSource::XcapBaseline);
         }
 
         Err(RemoteAppTargetError::new(
             ABILITY_SET_DESCRIPTION,
-            TargetResolutionError::DisplayFallbackForbidden,
+            TargetResolutionError::CaptureBackendUnavailable,
             format!(
-                "direct WebRTC baseline capture is display-only and cannot satisfy a {} target binding",
-                binding.target_kind().as_str()
+                "direct WebRTC xcap baseline cannot resolve the committed {} target binding without widening its scope",
+                binding.target_kind().as_str(),
             ),
         ))
     }
@@ -249,7 +256,7 @@ mod tests {
             .start_from_binding(&binding, MediaStartRequest { config: &config })
             .expect("display baseline is allowed");
 
-        assert_eq!(source, RemoteAppMediaSource::DisplayBaseline);
+        assert_eq!(source, RemoteAppMediaSource::XcapBaseline);
     }
 
     #[test]
@@ -288,7 +295,7 @@ mod tests {
             ) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
                 self.seen_binding_id
                     .replace(Some(binding.binding_id().to_string()));
-                Ok(RemoteAppMediaSource::DisplayBaseline)
+                Ok(RemoteAppMediaSource::XcapBaseline)
             }
         }
 
@@ -312,7 +319,7 @@ mod tests {
         )
         .expect("fake factory selects source");
 
-        assert_eq!(source, RemoteAppMediaSource::DisplayBaseline);
+        assert_eq!(source, RemoteAppMediaSource::XcapBaseline);
         assert_eq!(
             factory.seen_binding_id.into_inner(),
             Some(expected_binding_id),
@@ -321,11 +328,12 @@ mod tests {
     }
 
     #[test]
-    fn non_native_window_and_application_sources_fail_closed_before_display_baseline() {
+    fn exact_xcap_window_and_application_bindings_use_target_scoped_baseline() {
         for (kind, metadata) in [
             (
                 ResourceType::Window,
                 json!({
+                    "backend": "xcap",
                     "window_id": 7,
                     "pid": 9001,
                     "bundle_id": "com.example.Editor",
@@ -334,6 +342,7 @@ mod tests {
             (
                 ResourceType::Application,
                 json!({
+                    "backend": "xcap",
                     "display_id": 1,
                     "bundle_id": "com.example.Editor",
                     "app_identity": "com.example.Editor",
@@ -347,15 +356,11 @@ mod tests {
             commit_test_capture_proof(&mut binding);
             let config = display_baseline_config();
 
-            let err = DirectWebRtcMediaSourceFactory
+            let source = DirectWebRtcMediaSourceFactory
                 .start_from_binding(&binding, MediaStartRequest { config: &config })
-                .expect_err("app/window must not fall back to display baseline");
+                .expect("exact app/window binding uses xcap target baseline");
 
-            assert_eq!(
-                err.reason(),
-                TargetResolutionError::DisplayFallbackForbidden
-            );
-            assert_eq!(err.reason().frontend_action().as_str(), "show_unsupported");
+            assert_eq!(source, RemoteAppMediaSource::XcapBaseline);
         }
     }
 }

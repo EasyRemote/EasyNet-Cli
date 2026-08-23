@@ -9,6 +9,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/media"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
+mkdir -p "$SANDBOX/src/daemon/ability/builtins/resources/media"
 mkdir -p "$SANDBOX/docs/design"
 
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
@@ -418,7 +419,7 @@ fn start_remote_app_media_source(factory: &dyn RemoteAppMediaSourceFactory, bind
 }
 
 enum RemoteAppMediaSource {
-    DisplayBaseline,
+    XcapBaseline,
 }
 
 struct DirectWebRtcMediaSourceFactory;
@@ -430,10 +431,10 @@ impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
         if request.config.backend.production_ready() {
             validate_native_production_binding(request.config.backend, binding)?;
         }
-        if binding.target_kind() == RemoteDesktopTargetKind::Display {
-            Ok(RemoteAppMediaSource::DisplayBaseline)
+        if binding.supports_xcap_adapter() {
+            Ok(RemoteAppMediaSource::XcapBaseline)
         } else {
-            Err(TargetResolutionError::DisplayFallbackForbidden.into())
+            Err(anyhow!("xcap baseline cannot bind without widening its scope"))
         }
     }
 }
@@ -468,29 +469,40 @@ RS
 cat >"$SANDBOX/plugins/remote-desktop/src/media/mod.rs" <<'RS'
 const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
     RemoteDesktopMediaBackendDescriptor {
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
     };
 
 const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
     RemoteDesktopMediaBackendDescriptor {
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
     };
 
 fn xcap_supported_screen_entry(entry: ResourceEntry) -> bool {
     let backend = entry.metadata.get("backend").and_then(Value::as_str);
-    entry.kind == ResourceType::Display && backend == Some("xcap")
+    backend == Some("xcap") && match entry.kind {
+        ResourceType::Display => true,
+        ResourceType::Window | ResourceType::Application => screen_target_metadata_resolvable(entry),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn xcap_baseline_catalog_is_display_only_for_remoteapp_targets() {
-        assert!(
-            select_builtin_h264_backend(&discovered_window_entry("xcap")).is_none(),
-            "diagnostic xcap baseline must not advertise app/window capture; exact remoteapp capture requires native target binding"
-        );
+    fn xcap_baseline_catalog_supports_exact_window_and_application_targets() {
+        assert!(select_builtin_h264_backend(&discovered_window_entry("xcap")).is_some());
+    }
+
+    #[test]
+    fn direct_webrtc_binding_uses_xcap_without_widening_window_or_application_scope() {
+        assert!(true);
     }
 }
+RS
+
+cat >"$SANDBOX/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" <<'RS'
+const MAX_APPLICATION_COMPOSITE_PIXELS: u64 = 33_177_600;
+fn capture_application_rgb_with_xcap() {}
 RS
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
@@ -683,15 +695,15 @@ fi
 perl -0pi -e 's/RemoteDesktopInputPolicy::default\(\);/EffectiveRemoteDesktopInputPolicy::for_binding(&input_policy, &target_binding);/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
 
-perl -0pi -e 's/supported_subjects: &\["display"\]/supported_subjects: &["display", "window", "application"]/g' \
+perl -0pi -e 's/supported_subjects: &\["display", "window", "application"\]/supported_subjects: &["display"]/g' \
   "$SANDBOX/plugins/remote-desktop/src/media/mod.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
-  echo "remoteapp target binding checker accepted xcap baseline app/window catalog support" >&2
+  echo "remoteapp target binding checker accepted display-only xcap target catalog" >&2
   exit 1
 fi
 
-perl -0pi -e 's/supported_subjects: &\["display", "window", "application"\]/supported_subjects: &["display"]/g' \
+perl -0pi -e 's/supported_subjects: &\["display"\]/supported_subjects: &["display", "window", "application"]/g' \
   "$SANDBOX/plugins/remote-desktop/src/media/mod.rs"
 
 cat >>"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs" <<'RS'
@@ -721,7 +733,7 @@ fi
 perl -0pi -e 's/\nfn bad_resolver\(\) \{\n    ResourceEntryTargetResolver\.resolve_for_session\(\);\n\}\n//' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
 
-perl -0pi -e 's/binding\.target_kind\(\) == RemoteDesktopTargetKind::Display/true/' \
+perl -0pi -e 's/binding\.supports_xcap_adapter\(\)/true/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
@@ -729,7 +741,7 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
   exit 1
 fi
 
-perl -0pi -e 's/if true/if binding.target_kind\(\) == RemoteDesktopTargetKind::Display/' \
+perl -0pi -e 's/if true/if binding.supports_xcap_adapter()/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
 
 perl -0pi -e 's/\n        binding\.require_capture_proof\(ABILITY_SET_DESCRIPTION\)\?;//' \

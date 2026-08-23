@@ -222,23 +222,29 @@ require 'Some\(expected_binding_id\)' \
 require 'start_remote_app_media_source\(' \
   "$REMOTE_ROOT/transport/webrtc_media.rs" \
   'direct WebRTC media loop must call through the injectable media-source boundary'
-require 'if binding\.target_kind\(\) == RemoteDesktopTargetKind::Display' \
+require 'binding\.supports_xcap_adapter\(\)' \
   "$REMOTE_ROOT/transport/media_source.rs" \
-  'direct WebRTC display baseline plan must be guarded as display-only'
-require 'RemoteAppMediaSource::DisplayBaseline' \
+  'direct WebRTC xcap baseline must require an exact target adapter'
+require 'RemoteAppMediaSource::XcapBaseline' \
   "$REMOTE_ROOT/transport/media_source.rs" \
-  'direct WebRTC display baseline must be an explicit media-source selection'
-require 'TargetResolutionError::DisplayFallbackForbidden' \
+  'direct WebRTC xcap baseline must be an explicit media-source selection'
+require 'without widening its scope' \
   "$REMOTE_ROOT/transport/media_source.rs" \
-  'direct WebRTC baseline guard must fail app/window sessions with typed display_fallback_forbidden reason'
-require_count_at_least 'supported_subjects: &\["display"\]' "$MEDIA" 2 \
-  'both xcap baseline media backends must advertise display-only support'
-require 'entry\.kind == ResourceType::Display && backend == Some\("xcap"\)' "$MEDIA" \
-  'xcap baseline selector must be display-only'
-require 'xcap_baseline_catalog_is_display_only_for_remoteapp_targets' "$MEDIA" \
-  'media catalog must test xcap baseline does not advertise app/window support'
-require 'diagnostic xcap baseline must not advertise app/window capture' "$MEDIA" \
-  'xcap display-only test must document that app/window need native target binding'
+  'direct WebRTC xcap baseline failure must state that target scope may not widen'
+require_count_at_least 'supported_subjects: &\["display", "window", "application"\]' "$MEDIA" 2 \
+  'both xcap media backends must advertise their exact target subject matrix'
+require 'screen_target_metadata_resolvable\(entry\)' "$MEDIA" \
+  'xcap app/window selection must require resolvable target metadata'
+require 'xcap_baseline_catalog_supports_exact_window_and_application_targets' "$MEDIA" \
+  'media catalog must test exact xcap app/window support'
+require 'direct_webrtc_binding_uses_xcap_without_widening_window_or_application_scope' "$MEDIA" \
+  'xcap binding test must prove app/window scope is preserved'
+require 'capture_application_rgb_with_xcap' \
+  "$ROOT/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" \
+  'xcap application media must capture the committed application window set'
+require 'MAX_APPLICATION_COMPOSITE_PIXELS' \
+  "$ROOT/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" \
+  'xcap application compositor must have an explicit memory bound'
 require_count_at_least '"target_model": self\.target_kind\.target_model\(\)' \
   "$REMOTE_ROOT/target.rs" \
   2 \

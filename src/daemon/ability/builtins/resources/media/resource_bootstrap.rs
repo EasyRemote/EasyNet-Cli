@@ -596,19 +596,28 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
     let windows =
         xcap::Window::all().map_err(|err| anyhow::anyhow!("xcap Window::all failed: {err}"))?;
     let mut out = Vec::new();
-    let mut apps: BTreeMap<String, AppAggregate> = BTreeMap::new();
+    // Application resources are process instances, not display names. Grouping
+    // only by `app_name` merges two independently running instances and makes
+    // their window sets impossible to bind or track exactly.
+    let mut apps: BTreeMap<(u32, Option<String>), AppAggregate> = BTreeMap::new();
+    let platform = std::env::consts::OS;
     for window in windows {
         let id = match window.id() {
             Ok(id) => id,
             Err(_) => continue,
         };
-        let pid = window.pid().ok();
+        let pid = match window.pid() {
+            Ok(pid) => pid,
+            // Window Resources require a stable owner identity. Publishing an
+            // entry without it only defers an unavoidable admission failure.
+            Err(_) => continue,
+        };
         let app_name = window
             .app_name()
             .ok()
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "Unknown application".to_string());
+            .filter(|s| !s.is_empty());
+        let display_app_name = app_name.as_deref().unwrap_or("Unknown application");
         let title = window
             .title()
             .ok()
@@ -618,7 +627,7 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         let y = window.y().ok().map(i64::from);
         let width = window.width().ok();
         let height = window.height().ok();
-        if !is_remote_capture_candidate(&app_name, width, height) {
+        if !is_remote_capture_candidate(display_app_name, width, height) {
             continue;
         }
         let minimized = window.is_minimized().ok();
@@ -627,16 +636,16 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         }
         let focused = window.is_focused().ok();
         let display_name = match &title {
-            Some(title) => format!("{app_name} - {title}"),
-            None => app_name.clone(),
+            Some(title) => format!("{display_app_name} - {title}"),
+            None => display_app_name.to_string(),
         };
         let area = screen_target_area(width, height);
         let bounds = ScreenTargetBounds::new(x, y, width, height);
-        apps.entry(app_name.clone())
+        apps.entry((pid, app_name.clone()))
             .or_default()
             .record_window(AppWindowObservation {
                 window_id: id,
-                pid,
+                pid: Some(pid),
                 title: title.as_deref(),
                 area,
                 focused: focused == Some(true),
@@ -646,10 +655,11 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             });
         out.push(DiscoveredResource {
             kind: ResourceType::Window,
-            hardware_id: format!("window:xcap:{}:{id}", pid.unwrap_or(0)),
+            hardware_id: format!("window:xcap:{pid}:{id}"),
             display_name,
             metadata: json!({
                 "backend": "xcap",
+                "platform": platform,
                 "capture_target": "window",
                 "discovery_source": "auto_bootstrap",
                 "discovery_scope": "current_visible_windows",
@@ -668,27 +678,36 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             }),
         });
     }
-    out.extend(apps.into_iter().map(|(app_name, app)| DiscoveredResource {
-        kind: ResourceType::Application,
-        hardware_id: format!("application:xcap:{app_name}"),
-        display_name: app_name.clone(),
-        metadata: json!({
-            "backend": "xcap",
-            "capture_target": "application",
-            "discovery_source": "auto_bootstrap",
-            "discovery_scope": "current_visible_windows",
-            "auto_prune": true,
-            "platform_backend": "xcap_window_all",
-            "app_name": app_name,
-            "window_count": app.window_count,
-            "primary_window_id": app.primary_window_id,
-            "primary_pid": app.primary_pid,
-            "primary_title": app.primary_title,
-            "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
-            "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
-            "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
-            "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
-        }),
+    out.extend(apps.into_iter().map(|((pid, app_name), app)| {
+        let window_set_epoch = app.window_set_epoch();
+        DiscoveredResource {
+            kind: ResourceType::Application,
+            hardware_id: format!("application:xcap:{platform}:pid:{pid}"),
+            display_name: app_name
+                .clone()
+                .unwrap_or_else(|| "Unknown application".to_string()),
+            metadata: json!({
+                "backend": "xcap",
+                "platform": platform,
+                "capture_target": "application",
+                "discovery_source": "auto_bootstrap",
+                "discovery_scope": "process_window_set",
+                "auto_prune": true,
+                "platform_backend": "xcap_window_all",
+                "app_name": app_name,
+                "window_count": app.window_count,
+                "resolved_window_ids": app.window_ids,
+                "window_set_epoch": window_set_epoch,
+                "target_identity_epoch": window_set_epoch,
+                "primary_window_id": app.primary_window_id,
+                "primary_pid": app.primary_pid,
+                "primary_title": app.primary_title,
+                "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
+                "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
+                "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
+                "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
+            }),
+        }
     }));
     Ok(out)
 }

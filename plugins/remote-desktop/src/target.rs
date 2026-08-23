@@ -55,6 +55,14 @@ impl RemoteDesktopTargetKind {
         }
     }
 
+    fn target_model_for_platform(self, platform: &str) -> &'static str {
+        match (self, platform) {
+            (Self::Application, "macos") => "display_scoped_application_window_set",
+            (Self::Application, _) => "process_scoped_application_window_set",
+            _ => self.target_model(),
+        }
+    }
+
     fn from_recovery_str(value: &str) -> anyhow::Result<Self> {
         match value {
             "display" => Ok(Self::Display),
@@ -583,7 +591,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct ResolvedCaptureTargetProof
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct AppWindowSetProof {
-    display_id: u64,
+    display_id: Option<u64>,
     bundle_id: Option<String>,
     primary_pid: Option<i64>,
     resolved_window_ids: Vec<u64>,
@@ -591,8 +599,23 @@ pub(in crate::daemon::plugins::remote_desktop) struct AppWindowSetProof {
 }
 
 impl AppWindowSetProof {
+    #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn new(
         display_id: u64,
+        bundle_id: Option<String>,
+        primary_pid: Option<i64>,
+        resolved_window_ids: Vec<u64>,
+    ) -> Self {
+        Self::new_platform_scoped(
+            Some(display_id),
+            bundle_id,
+            primary_pid,
+            resolved_window_ids,
+        )
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn new_platform_scoped(
+        display_id: Option<u64>,
         bundle_id: Option<String>,
         primary_pid: Option<i64>,
         resolved_window_ids: Vec<u64>,
@@ -601,7 +624,7 @@ impl AppWindowSetProof {
         resolved_window_ids.sort_unstable();
         resolved_window_ids.dedup();
         let window_set_epoch = compute_window_set_epoch(
-            Some(display_id),
+            display_id,
             bundle_id.as_deref(),
             primary_pid,
             &resolved_window_ids,
@@ -616,7 +639,6 @@ impl AppWindowSetProof {
     }
 
     fn from_entry(entry: &ResourceEntry, display_id: Option<u64>) -> Option<Self> {
-        let display_id = display_id?;
         let mut resolved_window_ids = metadata_u64_array(entry, "resolved_window_ids");
         resolved_window_ids.sort_unstable();
         resolved_window_ids.dedup();
@@ -627,7 +649,7 @@ impl AppWindowSetProof {
         let primary_pid = metadata_i64(entry, "primary_pid").or_else(|| metadata_i64(entry, "pid"));
         let window_set_epoch = metadata_u64(entry, "window_set_epoch").unwrap_or_else(|| {
             compute_window_set_epoch(
-                Some(display_id),
+                display_id,
                 bundle_id.as_deref(),
                 primary_pid,
                 &resolved_window_ids,
@@ -691,7 +713,7 @@ impl AppWindowSetProof {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Self {
-            display_id: required_u64(value, "display_id")?,
+            display_id: optional_u64(value, "display_id")?,
             bundle_id: optional_string(value, "bundle_id")?,
             primary_pid: optional_i64(value, "primary_pid")?,
             resolved_window_ids,
@@ -706,7 +728,7 @@ impl AppWindowSetProof {
 
     fn diagnostic_label(&self) -> String {
         format!(
-            "display_id={}, bundle_id={:?}, primary_pid={:?}, resolved_window_ids={:?}, window_set_epoch={}",
+            "display_id={:?}, bundle_id={:?}, primary_pid={:?}, resolved_window_ids={:?}, window_set_epoch={}",
             self.display_id,
             self.bundle_id,
             self.primary_pid,
@@ -879,7 +901,7 @@ impl ResolvedCaptureTargetProof {
                 RemoteAppTargetError::new(
                     ability,
                     TargetResolutionError::TargetMetadataIncomplete,
-                    "application capture proof has no resolved display-scoped window-set proof",
+                    "application capture proof has no resolved platform-scoped window-set proof",
                 )
             })?;
             match phase {
@@ -889,7 +911,7 @@ impl ResolvedCaptureTargetProof {
                         RemoteAppTargetError::new(
                             ability,
                             TargetResolutionError::TargetMetadataIncomplete,
-                            "application target binding has no committed display-scoped window-set proof",
+                            "application target binding has no committed platform-scoped window-set proof",
                         )
                     })?;
                     if actual != expected {
@@ -1131,11 +1153,11 @@ pub(in crate::daemon::plugins::remote_desktop) struct ScopeAudit {
 }
 
 impl ScopeAudit {
-    fn to_value(&self) -> Value {
+    fn to_value(&self, platform: &str) -> Value {
         json!({
             "requested_target_kind": self.requested_target_kind.as_str(),
             "effective_target_kind": self.effective_target_kind.as_str(),
-            "target_model": self.effective_target_kind.target_model(),
+            "target_model": self.effective_target_kind.target_model_for_platform(platform),
             "capture_surface": self.capture_scope.as_str(),
             "input_mode": self.input_scope.as_str(),
             "input_scope_reason": self.input_scope_reason.as_str(),
@@ -1193,6 +1215,39 @@ impl DiagnosticCaptureSubject {
             metadata: self.metadata.clone(),
             first_seen_at: self.first_seen_at.clone(),
         }
+    }
+
+    fn commit_application_window_set(&mut self, window_set: &AppWindowSetProof) {
+        let Value::Object(metadata) = &mut self.metadata else {
+            return;
+        };
+        metadata.insert(
+            "display_id".to_string(),
+            window_set.display_id.map_or(Value::Null, Value::from),
+        );
+        metadata.insert(
+            "primary_pid".to_string(),
+            window_set.primary_pid.map_or(Value::Null, Value::from),
+        );
+        metadata.insert(
+            "bundle_id".to_string(),
+            window_set
+                .bundle_id
+                .as_ref()
+                .map_or(Value::Null, |value| Value::String(value.clone())),
+        );
+        metadata.insert(
+            "resolved_window_ids".to_string(),
+            json!(window_set.resolved_window_ids),
+        );
+        metadata.insert(
+            "window_set_epoch".to_string(),
+            json!(window_set.window_set_epoch),
+        );
+        metadata.insert(
+            "target_identity_epoch".to_string(),
+            json!(window_set.window_set_epoch),
+        );
     }
 }
 
@@ -1270,22 +1325,35 @@ impl RemoteAppTargetBinding {
             "target_kind": target_kind.as_str(),
             "binding_id": required_string(value, "binding_id")?,
         });
+        let mut diagnostic_capture_subject = DiagnosticCaptureSubject {
+            resource_ura: subject_ura.clone(),
+            owner_agent: "easynet:///r/local/agent/remote-desktop.recovered".to_string(),
+            kind: target_kind.resource_type(),
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: resolved_identity.hardware_id.clone(),
+            display_name: subject_display_name.to_string(),
+            metadata: json!({
+                "recovered": true,
+                "platform": platform,
+                "backend": native_locator.discovery_backend,
+                "monitor_id": native_locator.display_id,
+                "display_id": native_locator.display_id,
+                "primary_display": native_locator.primary_display,
+                "window_id": native_locator.window_id,
+                "pid": native_locator.pid,
+                "primary_pid": native_locator.pid,
+                "app_identity": native_locator.app_identity,
+                "bundle_id": native_locator.bundle_id,
+                "app_name": native_locator.app_name,
+                "title": native_locator.title,
+            }),
+            first_seen_at: String::new(),
+        };
+        if let Some(window_set) = app_window_set.as_ref() {
+            diagnostic_capture_subject.commit_application_window_set(window_set);
+        }
         Ok(Self {
-            diagnostic_capture_subject: DiagnosticCaptureSubject {
-                resource_ura: subject_ura.clone(),
-                owner_agent: "easynet:///r/local/agent/remote-desktop.recovered".to_string(),
-                kind: target_kind.resource_type(),
-                binding: ResourceBinding::LocalDevice,
-                hardware_id: resolved_identity.hardware_id.clone(),
-                display_name: subject_display_name.to_string(),
-                metadata: json!({
-                    "recovered": true,
-                    "platform": platform,
-                    "backend": backend,
-                    "native_locator": native_locator.to_value(),
-                }),
-                first_seen_at: String::new(),
-            },
+            diagnostic_capture_subject,
             scope_audit: ScopeAudit {
                 requested_target_kind: target_kind,
                 effective_target_kind: target_kind,
@@ -1394,6 +1462,9 @@ impl RemoteAppTargetBinding {
         }
         candidate.geometry = geometry;
         candidate.app_window_set = Some(app_window_set.clone());
+        candidate
+            .diagnostic_capture_subject
+            .commit_application_window_set(&app_window_set);
         candidate.capture_proof = candidate
             .capture_proof
             .clone()
@@ -1435,11 +1506,13 @@ impl RemoteAppTargetBinding {
                 RemoteAppTargetError::new(
                     ability,
                     TargetResolutionError::TargetMetadataIncomplete,
-                    "application capture proof has no resolved display-scoped window-set proof",
+                    "application capture proof has no resolved platform-scoped window-set proof",
                 )
             })?);
             if let Some(committed_window_set) = self.app_window_set.as_ref() {
                 self.target_identity_epoch = committed_window_set.window_set_epoch;
+                self.diagnostic_capture_subject
+                    .commit_application_window_set(committed_window_set);
             }
         }
         self.capture_proof = Some(proof);
@@ -1469,8 +1542,11 @@ impl RemoteAppTargetBinding {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn supports_xcap_adapter(&self) -> bool {
+        if self.native_locator.capture_backend != "xcap" {
+            return false;
+        }
         match self.target_kind {
-            RemoteDesktopTargetKind::Display => self.native_locator.capture_backend == "xcap",
+            RemoteDesktopTargetKind::Display => true,
             RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
                 matches!(
                     self.native_locator.discovery_backend.as_str(),
@@ -1481,6 +1557,9 @@ impl RemoteAppTargetBinding {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn supports_native_adapter(&self) -> bool {
+        if self.platform != "macos" || self.native_locator.capture_backend != "screencapturekit" {
+            return false;
+        }
         match self.target_kind {
             RemoteDesktopTargetKind::Display => {
                 self.native_locator.display_id.is_some() || self.native_locator.primary_display
@@ -1513,7 +1592,7 @@ impl RemoteAppTargetBinding {
         json!({
             "subject_ura": self.subject_ura,
             "target_kind": self.target_kind.as_str(),
-            "target_model": self.target_kind.target_model(),
+            "target_model": self.target_kind.target_model_for_platform(&self.platform),
             "binding_id": self.binding_id,
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
@@ -1560,7 +1639,7 @@ impl RemoteAppTargetBinding {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn scope_audit_value(&self) -> Value {
-        self.scope_audit.to_value()
+        self.scope_audit.to_value(&self.platform)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn latest_target_diagnostic_value(
@@ -1588,7 +1667,7 @@ impl RemoteAppTargetBinding {
         json!({
             "subject_ura": self.subject_ura,
             "target_kind": self.target_kind.as_str(),
-            "target_model": self.target_kind.target_model(),
+            "target_model": self.target_kind.target_model_for_platform(&self.platform),
             "binding_id": self.binding_id,
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
@@ -1634,7 +1713,72 @@ mod platform_live_resolution {
     }
 }
 
-#[cfg(not(all(target_os = "macos", feature = "native-media")))]
+#[cfg(all(not(target_os = "macos"), feature = "native-media"))]
+mod platform_live_resolution {
+    use super::{
+        RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
+        ResolvedCaptureTargetProof, TargetResolutionError,
+    };
+    use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+        capture_rgb_with_xcap, ScreenCaptureOptions,
+    };
+
+    pub(super) fn verify_target_binding_for_session(
+        ability: &'static str,
+        binding: &RemoteAppTargetBinding,
+    ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
+        if !binding.supports_xcap_adapter() {
+            return Err(RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::CaptureBackendUnavailable,
+                format!(
+                    "{} target binding cannot be resolved by the xcap platform adapter",
+                    binding.target_kind().as_str()
+                ),
+            ));
+        }
+        let frame = capture_rgb_with_xcap(
+            &binding
+                .diagnostic_capture_subject()
+                .to_backend_resource_entry(),
+            &ScreenCaptureOptions::default(),
+        )
+        .map_err(|error| {
+            RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::CaptureBackendUnavailable,
+                format!(
+                    "xcap failed to prove the exact {} capture target: {error}",
+                    binding.target_kind().as_str()
+                ),
+            )
+        })?;
+        let locator = binding.native_locator();
+        let mut proof =
+            ResolvedCaptureTargetProof::new(locator.capture_backend.clone(), binding.target_kind())
+                .with_native_identity(
+                    locator.display_id(),
+                    locator.window_id(),
+                    locator.pid(),
+                    locator.app_identity().map(ToOwned::to_owned),
+                    locator.bundle_id().map(ToOwned::to_owned),
+                )
+                .with_native_dimensions(Some((frame.width as usize, frame.height as usize)));
+        if binding.target_kind() == RemoteDesktopTargetKind::Application {
+            let window_set = binding.committed_app_window_set().cloned().ok_or_else(|| {
+                RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetMetadataIncomplete,
+                    "xcap application binding has no committed process-scoped window set",
+                )
+            })?;
+            proof = proof.with_app_window_set(window_set);
+        }
+        Ok(proof)
+    }
+}
+
+#[cfg(not(feature = "native-media"))]
 mod platform_live_resolution {
     use super::{
         RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
@@ -1662,8 +1806,7 @@ mod platform_live_resolution {
                     ability,
                     TargetResolutionError::CaptureBackendUnavailable,
                     format!(
-                        "{} targets require a native platform capture backend; \
-                         headless/display providers cannot prove app/window binding",
+                        "{} targets require the native-media platform capture feature",
                         binding.target_kind().as_str()
                     ),
                 ))
@@ -1733,15 +1876,19 @@ fn resolve_resource_entry_for_session(
     let input_scope_decision =
         input_scope_for_request(target_kind, requested_mode, input_control_granted);
     let input_scope = input_scope_decision.scope();
-    let display_id = display_id(entry);
-    validate_required_identity(ability, entry, target_kind, display_id)?;
     let platform = metadata_string(entry, "platform").unwrap_or_else(|| {
         if cfg!(target_os = "macos") {
             "macos".to_string()
+        } else if cfg!(target_os = "windows") {
+            "windows".to_string()
+        } else if cfg!(target_os = "linux") {
+            "linux".to_string()
         } else {
             "unknown".to_string()
         }
     });
+    let display_id = display_id(entry);
+    validate_required_identity(ability, entry, target_kind, display_id, &platform)?;
     let discovery_backend =
         metadata_string(entry, "backend").unwrap_or_else(|| "resource_registry".to_string());
     let capture_backend = capture_backend_for_entry(&platform, entry, target_kind);
@@ -1786,9 +1933,9 @@ fn resolve_resource_entry_for_session(
         "reason": Value::Null,
         "requested_identity": requested_identity_projection(entry),
         "resolved_identity": resolved_identity.to_value(),
-        "match_strategy": match_strategy_for_kind(target_kind),
+        "match_strategy": match_strategy_for_kind(target_kind, &platform),
         "capture_backend": capture_backend,
-        "target_model": target_kind.target_model(),
+        "target_model": target_kind.target_model_for_platform(&platform),
         "display_fallback_used": false,
         "frontend_action": Value::Null,
     });
@@ -1937,6 +2084,7 @@ fn validate_required_identity(
     entry: &ResourceEntry,
     target_kind: RemoteDesktopTargetKind,
     display_id: Option<u64>,
+    platform: &str,
 ) -> Result<(), RemoteAppTargetError> {
     match target_kind {
         RemoteDesktopTargetKind::Display => {
@@ -1970,7 +2118,7 @@ fn validate_required_identity(
             Ok(())
         }
         RemoteDesktopTargetKind::Application => {
-            if display_id.is_none() {
+            if platform == "macos" && display_id.is_none() {
                 return Err(RemoteAppTargetError::new(
                     ability,
                     TargetResolutionError::DisplayIdentityMissing,
@@ -1993,7 +2141,7 @@ fn validate_required_identity(
                 return Err(RemoteAppTargetError::new(
                     ability,
                     TargetResolutionError::TargetMetadataIncomplete,
-                    "application targets require resolved_window_ids and window_set_epoch so capture can prove the display-scoped app window set",
+                    "application targets require resolved_window_ids and window_set_epoch so capture can prove the platform-scoped app window set",
                 ));
             }
             Ok(())
@@ -2061,7 +2209,8 @@ fn capture_backend_for_entry(
     entry: &ResourceEntry,
     target_kind: RemoteDesktopTargetKind,
 ) -> String {
-    if cfg!(target_os = "macos")
+    if platform == "macos"
+        && cfg!(target_os = "macos")
         && matches!(
             target_kind,
             RemoteDesktopTargetKind::Display
@@ -2074,11 +2223,14 @@ fn capture_backend_for_entry(
     metadata_string(entry, "backend").unwrap_or_else(|| platform.to_string())
 }
 
-fn match_strategy_for_kind(target_kind: RemoteDesktopTargetKind) -> &'static str {
+fn match_strategy_for_kind(target_kind: RemoteDesktopTargetKind, platform: &str) -> &'static str {
     match target_kind {
         RemoteDesktopTargetKind::Display => "display_id_or_explicit_primary",
         RemoteDesktopTargetKind::Window => "window_id_plus_owner",
-        RemoteDesktopTargetKind::Application => "display_scoped_app_identity",
+        RemoteDesktopTargetKind::Application if platform == "macos" => {
+            "display_scoped_app_identity"
+        }
+        RemoteDesktopTargetKind::Application => "process_scoped_app_window_set",
     }
 }
 
@@ -2395,6 +2547,56 @@ mod tests {
                 true,
             )
             .expect("display identity must resolve with explicit input consent")
+    }
+
+    #[test]
+    fn windows_xcap_application_binding_is_process_scoped_without_fake_display() {
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    live_metadata(json!({
+                        "platform": "windows",
+                        "backend": "xcap",
+                        "app_name": "Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [11, 10],
+                        "window_set_epoch": 77,
+                        "target_identity_epoch": 77,
+                    })),
+                ),
+                "interactive",
+                1,
+            )
+            .expect("Windows xcap application identity must resolve without display widening");
+
+        let projection = binding.to_value();
+        assert_eq!(projection["platform"], json!("windows"));
+        assert_eq!(projection["backend"], json!("xcap"));
+        assert_eq!(
+            projection["target_model"],
+            json!("process_scoped_application_window_set")
+        );
+        assert_eq!(
+            binding.scope_audit_value()["target_model"],
+            json!("process_scoped_application_window_set")
+        );
+        assert_eq!(
+            binding.latest_target_diagnostic_value()["target_model"],
+            json!("process_scoped_application_window_set")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["target_model"],
+            json!("process_scoped_application_window_set")
+        );
+        assert!(projection["native_locator"]["display_id"].is_null());
+        assert_eq!(
+            projection["app_window_set"]["resolved_window_ids"],
+            json!([10, 11])
+        );
+        assert_eq!(projection["capture_scope"], json!("AppSurface"));
+        assert!(!binding.scope_audit.display_fallback_used);
     }
 
     #[test]

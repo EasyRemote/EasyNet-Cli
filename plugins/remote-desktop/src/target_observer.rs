@@ -355,9 +355,7 @@ fn validate_application_input(
     windows: &[ObservedWindow],
 ) -> Result<(), TargetInputGuardFailure> {
     let locator = binding.native_locator();
-    let display_id = locator
-        .display_id()
-        .ok_or(TargetInputGuardFailure::IdentityMismatch)?;
+    let display_id = locator.display_id();
     let committed_window_set = binding
         .committed_app_window_set()
         .ok_or(TargetInputGuardFailure::IdentityMismatch)?;
@@ -365,21 +363,23 @@ fn validate_application_input(
         .iter()
         .filter(|window| app_owner_matches(binding, window))
         .collect::<Vec<_>>();
-    if owner_windows.iter().any(|window| {
-        window
-            .display_id
-            .is_some_and(|observed_display| observed_display != display_id)
+    if display_id.is_some_and(|expected_display| {
+        owner_windows.iter().any(|window| {
+            window
+                .display_id
+                .is_some_and(|observed_display| observed_display != expected_display)
+        })
     }) {
         return Err(TargetInputGuardFailure::WindowSetStale);
     }
     let matching = owner_windows
         .into_iter()
-        .filter(|window| window.display_id == Some(display_id))
+        .filter(|window| display_id.is_none_or(|expected| window.display_id == Some(expected)))
         .collect::<Vec<_>>();
     if matching.is_empty() {
         return Err(TargetInputGuardFailure::TargetNotFound);
     }
-    let current_window_set = AppWindowSetProof::new(
+    let current_window_set = AppWindowSetProof::new_platform_scoped(
         display_id,
         locator.bundle_id().map(str::to_string),
         locator.pid(),
@@ -576,11 +576,11 @@ fn observe_application(
     windows: &[ObservedWindow],
 ) -> Option<TargetObservation> {
     let locator = binding.native_locator();
-    let expected_display = locator.display_id()?;
+    let expected_display = locator.display_id();
     let Some(committed_window_set) = binding.committed_app_window_set() else {
         return Some(lost(
             TargetResolutionError::TargetMetadataIncomplete,
-            "application target binding has no committed display-scoped window set",
+            "application target binding has no committed platform-scoped window set",
         ));
     };
     let matching: Vec<&ObservedWindow> = windows
@@ -597,7 +597,7 @@ fn observe_application(
         .iter()
         .filter_map(|window| window.display_id)
         .collect();
-    if displays.len() > 1 {
+    if expected_display.is_some() && displays.len() > 1 {
         return Some(lost(
             TargetResolutionError::TargetMultiDisplayUnsupported,
             "bound application spans multiple displays but session is display-scoped",
@@ -605,12 +605,14 @@ fn observe_application(
     }
     let selected_display_windows: Vec<&ObservedWindow> = matching
         .into_iter()
-        .filter(|window| window.display_id == Some(expected_display))
+        .filter(|window| {
+            expected_display.is_none_or(|expected| window.display_id == Some(expected))
+        })
         .collect();
     if selected_display_windows.is_empty() {
         return Some(lost(
             TargetResolutionError::TargetDisplayUnavailable,
-            "bound application has no windows on the selected display",
+            "bound application has no windows in the selected platform scope",
         ));
     }
     let selected_display_window_ids: BTreeSet<u64> = selected_display_windows
@@ -643,7 +645,7 @@ fn observe_application(
             "bound application window set has incomplete geometry in host target snapshot",
         ));
     };
-    let current_window_set = AppWindowSetProof::new(
+    let current_window_set = AppWindowSetProof::new_platform_scoped(
         expected_display,
         locator.bundle_id().map(str::to_string),
         locator.pid(),
@@ -1382,6 +1384,41 @@ mod tests {
             .expect("application target binding resolves")
     }
 
+    fn process_scoped_application_binding() -> RemoteAppTargetBinding {
+        let window_set_epoch =
+            AppWindowSetProof::new_platform_scoped(None, None, Some(9001), vec![10, 11])
+                .window_set_epoch();
+        ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/application.editor-windows"
+                        .to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Application,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "application:xcap:windows:pid:9001".to_string(),
+                    display_name: "Editor".to_string(),
+                    metadata: live_remote_target_metadata(json!({
+                        "platform": "windows",
+                        "backend": "xcap",
+                        "app_name": "Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11],
+                        "window_set_epoch": window_set_epoch,
+                        "primary_x": 10,
+                        "primary_y": 20,
+                        "primary_width": 100,
+                        "primary_height": 80,
+                    })),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("process-scoped application target binding resolves")
+    }
+
     fn visible_window_snapshot() -> HostTargetSnapshot {
         HostTargetSnapshot {
             windows: vec![ObservedWindow {
@@ -1587,6 +1624,49 @@ mod tests {
                 assert_eq!(geometry.width, Some(100.0));
             }
             other => panic!("window-set contraction must project as app rebind: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_scoped_application_observer_tracks_window_set_without_display_identity() {
+        let binding = process_scoped_application_binding();
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let host = HostTargetSnapshot {
+            windows: [10_u64, 11, 12]
+                .into_iter()
+                .enumerate()
+                .map(|(index, window_id)| ObservedWindow {
+                    window_id,
+                    pid: Some(9001),
+                    bundle_id: None,
+                    display_id: None,
+                    title: Some(format!("Editor {window_id}")),
+                    focused: index == 0,
+                    geometry: TargetGeometry {
+                        x: Some(10.0 + index as f64 * 110.0),
+                        y: Some(20.0),
+                        width: Some(100.0),
+                        height: Some(80.0),
+                    },
+                    visibility_state: TargetVisibilityState::Visible,
+                })
+                .collect(),
+            display_ids: BTreeSet::new(),
+        };
+
+        let observation = observe_binding_against_host_snapshot(&binding, &snapshot, &host)
+            .expect("process window-set expansion must be observed");
+        match observation {
+            TargetObservation::ApplicationWindowSetChanged {
+                app_window_set,
+                geometry,
+                ..
+            } => {
+                assert!(app_window_set.to_value()["display_id"].is_null());
+                assert_eq!(app_window_set.resolved_window_count(), 3);
+                assert_eq!(geometry.width, Some(320.0));
+            }
+            other => panic!("expected process-scoped application rebind, got {other:?}"),
         }
     }
 
@@ -2438,7 +2518,84 @@ mod tests {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "native-media"))]
+mod platform {
+    use std::collections::BTreeSet;
+
+    use super::{
+        sample_host_target_observations, HostTargetSnapshot, HostTargetSnapshotProvider,
+        ObservedWindow, PlatformTargetObservationSample, TargetInputGuardFailure,
+    };
+    use crate::daemon::plugins::remote_desktop::target::TargetGeometry;
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetVisibilityState;
+
+    struct XcapHostTargetSnapshotProvider;
+
+    pub(super) fn sample_platform_target_observations() -> PlatformTargetObservationSample {
+        sample_host_target_observations(&XcapHostTargetSnapshotProvider)
+    }
+
+    pub(super) fn live_host_target_snapshot() -> Result<HostTargetSnapshot, TargetInputGuardFailure>
+    {
+        XcapHostTargetSnapshotProvider
+            .snapshot()
+            .map_err(|_| TargetInputGuardFailure::SnapshotFailed)
+    }
+
+    impl HostTargetSnapshotProvider for XcapHostTargetSnapshotProvider {
+        fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot> {
+            let windows = xcap::Window::all()
+                .map_err(|error| anyhow::anyhow!("xcap Window::all failed: {error}"))?
+                .into_iter()
+                .filter_map(|window| {
+                    let window_id = u64::from(window.id().ok()?);
+                    let width = window.width().ok()?;
+                    let height = window.height().ok()?;
+                    if width == 0 || height == 0 {
+                        return None;
+                    }
+                    let minimized = window.is_minimized().ok() == Some(true);
+                    Some(ObservedWindow {
+                        window_id,
+                        pid: window.pid().ok().map(i64::from),
+                        // xcap does not expose a cross-platform bundle id. The
+                        // process id remains the load-bearing identity; app name
+                        // is an additional owner discriminator when present.
+                        bundle_id: window
+                            .app_name()
+                            .ok()
+                            .filter(|name| !name.trim().is_empty()),
+                        display_id: None,
+                        title: window.title().ok().filter(|title| !title.trim().is_empty()),
+                        focused: window.is_focused().ok() == Some(true),
+                        geometry: TargetGeometry {
+                            x: window.x().ok().map(f64::from),
+                            y: window.y().ok().map(f64::from),
+                            width: Some(f64::from(width)),
+                            height: Some(f64::from(height)),
+                        },
+                        visibility_state: if minimized {
+                            TargetVisibilityState::Minimized
+                        } else {
+                            TargetVisibilityState::Visible
+                        },
+                    })
+                })
+                .collect();
+            let display_ids = xcap::Monitor::all()
+                .map_err(|error| anyhow::anyhow!("xcap Monitor::all failed: {error}"))?
+                .into_iter()
+                .filter_map(|monitor| monitor.id().ok().map(u64::from))
+                .collect::<BTreeSet<_>>();
+            Ok(HostTargetSnapshot {
+                windows,
+                display_ids,
+            })
+        }
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(feature = "native-media")))]
 mod platform {
     use super::{HostTargetSnapshot, PlatformTargetObservationSample, TargetInputGuardFailure};
 

@@ -178,12 +178,12 @@ require 'observer_stops_tracking_missing_or_terminal_sessions_without_polling_pr
   'target observer tests must prove missing/terminal sessions stop tracking without polling host state'
 require 'stale_observation_cannot_commit_after_session_binding_reuse' "$TARGET_OBSERVER" \
   'stale observations must not advance a reused session binding'
-require 'unsupported_platform_target_observation' "$TARGET_OBSERVER" \
-  'target observer must centralize unsupported platform app/window fail-closed semantics'
-require_multiline 'm/#\[cfg\(not\(target_os = .macos.\)\)\]\s*mod platform.+?PlatformTargetObservationSample::unsupported_platform\(\)/s' "$TARGET_OBSERVER" \
-  'non-macOS platform target sample must fail app/window targets closed instead of silently returning no observation'
-require 'unsupported_platform_observer_fails_app_window_targets_closed' "$TARGET_OBSERVER" \
-  'target observer tests must prove unsupported platforms fail app/window targets closed'
+require 'XcapHostTargetSnapshotProvider' "$TARGET_OBSERVER" \
+  'non-macOS target observation must use the xcap host snapshot provider'
+require_multiline 'm/#\[cfg\(all\(not\(target_os = .macos.\), feature = .native-media.\)\)\]\s*mod platform.+?sample_host_target_observations\(&XcapHostTargetSnapshotProvider\)/s' "$TARGET_OBSERVER" \
+  'native-media non-macOS target observation must sample live xcap windows'
+require 'process_scoped_application_observer_tracks_window_set_without_display_identity' "$TARGET_OBSERVER" \
+  'target observer tests must prove Windows/Linux process-scoped application window-set tracking'
 require 'RemoteDesktopTargetMonitor' "$RUNTIME" \
   'remote desktop runtime must own a plugin-scoped target monitor'
 require 'fn track_session_target\(' "$RUNTIME" \
@@ -1208,7 +1208,7 @@ require '"production_target_subjects": production_target_subjects' "$VIEW_DEVICE
 require '"diagnostic_target_subjects": diagnostic_target_subjects' "$VIEW_DEVICE" \
   'device capabilities must expose diagnostic target subjects separately from production target subjects'
 require 'XCAP_OPENH264_WEBRTC_BACKEND\.supported_subjects_value\(\)' "$VIEW_DEVICE" \
-  'device capabilities must derive diagnostic target subjects from the display-only xcap WebRTC backend'
+  'device capabilities must derive baseline target subjects from the xcap WebRTC backend'
 require '"production_target_subjects_blocked_reason"' "$VIEW_DEVICE" \
   'device capabilities must expose why production app/window subjects are not claimable'
 require '"production_target_subjects_source"' "$VIEW_DEVICE" \
@@ -1221,12 +1221,12 @@ require 'platform_support_view\(production_ready, &production_backend\)' "$VIEW_
   'device capabilities must derive platform support from runtime production readiness'
 require 'input_control_support_view\(input_available\)' "$VIEW_DEVICE" \
   'device capabilities must derive input control support from runtime input permission'
-require '"linux_app_window_native_backend_not_implemented"' "$VIEW_DEVICE" \
-  'device capabilities must mark Linux app/window capture unsupported'
-require '"windows_native_backend_not_implemented"' "$VIEW_DEVICE" \
-  'device capabilities must mark Windows capture unsupported'
-require '"diagnostic_only"' "$VIEW_DEVICE" \
-  'device capabilities must distinguish Linux display diagnostic-only support from production capture'
+require '"linux_xcap_target_baseline_ready"' "$VIEW_DEVICE" \
+  'device capabilities must expose Linux exact-target xcap baseline readiness'
+require '"windows_xcap_target_baseline_ready"' "$VIEW_DEVICE" \
+  'device capabilities must expose Windows exact-target xcap baseline readiness'
+require '"baseline_ready"' "$VIEW_DEVICE" \
+  'device capabilities must distinguish executable baseline from certified production capture'
 require '"requires_input_control_consent": true' "$VIEW_DEVICE" \
   'device capabilities must expose explicit input-control consent requirement'
 require '"macos_target_input_guard_ready"' "$VIEW_DEVICE" \
@@ -1236,7 +1236,9 @@ require '"linux_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \
 require '"windows_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \
   'device capabilities must mark Windows input injection unsupported'
 require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
-  'device capabilities must expose the application target model instead of flattening applications to display capture'
+  'device capabilities must expose the macOS display-scoped application target model'
+require '"process_scoped_application_window_set"' "$VIEW_DEVICE" \
+  'device capabilities must expose the Windows/Linux process-scoped application target model'
 require 'display/window/application target capture' "$VIEW_DEVICE" \
   'device capabilities must describe native ScreenCaptureKit as targeted display/window/application capture'
 reject 'available for display capture' "$VIEW_DEVICE" \

@@ -25,10 +25,8 @@ pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &
     "host_audio_not_implemented";
 const PLATFORM_REASON_MACOS_NATIVE_BACKEND_READY: &str =
     "macos_screencapturekit_videotoolbox_ready";
-const PLATFORM_REASON_LINUX_DISPLAY_DIAGNOSTIC_ONLY: &str = "linux_display_diagnostic_only";
-const PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED: &str =
-    "linux_app_window_native_backend_not_implemented";
-const PLATFORM_REASON_WINDOWS_UNSUPPORTED: &str = "windows_native_backend_not_implemented";
+const PLATFORM_REASON_LINUX_XCAP_BASELINE_READY: &str = "linux_xcap_target_baseline_ready";
+const PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY: &str = "windows_xcap_target_baseline_ready";
 const INPUT_REASON_MACOS_PERMISSION_GRANTED: &str = "macos_accessibility_permission_granted";
 const INPUT_REASON_MACOS_PERMISSION_DENIED: &str = "macos_accessibility_permission_denied";
 const INPUT_REASON_MACOS_TARGET_GUARD_READY: &str = "macos_target_input_guard_ready";
@@ -170,7 +168,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     let capture_target_models = json!([
         "display_surface",
         "window_surface",
-        "display_scoped_application_window_set"
+        "display_scoped_application_window_set",
+        "process_scoped_application_window_set"
     ]);
     let reason = if production_ready {
         "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
@@ -392,25 +391,37 @@ fn platform_support_view(
             },
             "linux": {
                 "display": target_support(
-                    "diagnostic_only",
+                    "baseline_ready",
                     json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
-                    PLATFORM_REASON_LINUX_DISPLAY_DIAGNOSTIC_ONLY
+                    PLATFORM_REASON_LINUX_XCAP_BASELINE_READY
                 ),
                 "window": target_support(
-                    "unsupported",
-                    Value::Null,
-                    PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED
+                    "baseline_ready",
+                    json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
+                    PLATFORM_REASON_LINUX_XCAP_BASELINE_READY
                 ),
                 "application": target_support(
-                    "unsupported",
-                    Value::Null,
-                    PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED
+                    "baseline_ready",
+                    json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
+                    PLATFORM_REASON_LINUX_XCAP_BASELINE_READY
                 ),
             },
             "windows": {
-                "display": target_support("unsupported", Value::Null, PLATFORM_REASON_WINDOWS_UNSUPPORTED),
-                "window": target_support("unsupported", Value::Null, PLATFORM_REASON_WINDOWS_UNSUPPORTED),
-                "application": target_support("unsupported", Value::Null, PLATFORM_REASON_WINDOWS_UNSUPPORTED),
+                "display": target_support(
+                    "baseline_ready",
+                    json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
+                    PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY
+                ),
+                "window": target_support(
+                    "baseline_ready",
+                    json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
+                    PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY
+                ),
+                "application": target_support(
+                    "baseline_ready",
+                    json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
+                    PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY
+                ),
             },
         },
         "non_claim": "platform support metadata does not replace live cross-platform capture E2E evidence",
@@ -597,14 +608,15 @@ mod tests {
         }
         assert_eq!(
             capabilities["metadata"]["diagnostic_target_subjects"],
-            json!(["display"])
+            json!(["display", "window", "application"])
         );
         assert_eq!(
             capabilities["metadata"]["capture_target_models"],
             json!([
                 "display_surface",
                 "window_surface",
-                "display_scoped_application_window_set"
+                "display_scoped_application_window_set",
+                "process_scoped_application_window_set"
             ])
         );
         assert!(capabilities["metadata"]["reason"]
@@ -620,7 +632,7 @@ mod tests {
         assert_eq!(platform_support["schema_version"], json!(1));
         assert_eq!(
             platform_support["platforms"]["linux"]["display"]["status"],
-            json!("diagnostic_only")
+            json!("baseline_ready")
         );
         assert_eq!(
             platform_support["platforms"]["linux"]["display"]["backend"],
@@ -628,23 +640,23 @@ mod tests {
         );
         assert_eq!(
             platform_support["platforms"]["linux"]["window"]["status"],
-            json!("unsupported")
+            json!("baseline_ready")
         );
         assert_eq!(
             platform_support["platforms"]["linux"]["application"]["reason"],
-            json!("linux_app_window_native_backend_not_implemented")
+            json!("linux_xcap_target_baseline_ready")
         );
         assert_eq!(
             platform_support["platforms"]["windows"]["display"]["status"],
-            json!("unsupported")
+            json!("baseline_ready")
         );
         assert_eq!(
             platform_support["platforms"]["windows"]["window"]["reason"],
-            json!("windows_native_backend_not_implemented")
+            json!("windows_xcap_target_baseline_ready")
         );
         assert_eq!(
             platform_support["platforms"]["windows"]["application"]["status"],
-            json!("unsupported")
+            json!("baseline_ready")
         );
         assert!(platform_support["non_claim"]
             .as_str()

@@ -249,7 +249,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             let _ = peer_connection.close().await;
             return;
         }
-        Ok(RemoteAppMediaSource::DisplayBaseline) => {}
+        Ok(RemoteAppMediaSource::XcapBaseline) => {}
     }
 
     let baseline_inputs = BaselineMediaInputs {

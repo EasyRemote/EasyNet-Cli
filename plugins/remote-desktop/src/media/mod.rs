@@ -33,9 +33,7 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::persistence::resources::ResourceType;
-use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteDesktopTargetKind,
-};
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
 pub(in crate::daemon::plugins::remote_desktop) mod encode;
 pub(in crate::daemon::plugins::remote_desktop) mod native;
@@ -221,7 +219,7 @@ pub const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
         sdk_id: REMOTE_DESKTOP_MEDIA_SDK_ID,
         kind: "builtin",
         status: "available",
-        capture_api: "xcap.avcapture_screen_input",
+        capture_api: "xcap.cross_platform_capture",
         encoder: "openh264.software",
         carrier: "axon.invoke_bidi.annexb_h264",
         max_capture_fps: XCAP_MACOS_RECORDER_MAX_FPS,
@@ -231,7 +229,7 @@ pub const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
         unavailable_reason: None,
     };
 
@@ -241,7 +239,7 @@ pub const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
         sdk_id: REMOTE_DESKTOP_MEDIA_SDK_ID,
         kind: "builtin",
         status: "available",
-        capture_api: "xcap.avcapture_screen_input",
+        capture_api: "xcap.cross_platform_capture",
         encoder: "openh264.software",
         carrier: "webrtc.rtp_srtp",
         max_capture_fps: XCAP_MACOS_RECORDER_MAX_FPS,
@@ -251,7 +249,7 @@ pub const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
         unavailable_reason: Some("native_media_plugin_required_for_flagship_quality"),
     };
 
@@ -383,7 +381,7 @@ pub fn webrtc_transport_backend_for_entry(
     if let Some(native) = production_backend_for_entry(entry) {
         return Some(native);
     }
-    if entry.kind == ResourceType::Display && xcap_supported_screen_entry(entry) {
+    if xcap_supported_screen_entry(entry) {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -395,8 +393,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_backend_for_b
     if let Some(native) = production_backend_for_binding(binding) {
         return Some(native);
     }
-    if binding.target_kind() == RemoteDesktopTargetKind::Display && binding.supports_xcap_adapter()
-    {
+    if binding.supports_xcap_adapter() {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -449,8 +446,7 @@ pub fn select_builtin_h264_backend(
 pub(in crate::daemon::plugins::remote_desktop) fn select_builtin_h264_backend_for_binding(
     binding: &RemoteAppTargetBinding,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
-    if binding.target_kind() == RemoteDesktopTargetKind::Display && binding.supports_xcap_adapter()
-    {
+    if binding.supports_xcap_adapter() {
         return Some(XCAP_OPENH264_BACKEND);
     }
     None
@@ -459,7 +455,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn select_builtin_h264_backend_fo
 #[cfg(test)]
 fn xcap_supported_screen_entry(entry: &ResourceEntry) -> bool {
     let backend = entry.metadata.get("backend").and_then(Value::as_str);
-    entry.kind == ResourceType::Display && backend == Some("xcap")
+    backend == Some("xcap")
+        && match entry.kind {
+            ResourceType::Display => true,
+            ResourceType::Window | ResourceType::Application => {
+                screen_target_metadata_resolvable(entry)
+            }
+            _ => false,
+        }
 }
 
 #[cfg(test)]
@@ -558,6 +561,7 @@ mod tests {
             hardware_id: format!("window:{backend}:123:456"),
             display_name: "Cursor - main.rs".into(),
             metadata: live_remote_target_metadata(json!({
+                "platform": "windows",
                 "backend": backend,
                 "capture_target": "window",
                 "app_name": "Cursor",
@@ -578,9 +582,9 @@ mod tests {
             hardware_id: format!("application:{backend}:1:com.apple.Safari"),
             display_name: "Safari on display 1".into(),
             metadata: live_remote_target_metadata(json!({
+                "platform": "windows",
                 "backend": backend,
                 "capture_target": "application",
-                "display_id": 1,
                 "app_name": "Safari",
                 "bundle_id": "com.apple.Safari",
                 "app_identity": "com.apple.Safari",
@@ -609,43 +613,39 @@ mod tests {
     }
 
     #[test]
-    fn xcap_baseline_catalog_is_display_only_for_remoteapp_targets() {
+    fn xcap_baseline_catalog_supports_exact_window_and_application_targets() {
         let backend = select_builtin_h264_backend(&discovered_window_entry("xcap"));
 
-        assert!(
-            backend.is_none(),
-            "diagnostic xcap baseline must not advertise app/window capture; \
-             exact remoteapp capture requires native target binding"
+        assert_eq!(
+            backend.map(RemoteDesktopMediaBackendDescriptor::backend_id),
+            Some(XCAP_OPENH264_BACKEND_ID)
         );
-        assert!(!XCAP_OPENH264_BACKEND.supports_entry(&discovered_window_entry("xcap")));
-        assert!(!XCAP_OPENH264_WEBRTC_BACKEND
-            .supports_entry(&discovered_application_entry("macos_core_graphics")));
+        assert!(XCAP_OPENH264_BACKEND.supports_entry(&discovered_window_entry("xcap")));
+        assert!(XCAP_OPENH264_WEBRTC_BACKEND.supports_entry(&discovered_application_entry("xcap")));
     }
 
     #[test]
-    fn discovered_window_targets_do_not_use_xcap_baseline_for_direct_webrtc() {
+    fn discovered_exact_window_targets_use_xcap_baseline_for_direct_webrtc() {
         let backend = webrtc_transport_backend_for_entry(&discovered_window_entry("xcap"));
-        assert!(
-            backend.is_none_or(|backend| backend.backend_id() != XCAP_OPENH264_WEBRTC_BACKEND_ID)
+        assert_eq!(
+            backend.map(RemoteDesktopMediaBackendDescriptor::backend_id),
+            Some(XCAP_OPENH264_WEBRTC_BACKEND_ID)
         );
     }
 
     #[test]
-    fn direct_webrtc_binding_never_uses_xcap_fallback_for_window_or_application() {
+    fn direct_webrtc_binding_uses_xcap_without_widening_window_or_application_scope() {
         for entry in [
             discovered_window_entry("xcap"),
-            discovered_application_entry("macos_core_graphics"),
+            discovered_application_entry("xcap"),
         ] {
             let binding = binding_for(&entry);
             let backend = webrtc_transport_backend_for_binding(&binding);
 
-            assert!(
-                backend
-                    .is_none_or(|backend| backend.backend_id() != XCAP_OPENH264_WEBRTC_BACKEND_ID),
-                "direct WebRTC app/window sessions must use native binding capture or fail typed; \
-                 target_kind={}, backend={:?}",
-                binding.target_kind().as_str(),
-                backend.map(|backend| backend.backend_id())
+            assert_eq!(
+                backend.map(RemoteDesktopMediaBackendDescriptor::backend_id),
+                Some(XCAP_OPENH264_WEBRTC_BACKEND_ID),
+                "direct WebRTC xcap app/window session must preserve the target binding"
             );
         }
     }

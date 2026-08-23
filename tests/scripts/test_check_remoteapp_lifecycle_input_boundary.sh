@@ -21,6 +21,7 @@ write_fixture() {
 | E2E-09 target loss vs transport failure | selected target loss emits target/media loss without transport failure |
 | E2E-10 weak identity ambiguity | ambiguous weak native identity fails closed before stream start |
 | E2E-11 view-only input safety | app/window sessions remain view-only without a focus-safe input validator |
+| E2E-14 guarded target-local input | target-local input is allowed only after a fresh identity/focus/geometry guard proof |
 relay_ready
 Same-display application window-set rebind is implemented through the explicit pending-media-rebind state machine and emits TARGET_REBOUND only after a renewed capture proof commits.
 Direct WebRTC route discovery is provider-backed. Host candidates, configured STUN server-reflexive routes, standard TURN relay routes, and EasyNet relay routes are represented as typed route evidence.
@@ -311,7 +312,7 @@ mod tests {
 
     #[test]
     fn target_loss_rejects_late_client_media_state_without_degrading_session() {
-        assert!(!session.report_client_media_state(epoch, "stalled"));
+        assert!(!session.report_client_media_state(epoch, "stalled", None));
         assert_eq!(session.state(), RemoteDesktopState::Suspended);
         assert_eq!(session.transport_state()["primary"], json!("media_source_lost"));
         assert_eq!(session.transport_state()["device_sending"], json!(false));
@@ -320,8 +321,8 @@ mod tests {
 
     #[test]
     fn client_media_stall_emits_session_degraded_recovery_event() {
-        assert!(session.report_client_media_state(epoch, "presenting"));
-        assert!(session.report_client_media_state(epoch, "stalled"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        assert!(session.report_client_media_state(epoch, "stalled", None));
         assert_eq!(session.state(), RemoteDesktopState::Degraded);
         assert_eq!(session.transport_state()["primary"], json!("degraded"));
         assert!(!session.client_media_ready());
@@ -936,7 +937,7 @@ mod tests {
     fn production_media_ready_requires_production_codec_and_sender_ready() {
         assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_codec_not_negotiated"));
         assert_eq!(view["production_readiness"]["client_media_ready"], json!(false));
-        assert!(session.report_client_media_state(TransportEpoch::new(1), "presenting"));
+        assert!(session.report_client_media_state(TransportEpoch::new(1), "presenting", None));
         assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_route_not_ready"));
         assert_eq!(view["transport"]["production_ready"], json!(false));
         assert_eq!(view["transports"][0]["metadata"]["production_ready"], json!(false));
@@ -1017,7 +1018,9 @@ RS
 fn serialize_session() {
     let transport_route_state = transport_view.route_state();
     let input_readiness = input_readiness_view(session, &effective_input_policy);
-    let ready = transport_view.production_ready(session);
+    let video_ready = transport_view.production_ready(session);
+    let audio_ready = session.media_stats()["audio_ready"].as_bool().unwrap_or(false);
+    let ready = video_ready && audio_ready;
     json!({
         "consent": session.consent_state().to_value(),
         "input_readiness": input_readiness.clone(),
@@ -1029,7 +1032,12 @@ fn serialize_session() {
         },
         "production_readiness": {
             "ready": ready,
-            "blocked_reason": production_readiness_blocked_reason(session, transport_view),
+            "blocked_reason": production_readiness_blocked_reason(
+                session,
+                transport_view,
+                audio_ready,
+                &Value::Null,
+            ),
             "target_scope_ready": session.target_scope_ready(),
             "production_route_ready": transport_view.production_route_ready(),
             "route_readiness_blocker": transport_view.readiness_blocker(),
@@ -1038,7 +1046,7 @@ fn serialize_session() {
     });
 }
 
-fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport_view: &RemoteDesktopTransportView) -> Value {
+fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport_view: &RemoteDesktopTransportView, audio_ready: bool, audio_blocked_reason: &Value) -> Value {
     if transport_view.production_ready(session) {
         Value::Null
     } else if !session.target_scope_ready() {
@@ -1126,7 +1134,8 @@ fn device_capabilities_view() {
             "capture_target_models": [
                 "display_surface",
                 "window_surface",
-                "display_scoped_application_window_set"
+                "display_scoped_application_window_set",
+                "process_scoped_application_window_set"
             ],
             "reason": "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
         },
@@ -1140,8 +1149,8 @@ fn input_control_support_view(input_available: bool) {
         "platforms": {
             "macos": {
                 "display": {"status": "available", "scope": "display_global"},
-                "window": {"status": "unsupported", "reason": "target_scoped_keyboard_pointer_dispatch_unsafe"},
-                "application": {"status": "unsupported", "reason": "target_scoped_keyboard_pointer_dispatch_unsafe"}
+                "window": {"status": "available", "reason": "macos_target_input_guard_ready", "scope": "target_local"},
+                "application": {"status": "available", "reason": "macos_target_input_guard_ready", "scope": "target_local"}
             },
             "linux": {
                 "display": {"status": "unsupported", "reason": "linux_input_injection_backend_not_implemented"},
@@ -1161,14 +1170,14 @@ fn platform_support_view(production_ready: bool, production_backend: &Backend) {
     json!({
         "platforms": {
             "linux": {
-                "display": {"status": "diagnostic_only"},
-                "window": {"status": "unsupported", "reason": "linux_app_window_native_backend_not_implemented"},
-                "application": {"status": "unsupported", "reason": "linux_app_window_native_backend_not_implemented"}
+                "display": {"status": "baseline_ready", "reason": "linux_xcap_target_baseline_ready"},
+                "window": {"status": "baseline_ready", "reason": "linux_xcap_target_baseline_ready"},
+                "application": {"status": "baseline_ready", "reason": "linux_xcap_target_baseline_ready"}
             },
             "windows": {
-                "display": {"status": "unsupported", "reason": "windows_native_backend_not_implemented"},
-                "window": {"status": "unsupported", "reason": "windows_native_backend_not_implemented"},
-                "application": {"status": "unsupported", "reason": "windows_native_backend_not_implemented"}
+                "display": {"status": "baseline_ready", "reason": "windows_xcap_target_baseline_ready"},
+                "window": {"status": "baseline_ready", "reason": "windows_xcap_target_baseline_ready"},
+                "application": {"status": "baseline_ready", "reason": "windows_xcap_target_baseline_ready"}
             }
         }
     });
@@ -1260,11 +1269,16 @@ fn current_session_input_policy() {
 fn current_session_effective_input_policy() {
     InputTransportGuard::DirectWebRtc(epoch);
     let snapshot = session.target_snapshot();
-    let input_scope = session.target_binding().input_scope();
+    let binding = session.target_binding();
     if !snapshot.input_enabled() {
         return None;
     }
-    base_policy.for_current_target(snapshot, input_scope);
+    policy.target_binding = Some(binding.clone());
+    base_policy.for_current_target(snapshot, binding);
+}
+
+fn target_input_guard_validation() {
+    validate_live_target_input();
 }
 
 fn display_interactive_without_input_consent_remains_view_only() {}
@@ -1344,6 +1358,8 @@ fn apply_input_frame_with_effective_policy() {
     if let Some(reason) = pointer_target_revision_reject_reason(frame, input_policy.pointer_target()) {
         return InputApplyOutcome::rejected(reason);
     }
+    CGEventSetLocation(event, mapped_point(frame, target));
+    let _guard_evidence = "target_guard_validation";
 }
 
 fn pointer_target_revision_reject_reason() -> Option<&'static str> {
@@ -1412,6 +1428,15 @@ mod tests {
     fn pointer_input_rejects_stale_target_geometry_revision_before_os_injection() {}
 
     #[test]
+    fn target_local_input_without_bound_host_proof_fails_closed_before_os_injection() {}
+
+    #[test]
+    fn current_target_policy_replaces_creation_binding_after_rebind() {}
+
+    #[test]
+    fn target_pointer_mapping_clamps_raw_coordinates_inside_bound_surface() {}
+
+    #[test]
     fn input_frame_applied_payload_preserves_client_timestamp() {}
 
     #[test]
@@ -1453,6 +1478,18 @@ enum TargetResolutionError {
     TargetIdentityAmbiguous,
     TargetMetadataIncomplete,
     TargetIdentityChanged,
+}
+
+enum InputScopeReason {
+    TargetScopedInputGuarded,
+}
+
+impl InputScopeReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::TargetScopedInputGuarded => "target_scoped_input_guarded",
+        }
+    }
 }
 
 const TARGET_IDENTITY_AMBIGUOUS: TargetResolutionError =
@@ -1532,6 +1569,9 @@ mod tests {
             json!(binding.consent_epoch())
         );
     }
+
+    #[test]
+    fn application_interactive_with_input_consent_projects_guarded_target_scope() {}
 
     #[test]
     fn display_interactive_downgrades_until_input_consent_exists() {
@@ -1680,6 +1720,8 @@ fn observe_bound_session_target_once() {
     record_target_observation_for_session();
 }
 
+fn validate_live_target_input() {}
+
 fn unsupported_platform_target_observation(binding: &RemoteAppTargetBinding) -> Option<TargetObservation> {
     match binding.target_kind() {
         RemoteDesktopTargetKind::Display => None,
@@ -1755,12 +1797,17 @@ mod tests {
 
     #[test]
     fn unsupported_platform_observer_fails_app_window_targets_closed() {}
+
+    #[test]
+    fn process_scoped_application_observer_tracks_window_set_without_display_identity() {}
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "native-media"))]
 mod platform {
+    struct XcapHostTargetSnapshotProvider;
+
     fn sample_platform_target_observations() -> PlatformTargetObservationSample {
-        PlatformTargetObservationSample::unsupported_platform()
+        sample_host_target_observations(&XcapHostTargetSnapshotProvider)
     }
 }
 RS
@@ -2106,19 +2153,19 @@ perl -0pi -e 's/window_observation_prioritizes_visibility_loss_over_title_or_foc
 run_fail 'target observer tests must prove hidden/minimized availability outranks title/focus updates'
 
 write_fixture
-perl -0pi -e 's/unsupported_platform_target_observation/unsupported_platform_noop_observation/g' \
+perl -0pi -e 's/XcapHostTargetSnapshotProvider/UnsupportedHostTargetSnapshotProvider/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'target observer must centralize unsupported platform app/window fail-closed semantics'
+run_fail 'non-macOS target observation must use the xcap host snapshot provider'
 
 write_fixture
-perl -0pi -e 's/PlatformTargetObservationSample::unsupported_platform\(\)/PlatformTargetObservationSample::noop()/' \
+perl -0pi -e 's/sample_host_target_observations\(&XcapHostTargetSnapshotProvider\)/PlatformTargetObservationSample::unsupported_platform()/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'non-macOS platform target sample must fail app/window targets closed instead of silently returning no observation'
+run_fail 'native-media non-macOS target observation must sample live xcap windows'
 
 write_fixture
-perl -0pi -e 's/unsupported_platform_observer_fails_app_window_targets_closed/unsupported_platform_observer_silently_noops/' \
+perl -0pi -e 's/process_scoped_application_observer_tracks_window_set_without_display_identity/process_scoped_application_observer_ignores_window_set/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'target observer tests must prove unsupported platforms fail app/window targets closed'
+run_fail 'target observer tests must prove Windows/Linux process-scoped application window-set tracking'
 
 write_fixture
 perl -0pi -e 's/workflow\.into_session_init\(\)\?/workflow.into_session_init()/' \
@@ -2816,14 +2863,14 @@ perl -0pi -e 's/let snapshot = session\.target_snapshot\(\);/let snapshot = cach
 run_fail 'production input path must read the latest session target snapshot'
 
 write_fixture
-perl -0pi -e 's/let input_scope = session\.target_binding\(\)\.input_scope\(\);/let input_scope = cached_input_scope;/' \
+perl -0pi -e 's/let binding = session\.target_binding\(\);/let binding = cached_binding;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
-run_fail 'production input path must read input scope from the session-owned target binding'
+run_fail 'production input path must read the session-owned target binding'
 
 write_fixture
-perl -0pi -e 's/base_policy\.for_current_target\(snapshot, input_scope\);/base_policy;/' \
+perl -0pi -e 's/base_policy\.for_current_target\(snapshot, binding\);/base_policy;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
-run_fail 'production input path must reapply input scope through the typed effective policy after deriving latest pointer target geometry'
+run_fail 'production input path must reapply the current binding through the typed effective policy after deriving latest pointer target geometry'
 
 write_fixture
 perl -0pi -e 's/current_session_input_policy_uses_same_geometry_revision_as_target_event/current_session_input_policy_allows_stale_geometry_revision/' \
@@ -3001,19 +3048,19 @@ perl -0pi -e 's/input_control_support_view\(input_available\)/input_control_supp
 run_fail 'device capabilities must derive input control support from runtime input permission'
 
 write_fixture
-perl -0pi -e 's/linux_app_window_native_backend_not_implemented/linux_capture_available/g' \
+perl -0pi -e 's/linux_xcap_target_baseline_ready/linux_capture_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must mark Linux app/window capture unsupported'
+run_fail 'device capabilities must expose Linux xcap target baseline readiness'
 
 write_fixture
-perl -0pi -e 's/windows_native_backend_not_implemented/windows_capture_available/g' \
+perl -0pi -e 's/windows_xcap_target_baseline_ready/windows_capture_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must mark Windows capture unsupported'
+run_fail 'device capabilities must expose Windows xcap target baseline readiness'
 
 write_fixture
-perl -0pi -e 's/"diagnostic_only"/"production_ready"/' \
+perl -0pi -e 's/"baseline_ready"/"production_ready"/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must distinguish Linux display diagnostic-only support from production capture'
+run_fail 'device capabilities must distinguish executable baseline from production certification'
 
 write_fixture
 perl -0pi -e 's/"requires_input_control_consent": true/"requires_input_control_consent": false/' \
@@ -3039,6 +3086,11 @@ write_fixture
 perl -0pi -e 's/"display_scoped_application_window_set"/"application"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must expose the application target model instead of flattening applications to display capture'
+
+write_fixture
+perl -0pi -e 's/"process_scoped_application_window_set"/"application"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose the process-scoped application target model'
 
 write_fixture
 perl -0pi -e 's#display/window/application target capture#display capture#' \
