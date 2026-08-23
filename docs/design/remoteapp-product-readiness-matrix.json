@@ -64,6 +64,7 @@
         "daemon input data-channel loop rejects replayed or out-of-order frames as stale_client_sequence when client_sequence is present",
         "daemon applied input events include host_received_at_ms, host_applied_at_ms, and latency_ms when client_sent_at_ms is present and not ahead of host time",
         "daemon applied input events include an opaque stable input_event_id bound to the RemoteApp session id, transport epoch, input kind/action, accepted input count, client_sequence when present, and host receive time",
+        "daemon emits INPUT_FRAME_APPLIED for the first successful pointer frame and the first successful keyboard frame while keeping same-kind input storms sampled by a bounded interval",
         "daemon projects runtime OS input permission denial as INPUT_PERMISSION_BLOCKED and deactivates input without failing active media",
         "daemon clears session-local runtime OS input permission blockers after a successful host-applied input frame and projects INPUT_PERMISSION_RESTORED",
         "daemon show_session preserves the session-local runtime input permission blocker in input_readiness.blocked_reason until input is proven active again",

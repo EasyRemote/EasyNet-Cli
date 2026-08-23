@@ -10,7 +10,7 @@
 // - EasyNet/Hub must never relay high-frequency pointer or keyboard events
 //   through Invocation once a direct media/control channel is negotiated.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -566,6 +566,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
     let mut rejected_count = 0_u64;
     let mut sequence_gate = InputSequenceGate::default();
     let mut reject_diagnostics = InputRejectCoalescer::default();
+    let mut applied_diagnostics = InputAppliedDiagnosticGate::default();
     while let Some(event) = data_channel.poll().await {
         match event {
             DataChannelEvent::OnOpen => {
@@ -690,7 +691,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 if outcome.applied {
                     accepted_count = accepted_count.saturating_add(1);
                     sessions.mark_input_frame_applied(&session_id, epoch);
-                    if accepted_count == 1 || accepted_count.is_multiple_of(120) {
+                    if applied_diagnostics.should_emit(kind, accepted_count) {
                         flush_input_rejections(
                             &mut reject_diagnostics,
                             &sessions,
@@ -739,6 +740,19 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
         }
     }
     flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
+}
+
+#[derive(Debug, Default)]
+struct InputAppliedDiagnosticGate {
+    emitted_kinds: BTreeSet<String>,
+}
+
+impl InputAppliedDiagnosticGate {
+    fn should_emit(&mut self, kind: &str, accepted_count: u64) -> bool {
+        self.emitted_kinds.insert(kind.to_string())
+            || accepted_count == 1
+            || accepted_count.is_multiple_of(120)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2076,6 +2090,20 @@ mod tests {
         assert_eq!(gate.reject_reason(Some(3)), None);
         assert_eq!(gate.reject_reason(None), None);
         assert_eq!(gate.reject_reason(Some(3)), Some("stale_client_sequence"));
+    }
+
+    #[test]
+    fn input_applied_diagnostic_gate_emits_first_success_for_each_kind() {
+        let mut gate = InputAppliedDiagnosticGate::default();
+
+        assert!(gate.should_emit("pointer", 1));
+        assert!(
+            gate.should_emit("key", 2),
+            "keyboard must still emit when it is the second accepted frame"
+        );
+        assert!(!gate.should_emit("pointer", 3));
+        assert!(!gate.should_emit("key", 4));
+        assert!(gate.should_emit("pointer", 120));
     }
 
     #[test]

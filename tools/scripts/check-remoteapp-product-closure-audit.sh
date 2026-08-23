@@ -819,6 +819,10 @@ require 'stale rejected input must not be host-applied' "$INPUT_INJECTION" \
   'input injection verifier must prove stale rejected input is not applied'
 require 'struct InputSequenceGate' "$INPUT" \
   'RemoteApp daemon input execution path must have a per-channel client sequence gate'
+require 'struct InputAppliedDiagnosticGate' "$INPUT" \
+  'RemoteApp daemon input execution path must have bounded applied-input diagnostics'
+require 'input_applied_diagnostic_gate_emits_first_success_for_each_kind' "$INPUT" \
+  'RemoteApp input tests must prove first successful pointer and keyboard frames each emit applied evidence'
 require 'sequence_gate\.reject_reason\(client_sequence\)' "$INPUT" \
   'RemoteApp daemon input data-channel loop must reject stale client sequences before input execution'
 require '"stale_client_sequence"' "$INPUT" \
