@@ -15,6 +15,7 @@ INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
 MEDIA_ADAPTATION="$ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 MULTI_WINDOW_TRACKING="$ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
+FRONTEND_PRODUCT_FLOW="$ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
@@ -78,6 +79,7 @@ reject() {
 [[ -f "$MEDIA_ADAPTATION" ]] || fail "missing RemoteApp media adaptation evidence verifier"
 [[ -f "$MULTI_WINDOW_TRACKING" ]] || fail "missing RemoteApp multi-window tracking evidence verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
+[[ -f "$FRONTEND_PRODUCT_FLOW" ]] || fail "missing RemoteApp frontend product-flow verifier"
 [[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing RemoteApp host permission-subject verifier"
 [[ -f "$TARGET_FRESHNESS" ]] || fail "missing RemoteApp host target-picker freshness verifier"
@@ -525,6 +527,12 @@ require 'child verifier must not claim product completion' "$PRODUCT_COMPLETION"
   'product-completion gate must reject child product-complete claims'
 require 'requires_evidence_json' "$PRODUCT_COMPLETION" \
   'product-completion gate must require live evidence_json artifacts from domain verifiers'
+require 'requires_frontend_flow_summary' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require frontend product-flow summaries'
+require 'frontend_flow_summary must be an object' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject frontend product-flow reports without summaries'
+require 'self-test accepted frontend product-flow report without summary' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing frontend product-flow summaries'
 require 'requires_platforms_passed' "$PRODUCT_COMPLETION" \
   'product-completion gate must require cross-platform product evidence to pass rather than report unsupported'
 require 'requires_cross_platform_capture_scenarios' "$PRODUCT_COMPLETION" \
@@ -619,6 +627,34 @@ require 'tools/scripts/remoteapp-network-fallback-e2e.sh' "$PRODUCT_COMPLETION" 
   'product-completion gate must require network fallback report provenance'
 require 'product_complete_claim.*effective_status == "passed"' "$PRODUCT_COMPLETION" \
   'product-completion gate must be the single aggregate product-complete claim'
+require 'frontend_flow_summary' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must emit product journey summaries'
+require 'hub_api_ready' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize Hub API readiness'
+require 'product_runtime_ready' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize product runtime readiness'
+require 'frontend_typechecked' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize frontend typecheck coverage'
+require 'ui_flow_exercised' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize RemoteApp UI flow coverage'
+require 'browser_lifecycle_verified' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize Browser/Tauri lifecycle coverage'
+require 'cross_device_distinct_devices' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize distinct-device coverage'
+require 'permission_subject_checked' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize permission subject coverage'
+require 'target_picker_fresh' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize target-picker freshness'
+require 'window_frame_rendered' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize window render coverage'
+require 'application_frame_rendered' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize application render coverage'
+require 'window_view_only_input_checked' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize window input policy coverage'
+require 'application_view_only_input_checked' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize application input policy coverage'
+require 'end_session_lifecycle_verified' "$FRONTEND_PRODUCT_FLOW" \
+  'frontend product-flow verifier must summarize end-session lifecycle coverage'
 require 'real_remoteapp_cross_device_session' "$CROSS_DEVICE_REMOTEAPP" \
   'cross-device RemoteApp verifier must require real RemoteApp cross-device proof mode'
 require 'remoteapp_summary' "$CROSS_DEVICE_REMOTEAPP" \

@@ -20,6 +20,32 @@ EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_OUT_DIR="$REPO_ROOT/target/test/frontend-
   "$HARNESS" >/dev/null
 grep -q '"status": "skipped"' "$REPO_ROOT/target/test/frontend-remoteapp-product-flow-skip/report.json" || \
   fail "harness did not emit skipped report when run gate was absent"
+python3 - "$REPO_ROOT/target/test/frontend-remoteapp-product-flow-skip/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+summary = report.get("frontend_flow_summary")
+assert isinstance(summary, dict)
+assert summary["target_kind"] == "both"
+assert summary["passed_steps"] == []
+for field in (
+    "hub_api_ready",
+    "product_runtime_ready",
+    "frontend_typechecked",
+    "ui_flow_exercised",
+    "browser_lifecycle_verified",
+    "cross_device_distinct_devices",
+    "permission_subject_checked",
+    "target_picker_fresh",
+    "window_frame_rendered",
+    "application_frame_rendered",
+    "window_view_only_input_checked",
+    "application_view_only_input_checked",
+    "end_session_lifecycle_verified",
+):
+    assert summary[field] is False
+PY
 EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_OUT_DIR="$REPO_ROOT/target/test/frontend-remoteapp-browser-lifecycle-skip" \
   "$BROWSER_LIFECYCLE" >/dev/null
 grep -q '"status": "skipped"' "$REPO_ROOT/target/test/frontend-remoteapp-browser-lifecycle-skip/report.json" || \
@@ -75,6 +101,18 @@ chmod +x "$SB/tools/scripts/"*.sh
 CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
 CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/frontend_flow_summary/frontend_step_summary/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without frontend journey summary"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 
 cp "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good"

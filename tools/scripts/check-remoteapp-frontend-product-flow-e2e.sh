@@ -191,6 +191,28 @@ require 'cross-device product smoke evidence is required' "$HARNESS" \
   'product-flow --run must fail closed when cross-device smoke evidence is missing'
 require 'validate_cross_device_smoke_report' "$HARNESS" \
   'product-flow must validate supplied cross-device smoke reports'
+require 'frontend_flow_summary' "$HARNESS" \
+  'product-flow harness must emit frontend product journey summaries'
+require 'hub_api_ready' "$HARNESS" \
+  'product-flow summary must expose Hub API readiness'
+require 'product_runtime_ready' "$HARNESS" \
+  'product-flow summary must expose product runtime readiness'
+require 'ui_flow_exercised' "$HARNESS" \
+  'product-flow summary must expose UI flow coverage'
+require 'browser_lifecycle_verified' "$HARNESS" \
+  'product-flow summary must expose Browser/Tauri lifecycle coverage'
+require 'cross_device_distinct_devices' "$HARNESS" \
+  'product-flow summary must expose distinct-device cross-device coverage'
+require 'window_frame_rendered' "$HARNESS" \
+  'product-flow summary must expose window decoded-frame coverage'
+require 'application_frame_rendered' "$HARNESS" \
+  'product-flow summary must expose application decoded-frame coverage'
+require 'window_view_only_input_checked' "$HARNESS" \
+  'product-flow summary must expose window input-policy coverage'
+require 'application_view_only_input_checked' "$HARNESS" \
+  'product-flow summary must expose application input-policy coverage'
+require 'end_session_lifecycle_verified' "$HARNESS" \
+  'product-flow summary must expose end-session lifecycle coverage'
 require 'distinct_device_uras_observed is not true' "$HARNESS" \
   'product-flow must reject local-provider-only cross-device smoke reports'
 require 'local_provider_boundary_only is not false' "$HARNESS" \

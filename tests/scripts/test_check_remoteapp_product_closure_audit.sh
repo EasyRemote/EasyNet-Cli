@@ -29,6 +29,7 @@ cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/script
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh" "$SB/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" "$SB/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
@@ -144,6 +145,15 @@ grep -q "product-completion gate must require cross-platform capture scenario su
   fail "expected product-completion cross-platform capture scenarios failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 
+perl -0pi -e 's#requires_frontend_flow_summary#requires_frontend_steps_only#g' \
+  "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-frontend-summary.out 2>&1; then
+  fail "checker accepted product-completion gate without frontend flow summaries"
+fi
+grep -q "product-completion gate must require frontend product-flow summaries" /tmp/check-remoteapp-product-closure-completion-frontend-summary.out || \
+  fail "expected product-completion frontend flow summary failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+
 perl -0pi -e 's#requires_input_injection_scenarios#requires_input_platform_status_only#g' \
   "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-input-scenarios.out 2>&1; then
@@ -179,6 +189,15 @@ fi
 grep -q "product-completion gate must require lifecycle summary evidence" /tmp/check-remoteapp-product-closure-completion-lifecycle-summary.out || \
   fail "expected product-completion lifecycle summary failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+
+perl -0pi -e 's#frontend_flow_summary#frontend_step_summary#g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-frontend-flow-summary.out 2>&1; then
+  fail "checker accepted frontend product-flow verifier without journey summaries"
+fi
+grep -q "frontend product-flow verifier must emit product journey summaries" /tmp/check-remoteapp-product-closure-frontend-flow-summary.out || \
+  fail "expected frontend product-flow summary failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 
 perl -0pi -e 's#real_cross_platform_capture_matrix#source_only_capture_matrix#g' \
   "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"

@@ -156,6 +156,28 @@ for result_path in ordered_result_paths:
     if failed_step is None and result.get("status") != "passed":
         failed_step = result.get("name") or result_path.parent.name
         failed_step_stderr = stderr_excerpt
+passed_steps = {
+    step.get("name")
+    for step in steps
+    if isinstance(step, dict) and step.get("status") == "passed"
+}
+frontend_flow_summary = {
+    "target_kind": target_kind,
+    "passed_steps": sorted(name for name in passed_steps if isinstance(name, str)),
+    "hub_api_ready": "hub-api-readiness-preflight" in passed_steps,
+    "product_runtime_ready": "product-runtime-readiness-preflight" in passed_steps,
+    "frontend_typechecked": "frontend-typecheck" in passed_steps,
+    "ui_flow_exercised": "frontend-remoteapp-ui-flow" in passed_steps,
+    "browser_lifecycle_verified": "frontend-browser-lifecycle" in passed_steps,
+    "cross_device_distinct_devices": "cross-device-product-smoke" in passed_steps,
+    "permission_subject_checked": "host-permission-subject" in passed_steps,
+    "target_picker_fresh": "host-target-picker-freshness" in passed_steps,
+    "window_frame_rendered": "host-decoded-frame-window" in passed_steps,
+    "application_frame_rendered": "host-decoded-frame-application" in passed_steps,
+    "window_view_only_input_checked": "host-view-only-input-window" in passed_steps,
+    "application_view_only_input_checked": "host-view-only-input-application" in passed_steps,
+    "end_session_lifecycle_verified": "frontend-browser-lifecycle" in passed_steps,
+}
 report = {
     "script": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
     "status": status,
@@ -165,6 +187,7 @@ report = {
     "failed_step": failed_step,
     "failed_step_stderr": failed_step_stderr,
     "steps": steps,
+    "frontend_flow_summary": frontend_flow_summary,
     "evidence_contract": [
         "frontend TypeScript check",
         "DeviceMediaAccess RemoteApp UI flow",
@@ -483,6 +506,9 @@ PY
   grep -q -- '--pre-media-resource-refresh' "$0"
   grep -q 'host-remoteapp-view-only-input-safety-e2e.sh' "$0"
   grep -q 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E' "$0"
+  grep -q 'frontend_flow_summary' "$0"
+  grep -q 'window_frame_rendered' "$0"
+  grep -q 'application_view_only_input_checked' "$0"
   echo "frontend-remoteapp-product-flow-e2e self-test ok"
   exit 0
 fi

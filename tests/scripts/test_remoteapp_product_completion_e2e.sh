@@ -87,6 +87,12 @@ grep -q "child verifier must not claim product completion" "$SCRIPT" || \
   fail "completion gate must reject child product-complete claims"
 grep -q "requires_evidence_json" "$SCRIPT" || \
   fail "completion gate must require live evidence_json artifacts"
+grep -q "requires_frontend_flow_summary" "$SCRIPT" || \
+  fail "completion gate must require frontend flow summaries"
+grep -q "frontend_flow_summary must be an object" "$SCRIPT" || \
+  fail "completion gate must reject frontend product-flow reports without summaries"
+grep -q "self-test accepted frontend product-flow report without summary" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing frontend flow summaries"
 grep -q "requires_platforms_passed" "$SCRIPT" || \
   fail "completion gate must require product platforms to pass, not just be covered"
 grep -q "requires_cross_platform_capture_scenarios" "$SCRIPT" || \

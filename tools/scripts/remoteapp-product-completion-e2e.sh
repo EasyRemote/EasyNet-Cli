@@ -116,6 +116,7 @@ required = [
             "Browser/Tauri RemoteApp lifecycle evidence",
             "cross-device product smoke with distinct device URAs",
         ],
+        "requires_frontend_flow_summary": True,
         "product_flow_step_artifacts": [
             {"name": "hub-api-readiness-preflight"},
             {"name": "product-runtime-readiness-preflight"},
@@ -341,6 +342,49 @@ def number_value(value):
         return float(value)
     except Exception:
         return 0.0
+
+def validate_frontend_flow_summary(item_id, check, report, required_steps):
+    summary = report.get("frontend_flow_summary")
+    if not isinstance(summary, dict):
+        message = "frontend_flow_summary must be an object"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+    if summary.get("target_kind") != "both":
+        message = "frontend_flow_summary.target_kind must be both"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    passed_steps = summary.get("passed_steps")
+    if not isinstance(passed_steps, list):
+        message = "frontend_flow_summary.passed_steps must be a list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        passed_steps = []
+    missing_summary_steps = sorted(set(required_steps) - {step for step in passed_steps if isinstance(step, str)})
+    if missing_summary_steps:
+        message = "frontend_flow_summary.passed_steps missing: " + ", ".join(missing_summary_steps)
+        check["errors"].append(message)
+        add_error(item_id, message)
+    for field in (
+        "hub_api_ready",
+        "product_runtime_ready",
+        "frontend_typechecked",
+        "ui_flow_exercised",
+        "browser_lifecycle_verified",
+        "cross_device_distinct_devices",
+        "permission_subject_checked",
+        "target_picker_fresh",
+        "window_frame_rendered",
+        "application_frame_rendered",
+        "window_view_only_input_checked",
+        "application_view_only_input_checked",
+        "end_session_lifecycle_verified",
+    ):
+        if summary.get(field) is not True:
+            message = f"frontend_flow_summary.{field} must be true"
+            check["errors"].append(message)
+            add_error(item_id, message)
+    check["frontend_flow_summary"] = summary
 
 def validate_media_scenarios(item_id, check, report):
     required_scenarios = {"baseline", "degraded_network", "backpressure"}
@@ -1638,6 +1682,8 @@ for item in required:
             message = f"evidence_contract missing {expected!r}"
             check["errors"].append(message)
             add_error(item_id, message)
+    if item.get("requires_frontend_flow_summary"):
+        validate_frontend_flow_summary(item_id, check, report, item.get("required_steps", []))
     if item.get("requires_network_route_scenarios"):
         validate_network_route_scenarios(item_id, check, report)
     if item.get("requires_media_scenarios"):
@@ -2095,6 +2141,24 @@ if item_id == "frontend_product_flow":
         {"name": "host-view-only-input-window", "status": "passed"},
         {"name": "host-view-only-input-application", "status": "passed"},
     ]
+    passed_steps = sorted(step["name"] for step in report["steps"])
+    report["frontend_flow_summary"] = {
+        "target_kind": "both",
+        "passed_steps": passed_steps,
+        "hub_api_ready": True,
+        "product_runtime_ready": True,
+        "frontend_typechecked": True,
+        "ui_flow_exercised": True,
+        "browser_lifecycle_verified": True,
+        "cross_device_distinct_devices": True,
+        "permission_subject_checked": True,
+        "target_picker_fresh": True,
+        "window_frame_rendered": True,
+        "application_frame_rendered": True,
+        "window_view_only_input_checked": True,
+        "application_view_only_input_checked": True,
+        "end_session_lifecycle_verified": True,
+    }
 if item_id in lifecycle_target_by_id:
     report["target_kind"] = lifecycle_target_by_id[item_id]
     lifecycle_kind = item_id.rsplit("_", 1)[0]
@@ -2756,6 +2820,32 @@ PY
     exit 1
   fi
   write_synthetic_report "$tmp/session_cancel_window.json" session_cancel_window
+
+  python3 - "$tmp/frontend_product_flow.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+del report["frontend_flow_summary"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-frontend-flow-summary" >/dev/null 2>&1; then
+    echo "self-test accepted frontend product-flow report without summary" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
 
   python3 - "$tmp/frontend_product_flow.json" <<'PY'
 import json
@@ -3499,6 +3589,7 @@ case "$MODE" in
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
     grep -q 'requires_evidence_json' "$0"
     grep -q 'requires_platforms_passed' "$0"
+    grep -q 'requires_frontend_flow_summary' "$0"
     grep -q 'requires_cross_platform_capture_scenarios' "$0"
     grep -q 'requires_input_injection_scenarios' "$0"
     grep -q 'requires_media_scenarios' "$0"
@@ -3508,6 +3599,7 @@ case "$MODE" in
     grep -q 'requires_crash_restart_recovery_scenarios' "$0"
     grep -q 'requires_lifecycle_summary' "$0"
     grep -q 'lifecycle_summary must be an object' "$0"
+    grep -q 'frontend_flow_summary must be an object' "$0"
     grep -q 'media adaptation scenarios summary must be a non-empty list' "$0"
     grep -q 'multi-window tracking scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-platform capture .* scenarios summary must be a non-empty list' "$0"
@@ -3539,6 +3631,7 @@ case "$MODE" in
     grep -q 'self-test accepted missing evidence_json artifact' "$0"
     grep -q 'self-test accepted wrong lifecycle target_kind' "$0"
     grep -q 'self-test accepted lifecycle report without summary' "$0"
+    grep -q 'self-test accepted frontend product-flow report without summary' "$0"
     grep -q 'self-test accepted missing frontend product-flow step' "$0"
     grep -q 'self-test accepted product-flow target_kind other than both' "$0"
     grep -q 'self-test accepted missing product-flow step result artifact' "$0"
