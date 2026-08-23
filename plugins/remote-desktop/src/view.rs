@@ -143,9 +143,10 @@ fn production_readiness_view(
     session: &RemoteDesktopSession,
     transport_view: &RemoteDesktopTransportView,
 ) -> Value {
+    let ready = transport_view.production_ready(session);
     json!({
-        "ready": session.production_media_ready(),
-        "blocked_reason": production_readiness_blocked_reason(session),
+        "ready": ready,
+        "blocked_reason": production_readiness_blocked_reason(session, transport_view),
         "target_scope_ready": session.target_scope_ready(),
         "media_scope": "video_only",
         "audio_ready": false,
@@ -160,8 +161,11 @@ fn production_readiness_view(
     })
 }
 
-fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
-    if session.production_media_ready() {
+fn production_readiness_blocked_reason(
+    session: &RemoteDesktopSession,
+    transport_view: &RemoteDesktopTransportView,
+) -> Value {
+    if transport_view.production_ready(session) {
         Value::Null
     } else if !session.target_scope_ready() {
         json!("target_scope_not_ready")
@@ -171,6 +175,8 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value 
         json!("media_transport_not_ready")
     } else if !session.client_media_ready() {
         json!("client_media_not_presenting")
+    } else if !transport_view.production_route_ready() {
+        json!("production_route_not_ready")
     } else {
         json!("production_readiness_incomplete")
     }

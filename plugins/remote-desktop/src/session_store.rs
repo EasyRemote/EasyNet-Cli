@@ -966,6 +966,15 @@ mod tests {
                     "easynet:///r/acme/session/rd-production-ready/webrtc/1".to_string(),
                 )
                 .expect("production local answer records");
+            sessions
+                .get_mut("rd-production-ready")
+                .unwrap()
+                .record_local_ice_candidate(json!({
+                    "candidate": "candidate:host 1 UDP 2122252543 127.0.0.1 50000 typ host",
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0
+                }))
+                .expect("local host route candidate records");
         });
         store.mark_direct_webrtc_media_ready("rd-production-ready", TransportEpoch::new(1));
         store.with_sessions(|sessions| {
@@ -1010,11 +1019,14 @@ mod tests {
                 json!(false)
             );
             assert_eq!(view["production_media_ready"], json!(true));
-            assert_eq!(view["production_readiness"]["ready"], json!(true));
-            assert_eq!(view["production_readiness"]["blocked_reason"], json!(null));
+            assert_eq!(view["production_readiness"]["ready"], json!(false));
             assert_eq!(
-                view["production_readiness"]["route_readiness_blocker"],
-                json!(null)
+                view["production_readiness"]["blocked_reason"],
+                json!("production_route_not_ready")
+            );
+            assert_eq!(
+                view["production_readiness"]["route_readiness_blocker"]["reason_code"],
+                json!("transport_route_unavailable")
             );
             assert_eq!(view["transport"]["production_ready"], json!(false));
             assert_eq!(view["transports"][0]["production_ready"], json!(false));

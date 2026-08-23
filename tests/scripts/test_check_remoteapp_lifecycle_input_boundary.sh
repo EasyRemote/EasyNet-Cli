@@ -160,6 +160,7 @@ RS
   cat >"$SANDBOX/plugins/remote-desktop/src/session.rs" <<'RS'
 struct RemoteDesktopSession {
     consent: RemoteDesktopConsentState,
+    input_runtime_block_reason: Option<String>,
 }
 
 fn new() {
@@ -213,6 +214,15 @@ fn activate_input_for_transport_epoch() {
     if !self.consent.permits_media_input() {
         return false;
     }
+}
+
+fn input_runtime_block_reason(&self) -> Option<&str> {
+    self.input_runtime_block_reason.as_deref()
+}
+
+fn mark_input_permission_blocked() {
+    self.input_runtime_block_reason = Some(reason.to_string());
+    self.lifecycle.deactivate_input_for_runtime_block();
 }
 
 fn close() {
@@ -327,6 +337,20 @@ mod tests {
     }
 
     #[test]
+    fn rehydrated_non_terminal_session_preserves_runtime_input_block_reason() {
+        assert_eq!(
+            session.input_runtime_block_reason(),
+            Some("accessibility_permission_denied")
+        );
+    }
+
+    #[test]
+    fn runtime_input_permission_block_deactivates_input_without_failing_media() {
+        assert!(session.media_transport_ready());
+        assert!(!session.input_readiness()["interactive_ready"].as_bool().unwrap());
+    }
+
+    #[test]
     fn target_reappearance_after_loss_emits_explicit_rebind_failure() {
         let rebind_attempted = event;
         assert_eq!(rebind_attempted["reason_code"], json!("target_rebind_attempted"));
@@ -372,6 +396,28 @@ mod tests {
             "revoked consent must prevent input from reactivating even with the same transport epoch"
         );
     }
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/session_recovery.rs" <<'RS'
+struct RemoteDesktopRecoverySnapshot {
+    #[serde(default)]
+    input_runtime_block_reason: Option<String>,
+}
+
+impl RemoteDesktopRecoverySnapshot {
+    fn input_runtime_block_reason(&self) -> Option<&str> {
+        self.input_runtime_block_reason.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn recovery_snapshot_round_trips_runtime_input_block_reason() {}
+
+    #[test]
+    fn recovery_snapshot_keeps_legacy_rows_without_runtime_input_block_reason_loadable() {}
 }
 RS
 
@@ -440,6 +486,10 @@ RS
   cat >"$SANDBOX/plugins/remote-desktop/src/session_state.rs" <<'RS'
 fn suspend() {
     self.set_non_terminal_state(RemoteDesktopState::Suspended);
+}
+
+fn deactivate_input_for_runtime_block() {
+    self.input_activation = InputActivationGate::RuntimePermissionBlocked;
 }
 RS
 
@@ -605,6 +655,25 @@ fn session_degraded(client_state: &str, transport_epoch: u64, primary_phase: &st
     });
 }
 
+fn input_permission_blocked() {
+    RemoteDesktopEventProjection::new(
+        "INPUT_PERMISSION_BLOCKED",
+        json!({
+            "recoverability": "request_input_permission",
+            "frontend_action": FrontendAction::RequestPermission.as_str(),
+        }),
+    );
+}
+
+fn input_permission_restored() {
+    RemoteDesktopEventProjection::new(
+        "INPUT_PERMISSION_RESTORED",
+        json!({
+            "recoverability": "resolved",
+        }),
+    );
+}
+
 fn transport_blocked() {
     let blocker = RemoteDesktopTransportBlocker::from_webrtc_error(reason);
     json!({
@@ -635,6 +704,12 @@ fn session_expired_payload_projects_terminal_reason_code() {}
 
 #[test]
 fn session_degraded_payload_projects_recovery_context() {}
+
+#[test]
+fn input_permission_block_projects_request_permission_recovery() {}
+
+#[test]
+fn input_permission_restore_projects_resolved_recovery() {}
 
 #[test]
 fn session_created_projects_remote_desktop_attach_as_preview_ability() {}
@@ -684,6 +759,7 @@ fn event_type_proto_name(event_type: &str) -> &'static str {
         return "REMOTE_DESKTOP_EVENT_TARGET_CHANGED";
     }
     match event_type {
+        "INPUT_PERMISSION_BLOCKED" | "INPUT_PERMISSION_RESTORED" => "REMOTE_DESKTOP_EVENT_INPUT",
         _ => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
     }
 }
@@ -861,6 +937,7 @@ mod tests {
         assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_codec_not_negotiated"));
         assert_eq!(view["production_readiness"]["client_media_ready"], json!(false));
         assert!(session.report_client_media_state(TransportEpoch::new(1), "presenting"));
+        assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_route_not_ready"));
         assert_eq!(view["transport"]["production_ready"], json!(false));
         assert_eq!(view["transports"][0]["metadata"]["production_ready"], json!(false));
     }
@@ -940,6 +1017,7 @@ RS
 fn serialize_session() {
     let transport_route_state = transport_view.route_state();
     let input_readiness = input_readiness_view(session, &effective_input_policy);
+    let ready = transport_view.production_ready(session);
     json!({
         "consent": session.consent_state().to_value(),
         "input_readiness": input_readiness.clone(),
@@ -950,7 +1028,8 @@ fn serialize_session() {
             "route_state": transport_route_state.clone(),
         },
         "production_readiness": {
-            "blocked_reason": production_readiness_blocked_reason(session),
+            "ready": ready,
+            "blocked_reason": production_readiness_blocked_reason(session, transport_view),
             "target_scope_ready": session.target_scope_ready(),
             "production_route_ready": transport_view.production_route_ready(),
             "route_readiness_blocker": transport_view.readiness_blocker(),
@@ -959,8 +1038,8 @@ fn serialize_session() {
     });
 }
 
-fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
-    if session.production_media_ready() {
+fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport_view: &RemoteDesktopTransportView) -> Value {
+    if transport_view.production_ready(session) {
         Value::Null
     } else if !session.target_scope_ready() {
         json!("target_scope_not_ready")
@@ -970,13 +1049,19 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value 
         json!("media_transport_not_ready")
     } else if !session.client_media_ready() {
         json!("client_media_not_presenting")
+    } else if !transport_view.production_route_ready() {
+        json!("production_route_not_ready")
     } else {
         json!("production_readiness_incomplete")
     }
 }
 
 fn input_readiness_view(session: &RemoteDesktopSession, input_policy: &EffectiveRemoteDesktopInputPolicy) -> Value {
-    let blocked_reason = json!(session.target_binding().input_scope_reason());
+    let blocked_reason = if let Some(reason) = session.input_runtime_block_reason() {
+        json!(reason)
+    } else {
+        json!(session.target_binding().input_scope_reason())
+    };
     let interactive_ready = false;
     json!({
         "requested_mode": session.mode(),
@@ -991,6 +1076,10 @@ fn session_view_projects_effective_view_only_input_scope() {
     assert_eq!(view["input_readiness"]["requested_mode"], json!("interactive"));
     assert_eq!(view["input_readiness"]["effective_mode"], json!("view_only"));
     assert_eq!(view["input_readiness"]["blocked_reason"], json!("target_scoped_keyboard_pointer_dispatch_unsafe"));
+}
+
+fn session_view_projects_session_local_runtime_input_blocker() {
+    assert_eq!(view["input_readiness"]["blocked_reason"], json!("accessibility_permission_denied"));
 }
 RS
 
@@ -1195,11 +1284,48 @@ fn validate_input_frame() {
     validate_client_sequence(client_sequence)?;
 }
 
+fn data_channel_loop() {
+    if let Some(reason) = sequence_gate.reject_reason(client_sequence) {
+        return InputApplyOutcome::rejected(reason);
+    }
+    let outcome = apply_input_frame_with_effective_policy(&effective_input_policy, &frame);
+    if outcome.applied {
+        sessions.mark_input_frame_applied(&session_id, epoch);
+    }
+    let reason = outcome.reason.unwrap_or("input_injection_failed");
+    if input_runtime_permission_denied(reason) {
+        sessions.mark_input_permission_blocked(&session_id, epoch, reason);
+    }
+}
+
 const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
 const MAX_CLIENT_SEQUENCE: u64 = 9_007_199_254_740_991;
 
 fn validate_client_sent_at_ms() {}
 fn validate_client_sequence() {}
+
+struct InputFrameTiming {
+    client_sent_at_ms: Option<u64>,
+    host_received_at_ms: u64,
+}
+
+impl InputFrameTiming {
+    fn latency_ms_at(&self, host_applied_at_ms: u64) -> Option<u64> {
+        Some(host_applied_at_ms.saturating_sub(self.host_received_at_ms))
+    }
+}
+
+struct InputSequenceGate;
+
+impl InputSequenceGate {
+    fn reject_reason(&mut self, client_sequence: Option<u64>) -> Option<&'static str> {
+        if client_sequence == Some(1) {
+            Some("stale_client_sequence")
+        } else {
+            None
+        }
+    }
+}
 
 impl RemoteDesktopInputFrame {
     fn client_sent_at_ms(&self) -> Option<u64> {
@@ -1311,6 +1437,14 @@ mod tests {
 
     #[test]
     fn input_reject_diagnostics_are_coalesced_across_interleaved_signatures() {}
+
+    #[test]
+    fn input_sequence_gate_rejects_replayed_or_out_of_order_frames() {
+        assert_eq!(
+            sequence_gate.reject_reason(Some(1)),
+            Some("stale_client_sequence")
+        );
+    }
 }
 RS
 
@@ -2612,7 +2746,17 @@ perl -0pi -e 's/"target_scope_ready": session\.target_scope_ready\(\),//' \
 run_fail 'public production readiness must expose target scope readiness'
 
 write_fixture
-perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session\),//' \
+perl -0pi -e 's/let ready = transport_view\.production_ready\(session\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'public production readiness must bind ready to media plus route readiness'
+
+write_fixture
+perl -0pi -e 's/"ready": ready,//' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'public production readiness ready predicate must use the route-gated transport production predicate'
+
+write_fixture
+perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session, transport_view\),//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 
@@ -2620,6 +2764,11 @@ write_fixture
 perl -0pi -e 's/"client_media_not_presenting"/"production_readiness_incomplete"/' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'production readiness must distinguish missing client presenting/decoded evidence'
+
+write_fixture
+perl -0pi -e 's/"production_route_not_ready"/"production_readiness_incomplete"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'production readiness must distinguish route blockers after media and client presentation are ready'
 
 write_fixture
 perl -0pi -e 's/"production_ready": self\.production_ready\(session\),//' \

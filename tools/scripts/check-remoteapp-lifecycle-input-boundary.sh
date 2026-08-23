@@ -643,7 +643,11 @@ require '&& self\.transport\.client_media_ready\(\)' "$SESSION" \
   'production media readiness must wait for client presenting evidence, not only device sender readiness'
 require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
   'public production readiness must expose target scope readiness'
-require '"blocked_reason": production_readiness_blocked_reason\(session\)' "$VIEW" \
+require '"ready": ready' "$VIEW" \
+  'public production readiness ready predicate must use the route-gated transport production predicate'
+require 'let ready = transport_view\.production_ready\(session\)' "$VIEW" \
+  'public production readiness must bind ready to media plus route readiness'
+require '"blocked_reason": production_readiness_blocked_reason\(session, transport_view\)' "$VIEW" \
   'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 require 'fn production_readiness_blocked_reason\(' "$VIEW" \
   'production readiness blocked reason must be centralized in the session view projection'
@@ -655,6 +659,8 @@ require '"media_transport_not_ready"' "$VIEW" \
   'production readiness must distinguish media transport blockers'
 require '"client_media_not_presenting"' "$VIEW" \
   'production readiness must distinguish missing client presenting/decoded evidence'
+require '"production_route_not_ready"' "$VIEW" \
+  'production readiness must distinguish route blockers after media and client presentation are ready'
 require 'production_media_ready_requires_target_scope_ready' "$SESSION" \
   'production online predicate must test scope fallback/widening rejection'
 require 'scope widening or display fallback must prevent production online' "$SESSION" \
@@ -665,6 +671,8 @@ require 'view\["production_readiness"\]\["blocked_reason"\]' "$SESSION_STORE" \
   'production readiness tests must assert the public blocked_reason projection'
 require 'view\["production_readiness"\]\["client_media_ready"\]' "$SESSION_STORE" \
   'production readiness tests must assert client presenting evidence before online'
+require 'production_route_not_ready' "$SESSION_STORE" \
+  'production readiness tests must prove host-only routes keep product readiness offline after client presentation'
 require 'report_client_media_state\(TransportEpoch::new\(1\), "presenting"\)' "$SESSION_STORE" \
   'production readiness tests must prove client presenting flips production online after sender readiness'
 require 'view\["transport"\]\["production_ready"\]' "$SESSION_STORE" \
