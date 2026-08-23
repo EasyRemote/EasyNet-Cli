@@ -5,6 +5,7 @@ ROOT="${CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT:-$(cd "$(dirname "${BASH_SOUR
 FRONTEND_ROOT="${CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT:-$ROOT/../EasyNet/Frontend}"
 HARNESS="$ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 DECODED_FRAME="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
@@ -68,6 +69,8 @@ require_order() {
 [[ -x "$HARNESS" ]] || fail "frontend RemoteApp product-flow E2E harness must be executable"
 [[ -f "$BROWSER_LIFECYCLE" ]] || fail "missing frontend RemoteApp Browser/Tauri lifecycle E2E verifier"
 [[ -x "$BROWSER_LIFECYCLE" ]] || fail "frontend RemoteApp Browser/Tauri lifecycle E2E verifier must be executable"
+[[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -x "$CROSS_DEVICE_SMOKE" ]] || fail "RemoteApp cross-device product smoke gate must be executable"
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
 [[ -f "$TARGET_FRESHNESS" ]] || fail "missing host target picker freshness E2E harness"
 [[ -f "$DECODED_FRAME" ]] || fail "missing host decoded-frame E2E harness"
@@ -85,6 +88,7 @@ require_order() {
 
 bash "$HARNESS" --self-test >/dev/null
 bash "$BROWSER_LIFECYCLE" --self-test >/dev/null
+bash "$CROSS_DEVICE_SMOKE" --self-test >/dev/null
 bash "$HUB_API_PREFLIGHT" --self-test >/dev/null
 require 'real_browser_tauri_lifecycle' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require real frontend lifecycle proof mode'
@@ -173,6 +177,28 @@ require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD' "$
   'product-flow harness must accept a Browser/Tauri lifecycle runner command'
 require 'frontend Browser/Tauri lifecycle evidence is required' "$HARNESS" \
   'product-flow --run must fail closed when Browser/Tauri lifecycle evidence is missing'
+require 'remoteapp-cross-device-product-smoke\.sh' "$HARNESS" \
+  'product-flow harness must include the cross-device product smoke gate'
+require 'run_cross_device_product_smoke' "$HARNESS" \
+  'product-flow harness must expose a cross-device product smoke step'
+require 'run_step cross-device-product-smoke run_cross_device_product_smoke' "$HARNESS" \
+  'product-flow harness must execute cross-device smoke evidence as a product-flow gate'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_EVIDENCE_JSON' "$HARNESS" \
+  'product-flow harness must accept cross-device smoke evidence JSON'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_RUN' "$HARNESS" \
+  'product-flow harness must accept an explicit cross-device smoke run gate'
+require 'cross-device product smoke evidence is required' "$HARNESS" \
+  'product-flow --run must fail closed when cross-device smoke evidence is missing'
+require 'validate_cross_device_smoke_report' "$HARNESS" \
+  'product-flow must validate supplied cross-device smoke reports'
+require 'distinct_device_uras_observed is not true' "$HARNESS" \
+  'product-flow must reject local-provider-only cross-device smoke reports'
+require 'local_provider_boundary_only is not false' "$HARNESS" \
+  'product-flow must reject local provider boundary cross-device reports'
+require 'cross_device_hub_routing is not true' "$HARNESS" \
+  'product-flow must require cross-device Hub routing evidence'
+require 'synthetic_stream_bidi_carrier is not true' "$HARNESS" \
+  'product-flow must require synthetic stream/bidi carrier evidence'
 require 'hub-api-readiness-preflight\.sh' "$HARNESS" \
   'product-flow harness must invoke Hub API readiness preflight'
 require 'run_step hub-api-readiness-preflight run_hub_api_readiness_preflight' "$HARNESS" \
@@ -197,6 +223,10 @@ require_order 'run_step product-runtime-readiness-preflight run_product_runtime_
   'product-flow report order must put runtime readiness before frontend checks'
 require_order 'run_step frontend-remoteapp-ui-flow run_frontend_ui_flow' 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' "$HARNESS" \
   'product-flow must run component UI coverage before live Browser/Tauri lifecycle evidence'
+require_order 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' 'run_step cross-device-product-smoke run_cross_device_product_smoke' "$HARNESS" \
+  'product-flow must run Browser/Tauri lifecycle evidence before cross-device smoke evidence'
+require_order 'run_step cross-device-product-smoke run_cross_device_product_smoke' 'run_step host-permission-subject' "$HARNESS" \
+  'product-flow must execute cross-device evidence before host-only probes'
 require_order 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' 'run_step host-permission-subject' "$HARNESS" \
   'product-flow must execute Browser/Tauri lifecycle evidence before host-only probes'
 require 'host-remoteapp-permission-subject-e2e\.sh' "$HARNESS" \

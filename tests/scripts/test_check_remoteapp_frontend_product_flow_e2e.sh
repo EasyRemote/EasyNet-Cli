@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
 HARNESS="$REPO_ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 BROWSER_LIFECYCLE="$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+CROSS_DEVICE_SMOKE="$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 
 fail() {
   printf 'test_check_remoteapp_frontend_product_flow_e2e: %s\n' "$1" >&2
@@ -14,6 +15,7 @@ fail() {
 "$SCRIPT" >/dev/null
 "$HARNESS" --self-test >/dev/null
 "$BROWSER_LIFECYCLE" --self-test >/dev/null
+"$CROSS_DEVICE_SMOKE" --self-test >/dev/null
 EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_OUT_DIR="$REPO_ROOT/target/test/frontend-remoteapp-product-flow-skip" \
   "$HARNESS" >/dev/null
 grep -q '"status": "skipped"' "$REPO_ROOT/target/test/frontend-remoteapp-product-flow-skip/report.json" || \
@@ -37,6 +39,7 @@ mkdir -p \
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
 cp "$HARNESS" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 cp "$BROWSER_LIFECYCLE" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+cp "$CROSS_DEVICE_SMOKE" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 cp "$REPO_ROOT/tools/scripts/hub-api-readiness-preflight.sh" \
   "$SB/tools/scripts/hub-api-readiness-preflight.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh" \
@@ -135,7 +138,7 @@ mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
 
 cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
-perl -0pi -e 's/run_step frontend-browser-lifecycle run_frontend_browser_lifecycle\nrun_step host-permission-subject "\$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "\$OUT_DIR\/host-permission-subject"/run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR\/host-permission-subject"\nrun_step frontend-browser-lifecycle run_frontend_browser_lifecycle/g' \
+perl -0pi -e 's/run_step frontend-browser-lifecycle run_frontend_browser_lifecycle\nrun_step cross-device-product-smoke run_cross_device_product_smoke\nrun_step host-permission-subject "\$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "\$OUT_DIR\/host-permission-subject"/run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR\/host-permission-subject"\nrun_step frontend-browser-lifecycle run_frontend_browser_lifecycle\nrun_step cross-device-product-smoke run_cross_device_product_smoke/g' \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
@@ -153,6 +156,54 @@ if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
   fail "checker accepted product-flow harness that treats Browser/Tauri lifecycle evidence as optional"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step cross-device-product-smoke run_cross_device_product_smoke/# cross-device product smoke removed/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without cross-device product smoke step"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step frontend-browser-lifecycle run_frontend_browser_lifecycle\nrun_step cross-device-product-smoke run_cross_device_product_smoke/run_step cross-device-product-smoke run_cross_device_product_smoke\nrun_step frontend-browser-lifecycle run_frontend_browser_lifecycle/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness that runs cross-device smoke before Browser/Tauri lifecycle evidence"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/cross-device product smoke evidence is required/cross-device product smoke evidence is optional/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness that treats cross-device smoke evidence as optional"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/distinct_device_uras_observed is not true/distinct_device_uras_observed is optional/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without distinct-device smoke validation"
 fi
 mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"

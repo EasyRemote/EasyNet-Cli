@@ -2,8 +2,9 @@
 # Frontend RemoteApp product-flow E2E harness.
 #
 # This is the product-flow entrypoint for RemoteApp. It deliberately combines
-# frontend surface coverage with host daemon evidence instead of treating a
-# component mock or a host-only CLI probe as full product proof.
+# frontend surface coverage, cross-device routing evidence, and host daemon
+# evidence instead of treating a component mock or a host-only CLI probe as full
+# product proof.
 
 set -euo pipefail
 
@@ -22,10 +23,16 @@ DECODED_FRAME="$SELF_DIR/host-remoteapp-decoded-frame-e2e.sh"
 VIEW_ONLY_INPUT="$SELF_DIR/host-remoteapp-view-only-input-safety-e2e.sh"
 HUB_API_PREFLIGHT="$SELF_DIR/hub-api-readiness-preflight.sh"
 BROWSER_LIFECYCLE="$SELF_DIR/frontend-remoteapp-browser-lifecycle-e2e.sh"
+CROSS_DEVICE_SMOKE="$SELF_DIR/remoteapp-cross-device-product-smoke.sh"
 BROWSER_LIFECYCLE_EVIDENCE_JSON="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_EVIDENCE_JSON:-}}"
 BROWSER_LIFECYCLE_RUNNER_CMD="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_RUNNER_CMD:-}}"
 BROWSER_LIFECYCLE_FRONTEND_URL="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_FRONTEND_URL:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_FRONTEND_URL:-}}"
 BROWSER_LIFECYCLE_SURFACE="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_SURFACE:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_SURFACE:-browser}}"
+CROSS_DEVICE_SMOKE_EVIDENCE_JSON="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_EVIDENCE_JSON:-${EASYNET_REMOTEAPP_CROSS_DEVICE_SMOKE_EVIDENCE_JSON:-}}"
+CROSS_DEVICE_SMOKE_RUN="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_RUN:-0}"
+CROSS_DEVICE_SMOKE_BUILD="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_BUILD:-0}"
+CROSS_DEVICE_SMOKE_KEEP="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_KEEP:-0}"
+CROSS_DEVICE_SMOKE_PROJECT_PREFIX="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_PROJECT_PREFIX:-}"
 
 usage() {
   cat <<'USAGE'
@@ -55,18 +62,25 @@ The --run path performs:
   4. Frontend DeviceMediaAccess RemoteApp UI flow test.
   5. Real Browser/Tauri RemoteApp lifecycle verifier using an external runner
      or pre-existing evidence JSON.
-  6. Host permission subject preflight with screen-capture permission granted.
-  7. Host target picker freshness with a sentinel fixture.
-  8. Host decoded-frame WebRTC E2E for window/application targets.
-  9. Host view-only input safety for app/window targets.
+  6. Cross-device product smoke evidence with distinct caller/provider device URAs.
+  7. Host permission subject preflight with screen-capture permission granted.
+  8. Host target picker freshness with a sentinel fixture.
+  9. Host decoded-frame WebRTC E2E for window/application targets.
+  10. Host view-only input safety for app/window targets.
 
 Set EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON to
 an existing Browser/Tauri lifecycle evidence artifact, or set
 EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD together
 with EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_FRONTEND_URL.
 
+Set EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_EVIDENCE_JSON to
+an existing cross-device smoke report, or set
+EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_RUN=1 to run
+remoteapp-cross-device-product-smoke.sh as part of the product flow.
+
 This harness still does not claim product completion by itself; it produces one
-bounded E2E evidence bundle for the frontend + daemon + host RemoteApp flow.
+bounded E2E evidence bundle for the frontend + daemon + cross-device + host
+RemoteApp flow.
 USAGE
 }
 
@@ -109,6 +123,7 @@ step_order = [
     "frontend-typecheck",
     "frontend-remoteapp-ui-flow",
     "frontend-browser-lifecycle",
+    "cross-device-product-smoke",
     "host-permission-subject",
     "host-target-picker-freshness",
     "host-decoded-frame-window",
@@ -154,6 +169,7 @@ report = {
         "frontend TypeScript check",
         "DeviceMediaAccess RemoteApp UI flow",
         "Browser/Tauri RemoteApp lifecycle evidence",
+        "cross-device product smoke with distinct device URAs",
         "hub api readiness preflight",
         "product runtime readiness preflight",
         "host permission subject preflight",
@@ -214,6 +230,79 @@ run_frontend_browser_lifecycle() {
     return 64
   fi
   "$BROWSER_LIFECYCLE" "${args[@]}"
+}
+
+validate_cross_device_smoke_report() {
+  local report_json="$1"
+  python3 - "$report_json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+topology = report.get("topology") if isinstance(report, dict) else None
+coverage = report.get("coverage") if isinstance(report, dict) else None
+errors = []
+if report.get("status") != "passed":
+    errors.append(f"cross-device smoke status is {report.get('status')!r}, expected 'passed'")
+if report.get("product_complete_claim") is not False:
+    errors.append("cross-device smoke must not claim product completion")
+if not isinstance(topology, dict):
+    errors.append("cross-device smoke report is missing topology")
+else:
+    if topology.get("requires_distinct_devices") is not True:
+        errors.append("cross-device smoke topology must require distinct devices")
+    if topology.get("distinct_device_uras_observed") is not True:
+        errors.append("distinct_device_uras_observed is not true")
+    if topology.get("local_provider_boundary_only") is not False:
+        errors.append("local_provider_boundary_only is not false")
+if not isinstance(coverage, dict):
+    errors.append("cross-device smoke report is missing coverage")
+else:
+    if coverage.get("cross_device_hub_routing") is not True:
+        errors.append("cross_device_hub_routing is not true")
+    if coverage.get("synthetic_stream_bidi_carrier") is not True:
+        errors.append("synthetic_stream_bidi_carrier is not true")
+    if coverage.get("distinct_device_uras_observed") is not True:
+        errors.append("coverage distinct_device_uras_observed is not true")
+    if coverage.get("local_provider_boundary_only") is not False:
+        errors.append("coverage local_provider_boundary_only is not false")
+if errors:
+    for error in errors:
+        print(error, file=sys.stderr)
+    raise SystemExit(1)
+print("cross-device smoke evidence ok")
+PY
+}
+
+run_cross_device_product_smoke() {
+  local step_dir="$OUT_DIR/cross-device-product-smoke"
+  local artifact_dir="$step_dir/artifact"
+  mkdir -p "$artifact_dir"
+  if [[ -n "$CROSS_DEVICE_SMOKE_EVIDENCE_JSON" ]]; then
+    cp "$CROSS_DEVICE_SMOKE_EVIDENCE_JSON" "$step_dir/evidence-report.json"
+    validate_cross_device_smoke_report "$step_dir/evidence-report.json"
+    return 0
+  fi
+  if [[ "$CROSS_DEVICE_SMOKE_RUN" == "1" ]]; then
+    local args=("--run" "--out-dir" "$artifact_dir")
+    if [[ "$CROSS_DEVICE_SMOKE_BUILD" == "1" ]]; then
+      args+=("--build")
+    fi
+    if [[ "$CROSS_DEVICE_SMOKE_KEEP" == "1" ]]; then
+      args+=("--keep")
+    fi
+    if [[ -n "$CROSS_DEVICE_SMOKE_PROJECT_PREFIX" ]]; then
+      args+=("--project-prefix" "$CROSS_DEVICE_SMOKE_PROJECT_PREFIX")
+    fi
+    "$CROSS_DEVICE_SMOKE" "${args[@]}"
+    cp "$artifact_dir/report.json" "$step_dir/evidence-report.json"
+    validate_cross_device_smoke_report "$step_dir/evidence-report.json"
+    return 0
+  fi
+  echo "cross-device product smoke evidence is required: set EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_EVIDENCE_JSON or EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_RUN=1" >&2
+  return 64
 }
 
 run_with_timeout() {
@@ -323,10 +412,67 @@ if [[ "$SELF_TEST" -eq 1 ]]; then
   grep -q 'DeviceMediaAccess.test.tsx' "$0"
   grep -q 'npx tsc --noEmit' "$0"
   grep -q 'frontend-remoteapp-browser-lifecycle-e2e.sh' "$0"
+  grep -q 'remoteapp-cross-device-product-smoke.sh' "$0"
   grep -q 'run_frontend_browser_lifecycle' "$0"
+  grep -q 'run_cross_device_product_smoke' "$0"
   grep -q 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON' "$0"
   grep -q 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD' "$0"
   grep -q 'frontend Browser/Tauri lifecycle evidence is required' "$0"
+  grep -q 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_EVIDENCE_JSON' "$0"
+  grep -q 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_RUN' "$0"
+  grep -q 'cross-device product smoke evidence is required' "$0"
+  grep -q 'distinct_device_uras_observed is not true' "$0"
+  self_test_tmp="$(mktemp -d)"
+  trap 'rm -rf "$self_test_tmp"' EXIT
+  python3 - "$self_test_tmp/cross-device-good.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({
+    "status": "passed",
+    "product_complete_claim": False,
+    "topology": {
+        "requires_distinct_devices": True,
+        "distinct_device_uras_observed": True,
+        "local_provider_boundary_only": False,
+    },
+    "coverage": {
+        "cross_device_hub_routing": True,
+        "synthetic_stream_bidi_carrier": True,
+        "distinct_device_uras_observed": True,
+        "local_provider_boundary_only": False,
+    },
+}) + "\n", encoding="utf-8")
+PY
+  validate_cross_device_smoke_report "$self_test_tmp/cross-device-good.json" >/dev/null
+  python3 - "$self_test_tmp/cross-device-local-only.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({
+    "status": "passed",
+    "product_complete_claim": False,
+    "topology": {
+        "requires_distinct_devices": True,
+        "distinct_device_uras_observed": False,
+        "local_provider_boundary_only": True,
+    },
+    "coverage": {
+        "cross_device_hub_routing": True,
+        "synthetic_stream_bidi_carrier": True,
+        "distinct_device_uras_observed": False,
+        "local_provider_boundary_only": True,
+    },
+}) + "\n", encoding="utf-8")
+PY
+  if validate_cross_device_smoke_report "$self_test_tmp/cross-device-local-only.json" >/dev/null 2>&1; then
+    echo "self-test accepted local-provider-only cross-device smoke evidence" >&2
+    exit 1
+  fi
   grep -q 'run_product_runtime_readiness_preflight' "$0"
   grep -q 'daemon.invocation_accepting is not true' "$0"
   grep -q 'product-runtime-readiness-preflight' "$0"
@@ -363,6 +509,7 @@ run_step product-runtime-readiness-preflight run_product_runtime_readiness_prefl
 run_step frontend-typecheck run_frontend_tsc
 run_step frontend-remoteapp-ui-flow run_frontend_ui_flow
 run_step frontend-browser-lifecycle run_frontend_browser_lifecycle
+run_step cross-device-product-smoke run_cross_device_product_smoke
 run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR/host-permission-subject"
 run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture --target-kind window --out-dir "$OUT_DIR/host-target-picker-freshness"
 
@@ -383,5 +530,5 @@ case "$TARGET_KIND" in
     ;;
 esac
 
-write_json_report "passed" "frontend and host RemoteApp product-flow evidence completed"
+write_json_report "passed" "frontend, cross-device, and host RemoteApp product-flow evidence completed"
 echo "[frontend-remoteapp-product-flow-e2e] PASS: $OUT_DIR/report.md"
