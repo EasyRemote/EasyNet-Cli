@@ -485,6 +485,12 @@ require '"stale_client_sequence"' "$INPUT" \
   'RemoteApp daemon input sequence gate must expose a stable stale sequence rejection reason'
 require 'input_sequence_gate_rejects_replayed_or_out_of_order_frames' "$INPUT" \
   'RemoteApp daemon input tests must prove replayed or out-of-order client sequences are rejected'
+require 'struct InputFrameTiming' "$INPUT" \
+  'RemoteApp daemon input execution path must have a typed host timing projection'
+require 'host_applied_at_ms' "$INPUT" \
+  'RemoteApp daemon applied input events must expose host apply timestamps'
+require 'latency_ms' "$INPUT" \
+  'RemoteApp daemon input execution events must expose bounded latency telemetry'
 require 'latency_ms must be within threshold' "$INPUT_INJECTION" \
   'input injection verifier must reject high latency'
 require 'observed_effect' "$INPUT_INJECTION" \

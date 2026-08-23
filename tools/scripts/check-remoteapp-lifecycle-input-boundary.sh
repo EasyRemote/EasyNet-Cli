@@ -1011,6 +1011,14 @@ require 'fn client_sent_at_ms\(&self\) -> Option<u64>' "$INPUT" \
   'daemon input frame schema must expose client send timestamps for input observability'
 require 'fn client_sequence\(&self\) -> Option<u64>' "$INPUT" \
   'daemon input frame schema must expose client input sequence telemetry for input observability'
+require 'struct InputFrameTiming' "$INPUT" \
+  'daemon input execution path must use a typed host timing projection'
+require 'host_received_at_ms' "$INPUT" \
+  'daemon input execution events must expose host receive timestamps'
+require 'host_applied_at_ms' "$INPUT" \
+  'daemon applied input events must expose host apply timestamps'
+require 'latency_ms' "$INPUT" \
+  'daemon input events must expose bounded latency when client and host clocks allow it'
 require 'validate_client_sent_at_ms' "$INPUT" \
   'daemon input frame validation must bound client send timestamps'
 require 'MAX_CLIENT_SENT_AT_MS' "$INPUT" \

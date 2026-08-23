@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
+use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
@@ -603,6 +604,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 let kind = frame.kind().as_policy_key();
                 let client_sent_at_ms = frame.client_sent_at_ms();
                 let client_sequence = frame.client_sequence();
+                let timing = InputFrameTiming::received(client_sent_at_ms);
                 if let Some(reason) = sequence_gate.reject_reason(client_sequence) {
                     rejected_count = rejected_count.saturating_add(1);
                     record_input_rejection(
@@ -613,7 +615,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         InputRejectSample::new(reason, rejected_count)
                             .kind(kind)
                             .action(frame.action())
-                            .client_sent_at_ms(client_sent_at_ms)
+                            .timing(timing)
                             .client_sequence(client_sequence),
                     );
                     continue;
@@ -633,7 +635,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         InputRejectSample::new("target_input_not_ready", rejected_count)
                             .kind(kind)
                             .action(frame.action())
-                            .client_sent_at_ms(client_sent_at_ms)
+                            .timing(timing)
                             .client_sequence(client_sequence),
                     );
                     continue;
@@ -659,7 +661,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                                 frame.action(),
                                 accepted_count,
                                 rejected_count,
-                                client_sent_at_ms,
+                                timing,
+                                now_ms(),
                                 client_sequence,
                             ),
                         );
@@ -677,7 +680,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         )
                         .kind(kind)
                         .action(frame.action())
-                        .client_sent_at_ms(client_sent_at_ms)
+                        .timing(timing)
                         .client_sequence(client_sequence),
                     );
                 }
@@ -686,6 +689,35 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
         }
     }
     flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InputFrameTiming {
+    client_sent_at_ms: Option<u64>,
+    host_received_at_ms: u64,
+}
+
+impl InputFrameTiming {
+    fn received(client_sent_at_ms: Option<u64>) -> Self {
+        Self {
+            client_sent_at_ms,
+            host_received_at_ms: now_ms(),
+        }
+    }
+
+    #[cfg(test)]
+    const fn for_test(client_sent_at_ms: Option<u64>, host_received_at_ms: u64) -> Self {
+        Self {
+            client_sent_at_ms,
+            host_received_at_ms,
+        }
+    }
+
+    fn latency_ms_at(self, host_at_ms: u64) -> Option<u64> {
+        self.client_sent_at_ms
+            .filter(|client_sent_at_ms| *client_sent_at_ms <= host_at_ms)
+            .map(|client_sent_at_ms| host_at_ms.saturating_sub(client_sent_at_ms))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -822,6 +854,8 @@ struct InputRejectSample {
     message: Option<String>,
     rejected_count: u64,
     client_sent_at_ms: Option<u64>,
+    host_received_at_ms: Option<u64>,
+    latency_ms: Option<u64>,
     client_sequence: Option<u64>,
 }
 
@@ -836,6 +870,8 @@ impl InputRejectSample {
             message: None,
             rejected_count,
             client_sent_at_ms: None,
+            host_received_at_ms: None,
+            latency_ms: None,
             client_sequence: None,
         }
     }
@@ -855,8 +891,10 @@ impl InputRejectSample {
         self
     }
 
-    fn client_sent_at_ms(mut self, client_sent_at_ms: Option<u64>) -> Self {
-        self.client_sent_at_ms = client_sent_at_ms;
+    fn timing(mut self, timing: InputFrameTiming) -> Self {
+        self.client_sent_at_ms = timing.client_sent_at_ms;
+        self.host_received_at_ms = Some(timing.host_received_at_ms);
+        self.latency_ms = timing.latency_ms_at(timing.host_received_at_ms);
         self
     }
 
@@ -871,6 +909,8 @@ struct PendingInputReject {
     signature: InputRejectSignature,
     latest_message: Option<String>,
     latest_client_sent_at_ms: Option<u64>,
+    latest_host_received_at_ms: Option<u64>,
+    latest_latency_ms: Option<u64>,
     latest_client_sequence: Option<u64>,
     first_rejected_count: u64,
     last_rejected_count: u64,
@@ -885,6 +925,8 @@ impl PendingInputReject {
             signature: sample.signature,
             latest_message: sample.message,
             latest_client_sent_at_ms: sample.client_sent_at_ms,
+            latest_host_received_at_ms: sample.host_received_at_ms,
+            latest_latency_ms: sample.latency_ms,
             latest_client_sequence: sample.client_sequence,
             first_rejected_count: sample.rejected_count,
             last_rejected_count: sample.rejected_count,
@@ -897,6 +939,8 @@ impl PendingInputReject {
     fn observe(&mut self, sample: InputRejectSample) {
         self.latest_message = sample.message;
         self.latest_client_sent_at_ms = sample.client_sent_at_ms;
+        self.latest_host_received_at_ms = sample.host_received_at_ms;
+        self.latest_latency_ms = sample.latency_ms;
         self.latest_client_sequence = sample.client_sequence;
         self.last_rejected_count = sample.rejected_count;
         self.observed_total = self.observed_total.saturating_add(1);
@@ -915,6 +959,8 @@ impl PendingInputReject {
             payload.insert("message".to_string(), json!(message));
         }
         insert_client_sent_at_ms(&mut payload, self.latest_client_sent_at_ms);
+        insert_host_received_at_ms(&mut payload, self.latest_host_received_at_ms);
+        insert_latency_ms(&mut payload, self.latest_latency_ms);
         insert_client_sequence(&mut payload, self.latest_client_sequence);
         payload.insert(
             "rejected_count".to_string(),
@@ -969,7 +1015,8 @@ fn input_frame_applied_payload(
     action: &str,
     accepted_count: u64,
     rejected_count: u64,
-    client_sent_at_ms: Option<u64>,
+    timing: InputFrameTiming,
+    host_applied_at_ms: u64,
     client_sequence: Option<u64>,
 ) -> Value {
     let mut payload = Map::new();
@@ -977,7 +1024,10 @@ fn input_frame_applied_payload(
     payload.insert("action".to_string(), json!(action));
     payload.insert("accepted_count".to_string(), json!(accepted_count));
     payload.insert("rejected_count".to_string(), json!(rejected_count));
-    insert_client_sent_at_ms(&mut payload, client_sent_at_ms);
+    insert_client_sent_at_ms(&mut payload, timing.client_sent_at_ms);
+    insert_host_received_at_ms(&mut payload, Some(timing.host_received_at_ms));
+    payload.insert("host_applied_at_ms".to_string(), json!(host_applied_at_ms));
+    insert_latency_ms(&mut payload, timing.latency_ms_at(host_applied_at_ms));
     insert_client_sequence(&mut payload, client_sequence);
     Value::Object(payload)
 }
@@ -985,6 +1035,21 @@ fn input_frame_applied_payload(
 fn insert_client_sent_at_ms(payload: &mut Map<String, Value>, client_sent_at_ms: Option<u64>) {
     if let Some(client_sent_at_ms) = client_sent_at_ms {
         payload.insert("client_sent_at_ms".to_string(), json!(client_sent_at_ms));
+    }
+}
+
+fn insert_host_received_at_ms(payload: &mut Map<String, Value>, host_received_at_ms: Option<u64>) {
+    if let Some(host_received_at_ms) = host_received_at_ms {
+        payload.insert(
+            "host_received_at_ms".to_string(),
+            json!(host_received_at_ms),
+        );
+    }
+}
+
+fn insert_latency_ms(payload: &mut Map<String, Value>, latency_ms: Option<u64>) {
+    if let Some(latency_ms) = latency_ms {
+        payload.insert("latency_ms".to_string(), json!(latency_ms));
     }
 }
 
@@ -1637,7 +1702,10 @@ mod tests {
                     InputRejectSample::new("input_policy_denied", rejected_count)
                         .kind("pointer")
                         .action("move")
-                        .client_sent_at_ms(Some(1_787_331_000_000 + rejected_count))
+                        .timing(InputFrameTiming::for_test(
+                            Some(1_787_331_000_000 + rejected_count),
+                            1_787_331_000_025 + rejected_count,
+                        ))
                         .client_sequence(Some(rejected_count)),
                 ),
             );
@@ -1685,6 +1753,11 @@ mod tests {
             json!(1_787_331_000_000 + REJECT_STORM)
         );
         assert_eq!(
+            emitted.last().unwrap()["host_received_at_ms"],
+            json!(1_787_331_000_025 + REJECT_STORM)
+        );
+        assert_eq!(emitted.last().unwrap()["latency_ms"], json!(25));
+        assert_eq!(
             emitted.last().unwrap()["client_sequence"],
             json!(REJECT_STORM)
         );
@@ -1699,15 +1772,43 @@ mod tests {
 
     #[test]
     fn input_frame_applied_payload_preserves_client_timestamp() {
-        let payload =
-            input_frame_applied_payload("pointer", "move", 1, 0, Some(1_787_331_000_123), Some(7));
+        let payload = input_frame_applied_payload(
+            "pointer",
+            "move",
+            1,
+            0,
+            InputFrameTiming::for_test(Some(1_787_331_000_123), 1_787_331_000_130),
+            1_787_331_000_142,
+            Some(7),
+        );
 
         assert_eq!(payload["kind"], json!("pointer"));
         assert_eq!(payload["action"], json!("move"));
         assert_eq!(payload["accepted_count"], json!(1));
         assert_eq!(payload["rejected_count"], json!(0));
         assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_123_u64));
+        assert_eq!(payload["host_received_at_ms"], json!(1_787_331_000_130_u64));
+        assert_eq!(payload["host_applied_at_ms"], json!(1_787_331_000_142_u64));
+        assert_eq!(payload["latency_ms"], json!(19));
         assert_eq!(payload["client_sequence"], json!(7));
+    }
+
+    #[test]
+    fn input_frame_applied_payload_omits_latency_for_future_client_clock() {
+        let payload = input_frame_applied_payload(
+            "key",
+            "down",
+            1,
+            0,
+            InputFrameTiming::for_test(Some(1_787_331_000_500), 1_787_331_000_130),
+            1_787_331_000_142,
+            Some(8),
+        );
+
+        assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_500_u64));
+        assert_eq!(payload["host_received_at_ms"], json!(1_787_331_000_130_u64));
+        assert_eq!(payload["host_applied_at_ms"], json!(1_787_331_000_142_u64));
+        assert!(payload.get("latency_ms").is_none());
     }
 
     #[test]
