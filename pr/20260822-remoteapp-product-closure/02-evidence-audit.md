@@ -72,11 +72,14 @@ Current frontend lifecycle evidence:
   traceable `result.json` step artifacts plus subreport/evidence artifacts for
   Browser/Tauri, cross-device, and host product-flow steps. Host product-flow
   verifier reports now expose stable `script` identity for permission-subject,
-  target-picker, decoded-frame, and view-only-input evidence. It also requires
-  non-empty observed caller/provider device pairs with distinct device URAs in
-  the cross-device report. This gate is an aggregate completion guard, not a
-  substitute for any live domain artifact, and it rejects target-narrowed or
-  empty-shell frontend product-flow evidence.
+  target-picker, decoded-frame, and view-only-input evidence; decoded-frame and
+  view-only-input subreports must also match the exact `target_kind` required
+  by their frontend step, so window evidence and application evidence cannot be
+  swapped. It also requires non-empty observed caller/provider device pairs with
+  distinct device URAs in the cross-device report. This gate is an aggregate
+  completion guard, not a substitute for any live domain artifact, and it
+  rejects target-narrowed, target-swapped, or empty-shell frontend product-flow
+  evidence.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:

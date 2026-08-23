@@ -59,6 +59,12 @@ grep -q "tools/scripts/host-remoteapp-decoded-frame-e2e.sh" "$SCRIPT" || \
   fail "completion gate must pin decoded-frame product-flow subreport identity"
 grep -q "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" "$SCRIPT" || \
   fail "completion gate must pin view-only input product-flow subreport identity"
+grep -q "expected_target_kind" "$SCRIPT" || \
+  fail "completion gate must pin product-flow host subreport target kinds"
+grep -q "product-flow subreport" "$SCRIPT" || \
+  fail "completion gate must inspect product-flow subreports"
+grep -q "target_kind is" "$SCRIPT" || \
+  fail "completion gate must reject wrong product-flow host subreport target kinds"
 grep -q "product-flow step result_json path does not exist" "$SCRIPT" || \
   fail "completion gate must reject missing product-flow step result artifacts"
 grep -q "product-flow subreport evidence_json path does not exist" "$SCRIPT" || \
@@ -81,6 +87,8 @@ grep -q "self-test accepted missing product-flow subreport evidence artifact" "$
   fail "completion gate self-test must cover missing product-flow subreport evidence artifacts"
 grep -q "self-test accepted wrong product-flow host subreport script identity" "$SCRIPT" || \
   fail "completion gate self-test must cover wrong product-flow host subreport script identities"
+grep -q "self-test accepted wrong product-flow host subreport target_kind" "$SCRIPT" || \
+  fail "completion gate self-test must cover wrong product-flow host subreport target kinds"
 grep -q "self-test accepted missing observed cross-device pairs" "$SCRIPT" || \
   fail "completion gate self-test must cover missing observed cross-device pairs"
 grep -q "expected_script" "$SCRIPT" || \

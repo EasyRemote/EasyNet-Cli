@@ -517,6 +517,8 @@ require 'expected_target_kind' "$PRODUCT_COMPLETION" \
   'product-completion gate must require full frontend product-flow target coverage'
 require 'target_kind is' "$PRODUCT_COMPLETION" \
   'product-completion gate must reject frontend product-flow reports that are not target_kind=both'
+require 'product-flow subreport .* target_kind is' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject swapped window/application host subreport target kinds'
 require 'host-decoded-frame-window' "$PRODUCT_COMPLETION" \
   'product-completion gate must require window decoded-frame product-flow evidence'
 require 'host-decoded-frame-application' "$PRODUCT_COMPLETION" \
@@ -533,6 +535,8 @@ require 'product-flow subreport evidence_json path does not exist' "$PRODUCT_COM
   'product-completion gate must fail when a product-flow subreport evidence artifact is missing'
 require 'self-test accepted wrong product-flow host subreport script identity' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject wrong product-flow host subreport script identities'
+require 'self-test accepted wrong product-flow host subreport target_kind' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject wrong product-flow host subreport target kinds'
 require 'evidence_json path does not exist' "$PRODUCT_COMPLETION" \
   'product-completion gate must fail when a report evidence_json artifact is missing'
 require 'required product-flow step' "$PRODUCT_COMPLETION" \

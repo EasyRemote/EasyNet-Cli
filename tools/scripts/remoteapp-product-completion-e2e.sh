@@ -128,24 +128,28 @@ required = [
                 "name": "host-decoded-frame-window",
                 "report_json": "report.json",
                 "expected_script": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh",
+                "expected_target_kind": "window",
                 "requires_evidence_json": True,
             },
             {
                 "name": "host-decoded-frame-application",
                 "report_json": "report.json",
                 "expected_script": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh",
+                "expected_target_kind": "application",
                 "requires_evidence_json": True,
             },
             {
                 "name": "host-view-only-input-window",
                 "report_json": "report.json",
                 "expected_script": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
+                "expected_target_kind": "window",
                 "requires_evidence_json": True,
             },
             {
                 "name": "host-view-only-input-application",
                 "report_json": "report.json",
                 "expected_script": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
+                "expected_target_kind": "application",
                 "requires_evidence_json": True,
             },
         ],
@@ -426,6 +430,18 @@ for item in required:
                             artifact_check["errors"].append(message)
                             check["errors"].append(message)
                             add_error(item_id, message)
+                        expected_step_target_kind = step_spec.get("expected_target_kind")
+                        if expected_step_target_kind:
+                            artifact_check["expected_target_kind"] = expected_step_target_kind
+                            artifact_check["observed_target_kind"] = subreport.get("target_kind")
+                            if subreport.get("target_kind") != expected_step_target_kind:
+                                message = (
+                                    f"product-flow subreport {step_name!r} target_kind is "
+                                    f"{subreport.get('target_kind')!r}, expected {expected_step_target_kind!r}"
+                                )
+                                artifact_check["errors"].append(message)
+                                check["errors"].append(message)
+                                add_error(item_id, message)
                         if subreport.get("product_complete_claim") is True:
                             message = f"product-flow subreport {step_name!r} must not claim product completion"
                             artifact_check["errors"].append(message)
@@ -758,13 +774,22 @@ if item_id == "frontend_product_flow":
                 "host-view-only-input-window": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
                 "host-view-only-input-application": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
             }
+            target_kind_by_step = {
+                "host-decoded-frame-window": "window",
+                "host-decoded-frame-application": "application",
+                "host-view-only-input-window": "window",
+                "host-view-only-input-application": "application",
+            }
+            report_payload = {
+                "script": script_by_step[step_name],
+                "status": "passed",
+                "product_complete_claim": False,
+                "evidence_json": str(evidence_path),
+            }
+            if step_name in target_kind_by_step:
+                report_payload["target_kind"] = target_kind_by_step[step_name]
             (step_dir / "report.json").write_text(
-                json.dumps({
-                    "script": script_by_step[step_name],
-                    "status": "passed",
-                    "product_complete_claim": False,
-                    "evidence_json": str(evidence_path),
-                }, indent=2, sort_keys=True) + "\n",
+                json.dumps(report_payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
 if item_id in evidence_json_ids:
@@ -974,6 +999,39 @@ PY
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
     "$0" --check --out-dir "$tmp/wrong-product-flow-host-subreport-script" >/dev/null 2>&1; then
     echo "self-test accepted wrong product-flow host subreport script identity" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
+
+  python3 - "$tmp/frontend_product_flow.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+subreport_path = path.parent / "host-decoded-frame-window" / "report.json"
+subreport = json.loads(subreport_path.read_text(encoding="utf-8"))
+subreport["target_kind"] = "application"
+subreport_path.write_text(json.dumps(subreport) + "\n", encoding="utf-8")
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/wrong-product-flow-host-subreport-target-kind" >/dev/null 2>&1; then
+    echo "self-test accepted wrong product-flow host subreport target_kind" >&2
     exit 1
   fi
   write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
@@ -1195,6 +1253,7 @@ case "$MODE" in
     grep -q 'product_flow_step_artifacts' "$0"
     grep -q 'product-flow subreport' "$0"
     grep -q 'script is' "$0"
+    grep -q 'target_kind is' "$0"
     grep -q 'product-flow step result_json path does not exist' "$0"
     grep -q 'product-flow subreport evidence_json path does not exist' "$0"
     grep -q 'evidence_json path does not exist' "$0"
@@ -1208,6 +1267,7 @@ case "$MODE" in
     grep -q 'self-test accepted missing product-flow step result artifact' "$0"
     grep -q 'self-test accepted missing product-flow subreport evidence artifact' "$0"
     grep -q 'self-test accepted wrong product-flow host subreport script identity' "$0"
+    grep -q 'self-test accepted wrong product-flow host subreport target_kind' "$0"
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test

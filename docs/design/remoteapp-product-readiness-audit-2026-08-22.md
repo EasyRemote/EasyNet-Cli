@@ -118,6 +118,13 @@ It also renders daemon-projected `media_pipeline_support`, including video-only
 scope, H.264 pipeline identity, bounded stale-frame drop policy, and product
 blockers such as `host_audio_not_implemented`; this is frontend transparency,
 not host-audio or degraded-network E2E evidence.
+The aggregate product-completion gate additionally binds frontend product-flow
+host subreports to the target kind required by each step. Window decoded-frame
+and view-only-input steps must be backed by `target_kind=window` host evidence;
+application decoded-frame and view-only-input steps must be backed by
+`target_kind=application` host evidence. This prevents a real but differently
+scoped host run from satisfying the wrong window/application product-flow
+requirement.
 The network fallback verifier,
 `tools/scripts/remoteapp-network-fallback-e2e.sh`, defines the live artifact
 contract for real direct, STUN srflx, TURN relay, and EasyNet relay paths. It

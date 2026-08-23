@@ -37,8 +37,11 @@ trusting only the summarized `steps` array.
 - Each required frontend product-flow step must have a sibling step
   `result.json` with `status=passed`; Browser/Tauri, cross-device, and host
   steps must also expose their expected subreport/evidence artifacts.
-- Host product-flow subreports must expose stable `script` identity and the
-  completion gate must match that identity to the expected host verifier.
+- Host product-flow subreports must expose stable `script` identity, and
+  decoded-frame/view-only-input host subreports must also expose the exact
+  `target_kind` required by the frontend step. The completion gate must reject
+  evidence where a window step is backed by application evidence, or an
+  application step is backed by window evidence.
 - The cross-device smoke report must include at least one observed
   caller/provider device pair where both URAs are present and distinct.
 - Host lifecycle E2E reports must include the same `script` identity field as
