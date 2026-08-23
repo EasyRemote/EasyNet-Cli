@@ -276,10 +276,12 @@
         "frontend denied permission_status stays in the share picker with Request permission recovery instead of becoming a session-level error",
         "product-flow harness entrypoint",
         "2026-08-23 local product-flow both report passed Hub API readiness, daemon readiness, frontend typecheck, DeviceMediaAccess UI flow, host target picker freshness, decoded-frame WebRTC, and view-only input safety for window and application targets",
-        "frontend-remoteapp-browser-lifecycle-e2e.sh verifier requires real Browser/Tauri lifecycle artifacts to carry connected WebRTC state, attached media stream, visible media element, positive rendered frame count, visible input status, and terminal receipt"
+        "frontend-remoteapp-browser-lifecycle-e2e.sh verifier requires real Browser/Tauri lifecycle artifacts to carry UI automation evidence source, monotonic observed timestamps, connected WebRTC state, attached media stream, visible media element, positive rendered frame count, visible input status, and terminal receipt"
       ],
       "required_evidence_before_product_complete": [
         "Live Browser/Tauri E2E artifact with real backend/runtime",
+        "browser/Tauri automation evidence source for every lifecycle step",
+        "strictly increasing observed_at_ms across lifecycle steps",
         "picker to permission to consent to create_session",
         "WebRTC attach and watch_events recovery",
         "media presentation",

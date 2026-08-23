@@ -723,6 +723,12 @@ require 'real_backend_runtime.*True|real_backend_runtime.*true' "$FRONTEND_BROWS
   'frontend Browser/Tauri lifecycle verifier must require real backend/runtime evidence'
 require 'target_picker_opened' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect target picker evidence'
+require 'evidence_source.*browser_automation.*tauri_automation|browser_automation.*tauri_automation' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require real UI automation evidence source'
+require 'component_snapshot_only must not be true' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must reject component snapshot-only evidence'
+require 'observed_at_ms must be strictly increasing' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require monotonic observed step timestamps'
 require 'remote_desktop\.permission_status' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect permission_status evidence'
 require 'remote_desktop\.create_session' "$FRONTEND_BROWSER_LIFECYCLE" \

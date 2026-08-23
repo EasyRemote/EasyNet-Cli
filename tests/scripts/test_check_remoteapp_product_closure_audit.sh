@@ -334,6 +334,24 @@ grep -q "frontend Browser/Tauri lifecycle verifier must require connected WebRTC
   fail "expected Browser/Tauri connected WebRTC state failure"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 
+perl -0pi -e 's#browser_automation#component_state#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-source.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without UI automation evidence source"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must require real UI automation evidence source" /tmp/check-remoteapp-product-closure-browser-lifecycle-source.out || \
+  fail "expected Browser/Tauri evidence-source failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+perl -0pi -e 's#observed_at_ms must be strictly increasing#observed_at_ms may repeat#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-observed-order.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without monotonic observed step timestamps"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must require monotonic observed step timestamps" /tmp/check-remoteapp-product-closure-browser-lifecycle-observed-order.out || \
+  fail "expected Browser/Tauri observed step order failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
 perl -0pi -e 's#frames_presented#frame_count#g' \
   "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-frames.out 2>&1; then

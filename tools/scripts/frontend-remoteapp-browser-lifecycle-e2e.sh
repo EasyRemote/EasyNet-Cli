@@ -53,8 +53,9 @@ Evidence contract:
   media_pipeline_support_visible -> input_control_attempted_or_policy_blocked
   -> session_ended -> terminal_receipt_visible. The WebRTC step must show a
   connected peer path, the media step must show a visible rendered media element
-  with positive frame count, and the input step must show either applied input
-  telemetry or an explicit policy block.
+  with positive frame count, every step must carry real browser/Tauri automation
+  evidence with monotonic observation timestamps, and the input step must show
+  either applied input telemetry or an explicit policy block.
 
 Non-claims:
   A skipped report or self-test does not prove frontend product readiness.
@@ -203,6 +204,7 @@ steps = evidence.get("steps")
 require(isinstance(steps, list) and steps, "steps must be a non-empty list")
 step_names = []
 step_by_name = {}
+last_observed_at_ms = 0
 if isinstance(steps, list):
     for step in steps:
         if not isinstance(step, dict):
@@ -215,6 +217,18 @@ if isinstance(steps, list):
         step_names.append(name)
         step_by_name[name] = step
         require(step.get("status") == "passed", f"{name}: status must be passed")
+        require(step.get("evidence_source") in {"browser_automation", "tauri_automation"},
+                f"{name}: evidence_source must be browser_automation or tauri_automation")
+        require(step.get("component_snapshot_only") is not True,
+                f"{name}: component_snapshot_only must not be true")
+        try:
+            observed_at_ms = int(step.get("observed_at_ms", 0))
+        except (TypeError, ValueError):
+            observed_at_ms = 0
+        require(observed_at_ms > 0, f"{name}: observed_at_ms must be positive")
+        require(observed_at_ms > last_observed_at_ms,
+                f"{name}: observed_at_ms must be strictly increasing")
+        last_observed_at_ms = observed_at_ms
 
 cursor = -1
 for required in required_steps:
@@ -361,13 +375,19 @@ import sys
 
 subject = "easynet:///r/localhost/resource/device.mac-1/streams/window.browser-lifecycle"
 session_id = "rd-browser-lifecycle-self-test"
+def observed(step, offset):
+    step["evidence_source"] = "browser_automation"
+    step["component_snapshot_only"] = False
+    step["observed_at_ms"] = 1787332000000 + offset
+    return step
+
 steps = [
-    {"name": "app_loaded", "status": "passed"},
-    {"name": "authenticated_session", "status": "passed"},
-    {"name": "target_picker_opened", "status": "passed"},
-    {"name": "permission_status_checked", "status": "passed", "ability": "remote_desktop.permission_status", "subject_ura": None},
-    {"name": "consent_granted", "status": "passed", "ability": "remote_desktop.grant_consent", "subject_ura": subject},
-    {"name": "session_created", "status": "passed", "ability": "remote_desktop.create_session", "subject_ura": subject, "session_id": session_id},
+    observed({"name": "app_loaded", "status": "passed"}, 10),
+    observed({"name": "authenticated_session", "status": "passed"}, 20),
+    observed({"name": "target_picker_opened", "status": "passed"}, 30),
+    observed({"name": "permission_status_checked", "status": "passed", "ability": "remote_desktop.permission_status", "subject_ura": None}, 40),
+    observed({"name": "consent_granted", "status": "passed", "ability": "remote_desktop.grant_consent", "subject_ura": subject}, 50),
+    observed({"name": "session_created", "status": "passed", "ability": "remote_desktop.create_session", "subject_ura": subject, "session_id": session_id}, 60),
     {
         "name": "webrtc_attached",
         "status": "passed",
@@ -378,7 +398,7 @@ steps = [
         "ice_connection_state": "connected",
         "media_stream_attached": True,
     },
-    {"name": "watch_events_streaming", "status": "passed", "ability": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id},
+    observed({"name": "watch_events_streaming", "status": "passed", "ability": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id}, 80),
     {
         "name": "media_presented",
         "status": "passed",
@@ -403,9 +423,13 @@ steps = [
         "blocked_reason": "view_only",
         "visible_status": "input scope view_only · no controls",
     },
-    {"name": "session_ended", "status": "passed", "ability": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id},
-    {"name": "terminal_receipt_visible", "status": "passed", "terminal": True, "reason_code": "user_cancelled", "session_id": session_id},
+    observed({"name": "session_ended", "status": "passed", "ability": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id}, 120),
+    observed({"name": "terminal_receipt_visible", "status": "passed", "terminal": True, "reason_code": "user_cancelled", "session_id": session_id}, 130),
 ]
+steps[6] = observed(steps[6], 70)
+steps[8] = observed(steps[8], 90)
+steps[9] = observed(steps[9], 100)
+steps[10] = observed(steps[10], 110)
 evidence = {
     "status": "passed",
     "proof_mode": "real_browser_tauri_lifecycle",
