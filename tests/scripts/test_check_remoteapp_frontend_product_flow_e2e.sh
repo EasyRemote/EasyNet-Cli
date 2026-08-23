@@ -123,6 +123,42 @@ mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
 
 cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step frontend-browser-lifecycle run_frontend_browser_lifecycle/# frontend browser lifecycle removed/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without Browser/Tauri lifecycle step"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step frontend-browser-lifecycle run_frontend_browser_lifecycle\nrun_step host-permission-subject "\$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "\$OUT_DIR\/host-permission-subject"/run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR\/host-permission-subject"\nrun_step frontend-browser-lifecycle run_frontend_browser_lifecycle/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness that runs host probes before Browser/Tauri lifecycle evidence"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/frontend Browser\/Tauri lifecycle evidence is required/frontend Browser\/Tauri lifecycle evidence is optional/g' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness that treats Browser/Tauri lifecycle evidence as optional"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
 perl -0pi -e 's/run_step hub-api-readiness-preflight run_hub_api_readiness_preflight/# hub api readiness preflight removed/g' \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \

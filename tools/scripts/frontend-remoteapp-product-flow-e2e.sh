@@ -21,6 +21,11 @@ TARGET_FRESHNESS="$SELF_DIR/host-remoteapp-target-picker-freshness-e2e.sh"
 DECODED_FRAME="$SELF_DIR/host-remoteapp-decoded-frame-e2e.sh"
 VIEW_ONLY_INPUT="$SELF_DIR/host-remoteapp-view-only-input-safety-e2e.sh"
 HUB_API_PREFLIGHT="$SELF_DIR/hub-api-readiness-preflight.sh"
+BROWSER_LIFECYCLE="$SELF_DIR/frontend-remoteapp-browser-lifecycle-e2e.sh"
+BROWSER_LIFECYCLE_EVIDENCE_JSON="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_EVIDENCE_JSON:-}}"
+BROWSER_LIFECYCLE_RUNNER_CMD="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_RUNNER_CMD:-}}"
+BROWSER_LIFECYCLE_FRONTEND_URL="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_FRONTEND_URL:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_FRONTEND_URL:-}}"
+BROWSER_LIFECYCLE_SURFACE="${EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_SURFACE:-${EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_SURFACE:-browser}}"
 
 usage() {
   cat <<'USAGE'
@@ -48,10 +53,17 @@ The --run path performs:
   2. Product runtime readiness preflight for daemon control/invocation.
   3. Frontend TypeScript check.
   4. Frontend DeviceMediaAccess RemoteApp UI flow test.
-  5. Host permission subject preflight with screen-capture permission granted.
-  6. Host target picker freshness with a sentinel fixture.
-  7. Host decoded-frame WebRTC E2E for window/application targets.
-  8. Host view-only input safety for app/window targets.
+  5. Real Browser/Tauri RemoteApp lifecycle verifier using an external runner
+     or pre-existing evidence JSON.
+  6. Host permission subject preflight with screen-capture permission granted.
+  7. Host target picker freshness with a sentinel fixture.
+  8. Host decoded-frame WebRTC E2E for window/application targets.
+  9. Host view-only input safety for app/window targets.
+
+Set EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON to
+an existing Browser/Tauri lifecycle evidence artifact, or set
+EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD together
+with EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_FRONTEND_URL.
 
 This harness still does not claim product completion by itself; it produces one
 bounded E2E evidence bundle for the frontend + daemon + host RemoteApp flow.
@@ -96,6 +108,7 @@ step_order = [
     "product-runtime-readiness-preflight",
     "frontend-typecheck",
     "frontend-remoteapp-ui-flow",
+    "frontend-browser-lifecycle",
     "host-permission-subject",
     "host-target-picker-freshness",
     "host-decoded-frame-window",
@@ -140,6 +153,7 @@ report = {
     "evidence_contract": [
         "frontend TypeScript check",
         "DeviceMediaAccess RemoteApp UI flow",
+        "Browser/Tauri RemoteApp lifecycle evidence",
         "hub api readiness preflight",
         "product runtime readiness preflight",
         "host permission subject preflight",
@@ -183,6 +197,23 @@ run_frontend_tsc() {
 
 run_frontend_ui_flow() {
   (cd "$FRONTEND_ROOT" && npm test -- src/components/easynet/DeviceMediaAccess.test.tsx)
+}
+
+run_frontend_browser_lifecycle() {
+  local args=("--run" "--surface" "$BROWSER_LIFECYCLE_SURFACE" "--out-dir" "$OUT_DIR/frontend-browser-lifecycle")
+  if [[ -n "$BROWSER_LIFECYCLE_EVIDENCE_JSON" ]]; then
+    args+=("--evidence-json" "$BROWSER_LIFECYCLE_EVIDENCE_JSON")
+  elif [[ -n "$BROWSER_LIFECYCLE_RUNNER_CMD" ]]; then
+    if [[ -z "$BROWSER_LIFECYCLE_FRONTEND_URL" ]]; then
+      echo "frontend Browser/Tauri lifecycle runner requires EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_FRONTEND_URL" >&2
+      return 64
+    fi
+    args+=("--runner-cmd" "$BROWSER_LIFECYCLE_RUNNER_CMD" "--frontend-url" "$BROWSER_LIFECYCLE_FRONTEND_URL")
+  else
+    echo "frontend Browser/Tauri lifecycle evidence is required: set EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON or EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD" >&2
+    return 64
+  fi
+  "$BROWSER_LIFECYCLE" "${args[@]}"
 }
 
 run_with_timeout() {
@@ -291,6 +322,11 @@ if [[ "$SELF_TEST" -eq 1 ]]; then
   grep -q 'run_hub_api_readiness_preflight' "$0"
   grep -q 'DeviceMediaAccess.test.tsx' "$0"
   grep -q 'npx tsc --noEmit' "$0"
+  grep -q 'frontend-remoteapp-browser-lifecycle-e2e.sh' "$0"
+  grep -q 'run_frontend_browser_lifecycle' "$0"
+  grep -q 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON' "$0"
+  grep -q 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD' "$0"
+  grep -q 'frontend Browser/Tauri lifecycle evidence is required' "$0"
   grep -q 'run_product_runtime_readiness_preflight' "$0"
   grep -q 'daemon.invocation_accepting is not true' "$0"
   grep -q 'product-runtime-readiness-preflight' "$0"
@@ -326,6 +362,7 @@ run_step hub-api-readiness-preflight run_hub_api_readiness_preflight
 run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight
 run_step frontend-typecheck run_frontend_tsc
 run_step frontend-remoteapp-ui-flow run_frontend_ui_flow
+run_step frontend-browser-lifecycle run_frontend_browser_lifecycle
 run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR/host-permission-subject"
 run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture --target-kind window --out-dir "$OUT_DIR/host-target-picker-freshness"
 

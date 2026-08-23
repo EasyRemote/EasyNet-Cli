@@ -161,6 +161,18 @@ require 'npx tsc --noEmit' "$HARNESS" \
   'product-flow harness must run frontend TypeScript checks'
 require 'npm test -- src/components/easynet/DeviceMediaAccess\.test\.tsx' "$HARNESS" \
   'product-flow harness must run DeviceMediaAccess RemoteApp UI flow coverage'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$HARNESS" \
+  'product-flow harness must include the real Browser/Tauri lifecycle verifier'
+require 'run_frontend_browser_lifecycle' "$HARNESS" \
+  'product-flow harness must expose a Browser/Tauri lifecycle runner step'
+require 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' "$HARNESS" \
+  'product-flow harness must execute Browser/Tauri lifecycle evidence as a product-flow gate'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON' "$HARNESS" \
+  'product-flow harness must accept Browser/Tauri lifecycle evidence JSON'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD' "$HARNESS" \
+  'product-flow harness must accept a Browser/Tauri lifecycle runner command'
+require 'frontend Browser/Tauri lifecycle evidence is required' "$HARNESS" \
+  'product-flow --run must fail closed when Browser/Tauri lifecycle evidence is missing'
 require 'hub-api-readiness-preflight\.sh' "$HARNESS" \
   'product-flow harness must invoke Hub API readiness preflight'
 require 'run_step hub-api-readiness-preflight run_hub_api_readiness_preflight' "$HARNESS" \
@@ -183,6 +195,10 @@ require_order 'run_step hub-api-readiness-preflight run_hub_api_readiness_prefli
   'product-flow must check Hub API before daemon runtime readiness'
 require_order 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' 'run_step frontend-typecheck run_frontend_tsc' "$HARNESS" \
   'product-flow report order must put runtime readiness before frontend checks'
+require_order 'run_step frontend-remoteapp-ui-flow run_frontend_ui_flow' 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' "$HARNESS" \
+  'product-flow must run component UI coverage before live Browser/Tauri lifecycle evidence'
+require_order 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' 'run_step host-permission-subject' "$HARNESS" \
+  'product-flow must execute Browser/Tauri lifecycle evidence before host-only probes'
 require 'host-remoteapp-permission-subject-e2e\.sh' "$HARNESS" \
   'product-flow harness must invoke host permission subject E2E'
 require '--require-screen-capture-granted' "$HARNESS" \
