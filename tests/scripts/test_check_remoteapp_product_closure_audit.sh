@@ -352,6 +352,42 @@ grep -q "media adaptation verifier must require rendered media after adaptation 
   fail "expected media adaptation rendered-after-adaptation timing failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 
+perl -0pi -e 's#render_probe evidence must be present#render probe evidence may be absent#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-render-probe.out 2>&1; then
+  fail "checker accepted media adaptation verifier without decoded render probe evidence"
+fi
+grep -q "media adaptation verifier must require decoded render probe evidence" /tmp/check-remoteapp-product-closure-media-render-probe.out || \
+  fail "expected media adaptation render-probe failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#render_probe media_pipeline_id must bind media_pipeline_id#render probe pipeline binding is optional#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-render-pipeline.out 2>&1; then
+  fail "checker accepted media adaptation verifier without render-probe pipeline binding"
+fi
+grep -q "media adaptation verifier must bind render probe to media pipeline" /tmp/check-remoteapp-product-closure-media-render-pipeline.out || \
+  fail "expected media adaptation render-probe pipeline failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#render_probe audio_payload_hash must be recorded#render_probe audio_payload_hash may be absent#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-render-audio-hash.out 2>&1; then
+  fail "checker accepted media adaptation verifier without audio payload fingerprint evidence"
+fi
+grep -q "media adaptation verifier must require audio payload fingerprint evidence" /tmp/check-remoteapp-product-closure-media-render-audio-hash.out || \
+  fail "expected media adaptation audio payload fingerprint failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#render_probe observed_at_ms must be after adaptation events#render_probe observation ordering is optional#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-render-order.out 2>&1; then
+  fail "checker accepted media adaptation verifier without render-probe ordering"
+fi
+grep -q "media adaptation verifier must order render probe after adaptation events" /tmp/check-remoteapp-product-closure-media-render-order.out || \
+  fail "expected media adaptation render-probe ordering failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
 perl -0pi -e 's#selected_resource_ura must match across media scenarios#selected_resource_ura may differ across media scenarios#g' \
   "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-resource-match.out 2>&1; then

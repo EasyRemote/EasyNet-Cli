@@ -82,4 +82,62 @@ fi
 grep -q "queue.observed_max_depth must not exceed max_depth" /tmp/remoteapp-media-adaptation-unbounded-queue.out || \
   fail "unbounded queue failure was not explicit"
 
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-render-probe.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+del evidence["scenarios"][0]["render_probe"]
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/no-render-probe.json" --out-dir "$OUT_DIR/no-render-probe" >/tmp/remoteapp-media-adaptation-no-render-probe.out 2>&1; then
+  fail "verifier accepted media evidence without decoded render probe"
+fi
+grep -q "render_probe evidence must be present" /tmp/remoteapp-media-adaptation-no-render-probe.out || \
+  fail "missing render probe failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/wrong-render-pipeline.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+evidence["scenarios"][0]["render_probe"]["media_pipeline_id"] = "unrelated-pipeline"
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/wrong-render-pipeline.json" --out-dir "$OUT_DIR/wrong-render-pipeline" >/tmp/remoteapp-media-adaptation-wrong-render-pipeline.out 2>&1; then
+  fail "verifier accepted decoded render probe from a different media pipeline"
+fi
+grep -q "render_probe media_pipeline_id must bind media_pipeline_id" /tmp/remoteapp-media-adaptation-wrong-render-pipeline.out || \
+  fail "render probe pipeline binding failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-audio-payload.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+evidence["scenarios"][0]["render_probe"]["audio_payload_hash"] = ""
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/no-audio-payload.json" --out-dir "$OUT_DIR/no-audio-payload" >/tmp/remoteapp-media-adaptation-no-audio-payload.out 2>&1; then
+  fail "verifier accepted decoded render probe without audio payload fingerprint"
+fi
+grep -q "render_probe audio_payload_hash must be recorded" /tmp/remoteapp-media-adaptation-no-audio-payload.out || \
+  fail "render probe audio payload failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/render-before-adaptation.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+for scenario in evidence["scenarios"]:
+    if scenario["scenario"] == "degraded_network":
+        scenario["render_probe"]["observed_at_ms"] = scenario["impairment_applied_at_ms"] + 1
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/render-before-adaptation.json" --out-dir "$OUT_DIR/render-before-adaptation" >/tmp/remoteapp-media-adaptation-render-before-adaptation.out 2>&1; then
+  fail "verifier accepted render probe observed before adaptation events"
+fi
+grep -q "render_probe observed_at_ms must be after adaptation events" /tmp/remoteapp-media-adaptation-render-before-adaptation.out || \
+  fail "render probe ordering failure was not explicit"
+
 echo "test_remoteapp_media_adaptation_e2e: ok"

@@ -631,6 +631,34 @@ require 'degraded_network must reduce effective_fps or drop frames versus baseli
   'media adaptation verifier must require degraded FPS/drop delta'
 require 'frames_rendered_after_adaptation_at_ms must be after adaptation events' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require rendered media after adaptation events'
+require 'render_probe' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require decoded render probe evidence'
+require 'render_probe evidence must be present' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require decoded render probe evidence'
+require 'render_probe\.probe_source must be decoded_media_payload' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require decoded media payload probe source'
+require 'render_probe selected_resource_ura must bind selected Resource URA' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind render probe to selected Resource URA'
+require 'render_probe session_id must bind session_id' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind render probe to session'
+require 'render_probe media_pipeline_id must bind media_pipeline_id' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind render probe to media pipeline'
+require 'render_probe video_codec must match negotiated video codec' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind render probe to negotiated video codec'
+require 'render_probe video_transport must match negotiated video transport' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind render probe to negotiated video transport'
+require 'render_probe audio_codec must match negotiated audio codec' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind render probe to negotiated audio codec'
+require 'render_probe decoded_video_frames must be positive' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require decoded video frame evidence'
+require 'render_probe decoded audio packets or samples must be positive' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require decoded audio evidence'
+require 'render_probe video_payload_hash must be recorded' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require video payload fingerprint evidence'
+require 'render_probe audio_payload_hash must be recorded' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require audio payload fingerprint evidence'
+require 'render_probe observed_at_ms must be after adaptation events' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must order render probe after adaptation events'
 require 'backpressure_detected' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require backpressure detection evidence'
 require 'frames_dropped' "$MEDIA_ADAPTATION" \

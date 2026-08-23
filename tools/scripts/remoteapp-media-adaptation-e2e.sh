@@ -46,7 +46,8 @@ Evidence contract:
   identity, with negotiated video codec, host audio, FPS/bitrate telemetry,
   adaptation/drop/backpressure events bound to the scenario session/pipeline,
   rendered media after adaptation, public RemoteApp session abilities, selected
-  Resource URA subject binding, and a visible terminal receipt.
+  Resource URA subject binding, render-probe evidence bound to decoded
+  video/audio payload from the same pipeline, and a visible terminal receipt.
 
 Non-claims:
   A skipped report or self-test does not prove media product readiness. This
@@ -368,6 +369,44 @@ for scenario_name in sorted(required_scenarios):
         require(integer(video.get("frames_rendered_after_adaptation_at_ms")) > latest_adaptation_event_at_ms,
                 f"{prefix}: video.frames_rendered_after_adaptation_at_ms must be after adaptation events")
 
+    render_probe = scenario.get("render_probe")
+    require(isinstance(render_probe, dict), f"{prefix}: render_probe evidence must be present")
+    if not isinstance(render_probe, dict):
+        render_probe = {}
+    render_probe_observed_at_ms = integer(render_probe.get("observed_at_ms"))
+    require(render_probe.get("probe_source") == "decoded_media_payload",
+            f"{prefix}: render_probe.probe_source must be decoded_media_payload")
+    require(render_probe.get("selected_resource_ura") == subject_ura,
+            f"{prefix}: render_probe selected_resource_ura must bind selected Resource URA")
+    require(render_probe.get("session_id") == session_id,
+            f"{prefix}: render_probe session_id must bind session_id")
+    require(render_probe.get("media_pipeline_id") == media_pipeline_id,
+            f"{prefix}: render_probe media_pipeline_id must bind media_pipeline_id")
+    require(str(render_probe.get("video_codec", "")).lower() == codec,
+            f"{prefix}: render_probe video_codec must match negotiated video codec")
+    require(str(render_probe.get("video_transport", "")).lower() == transport,
+            f"{prefix}: render_probe video_transport must match negotiated video transport")
+    require(str(render_probe.get("audio_codec", "")).lower() == audio_codec,
+            f"{prefix}: render_probe audio_codec must match negotiated audio codec")
+    require(integer(render_probe.get("decoded_video_frames")) > 0,
+            f"{prefix}: render_probe decoded_video_frames must be positive")
+    require(integer(render_probe.get("decoded_audio_packets")) > 0
+            or integer(render_probe.get("decoded_audio_samples")) > 0,
+            f"{prefix}: render_probe decoded audio packets or samples must be positive")
+    require(isinstance(render_probe.get("video_payload_hash"), str)
+            and render_probe.get("video_payload_hash"),
+            f"{prefix}: render_probe video_payload_hash must be recorded")
+    require(isinstance(render_probe.get("audio_payload_hash"), str)
+            and render_probe.get("audio_payload_hash"),
+            f"{prefix}: render_probe audio_payload_hash must be recorded")
+    require(render_probe_observed_at_ms >= scenario_started_at_ms,
+            f"{prefix}: render_probe observed_at_ms must be at or after scenario start")
+    if scenario_name in {"degraded_network", "backpressure"}:
+        require(latest_adaptation_event_at_ms > 0,
+                f"{prefix}: adaptation events must be recorded before render_probe")
+        require(render_probe_observed_at_ms > latest_adaptation_event_at_ms,
+                f"{prefix}: render_probe observed_at_ms must be after adaptation events")
+
     terminal = scenario.get("terminal_receipt")
     require(isinstance(terminal, dict), f"{prefix}: terminal_receipt must be visible")
     if not isinstance(terminal, dict):
@@ -386,6 +425,7 @@ for scenario_name in sorted(required_scenarios):
         "audio_codec": audio_codec,
         "selected_resource_ura": subject_ura,
         "media_pipeline_id": media_pipeline_id,
+        "render_probe_observed_at_ms": render_probe_observed_at_ms,
         "measured_fps": measured_fps,
         "observed_bitrate_kbps": integer(video.get("observed_bitrate_kbps")),
         "frames_rendered": integer(video.get("frames_rendered")),
@@ -604,6 +644,21 @@ def scenario(name, *, degraded=False, backpressure=False):
         "adaptation": {
             "algorithm": "webrtc_cc",
             "events": events,
+        },
+        "render_probe": {
+            "probe_source": "decoded_media_payload",
+            "selected_resource_ura": subject,
+            "session_id": session_id,
+            "media_pipeline_id": media_pipeline_id,
+            "video_codec": "h264",
+            "video_transport": "webrtc",
+            "audio_codec": "opus",
+            "decoded_video_frames": 180 if not degraded and not backpressure else 80,
+            "decoded_audio_packets": 320,
+            "decoded_audio_samples": 384000,
+            "video_payload_hash": f"sha256:video-{name}",
+            "audio_payload_hash": f"sha256:audio-{name}",
+            "observed_at_ms": scenario_started_at_ms + (6600 if degraded or backpressure else 2500),
         },
         "terminal_receipt": {
             "terminal": True,
