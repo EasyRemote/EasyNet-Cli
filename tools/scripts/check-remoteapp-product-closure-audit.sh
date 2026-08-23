@@ -685,8 +685,20 @@ require 'remote_desktop\.create_session' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect create_session evidence'
 require 'remote_desktop\.attach' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect attach evidence'
+require 'rtc_connection_state' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require connected WebRTC state'
+require 'media_stream_attached' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require attached media stream evidence'
 require 'remote_desktop\.watch_events' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect watch_events evidence'
+require 'media_element_visible' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require visible media element evidence'
+require 'frames_presented' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require rendered frame count evidence'
+require 'visible_status' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require visible input status evidence'
+require 'blocked_reason' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require explicit input policy-block reason'
 require 'remote_desktop\.end_session' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect end_session evidence'
 require 'terminal_receipt_visible' "$FRONTEND_BROWSER_LIFECYCLE" \

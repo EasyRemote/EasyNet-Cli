@@ -244,6 +244,24 @@ grep -q "frontend Browser/Tauri lifecycle verifier must require real lifecycle p
   fail "expected Browser/Tauri lifecycle proof-mode failure"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 
+perl -0pi -e 's#rtc_connection_state#rtc_state#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-rtc.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without connected WebRTC state"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must require connected WebRTC state" /tmp/check-remoteapp-product-closure-browser-lifecycle-rtc.out || \
+  fail "expected Browser/Tauri connected WebRTC state failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+perl -0pi -e 's#frames_presented#frame_count#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-frames.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without rendered frame count"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must require rendered frame count evidence" /tmp/check-remoteapp-product-closure-browser-lifecycle-frames.out || \
+  fail "expected Browser/Tauri rendered frame count failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
 perl -0pi -e 's#terminal_receipt_visible#terminal_receipt_hidden#g' \
   "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-terminal.out 2>&1; then

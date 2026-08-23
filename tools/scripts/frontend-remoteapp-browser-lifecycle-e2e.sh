@@ -51,7 +51,10 @@ Evidence contract:
   permission_status_checked -> consent_granted -> session_created ->
   webrtc_attached -> watch_events_streaming -> media_presented ->
   media_pipeline_support_visible -> input_control_attempted_or_policy_blocked
-  -> session_ended -> terminal_receipt_visible.
+  -> session_ended -> terminal_receipt_visible. The WebRTC step must show a
+  connected peer path, the media step must show a visible rendered media element
+  with positive frame count, and the input step must show either applied input
+  telemetry or an explicit policy block.
 
 Non-claims:
   A skipped report or self-test does not prove frontend product readiness.
@@ -239,17 +242,34 @@ created = step_by_name.get("session_created", {})
 ended = step_by_name.get("session_ended", {})
 terminal = step_by_name.get("terminal_receipt_visible", {})
 watch = step_by_name.get("watch_events_streaming", {})
+attached = step_by_name.get("webrtc_attached", {})
 media = step_by_name.get("media_presented", {})
 pipeline = step_by_name.get("media_pipeline_support_visible", {})
 input_step = step_by_name.get("input_control_attempted_or_policy_blocked", {})
 require(created.get("session_id") == session_id,
         "session_created must bind the top-level session_id")
+require(attached.get("session_id") == session_id,
+        "webrtc_attached must bind the created session_id")
+require(attached.get("rtc_connection_state") in {"connected", "completed"},
+        "webrtc_attached.rtc_connection_state must be connected or completed")
+require(attached.get("ice_connection_state") in {"connected", "completed"},
+        "webrtc_attached.ice_connection_state must be connected or completed")
+require(attached.get("media_stream_attached") is True,
+        "webrtc_attached must prove media_stream_attached=true")
 require(watch.get("session_id") == session_id,
         "watch_events_streaming must bind the created session_id")
 require(ended.get("session_id") == session_id,
         "session_ended must bind the created session_id")
 require(media.get("frame_presented") is True,
         "media_presented must prove at least one rendered media frame")
+require(media.get("media_element_visible") is True,
+        "media_presented must prove media_element_visible=true")
+try:
+    frames_presented = int(media.get("frames_presented", 0))
+except (TypeError, ValueError):
+    frames_presented = 0
+require(frames_presented > 0,
+        "media_presented.frames_presented must be positive")
 pipeline_label = pipeline.get("visible_label")
 require(isinstance(pipeline_label, str) and pipeline_label,
         "media_pipeline_support_visible must include visible_label")
@@ -271,6 +291,30 @@ require(isinstance(blockers, list)
         "media_pipeline_support_visible must expose host-audio and live media-adaptation E2E blockers")
 require(input_step.get("result") in {"input_applied", "policy_blocked"},
         "input control must either apply input or prove policy_blocked")
+input_status = input_step.get("visible_status")
+require(isinstance(input_status, str) and input_status,
+        "input control step must expose visible_status")
+if input_step.get("result") == "policy_blocked":
+    require(input_step.get("blocked_reason") in {
+        "view_only",
+        "input_scope_unsupported",
+        "input_permission_blocked",
+        "target_input_not_ready",
+        "input_control_consent_missing",
+    }, "policy_blocked input must expose a known blocked_reason")
+if input_step.get("result") == "input_applied":
+    try:
+        client_sequence = int(input_step.get("client_sequence", 0))
+    except (TypeError, ValueError):
+        client_sequence = 0
+    try:
+        latency_ms = float(input_step.get("latency_ms", -1))
+    except (TypeError, ValueError):
+        latency_ms = -1
+    require(client_sequence > 0,
+            "input_applied must include positive client_sequence")
+    require(0 <= latency_ms <= 250,
+            "input_applied latency_ms must be within frontend lifecycle bound")
 require(terminal.get("reason_code") in {"user_cancelled", "caller_ended", "resume_e2e_cleanup"},
         "terminal_receipt_visible must expose a known end reason")
 require(terminal.get("terminal") is True,
@@ -324,9 +368,24 @@ steps = [
     {"name": "permission_status_checked", "status": "passed", "ability": "remote_desktop.permission_status", "subject_ura": None},
     {"name": "consent_granted", "status": "passed", "ability": "remote_desktop.grant_consent", "subject_ura": subject},
     {"name": "session_created", "status": "passed", "ability": "remote_desktop.create_session", "subject_ura": subject, "session_id": session_id},
-    {"name": "webrtc_attached", "status": "passed", "ability": "remote_desktop.attach", "subject_ura": subject, "session_id": session_id},
+    {
+        "name": "webrtc_attached",
+        "status": "passed",
+        "ability": "remote_desktop.attach",
+        "subject_ura": subject,
+        "session_id": session_id,
+        "rtc_connection_state": "connected",
+        "ice_connection_state": "connected",
+        "media_stream_attached": True,
+    },
     {"name": "watch_events_streaming", "status": "passed", "ability": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id},
-    {"name": "media_presented", "status": "passed", "frame_presented": True},
+    {
+        "name": "media_presented",
+        "status": "passed",
+        "frame_presented": True,
+        "media_element_visible": True,
+        "frames_presented": 3,
+    },
     {
         "name": "media_pipeline_support_visible",
         "status": "passed",
@@ -337,7 +396,13 @@ steps = [
             "remoteapp_media_adaptation_e2e_artifact_missing",
         ],
     },
-    {"name": "input_control_attempted_or_policy_blocked", "status": "passed", "result": "policy_blocked"},
+    {
+        "name": "input_control_attempted_or_policy_blocked",
+        "status": "passed",
+        "result": "policy_blocked",
+        "blocked_reason": "view_only",
+        "visible_status": "input scope view_only · no controls",
+    },
     {"name": "session_ended", "status": "passed", "ability": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id},
     {"name": "terminal_receipt_visible", "status": "passed", "terminal": True, "reason_code": "user_cancelled", "session_id": session_id},
 ]
