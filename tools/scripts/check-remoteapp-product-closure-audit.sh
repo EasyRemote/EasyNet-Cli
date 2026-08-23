@@ -799,6 +799,12 @@ require 'client_sequence' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sequence evidence'
 require 'input_event_id must be recorded' "$INPUT_INJECTION" \
   'input injection verifier must require stable input event identity'
+require 'rdinp1_<32 lowercase hex>' "$INPUT_INJECTION" \
+  'input injection verifier must require daemon-shaped applied input event identity'
+require 'transport_epoch must be positive' "$INPUT_INJECTION" \
+  'input injection verifier must bind applied input to a transport epoch'
+require 'accepted_count must be positive' "$INPUT_INJECTION" \
+  'input injection verifier must bind applied input to daemon accepted-count ordering'
 require 'client_sent_at_ms' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sent_at_ms evidence'
 require 'host_received_at_ms' "$INPUT_INJECTION" \

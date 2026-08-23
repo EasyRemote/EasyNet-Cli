@@ -118,6 +118,7 @@ validate_evidence() {
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 evidence_path, report_path, md_path = sys.argv[1:4]
@@ -153,6 +154,7 @@ os_effect_probe_sources = {
     "linux_uinput_observer",
     "platform_automation",
 }
+input_event_id_pattern = re.compile(r"^rdinp1_[0-9a-f]{32}$")
 
 require(evidence.get("status") == "passed", "evidence.status must be passed")
 require(evidence.get("proof_mode") == "real_input_injection_matrix",
@@ -279,6 +281,15 @@ for platform_name in sorted(required_platforms):
             require(isinstance(result.get("input_event_id"), str)
                     and result.get("input_event_id"),
                     f"{result_prefix}: input_event_id must be recorded")
+            require(isinstance(result.get("input_event_id"), str)
+                    and input_event_id_pattern.fullmatch(result.get("input_event_id")),
+                    f"{result_prefix}: input_event_id must be daemon-applied rdinp1_<32 lowercase hex>")
+            require(isinstance(result.get("transport_epoch"), int)
+                    and result.get("transport_epoch") > 0,
+                    f"{result_prefix}: transport_epoch must be positive")
+            require(isinstance(result.get("accepted_count"), int)
+                    and result.get("accepted_count") > 0,
+                    f"{result_prefix}: accepted_count must be positive")
             require(isinstance(result.get("client_sent_at_ms"), int)
                     and result.get("client_sent_at_ms") > 0,
                     f"{result_prefix}: client_sent_at_ms must be positive")
@@ -419,6 +430,8 @@ for platform_name in sorted(required_platforms):
                 "event_type": result.get("event_type"),
                 "client_sequence": result.get("client_sequence"),
                 "input_event_id": result.get("input_event_id"),
+                "transport_epoch": result.get("transport_epoch"),
+                "accepted_count": result.get("accepted_count"),
                 "latency_ms": result.get("latency_ms"),
                 "os_effect_observed": os_effect.get("observed") is True,
                 "os_effect_probe_source": os_effect.get("os_effect_probe_source"),
@@ -573,7 +586,9 @@ macos = {
             "result": "input_applied",
             "event_type": "INPUT_FRAME_APPLIED",
             "client_sequence": 1,
-            "input_event_id": "input-event-pointer-1",
+            "input_event_id": "rdinp1_11111111111111111111111111111111",
+            "transport_epoch": 3,
+            "accepted_count": 1,
             "client_sent_at_ms": 1787331000000,
             "host_received_at_ms": 1787331000010,
             "host_applied_at_ms": 1787331000019,
@@ -585,7 +600,7 @@ macos = {
                 "observed": True,
                 "os_effect_probe_source": "macos_accessibility_api",
                 "observer_independent_from_injector": True,
-                "input_event_id": "input-event-pointer-1",
+                "input_event_id": "rdinp1_11111111111111111111111111111111",
                 "platform": "macos",
                 "subject_ura": subject,
                 "session_id": session_id,
@@ -605,7 +620,9 @@ macos = {
             "result": "input_applied",
             "event_type": "INPUT_FRAME_APPLIED",
             "client_sequence": 2,
-            "input_event_id": "input-event-keyboard-2",
+            "input_event_id": "rdinp1_22222222222222222222222222222222",
+            "transport_epoch": 3,
+            "accepted_count": 2,
             "client_sent_at_ms": 1787331000100,
             "host_received_at_ms": 1787331000120,
             "host_applied_at_ms": 1787331000135,
@@ -616,7 +633,7 @@ macos = {
                 "observed": True,
                 "os_effect_probe_source": "macos_accessibility_api",
                 "observer_independent_from_injector": True,
-                "input_event_id": "input-event-keyboard-2",
+                "input_event_id": "rdinp1_22222222222222222222222222222222",
                 "platform": "macos",
                 "subject_ura": subject,
                 "session_id": session_id,

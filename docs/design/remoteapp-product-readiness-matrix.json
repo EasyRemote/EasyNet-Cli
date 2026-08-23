@@ -82,7 +82,7 @@
         "frontend exposes Request permission recovery when daemon input_readiness reports input_injection_unavailable",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate current-session input policy implementation test",
         "device capability projection exposes input_control_support for macOS/Linux/Windows with macOS display tied to runtime permission and non-display/non-macOS input unsupported",
-        "remoteapp-input-injection-e2e.sh verifier for real pointer/keyboard input injection artifacts with monotonic applied sequence, stable input event identity, stale sequence rejection, independent platform OS-effect observer, post-application observation timing, target geometry/focus epoch binding, bounded pointer position tolerance, and keyboard focus/resource evidence"
+        "remoteapp-input-injection-e2e.sh verifier for real pointer/keyboard input injection artifacts with monotonic applied sequence, daemon-shaped stable input event identity, transport epoch, accepted-count ordering, stale sequence rejection, independent platform OS-effect observer, post-application observation timing, target geometry/focus epoch binding, bounded pointer position tolerance, and keyboard focus/resource evidence"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-input-injection-e2e.sh artifact",

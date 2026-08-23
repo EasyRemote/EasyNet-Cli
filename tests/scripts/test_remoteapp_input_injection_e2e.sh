@@ -24,6 +24,7 @@ EASYNET_REMOTEAPP_INPUT_INJECTION_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test 
 
 python3 - "$OUT_DIR/good/report.json" <<'PY'
 import json
+import re
 import sys
 
 report = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -48,6 +49,9 @@ assert set(applied) == {"pointer", "keyboard"}
 for entry in applied.values():
     assert entry["result"] == "input_applied"
     assert entry["event_type"] == "INPUT_FRAME_APPLIED"
+    assert re.fullmatch(r"rdinp1_[0-9a-f]{32}", entry["input_event_id"])
+    assert entry["transport_epoch"] > 0
+    assert entry["accepted_count"] > 0
     assert entry["latency_ms"] <= summary["latency_threshold_ms"]
     assert entry["os_effect_observed"] is True
     assert entry["observer_independent_from_injector"] is True
@@ -121,6 +125,35 @@ if "$SCRIPT" --run --evidence-json "$OUT_DIR/no-input-event-id.json" --out-dir "
 fi
 grep -q "input_event_id must be recorded" /tmp/remoteapp-input-injection-no-event-id.out || \
   fail "input_event_id failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/fake-input-event-id.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+evidence["platforms"][0]["input_results"][0]["input_event_id"] = "input-event-pointer-1"
+evidence["platforms"][0]["input_results"][0]["os_effect"]["input_event_id"] = "input-event-pointer-1"
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/fake-input-event-id.json" --out-dir "$OUT_DIR/fake-input-event-id" >/tmp/remoteapp-input-injection-fake-event-id.out 2>&1; then
+  fail "verifier accepted input evidence with non-daemon input_event_id"
+fi
+grep -q "input_event_id must be daemon-applied" /tmp/remoteapp-input-injection-fake-event-id.out || \
+  fail "non-daemon input_event_id failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-transport-epoch.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+del evidence["platforms"][0]["input_results"][0]["transport_epoch"]
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/no-transport-epoch.json" --out-dir "$OUT_DIR/no-transport-epoch" >/tmp/remoteapp-input-injection-no-transport-epoch.out 2>&1; then
+  fail "verifier accepted input evidence without transport_epoch"
+fi
+grep -q "transport_epoch must be positive" /tmp/remoteapp-input-injection-no-transport-epoch.out || \
+  fail "transport_epoch failure was not explicit"
 
 python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/injector-observer.json" <<'PY'
 import json
