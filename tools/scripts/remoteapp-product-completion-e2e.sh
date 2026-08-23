@@ -235,6 +235,7 @@ required = [
         "expected_script": "tools/scripts/remoteapp-network-fallback-e2e.sh",
         "coverage_keys": ["direct", "stun_srflx", "turn_relay", "easynet_relay"],
         "requires_evidence_json": True,
+        "requires_network_route_scenarios": True,
     },
     *lifecycle_required(
         "session_timeout",
@@ -294,6 +295,146 @@ def read_required_evidence_json(item_id, check, evidence_path, label):
         check["errors"].append(message)
         add_error(item_id, message)
     return evidence
+
+def lower(value):
+    return value.lower() if isinstance(value, str) else value
+
+def positive_int(value):
+    try:
+        return int(value) > 0
+    except Exception:
+        return False
+
+def validate_network_route_scenarios(item_id, check, report):
+    required_routes = {
+        "direct": {
+            "selected_route_class": "direct",
+            "required_candidate_types": {"host"},
+            "forbidden_candidate_types": {"relay"},
+            "required_allowed_classes": {"direct"},
+            "required_blocked_classes": {"relay"},
+        },
+        "stun_srflx": {
+            "selected_route_class": "stun_srflx",
+            "required_candidate_types": {"srflx", "prflx"},
+            "required_allowed_classes": {"stun_srflx"},
+            "required_blocked_classes": {"direct"},
+        },
+        "turn_relay": {
+            "selected_route_class": "relay",
+            "required_candidate_types": {"relay"},
+            "required_allowed_classes": {"relay"},
+            "required_blocked_classes": {"direct", "stun_srflx"},
+        },
+        "easynet_relay": {
+            "selected_route_class": "relay",
+            "required_candidate_types": {"relay"},
+            "required_allowed_classes": {"relay"},
+            "required_blocked_classes": {"direct", "stun_srflx"},
+        },
+    }
+    scenarios = report.get("scenarios")
+    check["required_network_routes"] = sorted(required_routes)
+    if not isinstance(scenarios, list) or not scenarios:
+        message = "network fallback scenarios summary must be a non-empty list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+
+    route_entries = {}
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            message = f"network fallback scenarios[{index}] must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        route_kind = scenario.get("route_kind")
+        if route_kind not in required_routes:
+            message = f"network fallback scenarios[{index}].route_kind is {route_kind!r}, expected one of {sorted(required_routes)}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if route_kind in route_entries:
+            message = f"network fallback route {route_kind!r} appears more than once"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        route_entries[route_kind] = scenario
+
+    observed_routes = sorted(route_entries)
+    check["observed_network_routes"] = observed_routes
+    missing_routes = sorted(set(required_routes) - set(route_entries))
+    if missing_routes:
+        message = "network fallback scenarios missing routes: " + ", ".join(missing_routes)
+        check["errors"].append(message)
+        add_error(item_id, message)
+
+    for route_kind, spec in required_routes.items():
+        scenario = route_entries.get(route_kind)
+        if not isinstance(scenario, dict):
+            continue
+        prefix = f"network fallback route {route_kind}"
+        selected_route_class = lower(scenario.get("selected_route_class"))
+        if selected_route_class != spec["selected_route_class"]:
+            message = f"{prefix}: selected_route_class is {selected_route_class!r}, expected {spec['selected_route_class']!r}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if scenario.get("ice_connection_state") not in {"connected", "completed"}:
+            message = f"{prefix}: ice_connection_state must be connected or completed"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("candidate_pair_id"), str) or not scenario.get("candidate_pair_id"):
+            message = f"{prefix}: candidate_pair_id must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("session_id"), str) or not scenario.get("session_id"):
+            message = f"{prefix}: session_id must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("frames_rendered")):
+            message = f"{prefix}: frames_rendered must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        candidate_types = {
+            lower(item)
+            for item in scenario.get("candidate_types", [])
+            if isinstance(item, str)
+        }
+        allowed_route_classes = {
+            lower(item)
+            for item in scenario.get("allowed_route_classes", [])
+            if isinstance(item, str)
+        }
+        blocked_route_classes = {
+            lower(item)
+            for item in scenario.get("blocked_route_classes", [])
+            if isinstance(item, str)
+        }
+        if not spec["required_allowed_classes"].issubset(allowed_route_classes):
+            message = f"{prefix}: allowed_route_classes must include {sorted(spec['required_allowed_classes'])}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not spec["required_blocked_classes"].issubset(blocked_route_classes):
+            message = f"{prefix}: blocked_route_classes must include {sorted(spec['required_blocked_classes'])}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if selected_route_class not in allowed_route_classes:
+            message = f"{prefix}: selected_route_class must be allowed by the network fixture"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if selected_route_class in blocked_route_classes:
+            message = f"{prefix}: selected_route_class must not be blocked by the network fixture"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not spec["required_candidate_types"].intersection(candidate_types):
+            message = f"{prefix}: candidate_types must include one of {sorted(spec['required_candidate_types'])}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        forbidden_candidate_types = spec.get("forbidden_candidate_types", set())
+        if forbidden_candidate_types.intersection(candidate_types):
+            message = f"{prefix}: candidate_types must not include {sorted(forbidden_candidate_types)}"
+            check["errors"].append(message)
+            add_error(item_id, message)
 
 for item in required:
     item_id = item["id"]
@@ -373,6 +514,8 @@ for item in required:
             message = f"evidence_contract missing {expected!r}"
             check["errors"].append(message)
             add_error(item_id, message)
+    if item.get("requires_network_route_scenarios"):
+        validate_network_route_scenarios(item_id, check, report)
     if item.get("requires_platforms_passed"):
         platform_entries = report.get("platforms")
         check["required_passed_platforms"] = item["requires_platforms_passed"]
@@ -817,6 +960,35 @@ if item_id == "input_injection":
     report["platforms"] = [
         {"platform": platform, "status": "passed"}
         for platform in ("linux", "macos", "windows")
+    ]
+if item_id == "network_fallback":
+    network_routes = [
+        ("direct", "connected", "direct", ["host"], ["direct"], ["relay"]),
+        ("stun_srflx", "connected", "stun_srflx", ["srflx", "host"], ["stun_srflx"], ["direct"]),
+        ("turn_relay", "completed", "relay", ["relay", "host"], ["relay"], ["direct", "stun_srflx"]),
+        ("easynet_relay", "completed", "relay", ["relay", "relay"], ["relay"], ["direct", "stun_srflx"]),
+    ]
+    report["scenario_count"] = len(network_routes)
+    report["scenarios"] = [
+        {
+            "route_kind": route_kind,
+            "ice_connection_state": ice_connection_state,
+            "selected_route_class": selected_route_class,
+            "candidate_pair_id": f"pair-{route_kind}",
+            "candidate_types": candidate_types,
+            "allowed_route_classes": allowed_route_classes,
+            "blocked_route_classes": blocked_route_classes,
+            "frames_rendered": 8,
+            "session_id": f"rd-product-network-{route_kind}",
+        }
+        for (
+            route_kind,
+            ice_connection_state,
+            selected_route_class,
+            candidate_types,
+            allowed_route_classes,
+            blocked_route_classes,
+        ) in network_routes
     ]
 if item_id == "cross_device_smoke":
     report["topology"] = {
@@ -1448,6 +1620,32 @@ PY
   fi
   write_synthetic_report "$tmp/network_fallback.json" network_fallback
 
+  python3 - "$tmp/network_fallback.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+del report["scenarios"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-network-route-scenarios" >/dev/null 2>&1; then
+    echo "self-test accepted network fallback report without route scenarios" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/network_fallback.json" network_fallback
+
   if env \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON \
@@ -1498,6 +1696,8 @@ case "$MODE" in
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
     grep -q 'requires_evidence_json' "$0"
     grep -q 'requires_platforms_passed' "$0"
+    grep -q 'requires_network_route_scenarios' "$0"
+    grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
     grep -q 'unsupported_targets must be empty' "$0"
     grep -q "expected 'passed'" "$0"
     grep -q 'expected_target_kind' "$0"
@@ -1531,6 +1731,7 @@ case "$MODE" in
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'self-test accepted unsupported cross-platform capture as product completion' "$0"
     grep -q 'self-test accepted unsupported input injection as product completion' "$0"
+    grep -q 'self-test accepted network fallback report without route scenarios' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test
     ;;

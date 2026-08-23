@@ -27,6 +27,12 @@ grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON"
   fail "completion gate must require multi-window tracking report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require network fallback report"
+grep -q "requires_network_route_scenarios" "$SCRIPT" || \
+  fail "completion gate must require route-scenario summaries for network fallback"
+grep -q "network fallback scenarios summary must be a non-empty list" "$SCRIPT" || \
+  fail "completion gate must reject network fallback reports without route scenarios"
+grep -q "self-test accepted network fallback report without route scenarios" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing network route scenarios"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_WINDOW_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require window session timeout report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_APPLICATION_REPORT_JSON" "$SCRIPT" || \
