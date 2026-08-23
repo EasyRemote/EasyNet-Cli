@@ -259,6 +259,8 @@ require 'target_kind=both' "$AUDIT" \
   'audit must record that product-completion requires both window and application target coverage'
 require 'target-narrowed' "$AUDIT" \
   'audit must reject target-narrowed evidence as product completion'
+require 'traceable `result.json` step artifacts' "$AUDIT" \
+  'audit must record product-flow step artifact traceability'
 require 'check-remoteapp-main-crate-implementation-tests.sh' "$AUDIT" \
   'audit must name the main-crate implementation test gate'
 require 'production_target_subjects' "$AUDIT" \
@@ -408,6 +410,8 @@ require 'target_kind=both' "$PLAN" \
   'plan evidence audit must record both-target product-flow completion coverage'
 require 'target-narrowed' "$PLAN" \
   'plan evidence audit must reject narrowed product-flow evidence as product completion'
+require 'traceable `result.json` step artifacts' "$PLAN" \
+  'plan evidence audit must record product-flow step artifact traceability'
 require 'Historical local cross-device `--run` evidence' "$PLAN" \
   'plan evidence audit must classify the Service projection failure as historical evidence'
 require 'accepted_count=0, expected_count=5' "$PLAN" \
@@ -513,6 +517,12 @@ require 'host-view-only-input-window' "$PRODUCT_COMPLETION" \
   'product-completion gate must require window view-only input product-flow evidence'
 require 'host-view-only-input-application' "$PRODUCT_COMPLETION" \
   'product-completion gate must require application view-only input product-flow evidence'
+require 'product_flow_step_artifacts' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require product-flow step artifacts'
+require 'product-flow step result_json path does not exist' "$PRODUCT_COMPLETION" \
+  'product-completion gate must fail when a product-flow step result artifact is missing'
+require 'product-flow subreport evidence_json path does not exist' "$PRODUCT_COMPLETION" \
+  'product-completion gate must fail when a product-flow subreport evidence artifact is missing'
 require 'evidence_json path does not exist' "$PRODUCT_COMPLETION" \
   'product-completion gate must fail when a report evidence_json artifact is missing'
 require 'required product-flow step' "$PRODUCT_COMPLETION" \
@@ -525,6 +535,10 @@ require 'self-test accepted missing frontend product-flow step' "$PRODUCT_COMPLE
   'product-completion gate self-test must reject incomplete frontend product-flow reports'
 require 'self-test accepted product-flow target_kind other than both' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject narrowed frontend product-flow target coverage'
+require 'self-test accepted missing product-flow step result artifact' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing product-flow step result artifacts'
+require 'self-test accepted missing product-flow subreport evidence artifact' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing product-flow subreport evidence artifacts'
 require 'self-test accepted missing observed cross-device pairs' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject missing observed cross-device pairs'
 require 'expected_script' "$PRODUCT_COMPLETION" \

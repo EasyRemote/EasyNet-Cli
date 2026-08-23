@@ -350,7 +350,9 @@ reports to name an existing `evidence_json` artifact, requires the frontend
 product-flow report to expose passed Browser/Tauri, cross-device,
 permission-subject, target-picker, window/application decoded-frame, and
 window/application view-only-input steps with `target_kind=both`, and requires
-cross-device topology to include observed caller/provider device pairs with
+those product-flow steps to have traceable `result.json` step artifacts plus
+subreport/evidence artifacts for Browser/Tauri, cross-device, and host steps.
+Cross-device topology must include observed caller/provider device pairs with
 distinct device URAs. This gate is not itself new product evidence; it prevents
 partial, target-narrowed, or empty-shell evidence from being reported as full
 interactive desktop completion.

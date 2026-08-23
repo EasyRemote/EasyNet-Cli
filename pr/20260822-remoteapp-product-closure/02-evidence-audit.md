@@ -69,10 +69,12 @@ Current frontend lifecycle evidence:
   frontend product-flow steps for Browser/Tauri, cross-device,
   permission-subject, target-picker, window/application decoded-frame, and
   window/application view-only-input coverage with `target_kind=both`, and
+  traceable `result.json` step artifacts plus subreport/evidence artifacts for
+  Browser/Tauri, cross-device, and host product-flow steps. It also requires
   non-empty observed caller/provider device pairs with distinct device URAs in
   the cross-device report. This gate is an aggregate completion guard, not a
-  substitute for any live domain artifact, and it rejects target-narrowed
-  frontend product-flow evidence.
+  substitute for any live domain artifact, and it rejects target-narrowed or
+  empty-shell frontend product-flow evidence.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:

@@ -78,6 +78,10 @@ required = [
         "expected_target_kind": "both",
         "coverage_keys": [],
         "required_steps": [
+            "hub-api-readiness-preflight",
+            "product-runtime-readiness-preflight",
+            "frontend-typecheck",
+            "frontend-remoteapp-ui-flow",
             "frontend-browser-lifecycle",
             "cross-device-product-smoke",
             "host-permission-subject",
@@ -90,6 +94,54 @@ required = [
         "evidence_contract_contains": [
             "Browser/Tauri RemoteApp lifecycle evidence",
             "cross-device product smoke with distinct device URAs",
+        ],
+        "product_flow_step_artifacts": [
+            {"name": "hub-api-readiness-preflight"},
+            {"name": "product-runtime-readiness-preflight"},
+            {"name": "frontend-typecheck"},
+            {"name": "frontend-remoteapp-ui-flow"},
+            {
+                "name": "frontend-browser-lifecycle",
+                "report_json": "report.json",
+                "expected_script": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
+                "requires_evidence_json": True,
+            },
+            {
+                "name": "cross-device-product-smoke",
+                "report_json": "evidence-report.json",
+                "expected_script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
+                "cross_device": True,
+            },
+            {
+                "name": "host-permission-subject",
+                "report_json": "report.json",
+                "requires_evidence_json": True,
+            },
+            {
+                "name": "host-target-picker-freshness",
+                "report_json": "report.json",
+                "requires_evidence_json": True,
+            },
+            {
+                "name": "host-decoded-frame-window",
+                "report_json": "report.json",
+                "requires_evidence_json": True,
+            },
+            {
+                "name": "host-decoded-frame-application",
+                "report_json": "report.json",
+                "requires_evidence_json": True,
+            },
+            {
+                "name": "host-view-only-input-window",
+                "report_json": "report.json",
+                "requires_evidence_json": True,
+            },
+            {
+                "name": "host-view-only-input-application",
+                "report_json": "report.json",
+                "requires_evidence_json": True,
+            },
         ],
     },
     {
@@ -292,6 +344,135 @@ for item in required:
                 message = f"required product-flow step {step_name!r} did not pass"
                 check["errors"].append(message)
                 add_error(item_id, message)
+    if item.get("product_flow_step_artifacts"):
+        product_flow_root = report_path.parent
+        artifact_checks = []
+        for step_spec in item["product_flow_step_artifacts"]:
+            step_name = step_spec["name"]
+            step_dir = product_flow_root / step_name
+            result_path = step_dir / "result.json"
+            artifact_check = {
+                "name": step_name,
+                "result_json": str(result_path),
+                "errors": [],
+            }
+            if not result_path.exists():
+                message = f"product-flow step result_json path does not exist: {result_path}"
+                artifact_check["errors"].append(message)
+                check["errors"].append(message)
+                add_error(item_id, message)
+                artifact_checks.append(artifact_check)
+                continue
+            try:
+                step_result = json.loads(result_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                message = f"invalid product-flow step result JSON {result_path}: {exc}"
+                artifact_check["errors"].append(message)
+                check["errors"].append(message)
+                add_error(item_id, message)
+                artifact_checks.append(artifact_check)
+                continue
+            artifact_check["result_status"] = step_result.get("status")
+            artifact_check["result_name"] = step_result.get("name")
+            if step_result.get("status") != "passed":
+                message = f"product-flow step {step_name!r} result status is {step_result.get('status')!r}, expected 'passed'"
+                artifact_check["errors"].append(message)
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if step_result.get("name") != step_name:
+                message = f"product-flow step result name is {step_result.get('name')!r}, expected {step_name!r}"
+                artifact_check["errors"].append(message)
+                check["errors"].append(message)
+                add_error(item_id, message)
+            report_file = step_spec.get("report_json")
+            if report_file:
+                subreport_path = step_dir / report_file
+                artifact_check["subreport_json"] = str(subreport_path)
+                if not subreport_path.exists():
+                    message = f"product-flow subreport path does not exist: {subreport_path}"
+                    artifact_check["errors"].append(message)
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                else:
+                    try:
+                        subreport = json.loads(subreport_path.read_text(encoding="utf-8"))
+                    except Exception as exc:
+                        message = f"invalid product-flow subreport JSON {subreport_path}: {exc}"
+                        artifact_check["errors"].append(message)
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        subreport = None
+                    if isinstance(subreport, dict):
+                        artifact_check["subreport_status"] = subreport.get("status")
+                        if subreport.get("status") != "passed":
+                            message = f"product-flow subreport {step_name!r} status is {subreport.get('status')!r}, expected 'passed'"
+                            artifact_check["errors"].append(message)
+                            check["errors"].append(message)
+                            add_error(item_id, message)
+                        expected_step_script = step_spec.get("expected_script")
+                        artifact_check["expected_script"] = expected_step_script
+                        artifact_check["observed_script"] = subreport.get("script")
+                        if expected_step_script and subreport.get("script") != expected_step_script:
+                            message = (
+                                f"product-flow subreport {step_name!r} script is "
+                                f"{subreport.get('script')!r}, expected {expected_step_script!r}"
+                            )
+                            artifact_check["errors"].append(message)
+                            check["errors"].append(message)
+                            add_error(item_id, message)
+                        if subreport.get("product_complete_claim") is True:
+                            message = f"product-flow subreport {step_name!r} must not claim product completion"
+                            artifact_check["errors"].append(message)
+                            check["errors"].append(message)
+                            add_error(item_id, message)
+                        if step_spec.get("requires_evidence_json"):
+                            step_evidence_json = subreport.get("evidence_json")
+                            artifact_check["evidence_json"] = step_evidence_json if isinstance(step_evidence_json, str) else None
+                            if not isinstance(step_evidence_json, str) or not step_evidence_json.strip():
+                                message = f"product-flow subreport {step_name!r} evidence_json must be set"
+                                artifact_check["errors"].append(message)
+                                check["errors"].append(message)
+                                add_error(item_id, message)
+                            else:
+                                step_evidence_path = pathlib.Path(step_evidence_json)
+                                if not step_evidence_path.is_absolute():
+                                    step_evidence_path = subreport_path.parent / step_evidence_path
+                                artifact_check["resolved_evidence_json"] = str(step_evidence_path)
+                                if not step_evidence_path.exists():
+                                    message = f"product-flow subreport evidence_json path does not exist: {step_evidence_path}"
+                                    artifact_check["errors"].append(message)
+                                    check["errors"].append(message)
+                                    add_error(item_id, message)
+                        if step_spec.get("cross_device"):
+                            topology = subreport.get("topology") if isinstance(subreport.get("topology"), dict) else {}
+                            step_coverage = subreport.get("coverage") if isinstance(subreport.get("coverage"), dict) else {}
+                            observed_device_pairs = topology.get("observed_device_pairs")
+                            if topology.get("requires_distinct_devices") is not True:
+                                message = f"product-flow cross-device subreport {step_name!r} requires_distinct_devices is not true"
+                                artifact_check["errors"].append(message)
+                                check["errors"].append(message)
+                                add_error(item_id, message)
+                            if topology.get("distinct_device_uras_observed") is not True:
+                                message = f"product-flow cross-device subreport {step_name!r} distinct_device_uras_observed is not true"
+                                artifact_check["errors"].append(message)
+                                check["errors"].append(message)
+                                add_error(item_id, message)
+                            if topology.get("local_provider_boundary_only") is not False:
+                                message = f"product-flow cross-device subreport {step_name!r} local_provider_boundary_only is not false"
+                                artifact_check["errors"].append(message)
+                                check["errors"].append(message)
+                                add_error(item_id, message)
+                            if step_coverage.get("local_provider_boundary_only") is not False:
+                                message = f"product-flow cross-device subreport {step_name!r} coverage.local_provider_boundary_only is not false"
+                                artifact_check["errors"].append(message)
+                                check["errors"].append(message)
+                                add_error(item_id, message)
+                            if not isinstance(observed_device_pairs, list) or not observed_device_pairs:
+                                message = f"product-flow cross-device subreport {step_name!r} observed_device_pairs must not be empty"
+                                artifact_check["errors"].append(message)
+                                check["errors"].append(message)
+                                add_error(item_id, message)
+        check["product_flow_step_artifacts"] = artifact_checks
     if item.get("requires_evidence_json"):
         evidence_json = report.get("evidence_json")
         check["evidence_json"] = evidence_json if isinstance(evidence_json, str) else None
@@ -477,6 +658,10 @@ if item_id == "frontend_product_flow":
         "cross-device product smoke with distinct device URAs",
     ]
     report["steps"] = [
+        {"name": "hub-api-readiness-preflight", "status": "passed"},
+        {"name": "product-runtime-readiness-preflight", "status": "passed"},
+        {"name": "frontend-typecheck", "status": "passed"},
+        {"name": "frontend-remoteapp-ui-flow", "status": "passed"},
         {"name": "frontend-browser-lifecycle", "status": "passed"},
         {"name": "cross-device-product-smoke", "status": "passed"},
         {"name": "host-permission-subject", "status": "passed"},
@@ -501,6 +686,72 @@ if item_id == "cross_device_smoke":
         "local_provider_boundary_only": False,
     }
 path.parent.mkdir(parents=True, exist_ok=True)
+if item_id == "frontend_product_flow":
+    for step in report["steps"]:
+        step_name = step["name"]
+        step_dir = path.parent / step_name
+        step_dir.mkdir(parents=True, exist_ok=True)
+        (step_dir / "result.json").write_text(
+            json.dumps({"name": step_name, "status": "passed"}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if step_name == "frontend-browser-lifecycle":
+            evidence_path = step_dir / "evidence.json"
+            evidence_path.write_text(
+                json.dumps({"synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            (step_dir / "report.json").write_text(
+                json.dumps({
+                    "script": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
+                    "status": "passed",
+                    "product_complete_claim": False,
+                    "evidence_json": str(evidence_path),
+                }, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        elif step_name == "cross-device-product-smoke":
+            (step_dir / "evidence-report.json").write_text(
+                json.dumps({
+                    "script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
+                    "status": "passed",
+                    "product_complete_claim": False,
+                    "topology": {
+                        "requires_distinct_devices": True,
+                        "observed_device_pairs": [
+                            {
+                                "step": "cross-device-routing",
+                                "caller_ura": "easynet:///r/localhost/device/synthetic-caller",
+                                "provider_ura": "easynet:///r/localhost/device/synthetic-provider",
+                                "distinct_device_uras": True,
+                            }
+                        ],
+                        "distinct_device_uras_observed": True,
+                        "local_provider_boundary_only": False,
+                    },
+                    "coverage": {
+                        "cross_device_hub_routing": True,
+                        "synthetic_stream_bidi_carrier": True,
+                        "distinct_device_uras_observed": True,
+                        "local_provider_boundary_only": False,
+                    },
+                }, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        elif step_name.startswith("host-"):
+            evidence_path = step_dir / "evidence.json"
+            evidence_path.write_text(
+                json.dumps({"synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            (step_dir / "report.json").write_text(
+                json.dumps({
+                    "status": "passed",
+                    "product_complete_claim": False,
+                    "evidence_json": str(evidence_path),
+                }, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
 if item_id in evidence_json_ids:
     evidence_path = path.with_suffix(".evidence.json")
     evidence_path.write_text(
@@ -611,6 +862,70 @@ PY
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
     "$0" --check --out-dir "$tmp/product-flow-window-only" >/dev/null 2>&1; then
     echo "self-test accepted product-flow target_kind other than both" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
+
+  python3 - "$tmp/frontend_product_flow.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+result_path = path.parent / "host-decoded-frame-window" / "result.json"
+result_path.unlink()
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-product-flow-step-result" >/dev/null 2>&1; then
+    echo "self-test accepted missing product-flow step result artifact" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
+
+  python3 - "$tmp/frontend_product_flow.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+subreport_path = path.parent / "host-view-only-input-application" / "report.json"
+subreport = json.loads(subreport_path.read_text(encoding="utf-8"))
+pathlib.Path(subreport["evidence_json"]).unlink()
+subreport_path.write_text(json.dumps(subreport) + "\n", encoding="utf-8")
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-product-flow-step-evidence" >/dev/null 2>&1; then
+    echo "self-test accepted missing product-flow subreport evidence artifact" >&2
     exit 1
   fi
   write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
@@ -829,6 +1144,9 @@ case "$MODE" in
     grep -q 'host-decoded-frame-application' "$0"
     grep -q 'host-view-only-input-window' "$0"
     grep -q 'host-view-only-input-application' "$0"
+    grep -q 'product_flow_step_artifacts' "$0"
+    grep -q 'product-flow step result_json path does not exist' "$0"
+    grep -q 'product-flow subreport evidence_json path does not exist' "$0"
     grep -q 'evidence_json path does not exist' "$0"
     grep -q 'required product-flow step' "$0"
     grep -q 'topology.observed_device_pairs must not be empty' "$0"
@@ -837,6 +1155,8 @@ case "$MODE" in
     grep -q 'self-test accepted missing evidence_json artifact' "$0"
     grep -q 'self-test accepted missing frontend product-flow step' "$0"
     grep -q 'self-test accepted product-flow target_kind other than both' "$0"
+    grep -q 'self-test accepted missing product-flow step result artifact' "$0"
+    grep -q 'self-test accepted missing product-flow subreport evidence artifact' "$0"
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test

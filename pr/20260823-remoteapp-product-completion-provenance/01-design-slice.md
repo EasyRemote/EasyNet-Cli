@@ -18,7 +18,9 @@ that the supplied report came from the expected verifier, names an existing
 evidence artifact where the domain verifier owns one, exposes the required
 frontend product-flow steps for the full window+application target bundle, and
 carries concrete cross-device observed pairs before trusting that verifier's
-`passed` status and coverage summary.
+`passed` status and coverage summary. For the frontend product-flow report, the
+gate validates the step artifact tree rooted beside the report instead of
+trusting only the summarized `steps` array.
 
 ## Invariants
 
@@ -32,6 +34,9 @@ carries concrete cross-device observed pairs before trusting that verifier's
   permission-subject, target-picker freshness, window/application decoded-frame,
   and window/application view-only-input coverage, so an empty or target-narrowed
   passed report cannot stand in for the user-visible lifecycle bundle.
+- Each required frontend product-flow step must have a sibling step
+  `result.json` with `status=passed`; Browser/Tauri, cross-device, and host
+  steps must also expose their expected subreport/evidence artifacts.
 - The cross-device smoke report must include at least one observed
   caller/provider device pair where both URAs are present and distinct.
 - Host lifecycle E2E reports must include the same `script` identity field as
