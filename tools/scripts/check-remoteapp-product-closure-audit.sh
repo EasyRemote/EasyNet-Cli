@@ -431,6 +431,10 @@ require 'distinct_device_uras_observed' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must report whether distinct device URAs were observed'
 require 'local_provider_boundary_only' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must expose local-provider-only evidence as insufficient'
+require 'distinct device URAs were not observed' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must fail when distinct device URAs are not observed'
+require 'local_provider_boundary_only=true' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must fail local-provider-only passed runs'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
 require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \

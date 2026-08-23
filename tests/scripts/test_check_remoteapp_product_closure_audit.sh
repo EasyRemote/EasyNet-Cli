@@ -91,6 +91,24 @@ grep -q "cross-device smoke must report whether distinct device URAs were observ
   fail "expected cross-device distinct-device topology failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 
+perl -0pi -e 's#distinct device URAs were not observed#distinct device URAs are optional#g' \
+  "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-cross-device-hard-gate.out 2>&1; then
+  fail "checker accepted cross-device smoke without local-only failure gate"
+fi
+grep -q "cross-device smoke must fail when distinct device URAs are not observed" /tmp/check-remoteapp-product-closure-cross-device-hard-gate.out || \
+  fail "expected cross-device local-only hard-gate failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
+perl -0pi -e 's#local_provider_boundary_only=true#local_provider_boundary_only=false#g' \
+  "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-cross-device-local-only.out 2>&1; then
+  fail "checker accepted cross-device smoke without local-provider-only failure reason"
+fi
+grep -q "cross-device smoke must fail local-provider-only passed runs" /tmp/check-remoteapp-product-closure-cross-device-local-only.out || \
+  fail "expected cross-device local-provider-only failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
 perl -0pi -e 's#product_complete_claim.*False#product_complete_claim\": True#g' \
   "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-cross-device-complete-claim.out 2>&1; then

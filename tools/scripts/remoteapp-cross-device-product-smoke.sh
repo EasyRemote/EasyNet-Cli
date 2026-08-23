@@ -56,6 +56,9 @@ Evidence scope:
   This gate proves cross-device Hub routing and synthetic stream/bidi carrier
   behavior. It is not evidence for real macOS/Windows/Linux capture, host audio,
   pointer/keyboard injection, NAT/TURN deployment, or frontend browser rendering.
+  A completed run must observe distinct caller/provider device URAs; same-device
+  or local-provider-only topology is a failed cross-device smoke, not a pass
+  with caveats.
 USAGE
 }
 
@@ -167,6 +170,14 @@ for name in ("cross-device-routing", "synthetic-media-bidi"):
 
 distinct_device_uras_observed = any(pair["distinct_device_uras"] for pair in observed_device_pairs)
 local_provider_boundary_only = not distinct_device_uras_observed
+effective_status = status
+effective_reason = reason
+if status == "passed" and local_provider_boundary_only:
+    effective_status = "failed"
+    effective_reason = (
+        "distinct device URAs were not observed; "
+        "local_provider_boundary_only=true"
+    )
 coverage = {
     "cross_device_hub_routing": any(
         step["name"] == "cross-device-routing" and step.get("status") == "passed"
@@ -186,8 +197,8 @@ coverage = {
 }
 report = {
     "script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
-    "status": status,
-    "reason": reason,
+    "status": effective_status,
+    "reason": effective_reason,
     "product_complete_claim": False,
     "source": {
         "revision": source_revision,
@@ -221,8 +232,8 @@ report = {
 )
 (out_dir / "report.md").write_text(
     "# RemoteApp Cross-Device Product Smoke\n\n"
-    f"- Status: `{status}`\n"
-    f"- Reason: `{reason}`\n"
+    f"- Status: `{effective_status}`\n"
+    f"- Reason: `{effective_reason}`\n"
     f"- Source revision: `{source_revision}`\n"
     f"- Source dirty: `{str(source_dirty).lower()}`\n"
     f"- Runtime image: `{runtime_image}`\n"
@@ -353,6 +364,8 @@ if [[ "$RUN" == "self-test" ]]; then
   grep -q "synthetic_stream_bidi_carrier" "$0"
   grep -q "distinct_device_uras_observed" "$0"
   grep -q "local_provider_boundary_only" "$0"
+  grep -q "distinct device URAs were not observed" "$0"
+  grep -q "local_provider_boundary_only=true" "$0"
   grep -q "requires_distinct_devices" "$0"
   grep -q "observed_device_pairs" "$0"
   grep -q "product_complete_claim" "$0"
@@ -406,4 +419,18 @@ run_step synthetic-media-bidi "$MEDIA_SMOKE" "${media_args[@]}"
 cp "$OUT_DIR/synthetic-media-bidi/report.json" "$OUT_DIR/synthetic-media-bidi/child-report.json"
 
 write_report "passed" "cross-device routing and synthetic media smoke completed"
+if ! python3 - "$OUT_DIR/report.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    report = json.load(f)
+if report.get("status") != "passed":
+    print(report.get("reason") or "cross-device smoke failed", file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+  echo "[remoteapp-cross-device-product-smoke] FAIL: $OUT_DIR/report.md" >&2
+  exit 1
+fi
 echo "[remoteapp-cross-device-product-smoke] PASS: $OUT_DIR/report.md"

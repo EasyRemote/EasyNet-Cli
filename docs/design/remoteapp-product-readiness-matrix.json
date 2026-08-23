@@ -320,7 +320,7 @@
         "synthetic media/bidi carrier gate",
         "Service owner multihost projection regression coverage prevents same-user multi-device Pages projection conflicts",
         "cross-device smoke reports source/runtime image provenance so stale-image failures are distinguishable",
-        "cross-device smoke report aggregates observed caller/provider device pairs and flags local-provider-only evidence",
+        "cross-device smoke report aggregates observed caller/provider device pairs and fails local-provider-only completed runs instead of marking them passed",
         "latest live cross-device smoke attempt failed before child E2Es with docker info timed out after 3s",
         "host-local decoded-frame scripts cover local capture/render decode"
       ],
