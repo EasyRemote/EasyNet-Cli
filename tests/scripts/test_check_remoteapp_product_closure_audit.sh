@@ -262,6 +262,51 @@ grep -q "media adaptation verifier must compare one media pipeline across scenar
   fail "expected media adaptation pipeline comparability failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 
+perl -0pi -e 's#scenario_started_at_ms must be recorded#scenario start is optional#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-scenario-start.out 2>&1; then
+  fail "checker accepted media adaptation verifier without scenario start timestamp evidence"
+fi
+grep -q "media adaptation verifier must require scenario start timestamp evidence" /tmp/check-remoteapp-product-closure-media-scenario-start.out || \
+  fail "expected media adaptation scenario start timestamp failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#impairment_applied_at_ms must be after scenario_started_at_ms#impairment timing is optional#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-impairment-time.out 2>&1; then
+  fail "checker accepted media adaptation verifier without impairment timing evidence"
+fi
+grep -q "media adaptation verifier must require impairment timing evidence" /tmp/check-remoteapp-product-closure-media-impairment-time.out || \
+  fail "expected media adaptation impairment timing failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#media_pipeline_id must bind media_pipeline_id#media event pipeline binding is optional#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-event-pipeline.out 2>&1; then
+  fail "checker accepted media adaptation verifier without event media-pipeline binding"
+fi
+grep -q "media adaptation verifier must bind adaptation events to the media pipeline" /tmp/check-remoteapp-product-closure-media-event-pipeline.out || \
+  fail "expected media adaptation event pipeline binding failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#at_ms must be after impairment_applied_at_ms#adaptation event may precede impairment#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-event-order.out 2>&1; then
+  fail "checker accepted media adaptation verifier without event-after-impairment evidence"
+fi
+grep -q "media adaptation verifier must require adaptation events after impairment" /tmp/check-remoteapp-product-closure-media-event-order.out || \
+  fail "expected media adaptation event-after-impairment failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#frames_rendered_after_adaptation_at_ms must be after adaptation events#rendered-after-adaptation timing is optional#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-render-after-event.out 2>&1; then
+  fail "checker accepted media adaptation verifier without rendered-after-adaptation timing evidence"
+fi
+grep -q "media adaptation verifier must require rendered media after adaptation events" /tmp/check-remoteapp-product-closure-media-render-after-event.out || \
+  fail "expected media adaptation rendered-after-adaptation timing failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
 perl -0pi -e 's#selected_resource_ura must match across media scenarios#selected_resource_ura may differ across media scenarios#g' \
   "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-resource-match.out 2>&1; then

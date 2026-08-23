@@ -44,9 +44,9 @@ Evidence contract:
   codec configuration. It must include baseline, degraded_network, and
   backpressure scenarios over the same selected Resource URA and media pipeline
   identity, with negotiated video codec, host audio, FPS/bitrate telemetry,
-  adaptation/drop/backpressure evidence, rendered media, public RemoteApp
-  session abilities, selected Resource URA subject binding, and a visible
-  terminal receipt.
+  adaptation/drop/backpressure events bound to the scenario session/pipeline,
+  rendered media after adaptation, public RemoteApp session abilities, selected
+  Resource URA subject binding, and a visible terminal receipt.
 
 Non-claims:
   A skipped report or self-test does not prove media product readiness. This
@@ -204,6 +204,13 @@ for scenario_name in sorted(required_scenarios):
             f"{prefix}: session_id must be recorded")
     require(isinstance(media_pipeline_id, str) and media_pipeline_id,
             f"{prefix}: media_pipeline_id must be recorded")
+    scenario_started_at_ms = integer(scenario.get("scenario_started_at_ms"))
+    require(scenario_started_at_ms > 0,
+            f"{prefix}: scenario_started_at_ms must be recorded")
+    impairment_applied_at_ms = integer(scenario.get("impairment_applied_at_ms"))
+    if scenario_name in {"degraded_network", "backpressure"}:
+        require(impairment_applied_at_ms > scenario_started_at_ms,
+                f"{prefix}: impairment_applied_at_ms must be after scenario_started_at_ms")
 
     abilities = scenario.get("abilities")
     require(isinstance(abilities, list) and abilities,
@@ -319,6 +326,25 @@ for scenario_name in sorted(required_scenarios):
     if not isinstance(events, list):
         events = []
     event_types = {event.get("type") for event in events if isinstance(event, dict)}
+    latest_adaptation_event_at_ms = 0
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            errors.append(f"{prefix}: adaptation.events[{index}] must be an object")
+            continue
+        event_prefix = f"{prefix}: adaptation.events[{index}]"
+        event_at_ms = integer(event.get("at_ms"))
+        require(event_at_ms >= scenario_started_at_ms,
+                f"{event_prefix}.at_ms must be at or after scenario_started_at_ms")
+        latest_adaptation_event_at_ms = max(latest_adaptation_event_at_ms, event_at_ms)
+        require(event.get("selected_resource_ura") == subject_ura,
+                f"{event_prefix}.selected_resource_ura must bind selected Resource URA")
+        require(event.get("session_id") == session_id,
+                f"{event_prefix}.session_id must bind session_id")
+        require(event.get("media_pipeline_id") == media_pipeline_id,
+                f"{event_prefix}.media_pipeline_id must bind media_pipeline_id")
+        if scenario_name in {"degraded_network", "backpressure"} and event.get("type") != "steady_state":
+            require(event_at_ms > impairment_applied_at_ms,
+                    f"{event_prefix}.at_ms must be after impairment_applied_at_ms")
     require(adaptation.get("algorithm") in {"webrtc_cc", "transport_feedback", "native_encoder_feedback"},
             f"{prefix}: adaptation.algorithm must be explicit")
     if scenario_name == "degraded_network":
@@ -328,6 +354,8 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: degraded_network must include fps_downshift or frame_drop")
         require(integer(video.get("frames_rendered_after_adaptation")) > 0,
                 f"{prefix}: video.frames_rendered_after_adaptation must be positive")
+        require(integer(video.get("frames_rendered_after_adaptation_at_ms")) > latest_adaptation_event_at_ms,
+                f"{prefix}: video.frames_rendered_after_adaptation_at_ms must be after adaptation events")
     if scenario_name == "backpressure":
         require("backpressure_detected" in event_types,
                 f"{prefix}: backpressure must include backpressure_detected")
@@ -335,6 +363,10 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: backpressure must include frame_drop")
         require(integer(drop_policy.get("frames_dropped")) > 0,
                 f"{prefix}: drop_policy.frames_dropped must be positive")
+        require(integer(video.get("frames_rendered_after_adaptation")) > 0,
+                f"{prefix}: video.frames_rendered_after_adaptation must be positive after backpressure")
+        require(integer(video.get("frames_rendered_after_adaptation_at_ms")) > latest_adaptation_event_at_ms,
+                f"{prefix}: video.frames_rendered_after_adaptation_at_ms must be after adaptation events")
 
     terminal = scenario.get("terminal_receipt")
     require(isinstance(terminal, dict), f"{prefix}: terminal_receipt must be visible")
@@ -457,22 +489,66 @@ def abilities(subject, session_id):
 def scenario(name, *, degraded=False, backpressure=False):
     subject = "easynet:///r/acme/resource/device.dev/display.primary"
     session_id = f"sess-{name}"
-    events = [{"type": "steady_state", "at_ms": 1000}]
+    media_pipeline_id = "remoteapp-media-h264-opus-webrtc"
+    scenario_started_at_ms = 1787332000000
+    impairment_applied_at_ms = 0
+    events = [{
+        "type": "steady_state",
+        "at_ms": scenario_started_at_ms + 1000,
+        "selected_resource_ura": subject,
+        "session_id": session_id,
+        "media_pipeline_id": media_pipeline_id,
+    }]
     frames_after = 0
+    frames_after_at_ms = 0
     frames_dropped = 0
     if degraded:
+        impairment_applied_at_ms = scenario_started_at_ms + 1800
         events = [
-            {"type": "bitrate_downshift", "from_kbps": 6000, "to_kbps": 2500},
-            {"type": "fps_downshift", "from_fps": 60, "to_fps": 30},
+            {
+                "type": "bitrate_downshift",
+                "at_ms": scenario_started_at_ms + 2200,
+                "from_kbps": 6000,
+                "to_kbps": 2500,
+                "selected_resource_ura": subject,
+                "session_id": session_id,
+                "media_pipeline_id": media_pipeline_id,
+            },
+            {
+                "type": "fps_downshift",
+                "at_ms": scenario_started_at_ms + 2350,
+                "from_fps": 60,
+                "to_fps": 30,
+                "selected_resource_ura": subject,
+                "session_id": session_id,
+                "media_pipeline_id": media_pipeline_id,
+            },
         ]
         frames_after = 120
+        frames_after_at_ms = scenario_started_at_ms + 6400
         frames_dropped = 12
     if backpressure:
+        impairment_applied_at_ms = scenario_started_at_ms + 1800
         events = [
-            {"type": "backpressure_detected", "buffered_bytes": 1048576},
-            {"type": "frame_drop", "count": 18},
+            {
+                "type": "backpressure_detected",
+                "at_ms": scenario_started_at_ms + 2100,
+                "buffered_bytes": 1048576,
+                "selected_resource_ura": subject,
+                "session_id": session_id,
+                "media_pipeline_id": media_pipeline_id,
+            },
+            {
+                "type": "frame_drop",
+                "at_ms": scenario_started_at_ms + 2300,
+                "count": 18,
+                "selected_resource_ura": subject,
+                "session_id": session_id,
+                "media_pipeline_id": media_pipeline_id,
+            },
         ]
         frames_after = 90
+        frames_after_at_ms = scenario_started_at_ms + 6200
         frames_dropped = 18
     return {
         "scenario": name,
@@ -481,7 +557,9 @@ def scenario(name, *, degraded=False, backpressure=False):
         "policy_only": False,
         "selected_resource_ura": subject,
         "session_id": session_id,
-        "media_pipeline_id": "remoteapp-media-h264-opus-webrtc",
+        "media_pipeline_id": media_pipeline_id,
+        "scenario_started_at_ms": scenario_started_at_ms,
+        "impairment_applied_at_ms": impairment_applied_at_ms,
         "abilities": abilities(subject, session_id),
         "video": {
             "codec_negotiated": True,
@@ -499,6 +577,7 @@ def scenario(name, *, degraded=False, backpressure=False):
             "keyframe_interval_frames": 30,
             "p95_frame_latency_ms": 42,
             "frames_rendered_after_adaptation": frames_after,
+            "frames_rendered_after_adaptation_at_ms": frames_after_at_ms,
         },
         "audio": {
             "status": "passed",

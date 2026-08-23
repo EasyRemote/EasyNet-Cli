@@ -575,6 +575,18 @@ require 'codec_negotiated' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect codec negotiation'
 require 'media_pipeline_id' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must bind comparable scenarios to one media pipeline'
+require 'scenario_started_at_ms must be recorded' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require scenario start timestamp evidence'
+require 'impairment_applied_at_ms must be after scenario_started_at_ms' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require impairment timing evidence'
+require 'selected_resource_ura must bind selected Resource URA' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind adaptation events to selected Resource URA'
+require 'session_id must bind session_id' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind adaptation events to the session'
+require 'media_pipeline_id must bind media_pipeline_id' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind adaptation events to the media pipeline'
+require 'at_ms must be after impairment_applied_at_ms' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require adaptation events after impairment'
 require 'payload_content_type' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must preserve payload content type'
 require 'requested_fps' "$MEDIA_ADAPTATION" \
@@ -595,6 +607,8 @@ require 'degraded_network observed_bitrate_kbps must be lower than baseline' "$M
   'media adaptation verifier must require degraded observed bitrate downshift'
 require 'degraded_network must reduce effective_fps or drop frames versus baseline' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require degraded FPS/drop delta'
+require 'frames_rendered_after_adaptation_at_ms must be after adaptation events' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require rendered media after adaptation events'
 require 'backpressure_detected' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require backpressure detection evidence'
 require 'frames_dropped' "$MEDIA_ADAPTATION" \
