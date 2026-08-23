@@ -51,6 +51,14 @@ grep -q "host-view-only-input-application" "$SCRIPT" || \
   fail "completion gate must require application view-only input product-flow evidence"
 grep -q "product_flow_step_artifacts" "$SCRIPT" || \
   fail "completion gate must require product-flow step artifacts"
+grep -q "tools/scripts/host-remoteapp-permission-subject-e2e.sh" "$SCRIPT" || \
+  fail "completion gate must pin permission-subject product-flow subreport identity"
+grep -q "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" "$SCRIPT" || \
+  fail "completion gate must pin target-picker freshness product-flow subreport identity"
+grep -q "tools/scripts/host-remoteapp-decoded-frame-e2e.sh" "$SCRIPT" || \
+  fail "completion gate must pin decoded-frame product-flow subreport identity"
+grep -q "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" "$SCRIPT" || \
+  fail "completion gate must pin view-only input product-flow subreport identity"
 grep -q "product-flow step result_json path does not exist" "$SCRIPT" || \
   fail "completion gate must reject missing product-flow step result artifacts"
 grep -q "product-flow subreport evidence_json path does not exist" "$SCRIPT" || \
@@ -71,6 +79,8 @@ grep -q "self-test accepted missing product-flow step result artifact" "$SCRIPT"
   fail "completion gate self-test must cover missing product-flow step result artifacts"
 grep -q "self-test accepted missing product-flow subreport evidence artifact" "$SCRIPT" || \
   fail "completion gate self-test must cover missing product-flow subreport evidence artifacts"
+grep -q "self-test accepted wrong product-flow host subreport script identity" "$SCRIPT" || \
+  fail "completion gate self-test must cover wrong product-flow host subreport script identities"
 grep -q "self-test accepted missing observed cross-device pairs" "$SCRIPT" || \
   fail "completion gate self-test must cover missing observed cross-device pairs"
 grep -q "expected_script" "$SCRIPT" || \

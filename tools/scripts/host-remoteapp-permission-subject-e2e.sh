@@ -266,9 +266,11 @@ if isinstance(negative, list):
     require(seen == expected, f"negative target-subject cases mismatch: got {sorted(seen)!r}")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-permission-subject-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,
+    "product_complete_claim": False,
     "positive_subject_ura": get("positive_permission_status.subject_ura"),
     "negative_case_count": len(negative) if isinstance(negative, list) else None,
     "screen_capture_permission_required": require_screen_capture_granted,
@@ -333,10 +335,12 @@ evidence = {
     "screen_capture_permission_required": require_screen_capture_granted == "1",
 }
 report = {
+    "script": "tools/scripts/host-remoteapp-permission-subject-e2e.sh",
     "status": "failed",
     "phase": "runtime_preflight",
     "reason": reason,
     "evidence_json": evidence_path,
+    "product_complete_claim": False,
     "runtime_status_json": runtime_status_path,
     "daemon_invocation_accepting": evidence["daemon_invocation_accepting"],
     "daemon_control_accepting": evidence["daemon_control_accepting"],

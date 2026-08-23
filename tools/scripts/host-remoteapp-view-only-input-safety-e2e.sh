@@ -328,9 +328,11 @@ if isinstance(attach_probe, dict):
                 "key diagnostic rejection must preserve input_scope_unsupported telemetry")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,
+    "product_complete_claim": False,
     "target_kind": target_kind,
     "selected_resource_ura": resource_ura,
     "requested_input_mode": evidence.get("requested_input_mode"),

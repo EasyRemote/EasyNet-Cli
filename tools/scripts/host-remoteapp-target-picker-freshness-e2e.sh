@@ -121,10 +121,12 @@ import sys
 
 report_path, md_path, reason = sys.argv[1:4]
 report = {
+    "script": "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh",
     "status": "failed",
     "reason": reason,
     "phase": "daemon_invocation_preflight",
     "evidence_json": None,
+    "product_complete_claim": False,
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -269,9 +271,11 @@ require(evidence.get("selection_state") == "selected_from_live_refresh",
         "selection_state must prove the picker selected from the live refresh result")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,
+    "product_complete_claim": False,
     "selected_resource_ura": resource_ura,
     "inventory_observed_at_ms": inventory_observed_at_ms,
 }

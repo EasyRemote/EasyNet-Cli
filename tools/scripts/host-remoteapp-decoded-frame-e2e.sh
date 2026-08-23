@@ -249,9 +249,11 @@ import os
 import sys
 
 report = {
+    "script": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh",
     "enabled": False,
     "status": "skipped",
     "reason": "host remoteapp decoded-frame e2e requires --run or EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E=1",
+    "product_complete_claim": False,
 }
 open(sys.argv[1], "w", encoding="utf-8").write(json.dumps(report, indent=2, sort_keys=True) + "\n")
 with open(sys.argv[2], "w", encoding="utf-8") as f:
@@ -269,10 +271,12 @@ import sys
 
 report_path, md_path, target_kind, reason = sys.argv[1:5]
 report = {
+    "script": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh",
     "enabled": True,
     "status": "failed",
     "target_kind": target_kind,
     "reason": reason,
+    "product_complete_claim": False,
 }
 open(report_path, "w", encoding="utf-8").write(json.dumps(report, indent=2, sort_keys=True) + "\n")
 with open(md_path, "w", encoding="utf-8") as f:
@@ -736,11 +740,13 @@ if lifecycle_scenario != "none":
         require(False, f"unsupported lifecycle scenario in validation: {lifecycle_scenario}")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh",
     "enabled": True,
     "status": "failed" if errors else "passed",
     "target_kind": expected_kind,
     "evidence_json": evidence_path,
     "errors": errors,
+    "product_complete_claim": False,
     "assertions": {
         "live_inventory": inventory_ability,
         "selected_subject": invocation_subject_ura,

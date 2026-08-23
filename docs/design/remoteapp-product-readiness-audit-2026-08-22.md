@@ -352,6 +352,8 @@ permission-subject, target-picker, window/application decoded-frame, and
 window/application view-only-input steps with `target_kind=both`, and requires
 those product-flow steps to have traceable `result.json` step artifacts plus
 subreport/evidence artifacts for Browser/Tauri, cross-device, and host steps.
+Those subreports carry stable `script` identity, including the host
+permission-subject, target-picker, decoded-frame, and view-only-input verifiers.
 Cross-device topology must include observed caller/provider device pairs with
 distinct device URAs. This gate is not itself new product evidence; it prevents
 partial, target-narrowed, or empty-shell evidence from being reported as full

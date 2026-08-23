@@ -15,6 +15,10 @@ MEDIA_ADAPTATION="$ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 MULTI_WINDOW_TRACKING="$ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
 FRONTEND_BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
+TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+DECODED_FRAME="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+VIEW_ONLY_INPUT_SAFETY="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 SESSION_TIMEOUT="$ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 PERMISSION_REVOKE="$ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
@@ -73,6 +77,10 @@ reject() {
 [[ -f "$MULTI_WINDOW_TRACKING" ]] || fail "missing RemoteApp multi-window tracking evidence verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
 [[ -f "$FRONTEND_BROWSER_LIFECYCLE" ]] || fail "missing RemoteApp frontend Browser/Tauri lifecycle verifier"
+[[ -f "$PERMISSION_SUBJECT" ]] || fail "missing RemoteApp host permission-subject verifier"
+[[ -f "$TARGET_FRESHNESS" ]] || fail "missing RemoteApp host target-picker freshness verifier"
+[[ -f "$DECODED_FRAME" ]] || fail "missing RemoteApp host decoded-frame verifier"
+[[ -f "$VIEW_ONLY_INPUT_SAFETY" ]] || fail "missing RemoteApp host view-only input safety verifier"
 [[ -f "$SESSION_TIMEOUT" ]] || fail "missing RemoteApp session timeout E2E harness"
 [[ -f "$SESSION_CANCEL" ]] || fail "missing RemoteApp session cancel E2E harness"
 [[ -f "$PERMISSION_REVOKE" ]] || fail "missing RemoteApp permission revoke E2E harness"
@@ -523,6 +531,8 @@ require 'product-flow step result_json path does not exist' "$PRODUCT_COMPLETION
   'product-completion gate must fail when a product-flow step result artifact is missing'
 require 'product-flow subreport evidence_json path does not exist' "$PRODUCT_COMPLETION" \
   'product-completion gate must fail when a product-flow subreport evidence artifact is missing'
+require 'self-test accepted wrong product-flow host subreport script identity' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject wrong product-flow host subreport script identities'
 require 'evidence_json path does not exist' "$PRODUCT_COMPLETION" \
   'product-completion gate must fail when a report evidence_json artifact is missing'
 require 'required product-flow step' "$PRODUCT_COMPLETION" \
@@ -559,6 +569,14 @@ require '"script": "tools/scripts/host-remoteapp-permission-revoke-e2e.sh"' "$PE
   'permission revoke report must expose stable script provenance'
 require '"script": "tools/scripts/host-remoteapp-session-resume-e2e.sh"' "$SESSION_RESUME" \
   'session resume report must expose stable script provenance'
+require '"script": "tools/scripts/host-remoteapp-permission-subject-e2e.sh"' "$PERMISSION_SUBJECT" \
+  'permission-subject product-flow report must expose stable script provenance'
+require '"script": "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"' "$TARGET_FRESHNESS" \
+  'target-picker freshness product-flow report must expose stable script provenance'
+require '"script": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh"' "$DECODED_FRAME" \
+  'decoded-frame product-flow report must expose stable script provenance'
+require '"script": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"' "$VIEW_ONLY_INPUT_SAFETY" \
+  'view-only input product-flow report must expose stable script provenance'
 require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must require real capture matrix proof mode'
 require 'component_mock.*False|component_mock.*false' "$CAPTURE_MATRIX" \

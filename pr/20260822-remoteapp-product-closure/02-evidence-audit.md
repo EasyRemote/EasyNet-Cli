@@ -70,7 +70,9 @@ Current frontend lifecycle evidence:
   permission-subject, target-picker, window/application decoded-frame, and
   window/application view-only-input coverage with `target_kind=both`, and
   traceable `result.json` step artifacts plus subreport/evidence artifacts for
-  Browser/Tauri, cross-device, and host product-flow steps. It also requires
+  Browser/Tauri, cross-device, and host product-flow steps. Host product-flow
+  verifier reports now expose stable `script` identity for permission-subject,
+  target-picker, decoded-frame, and view-only-input evidence. It also requires
   non-empty observed caller/provider device pairs with distinct device URAs in
   the cross-device report. This gate is an aggregate completion guard, not a
   substitute for any live domain artifact, and it rejects target-narrowed or
