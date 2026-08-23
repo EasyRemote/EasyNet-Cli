@@ -5,7 +5,7 @@
 // Description: Canonical event payload projections for remote desktop
 // sessions.
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, TRANSPORT_INVOKE_BIDI, TRANSPORT_WEBRTC,
@@ -41,6 +41,42 @@ impl RemoteDesktopEventProjection {
     fn into_parts(self) -> (&'static str, Value) {
         (self.event_type, self.payload)
     }
+}
+
+fn with_target_binding_context(binding: &RemoteAppTargetBinding, mut payload: Value) -> Value {
+    let Value::Object(fields) = &mut payload else {
+        return payload;
+    };
+    insert_target_binding_context(fields, binding);
+    payload
+}
+
+fn insert_target_binding_context(
+    fields: &mut Map<String, Value>,
+    binding: &RemoteAppTargetBinding,
+) {
+    fields.insert("subject_ura".to_string(), json!(binding.subject_ura()));
+    fields.insert("binding_id".to_string(), json!(binding.binding_id()));
+    fields.insert("binding_epoch".to_string(), json!(binding.binding_epoch()));
+    fields.insert(
+        "target_identity_epoch".to_string(),
+        json!(binding.target_identity_epoch()),
+    );
+    fields.insert(
+        "target_geometry_revision".to_string(),
+        json!(binding.target_geometry_revision()),
+    );
+    fields.insert(
+        "media_source_epoch".to_string(),
+        json!(binding.media_source_epoch()),
+    );
+    fields.insert("consent_epoch".to_string(), json!(binding.consent_epoch()));
+    fields.insert("target_binding".to_string(), binding.to_value());
+    fields.insert("scope_audit".to_string(), binding.scope_audit_value());
+    fields.insert(
+        "latest_target_diagnostic".to_string(),
+        binding.latest_target_diagnostic_value(),
+    );
 }
 
 /// Domain event used when a production WebRTC worker reaches a terminal
@@ -317,69 +353,90 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_diagnostic(
 
 /// Build a WebRTC input-channel diagnostic payload.
 pub(in crate::daemon::plugins::remote_desktop) fn input_channel_diagnostic(
+    binding: &RemoteAppTargetBinding,
+    transport_epoch: u64,
     media_transport_ready: bool,
     diagnostic: Value,
 ) -> Value {
-    json!({
-        "transport_kind": TRANSPORT_WEBRTC,
-        "input_plane": "webrtc_data_channel",
-        "media_transport_ready": media_transport_ready,
-        "diagnostic": diagnostic,
-    })
+    with_target_binding_context(
+        binding,
+        json!({
+            "transport_kind": TRANSPORT_WEBRTC,
+            "input_plane": "webrtc_data_channel",
+            "transport_epoch": transport_epoch,
+            "media_transport_ready": media_transport_ready,
+            "diagnostic": diagnostic,
+        }),
+    )
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn input_permission_blocked(
+    binding: &RemoteAppTargetBinding,
     transport_epoch: u64,
     reason: &str,
     media_transport_ready: bool,
 ) -> RemoteDesktopEventProjection {
     RemoteDesktopEventProjection::new(
         "INPUT_PERMISSION_BLOCKED",
-        json!({
-            "transport_kind": TRANSPORT_WEBRTC,
-            "input_plane": "webrtc_data_channel",
-            "transport_epoch": transport_epoch,
-            "reason": reason,
-            "input_activation": "blocked",
-            "input_activation_reason": reason,
-            "media_transport_ready": media_transport_ready,
-            "recoverability": "request_input_permission",
-            "frontend_action": FrontendAction::RequestPermission.as_str(),
-        }),
+        with_target_binding_context(
+            binding,
+            json!({
+                "transport_kind": TRANSPORT_WEBRTC,
+                "input_plane": "webrtc_data_channel",
+                "transport_epoch": transport_epoch,
+                "reason": reason,
+                "input_activation": "blocked",
+                "input_activation_reason": reason,
+                "media_transport_ready": media_transport_ready,
+                "recoverability": "request_input_permission",
+                "frontend_action": FrontendAction::RequestPermission.as_str(),
+            }),
+        ),
     )
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn input_permission_restored(
+    binding: &RemoteAppTargetBinding,
     transport_epoch: u64,
     media_transport_ready: bool,
 ) -> RemoteDesktopEventProjection {
     RemoteDesktopEventProjection::new(
         "INPUT_PERMISSION_RESTORED",
-        json!({
-            "transport_kind": TRANSPORT_WEBRTC,
-            "input_plane": "webrtc_data_channel",
-            "transport_epoch": transport_epoch,
-            "input_activation": "enabled",
-            "input_activation_reason": Value::Null,
-            "media_transport_ready": media_transport_ready,
-            "recoverability": "resolved",
-            "frontend_action": Value::Null,
-        }),
+        with_target_binding_context(
+            binding,
+            json!({
+                "transport_kind": TRANSPORT_WEBRTC,
+                "input_plane": "webrtc_data_channel",
+                "transport_epoch": transport_epoch,
+                "input_activation": "enabled",
+                "input_activation_reason": Value::Null,
+                "media_transport_ready": media_transport_ready,
+                "recoverability": "resolved",
+                "frontend_action": Value::Null,
+            }),
+        ),
     )
 }
 
 /// Build a media-pipeline stats payload.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(in crate::daemon::plugins::remote_desktop) fn media_pipeline_stats(
+    binding: &RemoteAppTargetBinding,
+    transport_epoch: u64,
     media_transport_ready: bool,
     stats: Value,
 ) -> RemoteDesktopEventProjection {
     RemoteDesktopEventProjection::new(
         "MEDIA_PIPELINE_STATS",
-        json!({
-            "media_transport_ready": media_transport_ready,
-            "stats": stats,
-        }),
+        with_target_binding_context(
+            binding,
+            json!({
+                "transport_kind": TRANSPORT_WEBRTC,
+                "transport_epoch": transport_epoch,
+                "media_transport_ready": media_transport_ready,
+                "stats": stats,
+            }),
+        ),
     )
 }
 
@@ -580,11 +637,11 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
-        capture_target_resolved, input_permission_blocked, input_permission_restored,
-        media_source_lost, preview_transport_connected, session_closed, session_closing,
-        session_created, session_degraded, session_expired, transport_blocked,
-        webrtc_failed_with_context, webrtc_sender_ready, webrtc_transport_failure_context,
-        WebRtcFailureEventKind,
+        capture_target_resolved, input_channel_diagnostic, input_permission_blocked,
+        input_permission_restored, media_pipeline_stats, media_source_lost,
+        preview_transport_connected, session_closed, session_closing, session_created,
+        session_degraded, session_expired, transport_blocked, webrtc_failed_with_context,
+        webrtc_sender_ready, webrtc_transport_failure_context, WebRtcFailureEventKind,
     };
 
     #[test]
@@ -741,10 +798,28 @@ mod tests {
 
     #[test]
     fn input_permission_block_projects_request_permission_recovery() {
-        let (event_type, payload) =
-            input_permission_blocked(17, "accessibility_permission_denied", true).into_parts();
+        let init = test_session_init(
+            "rd-input-permission-blocked-event",
+            "easynet:///r/acme/resource/window.input-blocked",
+            vec!["webrtc".into()],
+        );
+        let (event_type, payload) = input_permission_blocked(
+            &init.target_binding,
+            17,
+            "accessibility_permission_denied",
+            true,
+        )
+        .into_parts();
 
         assert_eq!(event_type, "INPUT_PERMISSION_BLOCKED");
+        assert_eq!(
+            payload["subject_ura"],
+            json!("easynet:///r/acme/resource/window.input-blocked")
+        );
+        assert_eq!(
+            payload["target_binding"]["binding_id"],
+            json!(init.target_binding.binding_id())
+        );
         assert_eq!(payload["transport_kind"], json!("webrtc"));
         assert_eq!(payload["input_plane"], json!("webrtc_data_channel"));
         assert_eq!(payload["transport_epoch"], json!(17));
@@ -761,9 +836,23 @@ mod tests {
 
     #[test]
     fn input_permission_restore_projects_resolved_recovery() {
-        let (event_type, payload) = input_permission_restored(18, true).into_parts();
+        let init = test_session_init(
+            "rd-input-permission-restored-event",
+            "easynet:///r/acme/resource/window.input-restored",
+            vec!["webrtc".into()],
+        );
+        let (event_type, payload) =
+            input_permission_restored(&init.target_binding, 18, true).into_parts();
 
         assert_eq!(event_type, "INPUT_PERMISSION_RESTORED");
+        assert_eq!(
+            payload["subject_ura"],
+            json!("easynet:///r/acme/resource/window.input-restored")
+        );
+        assert_eq!(
+            payload["target_geometry_revision"],
+            json!(init.target_binding.target_geometry_revision())
+        );
         assert_eq!(payload["transport_kind"], json!("webrtc"));
         assert_eq!(payload["input_plane"], json!("webrtc_data_channel"));
         assert_eq!(payload["transport_epoch"], json!(18));
@@ -772,6 +861,72 @@ mod tests {
         assert_eq!(payload["media_transport_ready"], json!(true));
         assert_eq!(payload["recoverability"], json!("resolved"));
         assert_eq!(payload["frontend_action"], Value::Null);
+    }
+
+    #[test]
+    fn input_channel_diagnostic_projects_target_binding_context() {
+        let init = test_session_init(
+            "rd-input-channel-event",
+            "easynet:///r/acme/resource/window.input-channel",
+            vec!["webrtc".into()],
+        );
+        let payload = input_channel_diagnostic(
+            &init.target_binding,
+            19,
+            true,
+            json!({ "accepted_count": 1 }),
+        );
+
+        assert_eq!(
+            payload["subject_ura"],
+            json!("easynet:///r/acme/resource/window.input-channel")
+        );
+        assert_eq!(
+            payload["binding_epoch"],
+            json!(init.target_binding.binding_epoch())
+        );
+        assert_eq!(payload["transport_epoch"], json!(19));
+        assert_eq!(payload["diagnostic"]["accepted_count"], json!(1));
+        assert_eq!(
+            payload["target_binding"]["subject_ura"],
+            json!("easynet:///r/acme/resource/window.input-channel")
+        );
+    }
+
+    #[test]
+    fn media_pipeline_stats_projects_target_binding_context() {
+        let init = test_session_init(
+            "rd-media-pipeline-event",
+            "easynet:///r/acme/resource/window.media-pipeline",
+            vec!["webrtc".into()],
+        );
+        let (event_type, payload) = media_pipeline_stats(
+            &init.target_binding,
+            20,
+            true,
+            json!({
+                "media_pipeline_id": "pipeline-1",
+                "frames_encoded": 12
+            }),
+        )
+        .into_parts();
+
+        assert_eq!(event_type, "MEDIA_PIPELINE_STATS");
+        assert_eq!(
+            payload["subject_ura"],
+            json!("easynet:///r/acme/resource/window.media-pipeline")
+        );
+        assert_eq!(
+            payload["target_identity_epoch"],
+            json!(init.target_binding.target_identity_epoch())
+        );
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["transport_epoch"], json!(20));
+        assert_eq!(payload["stats"]["media_pipeline_id"], json!("pipeline-1"));
+        assert_eq!(
+            payload["target_binding"]["binding_id"],
+            json!(init.target_binding.binding_id())
+        );
     }
 
     #[test]

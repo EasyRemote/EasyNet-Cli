@@ -21,6 +21,7 @@ SESSION_RESUME="$ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh"
 CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
+SESSION_EVENTS="$ROOT/plugins/remote-desktop/src/session_events.rs"
 SESSION_RECOVERY="$ROOT/plugins/remote-desktop/src/session_recovery.rs"
 SESSION_STATE="$ROOT/plugins/remote-desktop/src/session_state.rs"
 SESSION_LIFECYCLE="$ROOT/plugins/remote-desktop/src/session_lifecycle.rs"
@@ -553,14 +554,20 @@ require 'session\.input_runtime_block_reason\(\)' "$SESSION_VIEW" \
   'RemoteApp show_session projection must expose session-local runtime input blockers through input_readiness'
 require 'session_view_projects_session_local_runtime_input_blocker' "$SESSION_VIEW" \
   'RemoteApp session view tests must prove runtime input blockers survive show_session projection'
-require 'INPUT_PERMISSION_BLOCKED' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+require 'INPUT_PERMISSION_BLOCKED' "$SESSION_EVENTS" \
   'RemoteApp session events must expose runtime input permission blocks'
-require 'input_permission_block_projects_request_permission_recovery' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+require 'input_permission_block_projects_request_permission_recovery' "$SESSION_EVENTS" \
   'RemoteApp session event tests must prove runtime input permission blocks project request-permission recovery'
-require 'INPUT_PERMISSION_RESTORED' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+require 'INPUT_PERMISSION_RESTORED' "$SESSION_EVENTS" \
   'RemoteApp session events must expose runtime input permission restore'
-require 'input_permission_restore_projects_resolved_recovery' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+require 'input_permission_restore_projects_resolved_recovery' "$SESSION_EVENTS" \
   'RemoteApp session event tests must prove runtime input permission restore projects resolved recovery'
+require 'input_channel_diagnostic_projects_target_binding_context' "$SESSION_EVENTS" \
+  'RemoteApp input-channel event projections must carry selected target binding evidence'
+require 'blocked\["payload"\]\["target_binding"\]\["binding_id"\]' "$SESSION" \
+  'RemoteApp input permission events must preserve selected target binding in the event log payload'
+require 'restored\["payload"\]\["target_geometry_revision"\]' "$SESSION" \
+  'RemoteApp input permission restore events must preserve target geometry revision'
 require 'INPUT_PERMISSION_BLOCKED' "$EVENT_LOG" \
   'RemoteApp event log must classify runtime input permission blocks as input events'
 require 'INPUT_PERMISSION_RESTORED' "$EVENT_LOG" \
@@ -607,6 +614,12 @@ require 'codec_negotiated' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect codec negotiation'
 require 'media_pipeline_id' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must bind comparable scenarios to one media pipeline'
+require 'MEDIA_PIPELINE_STATS' "$SESSION_EVENTS" \
+  'RemoteApp session events must expose target-bound media pipeline stats'
+require 'media_pipeline_stats_projects_target_binding_context' "$SESSION_EVENTS" \
+  'RemoteApp media pipeline stats projection must carry selected target binding evidence'
+require 'latest\["payload"\]\["target_binding"\]\["subject_ura"\]' "$SESSION" \
+  'RemoteApp media pipeline stats event-log rows must preserve selected Resource evidence'
 require 'scenario_started_at_ms must be recorded' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require scenario start timestamp evidence'
 require 'impairment_applied_at_ms must be after scenario_started_at_ms' "$MEDIA_ADAPTATION" \
@@ -1119,11 +1132,11 @@ require 'session_events::session_rehydrated' "$SESSION" \
   'RemoteApp session aggregate must emit typed SESSION_REHYDRATED projection with target binding evidence'
 require 'fn rehydrate\(' "$SESSION" \
   'RemoteApp session aggregate must own snapshot-to-session rehydration'
-require 'fn session_rehydrated' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+require 'fn session_rehydrated' "$SESSION_EVENTS" \
   'RemoteApp session event projections must define typed rehydration event payloads'
-require '"target_binding": binding\.to_value\(\)' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+require '"target_binding": binding\.to_value\(\)' "$SESSION_EVENTS" \
   'RemoteApp rehydration event payload must include selected target binding evidence'
-require '"subject_ura": binding\.subject_ura\(\)' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+require '"subject_ura": binding\.subject_ura\(\)' "$SESSION_EVENTS" \
   'RemoteApp rehydration event payload must bind selected Resource URA'
 require 'rehydrated_non_terminal_session_can_start_new_media_epoch_without_new_session' "$SESSION" \
   'RemoteApp session aggregate must prove rehydrated sessions can restart media without minting a new session'

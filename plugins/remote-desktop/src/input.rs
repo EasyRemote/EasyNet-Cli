@@ -1108,7 +1108,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
     if session.transport_epoch() != Some(epoch.value()) {
         return;
     }
-    session.record_input_channel_event(event_type, payload);
+    session.record_input_channel_event(epoch, event_type, payload);
 }
 
 #[cfg(test)]

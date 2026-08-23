@@ -764,6 +764,7 @@ impl RemoteDesktopSession {
         let changed = self.activate_input_for_transport_epoch(epoch);
         if had_runtime_block && changed {
             self.push_projected_event(session_events::input_permission_restored(
+                self.target.binding(),
                 epoch.value(),
                 self.transport.media_transport_ready(),
             ));
@@ -786,6 +787,7 @@ impl RemoteDesktopSession {
         self.input_runtime_block_reason = Some(reason.to_string());
         self.touch();
         self.push_projected_event(session_events::input_permission_blocked(
+            self.target.binding(),
             epoch.value(),
             reason,
             self.transport.media_transport_ready(),
@@ -1001,6 +1003,7 @@ impl RemoteDesktopSession {
     /// Record diagnostic input-channel activity without changing transport readiness.
     pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
         &mut self,
+        epoch: TransportEpoch,
         event_type: &str,
         payload: Value,
     ) {
@@ -1009,6 +1012,8 @@ impl RemoteDesktopSession {
         }
         self.touch();
         let payload = session_events::input_channel_diagnostic(
+            self.target.binding(),
+            epoch.value(),
             self.transport.media_transport_ready(),
             payload,
         );
@@ -1030,6 +1035,8 @@ impl RemoteDesktopSession {
         }
         self.touch();
         self.push_projected_event(session_events::media_pipeline_stats(
+            self.target.binding(),
+            epoch.value(),
             self.transport.media_transport_ready(),
             stats,
         ));
@@ -1045,6 +1052,8 @@ impl RemoteDesktopSession {
         }
         self.touch();
         self.push_projected_event(session_events::media_pipeline_stats(
+            self.target.binding(),
+            epoch.value(),
             self.transport.media_transport_ready(),
             stats,
         ));
@@ -2021,6 +2030,35 @@ mod tests {
         assert_eq!(stats["browser_stats"]["frames_decoded"], json!(24));
         assert_eq!(stats["browser_stats"]["frame_width"], json!(1280));
         assert_eq!(stats["browser_stats"]["decode_avg_ms"], json!(5.0));
+
+        let media_events: Vec<_> = session
+            .events()
+            .into_iter()
+            .filter(|event| event["event_type"] == json!("MEDIA_PIPELINE_STATS"))
+            .collect();
+        assert_eq!(media_events.len(), 3);
+        let latest = media_events.last().expect("latest media stats event");
+        assert_eq!(
+            latest["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            latest["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            latest["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
+        assert_eq!(latest["transport_epoch"], json!(epoch.value()));
+        assert_eq!(
+            latest["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            latest["payload"]["stats"]["browser_stats"]["decode_avg_ms"],
+            json!(5.0)
+        );
     }
 
     #[test]
@@ -2163,10 +2201,22 @@ mod tests {
         assert_eq!(blocked_events.len(), 1);
         let blocked = &blocked_events[0];
         assert_eq!(blocked["state"], json!("connected"));
+        assert_eq!(
+            blocked["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            blocked["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
         assert_eq!(blocked["transport_epoch"], json!(epoch.value()));
         assert_eq!(
             blocked["payload"]["reason"],
             json!("accessibility_permission_denied")
+        );
+        assert_eq!(
+            blocked["payload"]["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
         );
         assert_eq!(
             blocked["payload"]["frontend_action"],
@@ -2182,6 +2232,14 @@ mod tests {
         assert_eq!(restored_events.len(), 1);
         let restored = &restored_events[0];
         assert_eq!(restored["state"], json!("connected"));
+        assert_eq!(
+            restored["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            restored["payload"]["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
         assert_eq!(restored["transport_epoch"], json!(epoch.value()));
         assert_eq!(restored["payload"]["input_activation"], json!("enabled"));
         assert_eq!(restored["payload"]["recoverability"], json!("resolved"));
