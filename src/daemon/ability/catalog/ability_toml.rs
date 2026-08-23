@@ -92,6 +92,12 @@ pub fn render_ability_contract_toml(contract: &SystemAbilityContract) -> String 
         "call_mode = \"{}\"\n",
         contract.call_mode.as_str()
     ));
+    if let Some(bidi_wire_kind) = contract.bidi_wire_kind {
+        out.push_str(&format!(
+            "bidi_wire_kind = \"{}\"\n",
+            bidi_wire_kind.as_str()
+        ));
+    }
     out.push_str(&format!(
         "capability_state = {}\n",
         render_inline_value(
@@ -203,6 +209,8 @@ struct RawAbilityContractToml {
     #[serde(default)]
     subject_contract_ura: Option<String>,
     call_mode: String,
+    #[serde(default)]
+    bidi_wire_kind: Option<String>,
     capability_state: String,
     admission_action: String,
     visibility: String,
@@ -240,6 +248,19 @@ pub fn parse_ability_contract_toml(body: &str) -> anyhow::Result<SystemAbilityCo
         );
     }
     let call_mode = parse_enum::<CallMode>(&raw.call_mode, "call_mode")?;
+    let bidi_wire_kind = raw
+        .bidi_wire_kind
+        .as_deref()
+        .map(|raw| {
+            parse_enum::<crate::daemon::ability::manifest::AbilityBidiWireKind>(
+                raw,
+                "bidi_wire_kind",
+            )
+        })
+        .transpose()?;
+    if bidi_wire_kind.is_some() && call_mode != CallMode::Bidi {
+        anyhow::bail!("bidi_wire_kind requires call_mode = \"bidi\"");
+    }
     let capability_state =
         parse_enum::<CapabilityState>(&raw.capability_state, "capability_state")?;
     let admission_action =
@@ -295,6 +316,7 @@ pub fn parse_ability_contract_toml(body: &str) -> anyhow::Result<SystemAbilityCo
         dedicated_surface,
         subject_contract_kind,
         subject_contract_ura: raw.subject_contract_ura,
+        bidi_wire_kind,
         input_schema: serde_json::to_value(raw.input_schema)?,
         output_receipt_schema: serde_json::from_str(&raw.output_receipt_schema_json)?,
         call_mode,
@@ -700,6 +722,39 @@ additionalProperties = false
         assert_eq!(
             parsed.capability_state,
             crate::daemon::ability::conformance::CapabilityState::Seam
+        );
+    }
+
+    #[test]
+    fn governed_contract_round_trips_bidi_wire_kind() {
+        let mut contract = super::super::system_ability_contract_inventory()
+            .into_iter()
+            .find(|contract| contract.name == "voice.transcribe")
+            .expect("voice transcribe contract");
+        contract.bidi_wire_kind =
+            Some(crate::daemon::ability::manifest::AbilityBidiWireKind::MetadataJsonPlusBinary);
+        let body = render_ability_contract_toml(&contract);
+        assert!(body.contains("bidi_wire_kind = \"metadata_json_plus_binary\""));
+        let parsed = parse_ability_contract_toml(&body).expect("parse governed contract");
+        assert_eq!(parsed, contract);
+    }
+
+    #[test]
+    fn governed_contract_rejects_bidi_wire_kind_on_non_bidi_call_mode() {
+        let mut contract = super::super::system_ability_contract_inventory()
+            .into_iter()
+            .find(|contract| contract.name == "voice.report_metrics")
+            .expect("voice report metrics contract");
+        contract.bidi_wire_kind =
+            Some(crate::daemon::ability::manifest::AbilityBidiWireKind::MetadataJsonPlusBinary);
+        let body = render_ability_contract_toml(&contract);
+        let error = parse_ability_contract_toml(&body)
+            .expect_err("non-bidi ability must reject bidi wire kind");
+        assert!(
+            error
+                .to_string()
+                .contains("bidi_wire_kind requires call_mode"),
+            "error should name rejected wire kind/call mode mismatch: {error}"
         );
     }
 

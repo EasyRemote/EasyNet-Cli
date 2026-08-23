@@ -54,6 +54,7 @@ use crate::daemon::ability::builtins::{
 use crate::daemon::ability::catalog::system_ability_descriptor_path;
 use crate::daemon::ability::descriptors::AbilityHints;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::manifest::AbilityBidiWireKind;
 use crate::daemon::ability::names::{
     agents as agent_names, automation as automation_names, device_control as device_names,
     federation as federation_names, governance as governance_names,
@@ -76,6 +77,7 @@ pub struct SystemAbilityContract {
     pub dedicated_surface: crate::daemon::ability::manifest::AbilityDedicatedSurface,
     pub subject_contract_kind: crate::daemon::ability::manifest::AbilitySubjectContractKind,
     pub subject_contract_ura: Option<String>,
+    pub bidi_wire_kind: Option<AbilityBidiWireKind>,
     pub input_schema: serde_json::Value,
     pub output_receipt_schema: serde_json::Value,
     pub call_mode: DescriptorCallMode,
@@ -241,6 +243,10 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
                     crate::daemon::ability::manifest::AbilitySubjectContractKind::RouteTarget,
                 ),
             subject_contract_ura: descriptor.metadata.get("subject_contract_ura").cloned(),
+            bidi_wire_kind: descriptor
+                .metadata
+                .get("bidi_wire_kind")
+                .and_then(|value| parse_descriptor_bidi_wire_kind(value)),
             input_schema,
             output_receipt_schema: match descriptor.output_receipt_schema() {
                 serde_json::Value::Null => serde_json::json!({}),
@@ -281,6 +287,10 @@ fn parse_descriptor_dedicated_surface(
 fn parse_descriptor_subject_contract_kind(
     value: &str,
 ) -> Option<crate::daemon::ability::manifest::AbilitySubjectContractKind> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+}
+
+fn parse_descriptor_bidi_wire_kind(value: &str) -> Option<AbilityBidiWireKind> {
     serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
 }
 
