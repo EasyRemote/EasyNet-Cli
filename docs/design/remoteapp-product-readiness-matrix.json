@@ -59,6 +59,7 @@
         "daemon pointer/key input frame schema accepts frontend sent_at_ms and client_sequence metadata and preserves client_sent_at_ms/client_sequence in input applied/rejected events",
         "daemon input data-channel loop rejects replayed or out-of-order frames as stale_client_sequence when client_sequence is present",
         "daemon applied input events include host_received_at_ms, host_applied_at_ms, and latency_ms when client_sent_at_ms is present and not ahead of host time",
+        "daemon projects runtime OS input permission denial as INPUT_PERMISSION_BLOCKED and deactivates input without failing active media",
         "diagnostic InvokeBidi input responses preserve client_sent_at_ms and client_sequence for probe correlation, including target_input_not_ready",
         "host view-only input safety E2E opens public remote_desktop.attach InvokeBidi and requires app/window pointer/key diagnostic frames with client_sequence/client_sent_at_ms to reject as input_scope_unsupported",
         "2026-08-23 local product-flow both report passed view-only input safety for macOS window and application targets over public remote_desktop.attach InvokeBidi",
@@ -90,6 +91,7 @@
         "view_only safety does not prove interactive input",
         "client_sequence replay rejection does not prove successful OS injection",
         "daemon latency telemetry does not prove observed OS pointer/key effects",
+        "runtime permission block projection does not prove live macOS permission revocation E2E",
         "input readiness and policy gates do not prove successful OS injection",
         "the input injection verifier self-test does not prove live host input control"
       ]

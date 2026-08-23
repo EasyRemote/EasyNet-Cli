@@ -744,6 +744,27 @@ impl RemoteDesktopSession {
         changed
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn block_input_for_runtime_permission(
+        &mut self,
+        epoch: TransportEpoch,
+        reason: &str,
+    ) -> bool {
+        if self.lifecycle.is_terminal() || self.transport_epoch() != Some(epoch.value()) {
+            return false;
+        }
+        let changed = self.lifecycle.deactivate_input_for_runtime_block();
+        if !changed {
+            return false;
+        }
+        self.touch();
+        self.push_projected_event(session_events::input_permission_blocked(
+            epoch.value(),
+            reason,
+            self.transport.media_transport_ready(),
+        ));
+        true
+    }
+
     /// Commit a local or remote SDP description after validation.
     pub(in crate::daemon::plugins::remote_desktop) fn set_description(
         &mut self,
@@ -1887,6 +1908,62 @@ mod tests {
         assert_eq!(blurred["state"], json!("connected"));
         assert_eq!(blurred["transport_epoch"], json!(epoch.value()));
         assert_eq!(blurred["payload"]["focused"], json!(false));
+    }
+
+    #[test]
+    fn runtime_input_permission_block_deactivates_input_without_failing_media() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-input-permission-blocked",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(21);
+
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-input-permission-blocked"),
+        );
+        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::InputActive
+        );
+
+        assert!(
+            session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied")
+        );
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+        assert_eq!(session.state(), RemoteDesktopState::Connected);
+        assert!(session.media_transport_ready());
+        assert!(session.client_media_ready());
+        assert!(
+            !session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied"),
+            "permission block projection must be edge-triggered"
+        );
+
+        let blocked_events: Vec<_> = session
+            .events()
+            .into_iter()
+            .filter(|event| event["event_type"] == json!("INPUT_PERMISSION_BLOCKED"))
+            .collect();
+        assert_eq!(blocked_events.len(), 1);
+        let blocked = &blocked_events[0];
+        assert_eq!(blocked["state"], json!("connected"));
+        assert_eq!(blocked["transport_epoch"], json!(epoch.value()));
+        assert_eq!(
+            blocked["payload"]["reason"],
+            json!("accessibility_permission_denied")
+        );
+        assert_eq!(
+            blocked["payload"]["frontend_action"],
+            json!("request_permission")
+        );
+        assert_eq!(blocked["payload"]["media_transport_ready"], json!(true));
     }
 
     #[test]

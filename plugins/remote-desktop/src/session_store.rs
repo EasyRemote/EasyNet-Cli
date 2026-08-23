@@ -193,6 +193,19 @@ impl RemoteDesktopSessionStore {
         session.activate_input_for_transport_epoch(epoch)
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_input_permission_blocked(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+        reason: &str,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.block_input_for_runtime_permission(epoch, reason)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn target_observation_inputs_for_session(
         &self,
         session_id: &str,

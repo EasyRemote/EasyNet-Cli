@@ -669,19 +669,20 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     }
                 } else {
                     rejected_count = rejected_count.saturating_add(1);
+                    let reason = outcome.reason.unwrap_or("input_injection_failed");
+                    if input_runtime_permission_denied(reason) {
+                        sessions.mark_input_permission_blocked(&session_id, epoch, reason);
+                    }
                     record_input_rejection(
                         &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        InputRejectSample::new(
-                            outcome.reason.unwrap_or("input_injection_failed"),
-                            rejected_count,
-                        )
-                        .kind(kind)
-                        .action(frame.action())
-                        .timing(timing)
-                        .client_sequence(client_sequence),
+                        InputRejectSample::new(reason, rejected_count)
+                            .kind(kind)
+                            .action(frame.action())
+                            .timing(timing)
+                            .client_sequence(client_sequence),
                     );
                 }
             }
@@ -739,6 +740,10 @@ impl InputSequenceGate {
         self.last_client_sequence = Some(client_sequence);
         None
     }
+}
+
+fn input_runtime_permission_denied(reason: &str) -> bool {
+    matches!(reason, "accessibility_permission_denied")
 }
 
 #[derive(Debug, Clone, Copy)]

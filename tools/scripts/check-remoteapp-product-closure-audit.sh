@@ -491,6 +491,18 @@ require 'host_applied_at_ms' "$INPUT" \
   'RemoteApp daemon applied input events must expose host apply timestamps'
 require 'latency_ms' "$INPUT" \
   'RemoteApp daemon input execution events must expose bounded latency telemetry'
+require 'input_runtime_permission_denied\(reason\)' "$INPUT" \
+  'RemoteApp daemon input execution path must detect runtime permission denial'
+require 'mark_input_permission_blocked' "$INPUT" \
+  'RemoteApp daemon input execution path must project runtime permission denial to the session aggregate'
+require 'INPUT_PERMISSION_BLOCKED' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+  'RemoteApp session events must expose runtime input permission blocks'
+require 'input_permission_block_projects_request_permission_recovery' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+  'RemoteApp session event tests must prove runtime input permission blocks project request-permission recovery'
+require 'INPUT_PERMISSION_BLOCKED' "$EVENT_LOG" \
+  'RemoteApp event log must classify runtime input permission blocks as input events'
+require 'runtime_input_permission_block_deactivates_input_without_failing_media' "$SESSION" \
+  'RemoteApp session tests must prove runtime input permission block does not fail media'
 require 'latency_ms must be within threshold' "$INPUT_INJECTION" \
   'input injection verifier must reject high latency'
 require 'observed_effect' "$INPUT_INJECTION" \

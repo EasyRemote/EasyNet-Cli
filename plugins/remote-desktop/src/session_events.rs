@@ -292,6 +292,27 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_channel_diagnostic(
     })
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn input_permission_blocked(
+    transport_epoch: u64,
+    reason: &str,
+    media_transport_ready: bool,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "INPUT_PERMISSION_BLOCKED",
+        json!({
+            "transport_kind": TRANSPORT_WEBRTC,
+            "input_plane": "webrtc_data_channel",
+            "transport_epoch": transport_epoch,
+            "reason": reason,
+            "input_activation": "blocked",
+            "input_activation_reason": reason,
+            "media_transport_ready": media_transport_ready,
+            "recoverability": "request_input_permission",
+            "frontend_action": FrontendAction::RequestPermission.as_str(),
+        }),
+    )
+}
+
 /// Build a media-pipeline stats payload.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(in crate::daemon::plugins::remote_desktop) fn media_pipeline_stats(
@@ -504,10 +525,10 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
-        capture_target_resolved, media_source_lost, preview_transport_connected, session_closed,
-        session_closing, session_created, session_degraded, session_expired, transport_blocked,
-        webrtc_failed_with_context, webrtc_sender_ready, webrtc_transport_failure_context,
-        WebRtcFailureEventKind,
+        capture_target_resolved, input_permission_blocked, media_source_lost,
+        preview_transport_connected, session_closed, session_closing, session_created,
+        session_degraded, session_expired, transport_blocked, webrtc_failed_with_context,
+        webrtc_sender_ready, webrtc_transport_failure_context, WebRtcFailureEventKind,
     };
 
     #[test]
@@ -660,6 +681,26 @@ mod tests {
         assert_eq!(payload["recoverability"], json!("retry_session"));
         assert_eq!(payload["failure_domain"], json!("transport"));
         assert_eq!(payload["frontend_action"], json!("retry_session"));
+    }
+
+    #[test]
+    fn input_permission_block_projects_request_permission_recovery() {
+        let (event_type, payload) =
+            input_permission_blocked(17, "accessibility_permission_denied", true).into_parts();
+
+        assert_eq!(event_type, "INPUT_PERMISSION_BLOCKED");
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["input_plane"], json!("webrtc_data_channel"));
+        assert_eq!(payload["transport_epoch"], json!(17));
+        assert_eq!(payload["reason"], json!("accessibility_permission_denied"));
+        assert_eq!(payload["input_activation"], json!("blocked"));
+        assert_eq!(
+            payload["input_activation_reason"],
+            json!("accessibility_permission_denied")
+        );
+        assert_eq!(payload["media_transport_ready"], json!(true));
+        assert_eq!(payload["recoverability"], json!("request_input_permission"));
+        assert_eq!(payload["frontend_action"], json!("request_permission"));
     }
 
     #[test]

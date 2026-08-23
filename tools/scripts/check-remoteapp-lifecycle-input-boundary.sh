@@ -1061,8 +1061,22 @@ require 'self\.pointer_enabled = false' "$INPUT" \
   'view-only input policy must disable pointer'
 require_multiline 'm/fn reject_reason\(\s*&self,.+?self\.input_scope == InputScope::ViewOnly.+?return Some\("input_scope_unsupported"\)/s' "$INPUT" \
   'view-only key/pointer rejection must report input_scope_unsupported'
-require_multiline 'm/InputRejectSample::new\(\s*outcome\.reason\.unwrap_or\("input_injection_failed"\),\s*rejected_count/s' "$INPUT" \
+require 'let reason = outcome\.reason\.unwrap_or\("input_injection_failed"\)' "$INPUT" \
   'WebRTC input rejection diagnostics must use the policy-enforced apply outcome'
+require 'input_runtime_permission_denied\(reason\)' "$INPUT" \
+  'WebRTC input execution must detect OS/runtime input permission denial from apply outcome'
+require 'mark_input_permission_blocked' "$INPUT" \
+  'WebRTC input execution must project runtime input permission denial to the session aggregate'
+require 'INPUT_PERMISSION_BLOCKED' "$SESSION_EVENTS" \
+  'session events must expose a stable runtime input permission blocked event'
+require 'input_permission_block_projects_request_permission_recovery' "$SESSION_EVENTS" \
+  'session event tests must prove runtime input permission blocks project request-permission recovery'
+require 'INPUT_PERMISSION_BLOCKED' "$EVENT_LOG" \
+  'event log must classify runtime input permission blocks as input events'
+require 'deactivate_input_for_runtime_block' "$SESSION_STATE" \
+  'session lifecycle must distinguish runtime input permission block from target loss'
+require 'runtime_input_permission_block_deactivates_input_without_failing_media' "$SESSION" \
+  'session tests must prove runtime input permission block deactivates input without failing media'
 require 'input_frame_applied_payload' "$INPUT" \
   'WebRTC input applied events must use a centralized payload builder'
 require 'client_sent_at_ms' "$INPUT" \

@@ -221,6 +221,21 @@ impl RemoteDesktopSessionStateMachine {
         )
     }
 
+    /// Leave `InputActive` when the OS/runtime can no longer inject input even
+    /// though media may continue. Input must be re-proven before another
+    /// activation.
+    pub(in crate::daemon::plugins::remote_desktop) fn deactivate_input_for_runtime_block(
+        &mut self,
+    ) -> bool {
+        if self.phase != RemoteDesktopSessionPhase::InputActive || self.is_terminal() {
+            return false;
+        }
+        self.set_active(
+            RemoteDesktopSessionPhase::MediaActive,
+            RemoteDesktopState::Connected,
+        )
+    }
+
     /// Diagnostic preview changes only the coarse public projection. It is not a
     /// production media lifecycle transition.
     pub(in crate::daemon::plugins::remote_desktop) fn project_preview_connected(&mut self) -> bool {
