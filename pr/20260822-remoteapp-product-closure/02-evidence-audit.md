@@ -62,7 +62,9 @@ Current frontend lifecycle evidence:
   tracking, network fallback, session timeout, session cancel, permission
   revoke, session resume, and crash/restart recovery. It rejects missing
   reports, child verifier `product_complete_claim=true`, and cross-device
-  reports where `local_provider_boundary_only=true`. This gate is an aggregate
+  reports where `local_provider_boundary_only=true`. It also verifies the
+  stable `script` identity for each required report, including the host
+  timeout/cancel/revoke/resume lifecycle reports. This gate is an aggregate
   completion guard, not a substitute for any live domain artifact.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp

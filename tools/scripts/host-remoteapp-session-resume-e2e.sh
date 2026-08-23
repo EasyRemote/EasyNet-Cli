@@ -282,6 +282,7 @@ require(get("end_after_resume.session.terminal_receipt.reason_code") == "resume_
         "end_after_resume terminal_receipt.reason_code must be resume_e2e_cleanup")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-session-resume-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,

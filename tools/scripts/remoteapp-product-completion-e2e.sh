@@ -74,6 +74,7 @@ required = [
     {
         "id": "frontend_product_flow",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON",
+        "expected_script": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
         "coverage_keys": [],
         "evidence_contract_contains": [
             "Browser/Tauri RemoteApp lifecycle evidence",
@@ -83,11 +84,13 @@ required = [
     {
         "id": "browser_lifecycle",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON",
+        "expected_script": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
         "coverage_keys": [],
     },
     {
         "id": "cross_device_smoke",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
         "coverage_keys": [
             "cross_device_hub_routing",
             "synthetic_stream_bidi_carrier",
@@ -98,21 +101,25 @@ required = [
     {
         "id": "cross_platform_capture",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-cross-platform-capture-e2e.sh",
         "coverage_keys": ["macos", "windows", "linux"],
     },
     {
         "id": "input_injection",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-input-injection-e2e.sh",
         "coverage_keys": ["macos", "windows", "linux"],
     },
     {
         "id": "media_adaptation",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
         "coverage_keys": ["baseline", "degraded_network", "backpressure"],
     },
     {
         "id": "multi_window_tracking",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-multi-window-tracking-e2e.sh",
         "coverage_keys": [
             "independent_window_streams",
             "geometry_churn",
@@ -124,31 +131,37 @@ required = [
     {
         "id": "network_fallback",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-network-fallback-e2e.sh",
         "coverage_keys": ["direct", "stun_srflx", "turn_relay", "easynet_relay"],
     },
     {
         "id": "session_timeout",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON",
+        "expected_script": "tools/scripts/host-remoteapp-session-timeout-e2e.sh",
         "coverage_keys": [],
     },
     {
         "id": "session_cancel",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON",
+        "expected_script": "tools/scripts/host-remoteapp-session-cancel-e2e.sh",
         "coverage_keys": [],
     },
     {
         "id": "permission_revoke",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON",
+        "expected_script": "tools/scripts/host-remoteapp-permission-revoke-e2e.sh",
         "coverage_keys": [],
     },
     {
         "id": "session_resume",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON",
+        "expected_script": "tools/scripts/host-remoteapp-session-resume-e2e.sh",
         "coverage_keys": [],
     },
     {
         "id": "crash_restart_recovery",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-crash-restart-recovery-e2e.sh",
         "coverage_keys": [
             "daemon_restart_active_session",
             "plugin_worker_restart",
@@ -201,6 +214,16 @@ for item in required:
     check["status"] = status
     if status != "passed":
         message = f"status is {status!r}, expected 'passed'"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    expected_script = item.get("expected_script")
+    check["expected_script"] = expected_script
+    check["observed_script"] = report.get("script")
+    if expected_script and report.get("script") != expected_script:
+        message = (
+            f"report script is {report.get('script')!r}, "
+            f"expected {expected_script!r}"
+        )
         check["errors"].append(message)
         add_error(item_id, message)
     child_claim = report.get("product_complete_claim")
@@ -317,8 +340,23 @@ coverage_by_id = {
         "stale_socket_restart_cleanup": True,
     },
 }
+script_by_id = {
+    "frontend_product_flow": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
+    "browser_lifecycle": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
+    "cross_device_smoke": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
+    "cross_platform_capture": "tools/scripts/remoteapp-cross-platform-capture-e2e.sh",
+    "input_injection": "tools/scripts/remoteapp-input-injection-e2e.sh",
+    "media_adaptation": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
+    "multi_window_tracking": "tools/scripts/remoteapp-multi-window-tracking-e2e.sh",
+    "network_fallback": "tools/scripts/remoteapp-network-fallback-e2e.sh",
+    "session_timeout": "tools/scripts/host-remoteapp-session-timeout-e2e.sh",
+    "session_cancel": "tools/scripts/host-remoteapp-session-cancel-e2e.sh",
+    "permission_revoke": "tools/scripts/host-remoteapp-permission-revoke-e2e.sh",
+    "session_resume": "tools/scripts/host-remoteapp-session-resume-e2e.sh",
+    "crash_restart_recovery": "tools/scripts/remoteapp-crash-restart-recovery-e2e.sh",
+}
 report = {
-    "script": f"synthetic/{item_id}",
+    "script": script_by_id[item_id],
     "status": "passed",
     "product_complete_claim": False,
     "coverage": coverage_by_id.get(item_id, {}),
@@ -471,6 +509,37 @@ PY
     exit 1
   fi
 
+  write_synthetic_report "$tmp/input_injection.json" input_injection
+  python3 - "$tmp/network_fallback.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["script"] = "tools/scripts/wrong-network-fallback-e2e.sh"
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/wrong-script" >/dev/null 2>&1; then
+    echo "self-test accepted wrong report script identity" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/network_fallback.json" network_fallback
+
   if env \
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
     "$0" --check --out-dir "$tmp/missing-env" >/dev/null 2>&1; then
@@ -495,6 +564,8 @@ case "$MODE" in
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON' "$0"
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON' "$0"
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
+    grep -q 'report script is' "$0"
+    grep -q 'self-test accepted wrong report script identity' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test
     ;;

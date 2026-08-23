@@ -238,6 +238,7 @@ require(get("end_after_timeout.session.terminal_receipt")
         "end_after_timeout must preserve the original timeout terminal receipt")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-session-timeout-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,

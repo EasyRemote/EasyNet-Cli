@@ -233,6 +233,7 @@ if media_lost_event is not None and closed_event is not None:
             "MEDIA_SOURCE_LOST must precede SESSION_CLOSED")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-permission-revoke-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,

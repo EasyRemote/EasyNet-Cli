@@ -343,8 +343,10 @@ lifecycle, cross-device smoke, cross-platform capture, input injection, media
 adaptation, multi-window tracking, network fallback, session timeout, session
 cancel, permission revoke, session resume, and crash/restart recovery. Missing
 reports fail closed, child verifiers must not claim product completion, and
-cross-device evidence must not be local-provider-only. This gate is not itself
-new product evidence; it prevents partial evidence from being reported as full
+cross-device evidence must not be local-provider-only. The gate also checks the
+stable `script` identity of each report so a wrong or shape-compatible artifact
+cannot stand in for the required domain verifier. This gate is not itself new
+product evidence; it prevents partial evidence from being reported as full
 interactive desktop completion.
 
 ## Product closure matrix

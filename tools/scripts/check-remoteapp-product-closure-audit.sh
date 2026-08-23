@@ -253,6 +253,8 @@ require 'remoteapp-product-completion-e2e.sh' "$AUDIT" \
   'audit must name the product-completion evidence gate'
 require 'frontend product-flow, Browser/Tauri' "$AUDIT" \
   'audit must summarize product-completion required reports'
+require 'stable `script` identity' "$AUDIT" \
+  'audit must record product-completion report provenance validation'
 require 'check-remoteapp-main-crate-implementation-tests.sh' "$AUDIT" \
   'audit must name the main-crate implementation test gate'
 require 'production_target_subjects' "$AUDIT" \
@@ -396,6 +398,8 @@ require 'remoteapp-product-completion-e2e.sh' "$PLAN" \
   'plan evidence audit must record the product-completion evidence gate'
 require 'frontend product-flow, Browser/Tauri' "$PLAN" \
   'plan evidence audit must summarize product-completion required reports'
+require 'stable `script` identity' "$PLAN" \
+  'plan evidence audit must record product-completion report provenance validation'
 require 'Historical local cross-device `--run` evidence' "$PLAN" \
   'plan evidence audit must classify the Service projection failure as historical evidence'
 require 'accepted_count=0, expected_count=5' "$PLAN" \
@@ -487,8 +491,24 @@ require 'topology\.local_provider_boundary_only is not false' "$PRODUCT_COMPLETI
   'product-completion gate must reject local-provider-only cross-device reports'
 require 'child verifier must not claim product completion' "$PRODUCT_COMPLETION" \
   'product-completion gate must reject child product-complete claims'
+require 'expected_script' "$PRODUCT_COMPLETION" \
+  'product-completion gate must pin expected report script identities'
+require 'report script is' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject wrong report script identities'
+require 'tools/scripts/host-remoteapp-session-timeout-e2e.sh' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require host timeout report provenance'
+require 'tools/scripts/remoteapp-network-fallback-e2e.sh' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require network fallback report provenance'
 require 'product_complete_claim.*effective_status == "passed"' "$PRODUCT_COMPLETION" \
   'product-completion gate must be the single aggregate product-complete claim'
+require '"script": "tools/scripts/host-remoteapp-session-timeout-e2e.sh"' "$SESSION_TIMEOUT" \
+  'session timeout report must expose stable script provenance'
+require '"script": "tools/scripts/host-remoteapp-session-cancel-e2e.sh"' "$SESSION_CANCEL" \
+  'session cancel report must expose stable script provenance'
+require '"script": "tools/scripts/host-remoteapp-permission-revoke-e2e.sh"' "$PERMISSION_REVOKE" \
+  'permission revoke report must expose stable script provenance'
+require '"script": "tools/scripts/host-remoteapp-session-resume-e2e.sh"' "$SESSION_RESUME" \
+  'session resume report must expose stable script provenance'
 require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must require real capture matrix proof mode'
 require 'component_mock.*False|component_mock.*false' "$CAPTURE_MATRIX" \

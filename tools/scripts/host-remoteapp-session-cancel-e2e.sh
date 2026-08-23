@@ -249,6 +249,7 @@ require(get("end_cancel_again.session.terminal_receipt")
         "end_cancel_again must preserve the original cancel terminal receipt")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-session-cancel-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,

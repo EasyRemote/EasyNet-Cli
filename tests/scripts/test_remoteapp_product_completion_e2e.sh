@@ -35,6 +35,14 @@ grep -q "local-provider-only cross-device evidence" "$SCRIPT" || \
   fail "completion gate self-test must reject local-provider-only evidence"
 grep -q "child verifier must not claim product completion" "$SCRIPT" || \
   fail "completion gate must reject child product-complete claims"
+grep -q "expected_script" "$SCRIPT" || \
+  fail "completion gate must pin expected report script identities"
+grep -q "report script is" "$SCRIPT" || \
+  fail "completion gate must reject wrong report script identities"
+grep -q "tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SCRIPT" || \
+  fail "completion gate must pin host timeout report identity"
+grep -q "tools/scripts/remoteapp-network-fallback-e2e.sh" "$SCRIPT" || \
+  fail "completion gate must pin network fallback report identity"
 grep -q '"product_complete_claim": effective_status == "passed"' "$SCRIPT" || \
   fail "completion gate must be the single aggregate product completion claim"
 
