@@ -1267,8 +1267,8 @@ require 'remote_desktop\.permission_status' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect permission_status evidence'
 require 'remote_desktop\.create_session' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect create_session evidence'
-require 'remote_desktop\.attach' "$FRONTEND_BROWSER_LIFECYCLE" \
-  'frontend Browser/Tauri lifecycle verifier must inspect attach evidence'
+require 'remote_desktop\.set_description' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must inspect production WebRTC signaling evidence'
 require 'rtc_connection_state' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must require connected WebRTC state'
 require 'media_stream_attached' "$FRONTEND_BROWSER_LIFECYCLE" \

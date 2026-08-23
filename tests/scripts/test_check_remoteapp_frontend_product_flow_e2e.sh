@@ -60,6 +60,7 @@ mkdir -p \
   "$SB/pr/20260822-remoteapp-product-closure" \
   "$SB/Frontend/src/components/easynet" \
   "$SB/Frontend/src/lib/api" \
+  "$SB/Frontend/scripts" \
   "$SB/Frontend/src/store"
 
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
@@ -92,6 +93,8 @@ cp "$REPO_ROOT/../EasyNet/Frontend/src/components/easynet/ShareContentPicker.tsx
   "$SB/Frontend/src/components/easynet/ShareContentPicker.tsx"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/lib/api/remote-desktop-protocol.ts" \
   "$SB/Frontend/src/lib/api/remote-desktop-protocol.ts"
+cp "$REPO_ROOT/../EasyNet/Frontend/scripts/remoteapp-browser-lifecycle.mjs" \
+  "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/store/media-channel-store.ts" \
   "$SB/Frontend/src/store/media-channel-store.ts"
 cp "$REPO_ROOT/../EasyNet/Frontend/src/store/media-channel-store.test.ts" \

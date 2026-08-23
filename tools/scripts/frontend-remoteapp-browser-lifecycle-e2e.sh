@@ -49,7 +49,7 @@ Evidence contract:
   The evidence JSON must prove a real Browser/Tauri flow, not component mocks:
   app_loaded -> authenticated_session -> target_picker_opened ->
   permission_status_checked -> consent_granted -> session_created ->
-  webrtc_attached -> watch_events_streaming -> media_presented ->
+  webrtc_transport_connected -> watch_events_streaming -> media_presented ->
   media_pipeline_support_visible -> input_control_attempted_or_policy_blocked
   -> session_ended -> terminal_receipt_visible. The WebRTC step must show a
   connected peer path, the media step must show a visible rendered media element
@@ -168,7 +168,7 @@ required_steps = [
     "permission_status_checked",
     "consent_granted",
     "session_created",
-    "webrtc_attached",
+    "webrtc_transport_connected",
     "watch_events_streaming",
     "media_presented",
     "media_pipeline_support_visible",
@@ -180,7 +180,7 @@ ability_steps = {
     "permission_status_checked": "remote_desktop.permission_status",
     "consent_granted": "remote_desktop.grant_consent",
     "session_created": "remote_desktop.create_session",
-    "webrtc_attached": "remote_desktop.attach",
+    "webrtc_transport_connected": "remote_desktop.set_description",
     "watch_events_streaming": "remote_desktop.watch_events",
     "session_ended": "remote_desktop.end_session",
 }
@@ -266,20 +266,20 @@ created = step_by_name.get("session_created", {})
 ended = step_by_name.get("session_ended", {})
 terminal = step_by_name.get("terminal_receipt_visible", {})
 watch = step_by_name.get("watch_events_streaming", {})
-attached = step_by_name.get("webrtc_attached", {})
+attached = step_by_name.get("webrtc_transport_connected", {})
 media = step_by_name.get("media_presented", {})
 pipeline = step_by_name.get("media_pipeline_support_visible", {})
 input_step = step_by_name.get("input_control_attempted_or_policy_blocked", {})
 require(created.get("session_id") == session_id,
         "session_created must bind the top-level session_id")
 require(attached.get("session_id") == session_id,
-        "webrtc_attached must bind the created session_id")
+        "webrtc_transport_connected must bind the created session_id")
 require(attached.get("rtc_connection_state") in {"connected", "completed"},
-        "webrtc_attached.rtc_connection_state must be connected or completed")
+        "webrtc_transport_connected.rtc_connection_state must be connected or completed")
 require(attached.get("ice_connection_state") in {"connected", "completed"},
-        "webrtc_attached.ice_connection_state must be connected or completed")
+        "webrtc_transport_connected.ice_connection_state must be connected or completed")
 require(attached.get("media_stream_attached") is True,
-        "webrtc_attached must prove media_stream_attached=true")
+        "webrtc_transport_connected must prove media_stream_attached=true")
 require(watch.get("session_id") == session_id,
         "watch_events_streaming must bind the created session_id")
 require(ended.get("session_id") == session_id,
@@ -299,20 +299,27 @@ require(isinstance(pipeline_label, str) and pipeline_label,
         "media_pipeline_support_visible must include visible_label")
 if isinstance(pipeline_label, str):
     for token in (
-        "pipeline video_only",
+        "pipeline ",
         "h264",
         "bounded_queue_drop_stale_frames",
-        "host_audio_not_implemented",
     ):
         require(token in pipeline_label,
                 f"media_pipeline_support_visible.visible_label must include {token}")
+media_scope = pipeline.get("media_scope")
+require(media_scope in {"video_only", "audio_video"},
+        "media_pipeline_support_visible.media_scope must be video_only or audio_video")
 require(pipeline.get("product_ready") is False,
         "media_pipeline_support_visible must keep product_ready=false")
 blockers = pipeline.get("product_blockers")
 require(isinstance(blockers, list)
-        and "host_audio_not_implemented" in blockers
         and "remoteapp_media_adaptation_e2e_artifact_missing" in blockers,
-        "media_pipeline_support_visible must expose host-audio and live media-adaptation E2E blockers")
+        "media_pipeline_support_visible must expose the live media-adaptation E2E blocker")
+if media_scope == "video_only":
+    require(isinstance(blockers, list) and "host_audio_not_implemented" in blockers,
+            "video_only media must expose host_audio_not_implemented")
+if media_scope == "audio_video":
+    require(attached.get("audio_track_attached") is True,
+            "audio_video media must prove an attached WebRTC audio track")
 require(input_step.get("result") in {"input_applied", "policy_blocked"},
         "input control must either apply input or prove policy_blocked")
 input_status = input_step.get("visible_status")
@@ -431,14 +438,15 @@ steps = [
     observed({"name": "consent_granted", "status": "passed", "ability": "remote_desktop.grant_consent", "subject_ura": subject}, 50),
     observed({"name": "session_created", "status": "passed", "ability": "remote_desktop.create_session", "subject_ura": subject, "session_id": session_id}, 60),
     {
-        "name": "webrtc_attached",
+        "name": "webrtc_transport_connected",
         "status": "passed",
-        "ability": "remote_desktop.attach",
+        "ability": "remote_desktop.set_description",
         "subject_ura": subject,
         "session_id": session_id,
         "rtc_connection_state": "connected",
         "ice_connection_state": "connected",
         "media_stream_attached": True,
+        "audio_track_attached": False,
     },
     observed({"name": "watch_events_streaming", "status": "passed", "ability": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id}, 80),
     {
@@ -452,6 +460,7 @@ steps = [
         "name": "media_pipeline_support_visible",
         "status": "passed",
         "visible_label": "pipeline video_only · h264 · bounded_queue_drop_stale_frames · host_audio_not_implemented",
+        "media_scope": "video_only",
         "product_ready": False,
         "product_blockers": [
             "host_audio_not_implemented",

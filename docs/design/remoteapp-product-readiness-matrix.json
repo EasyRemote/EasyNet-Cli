@@ -320,14 +320,15 @@
         "frontend protocol/store/UI now project target_focus_epoch, reject stale/missing focus epochs before RTC input send, and send target_focus_epoch on pointer/key frames",
         "product-flow harness entrypoint",
         "2026-08-23 local product-flow both report passed Hub API readiness, daemon readiness, frontend typecheck, DeviceMediaAccess UI flow, host target picker freshness, decoded-frame WebRTC, and view-only input safety for window and application targets",
-        "frontend-remoteapp-browser-lifecycle-e2e.sh verifier requires real Browser/Tauri lifecycle artifacts to carry UI automation evidence source, monotonic observed timestamps, connected WebRTC state, attached media stream, visible media element, positive rendered frame count, visible input status, terminal receipt, and submitted data-channel frame and daemon applied event target_focus_epoch evidence for input_applied flows"
+        "frontend-remoteapp-browser-lifecycle-e2e.sh verifier requires real Browser/Tauri lifecycle artifacts to carry UI automation evidence source, monotonic observed timestamps, production remote_desktop.set_description signaling, connected WebRTC state, attached media stream, visible media element, positive rendered frame count, visible input status, terminal receipt, and submitted data-channel frame and daemon applied event target_focus_epoch evidence for input_applied flows",
+        "EasyNet Frontend now includes a bounded Playwright/Chrome lifecycle runner that drives the public UI, observes production ability requests without constructing Invocation envelopes, samples the real RTCPeerConnection and decoded video element, correlates input data-channel frames with daemon INPUT_FRAME_APPLIED events, and emits fail-closed verifier evidence"
       ],
       "required_evidence_before_product_complete": [
         "Live Browser/Tauri E2E artifact with real backend/runtime",
         "browser/Tauri automation evidence source for every lifecycle step",
         "strictly increasing observed_at_ms across lifecycle steps",
         "picker to permission to consent to create_session",
-        "WebRTC attach and watch_events recovery",
+        "production WebRTC set_description/ICE connection and watch_events recovery",
         "media presentation",
         "visible H.264/Opus media_pipeline_support with audio/video track evidence, drop-policy, and product-blocker state",
         "input/control or policy-block and end_session",
@@ -336,7 +337,8 @@
       ],
       "non_claims": [
         "component tests do not prove full real frontend product lifecycle",
-        "the Browser/Tauri verifier self-test does not prove live frontend product behavior"
+        "the Browser/Tauri verifier self-test does not prove live frontend product behavior",
+        "the 2026-08-24 runner attempt reached no product step because the configured frontend and backend endpoints were not listening; it is failure evidence, not a product pass"
       ]
     },
     {

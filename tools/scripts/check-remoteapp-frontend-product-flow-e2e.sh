@@ -17,6 +17,7 @@ FRONTEND_SHARE_PICKER="$FRONTEND_ROOT/src/components/easynet/ShareContentPicker.
 FRONTEND_STORE="$FRONTEND_ROOT/src/store/media-channel-store.ts"
 FRONTEND_STORE_TEST="$FRONTEND_ROOT/src/store/media-channel-store.test.ts"
 FRONTEND_PROTOCOL="$FRONTEND_ROOT/src/lib/api/remote-desktop-protocol.ts"
+FRONTEND_BROWSER_RUNNER="$FRONTEND_ROOT/scripts/remoteapp-browser-lifecycle.mjs"
 REMOTEAPP_NETWORK="$ROOT/plugins/remote-desktop/src/network.rs"
 REMOTEAPP_TRANSPORT_VIEW="$ROOT/plugins/remote-desktop/src/view_transport.rs"
 AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
@@ -81,6 +82,7 @@ require_order() {
 [[ -f "$FRONTEND_STORE" ]] || fail "missing frontend RemoteApp media channel store"
 [[ -f "$FRONTEND_STORE_TEST" ]] || fail "missing frontend RemoteApp media channel store test"
 [[ -f "$FRONTEND_PROTOCOL" ]] || fail "missing frontend RemoteApp protocol projection"
+[[ -f "$FRONTEND_BROWSER_RUNNER" ]] || fail "missing real frontend RemoteApp browser lifecycle runner"
 [[ -f "$REMOTEAPP_NETWORK" ]] || fail "missing RemoteApp network route model"
 [[ -f "$REMOTEAPP_TRANSPORT_VIEW" ]] || fail "missing RemoteApp transport view projection"
 [[ -f "$AUDIT" ]] || fail "missing RemoteApp product readiness audit"
@@ -112,10 +114,10 @@ require 'session_created' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require session creation evidence'
 require 'remote_desktop\.create_session' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must bind creation to remote_desktop.create_session'
-require 'webrtc_attached' "$BROWSER_LIFECYCLE" \
-  'Browser/Tauri lifecycle verifier must require WebRTC attach evidence'
-require 'remote_desktop\.attach' "$BROWSER_LIFECYCLE" \
-  'Browser/Tauri lifecycle verifier must bind attach to remote_desktop.attach'
+require 'webrtc_transport_connected' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require production WebRTC transport evidence'
+require 'remote_desktop\.set_description' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind production WebRTC signaling to remote_desktop.set_description'
 require 'watch_events_streaming' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require watch_events evidence'
 require 'remote_desktop\.watch_events' "$BROWSER_LIFECYCLE" \
@@ -144,6 +146,18 @@ require '--run requires --evidence-json or --runner-cmd' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require real runner output in --run mode'
 require 'EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_E2E' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require an explicit live-run gate'
+require 'playwright-core' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must drive a real browser automation runtime'
+require 'RTCPeerConnection' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe a real WebRTC peer connection'
+require 'requestVideoFrameCallback' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe a decoded browser media frame'
+require 'remote_desktop\.set_description' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe the production WebRTC signaling ability'
+require 'remote_desktop\.watch_events' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe the session event stream'
+reject 'remote_desktop\.attach' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser production lifecycle runner must not substitute the diagnostic attach ability for WebRTC signaling'
 require '/api/v1/health' "$HUB_API_PREFLIGHT" \
   'Hub API readiness preflight must probe the canonical backend health endpoint'
 require '"connection_state": connection\.get\("state"\)' "$HUB_API_PREFLIGHT" \

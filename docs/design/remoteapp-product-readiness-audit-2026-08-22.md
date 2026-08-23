@@ -98,9 +98,11 @@ decoded-frame, and view-only input E2E harnesses. A skipped/self-test report
 from that entrypoint is only harness evidence, not product completion.
 The Browser/Tauri lifecycle verifier,
 `tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh`, defines the
-required artifact contract for a real frontend runner: proof mode
+required artifact contract for the real bounded Playwright/Chrome runner in
+`../EasyNet/Frontend/scripts/remoteapp-browser-lifecycle.mjs`: proof mode
 `real_browser_tauri_lifecycle`, `component_mock=false`,
-`real_backend_runtime=true`, ordered picker/permission/consent/create/attach/
+`real_backend_runtime=true`, ordered picker/permission/consent/create/production
+`remote_desktop.set_description` WebRTC connection/
 watch/media/media-pipeline-support/input/end/terminal-receipt steps, public
 RemoteApp ability names, host-local `permission_status`, selected Resource URA
 binding for session abilities, real browser/Tauri automation evidence source
@@ -110,7 +112,11 @@ evidence, visible media element, positive rendered frame count, visible `media_p
 visible input status with either applied-input
 telemetry or explicit policy-block reason, and no product-complete claim. Its
 self-test only proves the contract validator; a live Browser/Tauri artifact is
-still required.
+still required. The production browser runner must not substitute diagnostic
+`remote_desktop.attach` for the WebRTC signaling path. Its 2026-08-24 bounded
+local attempt failed at startup because neither `127.0.0.1:3000` nor
+`127.0.0.1:8080` was listening, so that attempt is explicit blocker evidence,
+not a lifecycle pass.
 The frontend session-details surface now also renders daemon route state; a
 host-only WebRTC route is visible as `route host_only · no NAT/relay`, so
 transport presence is not confused with production NAT/relay readiness.
