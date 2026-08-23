@@ -50,6 +50,10 @@ trusting only the summarized `steps` array.
   now target-matrix evidence: the completion gate requires separate window and
   application reports and rejects a lifecycle report whose `target_kind` does
   not match the required matrix slot.
+- Cross-platform capture and input-injection reports may use explicit
+  `unsupported` platform states as readiness/blocker evidence, but the
+  aggregate product-completion gate must require macOS, Windows, and Linux
+  platform summaries to be `passed`.
 - The cross-device smoke report must include at least one observed
   caller/provider device pair where both URAs are present and distinct.
 - Host lifecycle E2E reports must include the same `script` identity field as

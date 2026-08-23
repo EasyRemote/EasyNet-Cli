@@ -51,6 +51,12 @@ grep -q "child verifier must not claim product completion" "$SCRIPT" || \
   fail "completion gate must reject child product-complete claims"
 grep -q "requires_evidence_json" "$SCRIPT" || \
   fail "completion gate must require live evidence_json artifacts"
+grep -q "requires_platforms_passed" "$SCRIPT" || \
+  fail "completion gate must require product platforms to pass, not just be covered"
+grep -q "unsupported_targets must be empty" "$SCRIPT" || \
+  fail "completion gate must reject unsupported cross-platform capture targets"
+grep -q "expected 'passed'" "$SCRIPT" || \
+  fail "completion gate must reject unsupported input platforms"
 grep -q "expected_target_kind" "$SCRIPT" || \
   fail "completion gate must require full product-flow target coverage"
 grep -q "target_kind is" "$SCRIPT" || \
@@ -113,6 +119,10 @@ grep -q "self-test accepted wrong product-flow host subreport target_kind" "$SCR
   fail "completion gate self-test must cover wrong product-flow host subreport target kinds"
 grep -q "self-test accepted missing observed cross-device pairs" "$SCRIPT" || \
   fail "completion gate self-test must cover missing observed cross-device pairs"
+grep -q "self-test accepted unsupported cross-platform capture as product completion" "$SCRIPT" || \
+  fail "completion gate self-test must cover unsupported capture product-completion rejection"
+grep -q "self-test accepted unsupported input injection as product completion" "$SCRIPT" || \
+  fail "completion gate self-test must cover unsupported input product-completion rejection"
 grep -q "expected_script" "$SCRIPT" || \
   fail "completion gate must pin expected report script identities"
 grep -q "report script is" "$SCRIPT" || \

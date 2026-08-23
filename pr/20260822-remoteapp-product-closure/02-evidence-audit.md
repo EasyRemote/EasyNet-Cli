@@ -68,7 +68,9 @@ Current frontend lifecycle evidence:
   host timeout/cancel/revoke/resume lifecycle reports, and pins those lifecycle
   reports to the exact expected `target_kind` so one target kind cannot satisfy
   the other. It now also requires existing `evidence_json` artifacts for the
-  domain verifier reports, explicit passed
+  domain verifier reports, requires cross-platform capture and input-injection
+  platform summaries to be `passed` for macOS, Windows, and Linux instead of
+  explicit `unsupported`, and requires explicit passed
   frontend product-flow steps for Browser/Tauri, cross-device,
   permission-subject, target-picker, window/application decoded-frame, and
   window/application view-only-input coverage with `target_kind=both`, and

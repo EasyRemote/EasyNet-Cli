@@ -521,6 +521,12 @@ require 'child verifier must not claim product completion' "$PRODUCT_COMPLETION"
   'product-completion gate must reject child product-complete claims'
 require 'requires_evidence_json' "$PRODUCT_COMPLETION" \
   'product-completion gate must require live evidence_json artifacts from domain verifiers'
+require 'requires_platforms_passed' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require cross-platform product evidence to pass rather than report unsupported'
+require 'unsupported_targets must be empty' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject unsupported cross-platform capture targets'
+require "expected 'passed'" "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject unsupported input platforms'
 require 'expected_target_kind' "$PRODUCT_COMPLETION" \
   'product-completion gate must require full frontend product-flow target coverage'
 require 'target_kind is' "$PRODUCT_COMPLETION" \
@@ -571,6 +577,10 @@ require 'self-test accepted failed evidence_json status' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject failed report evidence status'
 require 'self-test accepted missing observed cross-device pairs' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject missing observed cross-device pairs'
+require 'self-test accepted unsupported cross-platform capture as product completion' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject unsupported capture product-completion evidence'
+require 'self-test accepted unsupported input injection as product completion' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject unsupported input product-completion evidence'
 require 'expected_script' "$PRODUCT_COMPLETION" \
   'product-completion gate must pin expected report script identities'
 require 'report script is' "$PRODUCT_COMPLETION" \

@@ -198,6 +198,8 @@ required = [
         "expected_script": "tools/scripts/remoteapp-cross-platform-capture-e2e.sh",
         "coverage_keys": ["macos", "windows", "linux"],
         "requires_evidence_json": True,
+        "requires_platforms_passed": ["macos", "windows", "linux"],
+        "requires_passed_targets": ["display", "window", "application"],
     },
     {
         "id": "input_injection",
@@ -205,6 +207,7 @@ required = [
         "expected_script": "tools/scripts/remoteapp-input-injection-e2e.sh",
         "coverage_keys": ["macos", "windows", "linux"],
         "requires_evidence_json": True,
+        "requires_platforms_passed": ["macos", "windows", "linux"],
     },
     {
         "id": "media_adaptation",
@@ -370,6 +373,47 @@ for item in required:
             message = f"evidence_contract missing {expected!r}"
             check["errors"].append(message)
             add_error(item_id, message)
+    if item.get("requires_platforms_passed"):
+        platform_entries = report.get("platforms")
+        check["required_passed_platforms"] = item["requires_platforms_passed"]
+        if not isinstance(platform_entries, list):
+            message = "platforms summary must be a list"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        else:
+            platform_by_name = {
+                entry.get("platform"): entry
+                for entry in platform_entries
+                if isinstance(entry, dict) and isinstance(entry.get("platform"), str)
+            }
+            check["observed_platforms"] = sorted(platform_by_name)
+            for platform_name in item["requires_platforms_passed"]:
+                platform = platform_by_name.get(platform_name)
+                if not isinstance(platform, dict):
+                    message = f"platforms.{platform_name} summary is missing"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                    continue
+                unsupported_targets = platform.get("unsupported_targets")
+                if isinstance(unsupported_targets, list) and unsupported_targets:
+                    message = f"platforms.{platform_name}.unsupported_targets must be empty"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                platform_status = platform.get("status")
+                if platform_status is not None and platform_status != "passed":
+                    message = f"platforms.{platform_name}.status is {platform_status!r}, expected 'passed'"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                required_targets = item.get("requires_passed_targets")
+                if required_targets:
+                    passed_targets = platform.get("passed_targets")
+                    if not isinstance(passed_targets, list) or set(passed_targets) != set(required_targets):
+                        message = (
+                            f"platforms.{platform_name}.passed_targets is {passed_targets!r}, "
+                            f"expected {required_targets!r}"
+                        )
+                        check["errors"].append(message)
+                        add_error(item_id, message)
     if item.get("required_steps"):
         steps = report.get("steps") if isinstance(report.get("steps"), list) else []
         passed_steps = {
@@ -760,6 +804,20 @@ if item_id == "frontend_product_flow":
     ]
 if item_id in lifecycle_target_by_id:
     report["target_kind"] = lifecycle_target_by_id[item_id]
+if item_id == "cross_platform_capture":
+    report["platforms"] = [
+        {
+            "platform": platform,
+            "passed_targets": ["application", "display", "window"],
+            "unsupported_targets": [],
+        }
+        for platform in ("linux", "macos", "windows")
+    ]
+if item_id == "input_injection":
+    report["platforms"] = [
+        {"platform": platform, "status": "passed"}
+        for platform in ("linux", "macos", "windows")
+    ]
 if item_id == "cross_device_smoke":
     report["topology"] = {
         "requires_distinct_devices": True,
@@ -1255,6 +1313,63 @@ PY
   fi
   write_synthetic_report "$tmp/cross_device_smoke.json" cross_device_smoke
 
+  python3 - "$tmp/cross_platform_capture.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+for platform in report["platforms"]:
+    if platform["platform"] == "linux":
+        platform["passed_targets"] = ["display"]
+        platform["unsupported_targets"] = ["application", "window"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/unsupported-cross-platform-capture" >/dev/null 2>&1; then
+    echo "self-test accepted unsupported cross-platform capture as product completion" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/cross_platform_capture.json" cross_platform_capture
+
+  python3 - "$tmp/input_injection.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+for platform in report["platforms"]:
+    if platform["platform"] == "windows":
+        platform["status"] = "unsupported"
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/unsupported-input-injection" >/dev/null 2>&1; then
+    echo "self-test accepted unsupported input injection as product completion" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/input_injection.json" input_injection
+
   python3 - "$tmp/media_adaptation.json" <<'PY'
 import json
 import pathlib
@@ -1382,6 +1497,9 @@ case "$MODE" in
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_JSON' "$0"
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
     grep -q 'requires_evidence_json' "$0"
+    grep -q 'requires_platforms_passed' "$0"
+    grep -q 'unsupported_targets must be empty' "$0"
+    grep -q "expected 'passed'" "$0"
     grep -q 'expected_target_kind' "$0"
     grep -q 'target_kind is' "$0"
     grep -q 'host-decoded-frame-window' "$0"
@@ -1411,6 +1529,8 @@ case "$MODE" in
     grep -q 'self-test accepted wrong product-flow host subreport script identity' "$0"
     grep -q 'self-test accepted wrong product-flow host subreport target_kind' "$0"
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
+    grep -q 'self-test accepted unsupported cross-platform capture as product completion' "$0"
+    grep -q 'self-test accepted unsupported input injection as product completion' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test
     ;;

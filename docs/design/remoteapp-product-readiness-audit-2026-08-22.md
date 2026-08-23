@@ -360,13 +360,16 @@ recovery. Missing reports fail closed, child verifiers must not claim product
 completion, and cross-device evidence must not be local-provider-only. The gate
 also checks the stable `script` identity and expected `target_kind` of each
 required lifecycle report, so one target kind cannot stand in for the other.
-It also requires domain reports to name an existing `evidence_json` artifact,
-requires the frontend product-flow report to expose passed Browser/Tauri,
-cross-device, permission-subject, target-picker, window/application
-decoded-frame, and window/application view-only-input steps with
-`target_kind=both`, and requires those product-flow steps to have
-traceable `result.json` step artifacts plus subreport/evidence artifacts for
-Browser/Tauri, cross-device, and host steps.
+It also requires cross-platform capture and input-injection platform summaries
+to be `passed` for macOS, Windows, and Linux. Explicit `unsupported` platform
+states remain valid readiness/blocker evidence in their domain verifiers, but
+they cannot satisfy the aggregate product-complete claim. The gate also
+requires domain reports to name an existing `evidence_json` artifact, requires
+the frontend product-flow report to expose passed Browser/Tauri, cross-device,
+permission-subject, target-picker, window/application decoded-frame, and
+window/application view-only-input steps with `target_kind=both`, and requires
+those product-flow steps to have traceable `result.json` step artifacts plus
+subreport/evidence artifacts for Browser/Tauri, cross-device, and host steps.
 Those subreports carry stable `script` identity, including the host
 permission-subject, target-picker, decoded-frame, and view-only-input verifiers.
 Cross-device topology must include observed caller/provider device pairs with
