@@ -101,22 +101,52 @@ runtime_image_created = sys.argv[8] or None
 build_requested = sys.argv[9] == "1"
 out_dir.mkdir(parents=True, exist_ok=True)
 
+def read_json(path):
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
 steps = []
+observed_device_pairs = []
 for name in ("cross-device-routing", "synthetic-media-bidi"):
     step_dir = out_dir / name
     result = {"name": name, "status": "not_run"}
     result_path = step_dir / "result.json"
-    if result_path.exists():
-        result.update(json.loads(result_path.read_text(encoding="utf-8")))
+    result_doc = read_json(result_path)
+    if isinstance(result_doc, dict):
+        result.update(result_doc)
     report_path = step_dir / "report.json"
+    child_report = None
     if report_path.exists():
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report = read_json(report_path)
+        child_report = report if isinstance(report, dict) else None
         result["child_report"] = str(report_path)
-        result["assertion_count"] = len(report.get("assertions") or {})
+        result["assertion_count"] = len((child_report or {}).get("assertions") or {})
         result["failed_assertions"] = [
-            key for key, value in (report.get("assertions") or {}).items()
+            key for key, value in ((child_report or {}).get("assertions") or {}).items()
             if value is not True
         ]
+    topology = (child_report or {}).get("topology") if isinstance(child_report, dict) else None
+    if isinstance(topology, dict):
+        caller_ura = topology.get("caller_ura")
+        provider_ura = topology.get("provider_ura")
+        pair = {
+            "step": name,
+            "caller_ura": caller_ura if isinstance(caller_ura, str) else None,
+            "provider_ura": provider_ura if isinstance(provider_ura, str) else None,
+            "caller_node": topology.get("caller_node") if isinstance(topology.get("caller_node"), str) else None,
+            "provider_node": topology.get("provider_node") if isinstance(topology.get("provider_node"), str) else None,
+        }
+        pair["distinct_device_uras"] = bool(
+            pair["caller_ura"]
+            and pair["provider_ura"]
+            and pair["caller_ura"] != pair["provider_ura"]
+        )
+        observed_device_pairs.append(pair)
+        result["topology"] = pair
     stderr_path = step_dir / "stderr.txt"
     stderr_text = ""
     if stderr_path.exists():
@@ -135,6 +165,8 @@ for name in ("cross-device-routing", "synthetic-media-bidi"):
     }
     steps.append(result)
 
+distinct_device_uras_observed = any(pair["distinct_device_uras"] for pair in observed_device_pairs)
+local_provider_boundary_only = not distinct_device_uras_observed
 coverage = {
     "cross_device_hub_routing": any(
         step["name"] == "cross-device-routing" and step.get("status") == "passed"
@@ -149,11 +181,14 @@ coverage = {
     "real_audio_device_path": False,
     "nat_stun_turn_relay_deployment": False,
     "frontend_browser_rendering": False,
+    "distinct_device_uras_observed": distinct_device_uras_observed,
+    "local_provider_boundary_only": local_provider_boundary_only,
 }
 report = {
     "script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
     "status": status,
     "reason": reason,
+    "product_complete_claim": False,
     "source": {
         "revision": source_revision,
         "dirty": source_dirty,
@@ -163,6 +198,12 @@ report = {
         "image_id": runtime_image_id,
         "image_created": runtime_image_created,
         "build_requested": build_requested,
+    },
+    "topology": {
+        "requires_distinct_devices": True,
+        "observed_device_pairs": observed_device_pairs,
+        "distinct_device_uras_observed": distinct_device_uras_observed,
+        "local_provider_boundary_only": local_provider_boundary_only,
     },
     "steps": steps,
     "coverage": coverage,
@@ -188,6 +229,8 @@ report = {
     f"- Runtime image id: `{runtime_image_id or 'unknown'}`\n"
     f"- Runtime image created: `{runtime_image_created or 'unknown'}`\n"
     f"- Runtime image build requested: `{str(build_requested).lower()}`\n"
+    f"- Distinct device URAs observed: `{str(distinct_device_uras_observed).lower()}`\n"
+    f"- Local provider boundary only: `{str(local_provider_boundary_only).lower()}`\n"
     f"- Cross-device Hub routing: `{str(coverage['cross_device_hub_routing']).lower()}`\n"
     f"- Synthetic stream/bidi carrier: `{str(coverage['synthetic_stream_bidi_carrier']).lower()}`\n"
     "\nThis report is not product-complete RemoteApp evidence for real OS capture,\n"
@@ -308,6 +351,11 @@ if [[ "$RUN" == "self-test" ]]; then
   grep -q "docker-media-bidi-e2e.sh" "$0"
   grep -q "cross_device_hub_routing" "$0"
   grep -q "synthetic_stream_bidi_carrier" "$0"
+  grep -q "distinct_device_uras_observed" "$0"
+  grep -q "local_provider_boundary_only" "$0"
+  grep -q "requires_distinct_devices" "$0"
+  grep -q "observed_device_pairs" "$0"
+  grep -q "product_complete_claim" "$0"
   grep -q "service_owner_projection_failed" "$0"
   grep -q "real_os_window_application_capture" "$0"
   grep -q "does not prove real OS window/application capture" "$0"

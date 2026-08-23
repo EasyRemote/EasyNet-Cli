@@ -82,6 +82,24 @@ grep -q "cross-device smoke must preserve product non-claims" /tmp/check-remotea
   fail "expected cross-device smoke non-claim failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 
+perl -0pi -e 's#distinct_device_uras_observed#same_device_uras_observed#g' \
+  "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-cross-device-distinct.out 2>&1; then
+  fail "checker accepted cross-device smoke without distinct-device topology evidence"
+fi
+grep -q "cross-device smoke must report whether distinct device URAs were observed" /tmp/check-remoteapp-product-closure-cross-device-distinct.out || \
+  fail "expected cross-device distinct-device topology failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
+perl -0pi -e 's#product_complete_claim.*False#product_complete_claim\": True#g' \
+  "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-cross-device-complete-claim.out 2>&1; then
+  fail "checker accepted cross-device smoke with product completion claim"
+fi
+grep -q "cross-device smoke must reject product completion claims" /tmp/check-remoteapp-product-closure-cross-device-complete-claim.out || \
+  fail "expected cross-device product completion claim failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
 perl -0pi -e 's#real_cross_platform_capture_matrix#source_only_capture_matrix#g' \
   "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-proof-mode.out 2>&1; then

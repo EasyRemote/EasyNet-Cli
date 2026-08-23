@@ -421,6 +421,16 @@ require 'image_created' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must report runtime image creation time'
 require 'build_requested' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must report whether runtime image rebuild was requested'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must reject product completion claims'
+require 'requires_distinct_devices' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must require a distinct-device topology'
+require 'observed_device_pairs' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must report observed caller/provider device pairs'
+require 'distinct_device_uras_observed' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must report whether distinct device URAs were observed'
+require 'local_provider_boundary_only' "$CROSS_DEVICE_SMOKE" \
+  'cross-device smoke must expose local-provider-only evidence as insufficient'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
 require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \
