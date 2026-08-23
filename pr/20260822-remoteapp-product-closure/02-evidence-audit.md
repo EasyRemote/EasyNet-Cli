@@ -59,13 +59,16 @@ Current frontend lifecycle evidence:
   aggregate product-completion evidence gate. It requires passed report JSONs
   from frontend product-flow, Browser/Tauri lifecycle, cross-device smoke,
   cross-platform capture, input injection, media adaptation, multi-window
-  tracking, network fallback, session timeout, session cancel, permission
-  revoke, session resume, and crash/restart recovery. It rejects missing
-  reports, child verifier `product_complete_claim=true`, and cross-device
-  reports where `local_provider_boundary_only=true`. It also verifies the
-  stable `script` identity for each required report, including the host
-  timeout/cancel/revoke/resume lifecycle reports. It now also requires existing
-  `evidence_json` artifacts for the domain verifier reports, explicit passed
+  tracking, network fallback, window/application session timeout,
+  window/application session cancel, window/application permission revoke,
+  window/application session resume, and crash/restart recovery. It rejects
+  missing reports, child verifier `product_complete_claim=true`, and
+  cross-device reports where `local_provider_boundary_only=true`. It also
+  verifies the stable `script` identity for each required report, including the
+  host timeout/cancel/revoke/resume lifecycle reports, and pins those lifecycle
+  reports to the exact expected `target_kind` so one target kind cannot satisfy
+  the other. It now also requires existing `evidence_json` artifacts for the
+  domain verifier reports, explicit passed
   frontend product-flow steps for Browser/Tauri, cross-device,
   permission-subject, target-picker, window/application decoded-frame, and
   window/application view-only-input coverage with `target_kind=both`, and

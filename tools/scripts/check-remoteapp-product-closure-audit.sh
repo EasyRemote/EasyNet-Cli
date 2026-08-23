@@ -497,14 +497,22 @@ require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON'
   'product-completion gate must require multi-window tracking evidence'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON' "$PRODUCT_COMPLETION" \
   'product-completion gate must require network fallback evidence'
-require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON' "$PRODUCT_COMPLETION" \
-  'product-completion gate must require session timeout evidence'
-require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON' "$PRODUCT_COMPLETION" \
-  'product-completion gate must require session cancel evidence'
-require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON' "$PRODUCT_COMPLETION" \
-  'product-completion gate must require permission revoke evidence'
-require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON' "$PRODUCT_COMPLETION" \
-  'product-completion gate must require session resume evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_WINDOW_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require window session timeout evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_APPLICATION_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require application session timeout evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_WINDOW_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require window session cancel evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_APPLICATION_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require application session cancel evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_WINDOW_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require window permission revoke evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_APPLICATION_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require application permission revoke evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_WINDOW_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require window session resume evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require application session resume evidence'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON' "$PRODUCT_COMPLETION" \
   'product-completion gate must require crash/restart recovery evidence'
 require 'topology\.local_provider_boundary_only is not false' "$PRODUCT_COMPLETION" \
@@ -547,6 +555,8 @@ require 'topology\.observed_device_pairs must not be empty' "$PRODUCT_COMPLETION
   'product-completion gate must require observed cross-device caller/provider pairs'
 require 'self-test accepted missing evidence_json artifact' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject missing evidence_json artifacts'
+require 'self-test accepted wrong lifecycle target_kind' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject wrong lifecycle target kinds'
 require 'self-test accepted missing frontend product-flow step' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject incomplete frontend product-flow reports'
 require 'self-test accepted product-flow target_kind other than both' "$PRODUCT_COMPLETION" \

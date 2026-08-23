@@ -27,8 +27,22 @@ grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON"
   fail "completion gate must require multi-window tracking report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require network fallback report"
-grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON" "$SCRIPT" || \
-  fail "completion gate must require permission revoke report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_WINDOW_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require window session timeout report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_APPLICATION_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require application session timeout report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_WINDOW_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require window session cancel report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_APPLICATION_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require application session cancel report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_WINDOW_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require window permission revoke report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_APPLICATION_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require application permission revoke report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_WINDOW_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require window session resume report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require application session resume report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require crash/restart recovery report"
 grep -q "local-provider-only cross-device evidence" "$SCRIPT" || \
@@ -79,6 +93,8 @@ grep -q "topology.observed_device_pairs must not be empty" "$SCRIPT" || \
   fail "completion gate must reject cross-device reports without observed pairs"
 grep -q "self-test accepted missing evidence_json artifact" "$SCRIPT" || \
   fail "completion gate self-test must cover missing evidence_json artifacts"
+grep -q "self-test accepted wrong lifecycle target_kind" "$SCRIPT" || \
+  fail "completion gate self-test must cover wrong lifecycle target kinds"
 grep -q "self-test accepted missing frontend product-flow step" "$SCRIPT" || \
   fail "completion gate self-test must cover missing product-flow steps"
 grep -q "self-test accepted product-flow target_kind other than both" "$SCRIPT" || \
@@ -120,7 +136,7 @@ import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["status"] == "failed"
 assert report["product_complete_claim"] is False
-assert report["required_evidence_count"] == 13
+assert report["required_evidence_count"] == 17
 assert any("missing required report env" in error for error in report["errors"])
 PY
 

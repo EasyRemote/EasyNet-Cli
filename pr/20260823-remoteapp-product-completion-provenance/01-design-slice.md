@@ -46,6 +46,10 @@ trusting only the summarized `steps` array.
   `status=passed`. The aggregate gate does not duplicate domain-specific
   capture/input/media/network/lifecycle contracts, but it must reject a passed
   summary report that points at empty, failed, or invalid evidence.
+- Timeout, cancel, permission revoke, and session resume lifecycle evidence is
+  now target-matrix evidence: the completion gate requires separate window and
+  application reports and rejects a lifecycle report whose `target_kind` does
+  not match the required matrix slot.
 - The cross-device smoke report must include at least one observed
   caller/provider device pair where both URAs are present and distinct.
 - Host lifecycle E2E reports must include the same `script` identity field as

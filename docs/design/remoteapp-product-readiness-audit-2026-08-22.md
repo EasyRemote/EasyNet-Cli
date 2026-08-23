@@ -353,18 +353,20 @@ The product-completion gate,
 that may turn the individual RemoteApp evidence reports into a product-complete
 claim. It requires report JSONs for frontend product-flow, Browser/Tauri
 lifecycle, cross-device smoke, cross-platform capture, input injection, media
-adaptation, multi-window tracking, network fallback, session timeout, session
-cancel, permission revoke, session resume, and crash/restart recovery. Missing
-reports fail closed, child verifiers must not claim product completion, and
-cross-device evidence must not be local-provider-only. The gate also checks the
-stable `script` identity of each report so a wrong or shape-compatible artifact
-cannot stand in for the required domain verifier. It also requires domain
-reports to name an existing `evidence_json` artifact, requires the frontend
-product-flow report to expose passed Browser/Tauri, cross-device,
-permission-subject, target-picker, window/application decoded-frame, and
-window/application view-only-input steps with `target_kind=both`, and requires
-those product-flow steps to have traceable `result.json` step artifacts plus
-subreport/evidence artifacts for Browser/Tauri, cross-device, and host steps.
+adaptation, multi-window tracking, network fallback, window/application
+session timeout, window/application session cancel, window/application
+permission revoke, window/application session resume, and crash/restart
+recovery. Missing reports fail closed, child verifiers must not claim product
+completion, and cross-device evidence must not be local-provider-only. The gate
+also checks the stable `script` identity and expected `target_kind` of each
+required lifecycle report, so one target kind cannot stand in for the other.
+It also requires domain reports to name an existing `evidence_json` artifact,
+requires the frontend product-flow report to expose passed Browser/Tauri,
+cross-device, permission-subject, target-picker, window/application
+decoded-frame, and window/application view-only-input steps with
+`target_kind=both`, and requires those product-flow steps to have
+traceable `result.json` step artifacts plus subreport/evidence artifacts for
+Browser/Tauri, cross-device, and host steps.
 Those subreports carry stable `script` identity, including the host
 permission-subject, target-picker, decoded-frame, and view-only-input verifiers.
 Cross-device topology must include observed caller/provider device pairs with
