@@ -627,6 +627,14 @@ require 'multi_display_application' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must require multi-display application scenario'
 require 'frames_interleaved must be false' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must reject interleaved streams'
+require 'selected_sentinel_rendered' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require selected target sentinel rendering'
+require 'foreign_sentinel_rendered' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject foreign target sentinel leakage'
+require 'sentinel_owner_resource_ura' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must bind rendered sentinel to selected Resource URA'
+require 'cross_stream_sentinel_leakage' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject cross-stream sentinel leakage'
 require 'TARGET_MOVED' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must inspect target move events'
 require 'TARGET_RESIZED' "$MULTI_WINDOW_TRACKING" \
@@ -643,6 +651,10 @@ require 'first_display_capture_started' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must inspect first-display fallback evidence'
 require 'display_fallback_used' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must reject display fallback for application churn'
+require 'committed_window_set_sentinels_rendered_after_rebind' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require committed window-set sentinel rendering after rebind'
+require 'uncommitted_same_app_sentinel_rendered' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject uncommitted same-app window sentinel leakage'
 require 'MultiAppSurface' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must inspect MultiAppSurface state'
 require 'explicit_product_unsupported' "$MULTI_WINDOW_TRACKING" \

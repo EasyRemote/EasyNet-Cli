@@ -253,6 +253,24 @@ grep -q "multi-window tracking verifier must reject interleaved streams" /tmp/ch
   fail "expected multi-window tracking stream-isolation failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 
+perl -0pi -e 's#selected_sentinel_rendered#selected_sentinel_visible#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-selected-sentinel.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without selected sentinel rendering"
+fi
+grep -q "multi-window tracking verifier must require selected target sentinel rendering" /tmp/check-remoteapp-product-closure-tracking-selected-sentinel.out || \
+  fail "expected multi-window tracking selected-sentinel rendering failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
+perl -0pi -e 's#uncommitted_same_app_sentinel_rendered#uncommitted_same_app_sentinel_visible#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-uncommitted-sentinel.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without same-app leakage rejection"
+fi
+grep -q "multi-window tracking verifier must reject uncommitted same-app window sentinel leakage" /tmp/check-remoteapp-product-closure-tracking-uncommitted-sentinel.out || \
+  fail "expected multi-window tracking uncommitted-sentinel leakage failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
 perl -0pi -e 's#PENDING_MEDIA_REBIND#PENDING_SOURCE_REFRESH#g' \
   "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-rebind.out 2>&1; then

@@ -46,8 +46,10 @@ Evidence contract:
   application_window_set_churn, target_loss_rebind, and multi_display_application
   scenarios with public RemoteApp session abilities, selected Resource URA
   subject binding, ordered target lifecycle events, rendered frames, stream
-  isolation, rebind evidence, and visible terminal receipts. Multi-display
-  application may report explicit product unsupported state.
+  isolation, selected target sentinel binding, no cross-stream sentinel
+  leakage, application window-set rebind evidence, and visible terminal
+  receipts. Multi-display application may report explicit product unsupported
+  state.
 
 Non-claims:
   A skipped report or self-test does not prove multi-window tracking product
@@ -272,8 +274,10 @@ for scenario_name in sorted(required_scenarios):
         subject_uras = set()
         source_ids = set()
         epochs = set()
+        sentinel_ids = set()
         for index, stream in enumerate(streams if isinstance(streams, list) else []):
             stream_prefix = f"{prefix}/streams[{index}]"
+            selected_resource_ura = stream.get("selected_resource_ura")
             require(is_ura(stream.get("selected_resource_ura")),
                     f"{stream_prefix}: selected_resource_ura must be canonical")
             require(isinstance(stream.get("session_id"), str) and stream.get("session_id"),
@@ -288,19 +292,31 @@ for scenario_name in sorted(required_scenarios):
                     f"{stream_prefix}: frames_rendered must be positive")
             require(stream.get("target_binding_exact") is True,
                     f"{stream_prefix}: target_binding_exact must be true")
+            require(isinstance(stream.get("selected_sentinel_id"), str) and stream.get("selected_sentinel_id"),
+                    f"{stream_prefix}: selected_sentinel_id must be recorded")
+            require(stream.get("sentinel_owner_resource_ura") == selected_resource_ura,
+                    f"{stream_prefix}: sentinel_owner_resource_ura must match selected_resource_ura")
+            require(stream.get("selected_sentinel_rendered") is True,
+                    f"{stream_prefix}: selected_sentinel_rendered must be true")
+            require(stream.get("foreign_sentinel_rendered") is False,
+                    f"{stream_prefix}: foreign_sentinel_rendered must be false")
             stream_ids.add(stream.get("stream_id"))
             session_ids.add(stream.get("session_id"))
             subject_uras.add(stream.get("selected_resource_ura"))
             source_ids.add(stream.get("frame_source_id"))
             epochs.add(stream.get("media_source_epoch"))
+            sentinel_ids.add(stream.get("selected_sentinel_id"))
         expected = len(streams) if isinstance(streams, list) else 0
         require(len(stream_ids) == expected, f"{prefix}: stream ids must be distinct")
         require(len(session_ids) == expected, f"{prefix}: session ids must be distinct")
         require(len(subject_uras) == expected, f"{prefix}: selected Resource URAs must be distinct")
         require(len(source_ids) == expected, f"{prefix}: frame source ids must be distinct")
         require(len(epochs) == expected, f"{prefix}: media source epochs must be distinct")
+        require(len(sentinel_ids) == expected, f"{prefix}: selected sentinel ids must be distinct")
         require(scenario.get("frames_interleaved") is False,
                 f"{prefix}: frames_interleaved must be false")
+        require(scenario.get("cross_stream_sentinel_leakage") is False,
+                f"{prefix}: cross_stream_sentinel_leakage must be false")
 
     if scenario_name == "geometry_churn":
         require("TARGET_MOVED" in event_types, f"{prefix}: must include TARGET_MOVED")
@@ -320,6 +336,10 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: binding_epoch_after must increase")
         require(integer(media.get("frames_rendered_after_rebind")) > 0,
                 f"{prefix}: media.frames_rendered_after_rebind must be positive")
+        require(integer(media.get("committed_window_set_sentinels_rendered_after_rebind")) > 0,
+                f"{prefix}: media.committed_window_set_sentinels_rendered_after_rebind must be positive")
+        require(media.get("uncommitted_same_app_sentinel_rendered") is False,
+                f"{prefix}: media.uncommitted_same_app_sentinel_rendered must be false")
         require(scenario.get("first_display_capture_started") is False,
                 f"{prefix}: application churn must not start first-display fallback")
         require(scenario.get("display_fallback_used") is False,
@@ -443,6 +463,10 @@ independent["streams"] = [
         "media_source_epoch": 11,
         "frames_rendered": 90,
         "target_binding_exact": True,
+        "selected_sentinel_id": "sentinel-window-a",
+        "sentinel_owner_resource_ura": "easynet:///r/acme/resource/device.dev/window.a",
+        "selected_sentinel_rendered": True,
+        "foreign_sentinel_rendered": False,
     },
     {
         "selected_resource_ura": "easynet:///r/acme/resource/device.dev/window.b",
@@ -452,9 +476,14 @@ independent["streams"] = [
         "media_source_epoch": 12,
         "frames_rendered": 88,
         "target_binding_exact": True,
+        "selected_sentinel_id": "sentinel-window-b",
+        "sentinel_owner_resource_ura": "easynet:///r/acme/resource/device.dev/window.b",
+        "selected_sentinel_rendered": True,
+        "foreign_sentinel_rendered": False,
     },
 ]
 independent["frames_interleaved"] = False
+independent["cross_stream_sentinel_leakage"] = False
 
 geometry = base(
     "geometry_churn",
@@ -481,6 +510,8 @@ app["binding_epoch_after"] = 2
 app["first_display_capture_started"] = False
 app["display_fallback_used"] = False
 app["media"]["frames_rendered_after_rebind"] = 45
+app["media"]["committed_window_set_sentinels_rendered_after_rebind"] = 2
+app["media"]["uncommitted_same_app_sentinel_rendered"] = False
 
 loss = base(
     "target_loss_rebind",

@@ -161,8 +161,12 @@
         "independent concurrent window streams",
         "distinct Resource URAs, session ids, stream ids, media source epochs, and frame source ids",
         "non-interleaved frames for independently tracked streams",
+        "selected target sentinel rendering for each independently tracked stream",
+        "no foreign or cross-stream sentinel leakage between independently tracked streams",
         "move/resize geometry churn with increasing target_geometry_revision",
         "same-display application window-set churn with pending media rebind and TARGET_REBOUND",
+        "committed window-set sentinel rendering after application rebind",
+        "uncommitted same-app window sentinel absence after application rebind",
         "target loss with bounded rebind or explicit rebind failure",
         "multi-display MultiAppSurface implementation or explicit product unsupported report",
         "selected Resource URA session subjects",
@@ -170,6 +174,7 @@
       ],
       "non_claims": [
         "data structures alone do not prove independent tracking execution",
+        "distinct stream identifiers alone do not prove each stream rendered its selected window/application target",
         "target tracker unit tests do not prove real stream isolation",
         "the multi-window tracking verifier self-test does not prove live app/window churn behavior"
       ]
