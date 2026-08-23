@@ -39,6 +39,12 @@ grep -q "self-test accepted media adaptation report without scenarios" "$SCRIPT"
   fail "completion gate self-test must cover missing media scenario summaries"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require multi-window tracking report"
+grep -q "requires_multi_window_scenarios" "$SCRIPT" || \
+  fail "completion gate must require multi-window scenario summaries"
+grep -q "multi-window tracking scenarios summary must be a non-empty list" "$SCRIPT" || \
+  fail "completion gate must reject multi-window reports without scenario summaries"
+grep -q "self-test accepted unsupported multi-display application as product completion" "$SCRIPT" || \
+  fail "completion gate self-test must reject unsupported multi-display app product completion"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require network fallback report"
 grep -q "requires_network_route_scenarios" "$SCRIPT" || \

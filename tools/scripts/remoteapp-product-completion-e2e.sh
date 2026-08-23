@@ -248,6 +248,7 @@ required = [
             "multi_display_application",
         ],
         "requires_evidence_json": True,
+        "requires_multi_window_scenarios": True,
     },
     {
         "id": "network_fallback",
@@ -486,6 +487,187 @@ def validate_media_scenarios(item_id, check, report):
         if isinstance(backpressure, dict):
             if int_value(backpressure.get("frames_dropped")) <= int_value(baseline.get("frames_dropped")):
                 message = "media adaptation backpressure frames_dropped must exceed baseline"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+def validate_multi_window_scenarios(item_id, check, report):
+    required_scenarios = {
+        "independent_window_streams",
+        "geometry_churn",
+        "application_window_set_churn",
+        "target_loss_rebind",
+        "multi_display_application",
+    }
+    scenarios = report.get("scenarios")
+    check["required_multi_window_scenarios"] = sorted(required_scenarios)
+    if not isinstance(scenarios, list) or not scenarios:
+        message = "multi-window tracking scenarios summary must be a non-empty list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+
+    scenario_by_name = {}
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            message = f"multi-window tracking scenarios[{index}] must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        scenario_name = scenario.get("scenario")
+        if scenario_name not in required_scenarios:
+            message = f"multi-window tracking scenarios[{index}].scenario is {scenario_name!r}, expected one of {sorted(required_scenarios)}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if scenario_name in scenario_by_name:
+            message = f"multi-window tracking scenario {scenario_name!r} appears more than once"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        scenario_by_name[scenario_name] = scenario
+
+    observed_scenarios = sorted(scenario_by_name)
+    check["observed_multi_window_scenarios"] = observed_scenarios
+    missing_scenarios = sorted(required_scenarios - set(scenario_by_name))
+    if missing_scenarios:
+        message = "multi-window tracking scenarios missing: " + ", ".join(missing_scenarios)
+        check["errors"].append(message)
+        add_error(item_id, message)
+
+    for scenario_name, scenario in scenario_by_name.items():
+        prefix = f"multi-window tracking scenario {scenario_name}"
+        if scenario.get("status") != "passed":
+            message = f"{prefix}: status is {scenario.get('status')!r}, expected 'passed'"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if not isinstance(scenario.get("selected_resource_ura"), str) or not scenario.get("selected_resource_ura").startswith("easynet:///"):
+            message = f"{prefix}: selected_resource_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("session_id"), str) or not scenario.get("session_id"):
+            message = f"{prefix}: session_id must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("frames_rendered")):
+            message = f"{prefix}: frames_rendered must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        events = {
+            event_type
+            for event_type in scenario.get("events", [])
+            if isinstance(event_type, str)
+        }
+
+        if scenario_name == "independent_window_streams":
+            stream_count = int_value(scenario.get("stream_count"))
+            if stream_count < 2:
+                message = f"{prefix}: stream_count must be at least 2"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            for field in (
+                "distinct_stream_ids",
+                "distinct_session_ids",
+                "distinct_selected_resource_uras",
+                "distinct_frame_source_ids",
+                "distinct_media_source_epochs",
+                "distinct_selected_sentinel_ids",
+            ):
+                if int_value(scenario.get(field)) != stream_count:
+                    message = f"{prefix}: {field} must equal stream_count"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if scenario.get("frames_interleaved") is not False:
+                message = f"{prefix}: frames_interleaved must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("cross_stream_sentinel_leakage") is not False:
+                message = f"{prefix}: cross_stream_sentinel_leakage must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+        if scenario_name == "geometry_churn":
+            if "TARGET_MOVED" not in events:
+                message = f"{prefix}: events must include TARGET_MOVED"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if "TARGET_RESIZED" not in events:
+                message = f"{prefix}: events must include TARGET_RESIZED"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if int_value(scenario.get("geometry_revision_count")) < 2:
+                message = f"{prefix}: geometry_revision_count must be at least 2"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+        if scenario_name == "application_window_set_churn":
+            if not ({"APPLICATION_WINDOW_SET_EXPANDED", "APPLICATION_WINDOW_SET_CONTRACTED"} & events):
+                message = f"{prefix}: events must include application window-set churn"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            for event_name in ("PENDING_MEDIA_REBIND", "TARGET_REBOUND"):
+                if event_name not in events:
+                    message = f"{prefix}: events must include {event_name}"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if int_value(scenario.get("binding_epoch_after")) <= int_value(scenario.get("binding_epoch_before")):
+                message = f"{prefix}: binding_epoch_after must exceed binding_epoch_before"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not positive_int(scenario.get("frames_rendered_after_rebind")):
+                message = f"{prefix}: frames_rendered_after_rebind must be positive"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not positive_int(scenario.get("committed_window_set_sentinels_rendered_after_rebind")):
+                message = f"{prefix}: committed_window_set_sentinels_rendered_after_rebind must be positive"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("uncommitted_same_app_sentinel_rendered") is not False:
+                message = f"{prefix}: uncommitted_same_app_sentinel_rendered must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("first_display_capture_started") is not False:
+                message = f"{prefix}: first_display_capture_started must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("display_fallback_used") is not False:
+                message = f"{prefix}: display_fallback_used must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+        if scenario_name == "target_loss_rebind":
+            if "TARGET_LOST" not in events:
+                message = f"{prefix}: events must include TARGET_LOST"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not ({"TARGET_REBIND_FAILED", "TARGET_REBOUND"} & events):
+                message = f"{prefix}: events must include TARGET_REBIND_FAILED or TARGET_REBOUND"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if "TARGET_REBIND_FAILED" in events:
+                if scenario.get("rebind_failure_reason") != "explicit_rebind_required":
+                    message = f"{prefix}: rebind_failure_reason must be explicit_rebind_required"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                if scenario.get("frontend_action") not in {"new_session_required", "retry_session"}:
+                    message = f"{prefix}: frontend_action must be actionable"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if "TARGET_REBOUND" in events and not positive_int(scenario.get("frames_rendered_after_rebind")):
+                message = f"{prefix}: frames_rendered_after_rebind must be positive after rebound"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if int_value(scenario.get("rebind_deadline_ms")) <= int_value(scenario.get("lost_at_ms")):
+                message = f"{prefix}: rebind_deadline_ms must be after lost_at_ms"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+        if scenario_name == "multi_display_application":
+            if scenario.get("MultiAppSurface") is not True:
+                message = f"{prefix}: MultiAppSurface must be true for product completion"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if "MULTI_APP_SURFACE_CAPTURE_STARTED" not in events:
+                message = f"{prefix}: events must include MULTI_APP_SURFACE_CAPTURE_STARTED"
                 check["errors"].append(message)
                 add_error(item_id, message)
 
@@ -777,6 +959,8 @@ for item in required:
         validate_network_route_scenarios(item_id, check, report)
     if item.get("requires_media_scenarios"):
         validate_media_scenarios(item_id, check, report)
+    if item.get("requires_multi_window_scenarios"):
+        validate_multi_window_scenarios(item_id, check, report)
     if item.get("requires_cross_device_remoteapp_scenarios"):
         validate_cross_device_remoteapp_scenarios(item_id, check, report)
     if item.get("requires_platforms_passed"):
@@ -1271,6 +1455,73 @@ if item_id == "media_adaptation":
             frames_dropped,
             adaptation_event_types,
         ) in media_scenarios
+    ]
+if item_id == "multi_window_tracking":
+    report["scenario_count"] = 5
+    report["scenarios"] = [
+        {
+            "scenario": "independent_window_streams",
+            "status": "passed",
+            "session_id": "sess-independent",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/window.a",
+            "frames_rendered": 120,
+            "events": ["TARGET_STABLE"],
+            "stream_count": 2,
+            "distinct_stream_ids": 2,
+            "distinct_session_ids": 2,
+            "distinct_selected_resource_uras": 2,
+            "distinct_frame_source_ids": 2,
+            "distinct_media_source_epochs": 2,
+            "distinct_selected_sentinel_ids": 2,
+            "frames_interleaved": False,
+            "cross_stream_sentinel_leakage": False,
+        },
+        {
+            "scenario": "geometry_churn",
+            "status": "passed",
+            "session_id": "sess-geometry",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/window.geometry",
+            "frames_rendered": 120,
+            "events": ["TARGET_MOVED", "TARGET_RESIZED"],
+            "geometry_revision_count": 2,
+        },
+        {
+            "scenario": "application_window_set_churn",
+            "status": "passed",
+            "session_id": "sess-app",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/application.editor",
+            "frames_rendered": 120,
+            "events": ["APPLICATION_WINDOW_SET_EXPANDED", "PENDING_MEDIA_REBIND", "TARGET_REBOUND"],
+            "binding_epoch_before": 1,
+            "binding_epoch_after": 2,
+            "frames_rendered_after_rebind": 45,
+            "committed_window_set_sentinels_rendered_after_rebind": 2,
+            "uncommitted_same_app_sentinel_rendered": False,
+            "first_display_capture_started": False,
+            "display_fallback_used": False,
+        },
+        {
+            "scenario": "target_loss_rebind",
+            "status": "passed",
+            "session_id": "sess-loss",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/window.loss",
+            "frames_rendered": 120,
+            "events": ["TARGET_LOST", "TARGET_REBIND_FAILED"],
+            "lost_at_ms": 1000,
+            "rebind_deadline_ms": 31000,
+            "rebind_failure_reason": "explicit_rebind_required",
+            "frontend_action": "new_session_required",
+            "frames_rendered_after_rebind": 0,
+        },
+        {
+            "scenario": "multi_display_application",
+            "status": "passed",
+            "session_id": "sess-multi-display-app",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/application.multi-display",
+            "frames_rendered": 120,
+            "events": ["MULTI_APP_SURFACE_CAPTURE_STARTED"],
+            "MultiAppSurface": True,
+        },
     ]
 if item_id == "network_fallback":
     network_routes = [
@@ -1966,6 +2217,62 @@ PY
   fi
   write_synthetic_report "$tmp/media_adaptation.json" media_adaptation
 
+  python3 - "$tmp/multi_window_tracking.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+del report["scenarios"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-multi-window-scenarios" >/dev/null 2>&1; then
+    echo "self-test accepted multi-window tracking report without scenarios" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/multi_window_tracking.json" multi_window_tracking
+
+  python3 - "$tmp/multi_window_tracking.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+for scenario in report["scenarios"]:
+    if scenario.get("scenario") == "multi_display_application":
+        scenario["status"] = "unsupported"
+        scenario["MultiAppSurface"] = False
+        scenario["events"] = []
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/unsupported-multi-display-application" >/dev/null 2>&1; then
+    echo "self-test accepted unsupported multi-display application as product completion" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/multi_window_tracking.json" multi_window_tracking
+
   python3 - "$tmp/input_injection.json" <<'PY'
 import json
 import pathlib
@@ -2097,9 +2404,11 @@ case "$MODE" in
     grep -q 'requires_evidence_json' "$0"
     grep -q 'requires_platforms_passed' "$0"
     grep -q 'requires_media_scenarios' "$0"
+    grep -q 'requires_multi_window_scenarios' "$0"
     grep -q 'requires_network_route_scenarios' "$0"
     grep -q 'requires_cross_device_remoteapp_scenarios' "$0"
     grep -q 'media adaptation scenarios summary must be a non-empty list' "$0"
+    grep -q 'multi-window tracking scenarios summary must be a non-empty list' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-device RemoteApp scenarios summary must be a non-empty list' "$0"
     grep -q 'unsupported_targets must be empty' "$0"
@@ -2136,6 +2445,8 @@ case "$MODE" in
     grep -q 'self-test accepted unsupported cross-platform capture as product completion' "$0"
     grep -q 'self-test accepted unsupported input injection as product completion' "$0"
     grep -q 'self-test accepted media adaptation report without scenarios' "$0"
+    grep -q 'self-test accepted multi-window tracking report without scenarios' "$0"
+    grep -q 'self-test accepted unsupported multi-display application as product completion' "$0"
     grep -q 'self-test accepted network fallback report without route scenarios' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test

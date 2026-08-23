@@ -22,6 +22,39 @@ grep -q "skipped" /tmp/remoteapp-multi-window-tracking-skip.out || \
 
 EASYNET_REMOTEAPP_MULTI_WINDOW_TRACKING_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
 
+python3 - "$OUT_DIR/good/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+scenarios = {scenario["scenario"]: scenario for scenario in report["scenarios"]}
+assert set(scenarios) == {
+    "independent_window_streams",
+    "geometry_churn",
+    "application_window_set_churn",
+    "target_loss_rebind",
+    "multi_display_application",
+}
+independent = scenarios["independent_window_streams"]
+assert independent["stream_count"] == 2
+assert independent["distinct_stream_ids"] == independent["stream_count"]
+assert independent["distinct_selected_resource_uras"] == independent["stream_count"]
+assert independent["frames_interleaved"] is False
+assert independent["cross_stream_sentinel_leakage"] is False
+geometry = scenarios["geometry_churn"]
+assert "TARGET_MOVED" in geometry["events"]
+assert "TARGET_RESIZED" in geometry["events"]
+assert geometry["geometry_revision_count"] >= 2
+app = scenarios["application_window_set_churn"]
+assert app["binding_epoch_after"] > app["binding_epoch_before"]
+assert app["frames_rendered_after_rebind"] > 0
+assert app["display_fallback_used"] is False
+loss = scenarios["target_loss_rebind"]
+assert "TARGET_LOST" in loss["events"]
+assert loss["rebind_deadline_ms"] > loss["lost_at_ms"]
+assert scenarios["multi_display_application"]["status"] == "unsupported"
+PY
+
 python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/interleaved.json" <<'PY'
 import json
 import sys

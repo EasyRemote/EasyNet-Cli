@@ -395,13 +395,51 @@ for scenario_name in sorted(required_scenarios):
         require("MULTI_APP_SURFACE_CAPTURE_STARTED" in event_types,
                 f"{prefix}: must include MULTI_APP_SURFACE_CAPTURE_STARTED")
 
-    scenario_reports.append({
+    scenario_report = {
         "scenario": scenario_name,
         "status": "passed",
         "session_id": session_id,
         "selected_resource_ura": subject_ura,
+        "frames_rendered": integer(media.get("frames_rendered")),
         "events": event_types,
-    })
+    }
+    if scenario_name == "independent_window_streams":
+        scenario_report.update({
+            "stream_count": expected,
+            "distinct_stream_ids": len(stream_ids),
+            "distinct_session_ids": len(session_ids),
+            "distinct_selected_resource_uras": len(subject_uras),
+            "distinct_frame_source_ids": len(source_ids),
+            "distinct_media_source_epochs": len(epochs),
+            "distinct_selected_sentinel_ids": len(sentinel_ids),
+            "frames_interleaved": scenario.get("frames_interleaved"),
+            "cross_stream_sentinel_leakage": scenario.get("cross_stream_sentinel_leakage"),
+        })
+    if scenario_name == "geometry_churn":
+        scenario_report["geometry_revision_count"] = len(revisions)
+    if scenario_name == "application_window_set_churn":
+        scenario_report.update({
+            "binding_epoch_before": integer(scenario.get("binding_epoch_before")),
+            "binding_epoch_after": integer(scenario.get("binding_epoch_after")),
+            "frames_rendered_after_rebind": integer(media.get("frames_rendered_after_rebind")),
+            "committed_window_set_sentinels_rendered_after_rebind": integer(
+                media.get("committed_window_set_sentinels_rendered_after_rebind")
+            ),
+            "uncommitted_same_app_sentinel_rendered": media.get("uncommitted_same_app_sentinel_rendered"),
+            "first_display_capture_started": scenario.get("first_display_capture_started"),
+            "display_fallback_used": scenario.get("display_fallback_used"),
+        })
+    if scenario_name == "target_loss_rebind":
+        scenario_report.update({
+            "lost_at_ms": integer(scenario.get("lost_at_ms")),
+            "rebind_deadline_ms": integer(scenario.get("rebind_deadline_ms")),
+            "rebind_failure_reason": scenario.get("rebind_failure_reason"),
+            "frontend_action": scenario.get("frontend_action"),
+            "frames_rendered_after_rebind": integer(media.get("frames_rendered_after_rebind")),
+        })
+    if scenario_name == "multi_display_application":
+        scenario_report["MultiAppSurface"] = scenario.get("MultiAppSurface")
+    scenario_reports.append(scenario_report)
 
 if errors:
     report = {
