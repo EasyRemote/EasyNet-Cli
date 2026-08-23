@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(view["scope_audit"]["input_mode"], json!("view_only"));
         assert_eq!(
             view["scope_audit"]["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("input_consent_required")
         );
         assert_eq!(view["input_policy"]["input_scope"], json!("view_only"));
         assert_eq!(view["input_policy"]["keyboard_enabled"], json!(false));
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
         assert_eq!(
             view["input_readiness"]["blocked_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("input_consent_required")
         );
         assert_eq!(view["input_readiness"]["input_scope"], json!("view_only"));
         assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);

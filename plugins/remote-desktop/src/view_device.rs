@@ -31,8 +31,7 @@ const PLATFORM_REASON_LINUX_APP_WINDOW_UNSUPPORTED: &str =
 const PLATFORM_REASON_WINDOWS_UNSUPPORTED: &str = "windows_native_backend_not_implemented";
 const INPUT_REASON_MACOS_PERMISSION_GRANTED: &str = "macos_accessibility_permission_granted";
 const INPUT_REASON_MACOS_PERMISSION_DENIED: &str = "macos_accessibility_permission_denied";
-const INPUT_REASON_TARGET_SCOPED_UNSUPPORTED: &str =
-    "target_scoped_keyboard_pointer_dispatch_unsafe";
+const INPUT_REASON_MACOS_TARGET_GUARD_READY: &str = "macos_target_input_guard_ready";
 const INPUT_REASON_LINUX_UNSUPPORTED: &str = "linux_input_injection_backend_not_implemented";
 const INPUT_REASON_WINDOWS_UNSUPPORTED: &str = "windows_input_injection_backend_not_implemented";
 
@@ -320,6 +319,11 @@ fn input_control_support_view(input_available: bool) -> Value {
     } else {
         INPUT_REASON_MACOS_PERMISSION_DENIED
     };
+    let macos_target_reason = if input_available {
+        INPUT_REASON_MACOS_TARGET_GUARD_READY
+    } else {
+        INPUT_REASON_MACOS_PERMISSION_DENIED
+    };
 
     json!({
         "schema_version": 1,
@@ -329,8 +333,8 @@ fn input_control_support_view(input_available: bool) -> Value {
         "platforms": {
             "macos": {
                 "display": input_support(macos_display_status, macos_display_reason, json!("display_global")),
-                "window": input_support("unsupported", INPUT_REASON_TARGET_SCOPED_UNSUPPORTED, Value::Null),
-                "application": input_support("unsupported", INPUT_REASON_TARGET_SCOPED_UNSUPPORTED, Value::Null),
+                "window": input_support(macos_display_status, macos_target_reason, json!("target_local")),
+                "application": input_support(macos_display_status, macos_target_reason, json!("target_local")),
             },
             "linux": {
                 "display": input_support("unsupported", INPUT_REASON_LINUX_UNSUPPORTED, Value::Null),
@@ -679,11 +683,19 @@ mod tests {
         }
         assert_eq!(
             input_support["platforms"]["macos"]["window"]["status"],
-            json!("unsupported")
+            input_support["platforms"]["macos"]["display"]["status"]
+        );
+        assert_eq!(
+            input_support["platforms"]["macos"]["window"]["scope"],
+            json!("target_local")
         );
         assert_eq!(
             input_support["platforms"]["macos"]["application"]["reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!(if capabilities["input_injection"] == json!(true) {
+                "macos_target_input_guard_ready"
+            } else {
+                "macos_accessibility_permission_denied"
+            })
         );
         assert_eq!(
             input_support["platforms"]["linux"]["display"]["reason"],

@@ -254,8 +254,8 @@ reject 'full acceptance verified' "$SPEC" \
   'targeted-session SPEC must not claim full product acceptance'
 require 'full RemoteApp product closure incomplete' "$SPEC" \
   'targeted-session SPEC must state that full RemoteApp product closure is incomplete'
-require 'Interactive app/window input must remain view-only' "$SPEC" \
-  'SPEC must retain the view-only input limitation until input execution is proven'
+require 'macOS interactive app/window input uses `target_local` only after explicit' "$SPEC" \
+  'SPEC must bind target-local input to explicit consent and host execution guards'
 require 'Clipboard and file-drop frame types exist in the input model but are not implemented' "$SPEC" \
   'SPEC must retain unsupported clipboard/file-drop boundary'
 require 'MultiAppSurface' "$SPEC" \
@@ -785,6 +785,12 @@ require 'input_control' "$INPUT_INJECTION" \
   'input injection verifier must require input-control consent'
 require 'display_global' "$INPUT_INJECTION" \
   'input injection verifier must require display_global input scope'
+require 'target_local' "$INPUT_INJECTION" \
+  'input injection verifier must require target_local scope for window/application targets'
+require 'target_guard_validation' "$INPUT_INJECTION" \
+  'input injection verifier must require per-event target guard evidence'
+require 'fresh target snapshot and validation must precede OS apply' "$INPUT_INJECTION" \
+  'input injection verifier must order fresh target validation before each OS event'
 require 'focus_validated' "$INPUT_INJECTION" \
   'input injection verifier must require focus validation'
 require 'coordinate_mapping_validated' "$INPUT_INJECTION" \

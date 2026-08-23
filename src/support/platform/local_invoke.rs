@@ -1338,9 +1338,48 @@ impl LocalRemoteDesktopSessionIssuer {
         )
     }
 
+    pub fn create_session_with_input_control(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        input_control: bool,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout_with_input_control(
+            selected_resource_ura,
+            create_session_args,
+            input_control,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    }
+
     pub fn create_session_timeout(
         selected_resource_ura: &str,
         create_session_args: Value,
+        timeout: std::time::Duration,
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout_with_input_control(
+            selected_resource_ura,
+            create_session_args,
+            false,
+            timeout,
+            trace_id,
+        )
+    }
+
+    fn create_session_timeout_with_input_control(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        input_control: bool,
         timeout: std::time::Duration,
         trace_id: Option<&str>,
     ) -> anyhow::Result<(
@@ -1361,7 +1400,7 @@ impl LocalRemoteDesktopSessionIssuer {
         )?;
         let (grant, grant_meta) = invoke_local_target_with_invocation_meta(
             &grant_target,
-            serde_json::json!({ "intent": "remote_desktop_session" }),
+            remote_desktop_session_consent_args(input_control),
             grant_context,
         )?;
         let consent_ticket = grant
@@ -1528,6 +1567,14 @@ impl LocalRemoteDesktopSessionIssuer {
         )?;
         invoke_local_target_stream_with_invocation_context(&target, args, context, max_frames)
     }
+}
+
+#[cfg(feature = "remote-desktop")]
+fn remote_desktop_session_consent_args(input_control: bool) -> Value {
+    serde_json::json!({
+        "intent": "remote_desktop_session",
+        "input_control": input_control,
+    })
 }
 
 #[cfg(feature = "remote-desktop")]
@@ -2187,6 +2234,25 @@ mod tests {
         assert_eq!(
             target.dispatch_name(),
             crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION
+        );
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_consent_args_preserve_explicit_input_authority() {
+        assert_eq!(
+            remote_desktop_session_consent_args(false),
+            serde_json::json!({
+                "intent": "remote_desktop_session",
+                "input_control": false,
+            })
+        );
+        assert_eq!(
+            remote_desktop_session_consent_args(true),
+            serde_json::json!({
+                "intent": "remote_desktop_session",
+                "input_control": true,
+            })
         );
     }
 

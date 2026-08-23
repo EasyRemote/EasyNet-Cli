@@ -224,6 +224,9 @@ pub struct CreateRemoteDesktopSessionArgs {
     /// Remote desktop session mode.
     #[arg(long, value_parser = ["view_only", "interactive"])]
     pub mode: Option<String>,
+    /// Explicitly grant keyboard/pointer control for an interactive session.
+    #[arg(long, default_value_t = false)]
+    pub input_control: bool,
     /// Preferred transport, in priority order.
     #[arg(long = "transport", value_name = "TRANSPORT")]
     pub transport_preferences: Vec<String>,
@@ -568,9 +571,17 @@ fn stream_frames_to_json(frames: &[LocalStreamFrame]) -> Value {
 #[cfg(feature = "remote-desktop")]
 fn run_create_remote_desktop_session(args: CreateRemoteDesktopSessionArgs) -> anyhow::Result<()> {
     let request = create_remote_desktop_session_request(&args);
-    let (session, invocation, consent_invocation) =
+    let issued = if args.input_control {
+        LocalRemoteDesktopSessionIssuer::create_session_with_input_control(
+            &args.subject,
+            request,
+            true,
+        )
+    } else {
         LocalRemoteDesktopSessionIssuer::create_session(&args.subject, request)
-            .context("invoke remote_desktop.grant_consent -> remote_desktop.create_session")?;
+    };
+    let (session, invocation, consent_invocation) =
+        issued.context("invoke remote_desktop.grant_consent -> remote_desktop.create_session")?;
     let response = serde_json::json!({
         "session": session,
         "invocation": invocation.as_value(),
@@ -965,6 +976,7 @@ mod tests {
             subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
             session_id: None,
             mode: Some("view_only".to_string()),
+            input_control: true,
             transport_preferences: vec!["webrtc".to_string()],
             lease_ttl_ms: Some(30_000),
             format: OutputFormat::Json,
@@ -980,6 +992,10 @@ mod tests {
         );
         assert!(request.get("subject").is_none());
         assert!(request.get("resource_ura").is_none());
+        assert!(
+            request.get("input_control").is_none(),
+            "input consent belongs to grant_consent, not create_session args"
+        );
     }
 
     #[test]
@@ -989,6 +1005,7 @@ mod tests {
             subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
             session_id: Some("rd-stale-window-e2e".to_string()),
             mode: Some("view_only".to_string()),
+            input_control: false,
             transport_preferences: vec!["webrtc".to_string()],
             lease_ttl_ms: None,
             format: OutputFormat::Json,

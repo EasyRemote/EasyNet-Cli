@@ -150,6 +150,7 @@ enum InputScopeReason {
     RequestedViewOnly,
     InputControlGranted,
     InputConsentRequired,
+    TargetScopedInputGuarded,
     TargetScopedInputUnsafe,
 }
 
@@ -159,6 +160,7 @@ impl InputScopeReason {
             Self::RequestedViewOnly => "requested_view_only",
             Self::InputControlGranted => "input_control_granted",
             Self::InputConsentRequired => "input_consent_required",
+            Self::TargetScopedInputGuarded => "target_scoped_input_guarded",
             Self::TargetScopedInputUnsafe => "target_scoped_keyboard_pointer_dispatch_unsafe",
         }
     }
@@ -168,6 +170,7 @@ impl InputScopeReason {
             "requested_view_only" => Ok(Self::RequestedViewOnly),
             "input_control_granted" => Ok(Self::InputControlGranted),
             "input_consent_required" => Ok(Self::InputConsentRequired),
+            "target_scoped_input_guarded" => Ok(Self::TargetScopedInputGuarded),
             "target_scoped_keyboard_pointer_dispatch_unsafe" => Ok(Self::TargetScopedInputUnsafe),
             other => anyhow::bail!("unsupported RemoteApp recovery input_scope_reason {other:?}"),
         }
@@ -2032,13 +2035,23 @@ fn input_scope_for_request(
             }
         }
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
-            // macOS target-scoped keyboard/pointer dispatch is unsafe until the
-            // focus/activation validator is implemented. The session can still
-            // capture app/window surfaces in view-only mode.
-            InputScopeDecision::new(
-                InputScope::ViewOnly,
-                InputScopeReason::TargetScopedInputUnsafe,
-            )
+            if !cfg!(target_os = "macos") {
+                return InputScopeDecision::new(
+                    InputScope::ViewOnly,
+                    InputScopeReason::TargetScopedInputUnsafe,
+                );
+            }
+            if input_control_granted {
+                InputScopeDecision::new(
+                    InputScope::TargetLocal,
+                    InputScopeReason::TargetScopedInputGuarded,
+                )
+            } else {
+                InputScopeDecision::new(
+                    InputScope::ViewOnly,
+                    InputScopeReason::InputConsentRequired,
+                )
+            }
         }
     }
 }
@@ -2323,6 +2336,30 @@ mod tests {
                 1,
             )
             .expect("display-scoped application identity must resolve")
+    }
+
+    fn interactive_application_binding_with_input_consent() -> RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    live_metadata(json!({
+                        "display_id": 1,
+                        "bundle_id": "com.apple.Safari",
+                        "app_identity": "com.apple.Safari",
+                        "app_name": "Safari",
+                        "primary_pid": 42,
+                        "resolved_window_ids": [7, 8],
+                        "window_set_epoch": 99,
+                        "target_identity_epoch": 99,
+                    })),
+                ),
+                "interactive",
+                1,
+                true,
+            )
+            .expect("application identity must resolve with explicit input consent")
     }
 
     fn interactive_display_binding() -> RemoteAppTargetBinding {
@@ -3209,7 +3246,7 @@ mod tests {
         assert_eq!(projection["input_scope"], json!("view_only"));
         assert_eq!(
             projection["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("input_consent_required")
         );
         assert_eq!(
             projection["resolved_identity"]["bundle_id"],
@@ -3222,7 +3259,7 @@ mod tests {
         );
         assert_eq!(
             binding.scope_audit_value()["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("input_consent_required")
         );
         assert_eq!(
             binding.latest_target_diagnostic_value()["target_model"],
@@ -3238,24 +3275,25 @@ mod tests {
         );
         assert_eq!(
             binding.target_bound_event_payload()["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("input_consent_required")
         );
     }
 
     #[test]
-    fn application_interactive_downgrade_projects_input_scope_reason() {
-        let binding = interactive_application_binding();
+    fn application_interactive_with_input_consent_projects_guarded_target_scope() {
+        let binding = interactive_application_binding_with_input_consent();
+        assert_eq!(binding.to_value()["input_scope"], json!("target_local"));
         assert_eq!(
             binding.to_value()["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("target_scoped_input_guarded")
         );
         assert_eq!(
             binding.scope_audit_value()["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("target_scoped_input_guarded")
         );
         assert_eq!(
             binding.target_bound_event_payload()["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("target_scoped_input_guarded")
         );
     }
 

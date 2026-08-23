@@ -64,7 +64,11 @@ Implemented targeted-session state and explicit unsupported product boundaries:
   after a renewed capture proof commits. Rebind attempts that cannot be proven
   emit `TARGET_REBIND_FAILED`. Multi-display application capture remains
   unsupported until `MultiAppSurface`/multi-stream support exists.
-- Interactive app/window input must remain view-only until focus validation, coordinate mapping, and target epoch checks are proven on the execution path.
+- macOS interactive app/window input uses `target_local` only after explicit
+  input-control consent. The daemon revalidates exact identity, visibility,
+  focus, geometry, and application window-set state immediately before every
+  OS input event; other platforms remain fail-closed until they implement the
+  same execution guarantee.
 - Direct WebRTC route discovery is provider-backed. Host candidates,
   configured STUN server-reflexive routes, standard TURN relay routes, and
   EasyNet relay routes are represented as typed route evidence. Provider and
@@ -1067,13 +1071,13 @@ For app/window sessions:
 
 If a platform cannot guarantee target-scoped input for app/window sessions, interactive mode must fail closed or downgrade to `view_only` with an explicit reason.
 
-macOS v1 must treat app/window keyboard injection as unsafe unless it implements
-all of:
+macOS v1 permits app/window keyboard and pointer injection only because it
+implements all of:
 
 ```text
 foreground app/window validation before dispatch
 explicit target activation policy
-post-dispatch target still matches validation for bounded time
+fresh host validation occurs after the frame epoch gates and before dispatch
 input disabled on TARGET_LOST/HIDDEN/MINIMIZED/FOCUS_CHANGED away
 ```
 
@@ -1206,7 +1210,10 @@ macOS minimum viable implementation order:
 6. add poll/diff tracker for move/resize/lost after first successful capture
 ```
 
-The first implementation may mark application sessions as `capture_surface=AppSurface` and `input_mode=view_only` if target-scoped input cannot be guaranteed. It must not claim `WindowSurface` for application sessions.
+An implementation must mark application sessions as
+`capture_surface=AppSurface` and `input_mode=view_only` whenever target-scoped
+input cannot be guaranteed. It must not claim `WindowSurface` for application
+sessions.
 
 macOS v1 minimum product claim:
 
@@ -1215,7 +1222,8 @@ display: production when WebRTC path is ready
 window: production capture only after target_binding proves exact SCWindow
 application: production only when response states the exact display-scoped app
   window set; if the app spans displays and multi-stream is absent, unsupported
-interactive window/application: view_only unless focus validation is implemented
+interactive window/application: macOS target_local with explicit input consent
+  and per-event target guard; otherwise view_only
 ```
 
 ### Linux v1
@@ -1494,9 +1502,10 @@ E2E checkpoints with authoritative evidence:
 | E2E-08 move/resize tracking | Move and resize selected window during streaming | ordered `TARGET_MOVED`/`TARGET_RESIZED` events advance `target_geometry_revision`; input transform observes the same revision |
 | E2E-09 target loss vs transport failure | Close selected window while WebRTC remains connected | event is `TARGET_LOST`/`MEDIA_SOURCE_LOST`, not `TRANSPORT_FAILED`; session/event lifecycle state is `suspended`; input is disabled |
 | E2E-10 weak identity ambiguity | Create two windows with same app/title, select a row without stable native identity | resolver returns `target_identity_ambiguous`; no stream starts |
-| E2E-11 view-only input safety | Start app/window session without proven focus-safe input routing | response reports `input_mode=view_only`; keyboard frames are rejected or ignored with `input_scope_unsupported` |
+| E2E-11 view-only input safety | Start app/window session without explicit input-control consent | response reports `input_mode=view_only` with `input_consent_required`; keyboard/pointer frames are rejected or ignored with `input_scope_unsupported` |
 | E2E-12 frontend invocation subject | Create session from frontend selected target | Axon Invocation has selected resource URA in envelope subject and no `subject` inside args |
 | E2E-13 production online predicate | Complete WebRTC offer/answer and receive decoded frames for a selected window/application | post-negotiation session evidence reports `production_media_ready=true`, `production_readiness.production_codec_negotiated=true`, and `production_readiness.media_transport_ready=true`; UI online state must not be derived from `target_binding`, `production_gate`, or decoded-frame presence alone |
+| E2E-14 guarded target-local input | Start a consented interactive macOS window/application session and send pointer plus key frames | response reports `input_scope=target_local`; every applied input has a fresh pre-dispatch host proof bound to the selected Resource/session/geometry revision/focus epoch, exact target identity, visibility, focus, and exact application window set when applicable; an independent OS observer proves the selected target received the effect within the latency bound |
 
 Passing only unit tests for resolver matching, descriptor registration, or JSON
 schema does not prove the feature. M1 requires at least E2E-01 through E2E-07

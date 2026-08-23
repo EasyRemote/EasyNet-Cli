@@ -96,7 +96,8 @@ for checkpoint in \
   'E2E-08 move/resize tracking' \
   'E2E-09 target loss vs transport failure' \
   'E2E-10 weak identity ambiguity' \
-  'E2E-11 view-only input safety'; do
+  'E2E-11 view-only input safety' \
+  'E2E-14 guarded target-local input'; do
   require "$checkpoint" "$SPEC" "SPEC must retain $checkpoint acceptance"
 done
 
@@ -153,12 +154,12 @@ require 'fn current_session_effective_input_policy\(' "$INPUT" \
   'production input path must resolve current typed policy per frame'
 require 'let snapshot = session\.target_snapshot\(\);' "$INPUT" \
   'production input path must read the latest session target snapshot'
-require 'let input_scope = session\.target_binding\(\)\.input_scope\(\);' "$INPUT" \
-  'production input path must read input scope from the session-owned target binding'
+require 'let binding = session\.target_binding\(\);' "$INPUT" \
+  'production input path must read the current session-owned target binding'
 require 'if !snapshot\.input_enabled\(\)' "$INPUT" \
   'production input path must disable input after target loss'
-require 'base_policy\.for_current_target\(snapshot, input_scope\)' "$INPUT" \
-  'production input path must reapply input scope through the typed effective policy after deriving latest pointer target geometry'
+require 'base_policy\.for_current_target\(snapshot, binding\)' "$INPUT" \
+  'production input path must reapply the current binding and snapshot through the typed effective policy'
 require 'policy\["pointer_target"\]\["target_geometry_revision"\]' "$INPUT" \
   'input policy test must assert pointer target geometry revision'
 require 'loose base policy reopen view-only pointer input' "$INPUT" \
@@ -311,7 +312,7 @@ require_multiline 'm/session\.target_tracking_state\(\)\["input_enabled"\]\s*,\s
   'E2E-09 must assert target loss disables input'
 require 'target_loss_rejects_late_client_media_state_without_degrading_session' "$SESSION" \
   'E2E-09 must test late client media state cannot degrade a suspended target-loss session'
-require 'report_client_media_state\(epoch, "stalled"\)' "$SESSION" \
+require 'report_client_media_state\(epoch, "stalled", None\)' "$SESSION" \
   'E2E-09 must exercise the late client media-state path after target loss'
 require_multiline 'm/all\(\|event\| event\["event_type"\] != json!\("SESSION_DEGRADED"\)\)/s' "$SESSION" \
   'target-domain media source loss tests must assert SESSION_DEGRADED is not emitted'
@@ -645,9 +646,11 @@ require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
   'public production readiness must expose target scope readiness'
 require '"ready": ready' "$VIEW" \
   'public production readiness ready predicate must use the route-gated transport production predicate'
-require 'let ready = transport_view\.production_ready\(session\)' "$VIEW" \
-  'public production readiness must bind ready to media plus route readiness'
-require '"blocked_reason": production_readiness_blocked_reason\(session, transport_view\)' "$VIEW" \
+require 'let video_ready = transport_view\.production_ready\(session\)' "$VIEW" \
+  'public production readiness must bind video readiness to media plus route readiness'
+require 'let ready = video_ready && audio_ready' "$VIEW" \
+  'public production readiness must require both production video and host audio'
+require_multiline 'm/"blocked_reason": production_readiness_blocked_reason\(\s*session,\s*transport_view,/s' "$VIEW" \
   'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 require 'fn production_readiness_blocked_reason\(' "$VIEW" \
   'production readiness blocked reason must be centralized in the session view projection'
@@ -673,7 +676,7 @@ require 'view\["production_readiness"\]\["client_media_ready"\]' "$SESSION_STORE
   'production readiness tests must assert client presenting evidence before online'
 require 'production_route_not_ready' "$SESSION_STORE" \
   'production readiness tests must prove host-only routes keep product readiness offline after client presentation'
-require 'report_client_media_state\(TransportEpoch::new\(1\), "presenting"\)' "$SESSION_STORE" \
+require 'report_client_media_state\(TransportEpoch::new\(1\), "presenting", None\)' "$SESSION_STORE" \
   'production readiness tests must prove client presenting flips production online after sender readiness'
 require 'view\["transport"\]\["production_ready"\]' "$SESSION_STORE" \
   'public transport summary must expose production_ready separately from primary_ready'
@@ -951,27 +954,41 @@ require 'requested ScreenCaptureKit window identity is ambiguous' "$SCK" \
 require 'requested ScreenCaptureKit application identity is ambiguous' "$SCK" \
   'application selection ambiguity must be typed'
 
-# E2E-11: capture/session consent is not input consent. Display sessions and
-# app/window sessions remain view-only until explicit input consent exists; app
-# and window sessions additionally require a focus-safe target-local input
-# validator. Pointer geometry may be computed for diagnostics, but
-# keyboard/pointer injection is disabled without those proofs.
+# E2E-11: capture/session consent is not input consent. Every target remains
+# view-only until explicit input consent exists. macOS app/window input then
+# requires the target-local guard immediately before every OS event.
 require 'fn input_scope_for_request\(' "$TARGET" \
   'target resolver must centralize requested mode to input scope'
 require 'InputScopeDecision' "$TARGET" \
   'target resolver must return an explicit input scope decision, not a bare scope'
 require 'RemoteDesktopTargetKind::Window \| RemoteDesktopTargetKind::Application' "$TARGET" \
-  'window/application targets must share the view-only input safety branch'
+  'window/application targets must share one target-local input scope branch'
 require 'InputScope::ViewOnly' "$TARGET" \
   'requested interactive mode must downgrade to view_only when input authority is missing'
 require 'input_consent_required' "$TARGET" \
   'display interactive downgrade must publish missing input consent as a stable reason'
 require 'display_interactive_downgrades_until_input_consent_exists' "$TARGET" \
   'target binding tests must prove display interactive does not imply input consent'
-require 'target-scoped keyboard/pointer dispatch is unsafe' "$TARGET" \
-  'view-only downgrade must document the missing focus-safe validator'
-require 'target_scoped_keyboard_pointer_dispatch_unsafe' "$TARGET" \
-  'view-only downgrade must publish a stable machine-readable input scope reason'
+require 'TargetScopedInputGuarded' "$TARGET" \
+  'target binding must distinguish guarded target-local input from global input'
+require 'target_scoped_input_guarded' "$TARGET" \
+  'target binding must publish the stable guarded target-local scope reason'
+require 'validate_live_target_input' "$TARGET_OBSERVER" \
+  'target observer must expose fresh host validation for input execution'
+require 'target_input_guard_validation' "$INPUT" \
+  'input execution must invoke the target-local host guard'
+require 'target_local_input_without_bound_host_proof_fails_closed_before_os_injection' "$INPUT" \
+  'target-local input must fail closed without a bound host proof'
+require 'policy\.target_binding = Some\(binding\.clone\(\)\)' "$INPUT" \
+  'current input policy must replace the creation binding after target rebind'
+require 'current_target_policy_replaces_creation_binding_after_rebind' "$INPUT" \
+  'input tests must prove rebind refreshes the execution binding'
+require 'CGEventSetLocation\(event, mapped_point\(frame, target\)\)' "$INPUT" \
+  'macOS wheel injection must use the selected target location'
+require 'target_pointer_mapping_clamps_raw_coordinates_inside_bound_surface' "$INPUT" \
+  'target-local pointer mapping must prove raw coordinates cannot escape the target surface'
+require '"target_guard_validation"' "$INPUT" \
+  'applied target-local input events must publish host guard execution evidence'
 require '"input_scope_reason": self\.scope_audit\.input_scope_reason\.as_str\(\)' "$TARGET" \
   'target binding and TARGET_BOUND projection must expose the committed input scope reason'
 require 'binding\.scope_audit_value\(\)\["input_scope_reason"\]' "$TARGET" \
@@ -980,8 +997,8 @@ require 'binding\.target_bound_event_payload\(\)\["input_scope_reason"\]' "$TARG
   'target binding tests must prove input scope reason is externally visible in TARGET_BOUND'
 require 'binding\.target_bound_event_payload\(\)\["consent_epoch"\]' "$TARGET" \
   'target binding tests must prove consent epoch is externally visible in TARGET_BOUND'
-require 'application_interactive_downgrade_projects_input_scope_reason' "$TARGET" \
-  'target binding tests must prove app/window interactive downgrade reason is visible'
+require 'application_interactive_with_input_consent_projects_guarded_target_scope' "$TARGET" \
+  'target binding tests must prove explicit consent projects guarded target-local scope'
 require '"input_readiness": input_readiness\.clone\(\)' "$VIEW" \
   'session view must expose a single machine-readable input readiness projection'
 require '"readiness": input_readiness' "$VIEW" \
@@ -1212,8 +1229,8 @@ require '"diagnostic_only"' "$VIEW_DEVICE" \
   'device capabilities must distinguish Linux display diagnostic-only support from production capture'
 require '"requires_input_control_consent": true' "$VIEW_DEVICE" \
   'device capabilities must expose explicit input-control consent requirement'
-require '"target_scoped_keyboard_pointer_dispatch_unsafe"' "$VIEW_DEVICE" \
-  'device capabilities must keep macOS window/application input unsupported until target-scoped dispatch is safe'
+require '"macos_target_input_guard_ready"' "$VIEW_DEVICE" \
+  'device capabilities must expose guarded macOS window/application input readiness'
 require '"linux_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \
   'device capabilities must mark Linux input injection unsupported'
 require '"windows_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \

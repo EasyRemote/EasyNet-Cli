@@ -4,7 +4,7 @@
 # Boundary:
 # - This script proves SPEC E2E-11 at the public CLI/daemon boundary:
 #   a user asks for an interactive app/window remote desktop session, but the
-#   daemon has no proven focus-safe target-scoped input dispatcher. The public
+#   request deliberately omits explicit input-control consent. The public
 #   create/show session views must therefore report input_mode=view_only and a
 #   key/pointer rejection contract of input_scope_unsupported.
 # - It does not add a diagnostic input API. The live proof is the public
@@ -220,14 +220,14 @@ require(get("create_session.session.target_binding.target_kind") == target_kind,
 require(get("create_session.session.target_binding.input_scope") == "view_only",
         "target_binding.input_scope must be view_only")
 require(get("create_session.session.target_binding.input_scope_reason")
-        == "target_scoped_keyboard_pointer_dispatch_unsafe",
-        "target_binding must expose target_scoped_keyboard_pointer_dispatch_unsafe")
+        == "input_consent_required",
+        "target_binding must expose input_consent_required")
 require(isinstance(scope_audit, dict), "session.scope_audit must be recorded")
 require(get("create_session.session.scope_audit.input_mode") == "view_only",
         "scope_audit.input_mode must be view_only")
 require(get("create_session.session.scope_audit.input_scope_reason")
-        == "target_scoped_keyboard_pointer_dispatch_unsafe",
-        "scope_audit must expose target_scoped_keyboard_pointer_dispatch_unsafe")
+        == "input_consent_required",
+        "scope_audit must expose input_consent_required")
 require(get("create_session.session.scope_audit.scope_widened") is False,
         "view-only input downgrade must not widen capture scope")
 require(get("create_session.session.scope_audit.display_fallback_used") is False,
@@ -254,8 +254,8 @@ require(get("show_session.session.input_policy.input_scope") == "view_only",
 require(get("show_session.session.scope_audit.input_mode") == "view_only",
         "show_session must preserve input_mode=view_only")
 require(get("show_session.session.target_binding.input_scope_reason")
-        == "target_scoped_keyboard_pointer_dispatch_unsafe",
-        "show_session must preserve target-scoped input unsafe reason")
+        == "input_consent_required",
+        "show_session must preserve missing-consent reason")
 
 require(isinstance(attach_probe, dict), "diagnostic_input_probe must be recorded")
 if isinstance(attach_probe, dict):
@@ -401,13 +401,13 @@ session = {
         "subject_ura": subject,
         "target_kind": "window",
         "input_scope": "view_only",
-        "input_scope_reason": "target_scoped_keyboard_pointer_dispatch_unsafe",
+        "input_scope_reason": "input_consent_required",
     },
     "scope_audit": {
         "requested_target_kind": "window",
         "effective_target_kind": "window",
         "input_mode": "view_only",
-        "input_scope_reason": "target_scoped_keyboard_pointer_dispatch_unsafe",
+        "input_scope_reason": "input_consent_required",
         "scope_widened": False,
         "display_fallback_used": False,
     },

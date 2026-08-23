@@ -47,7 +47,8 @@ Evidence contract:
   The evidence JSON must prove real pointer/keyboard OS input injection, not
   policy-only readiness. macOS must pass pointer and keyboard injection with
   Accessibility/input permission, input-control consent, display_global input
-  scope, focus validation, coordinate mapping, target geometry revision,
+  scope derived from the selected display/window/application target, focus
+  validation, coordinate mapping, target geometry revision,
   strictly ordered INPUT_FRAME_APPLIED events, OS-observed pointer/key effects
   bound to the same Resource/session/revision/input event/focus epoch after
   host application by an observer independent from the injector, bounded
@@ -200,6 +201,9 @@ for platform_name in sorted(required_platforms):
     if status == "passed":
         subject_ura = platform.get("selected_resource_ura")
         session_id = platform.get("session_id")
+        target_kind = platform.get("target_kind")
+        require(target_kind in {"display", "window", "application"},
+                f"{prefix}: target_kind must be display, window, or application")
         require(is_ura(subject_ura), f"{prefix}: selected_resource_ura must be canonical")
         require(isinstance(session_id, str) and session_id, f"{prefix}: session_id must be recorded")
         require(platform.get("permission", {}).get("input_injection_granted") is True
@@ -207,8 +211,11 @@ for platform_name in sorted(required_platforms):
                 f"{prefix}: OS input permission must be granted")
         require(platform.get("consent_scope") == "input_control",
                 f"{prefix}: consent_scope must be input_control")
-        require(platform.get("input_scope") == "display_global",
-                f"{prefix}: input_scope must be display_global")
+        expected_input_scope = (
+            "display_global" if target_kind == "display" else "target_local"
+        )
+        require(platform.get("input_scope") == expected_input_scope,
+                f"{prefix}: input_scope must be {expected_input_scope} for {target_kind}")
         require(platform.get("focus_validated") is True,
                 f"{prefix}: focus_validated must be true")
         require(platform.get("coordinate_mapping_validated") is True,
@@ -299,6 +306,45 @@ for platform_name in sorted(required_platforms):
             require(isinstance(result.get("host_applied_at_ms"), int)
                     and result.get("host_applied_at_ms") >= result.get("host_received_at_ms", 0),
                     f"{result_prefix}: host_applied_at_ms must be >= host_received_at_ms")
+            if expected_input_scope == "target_local":
+                guard = result.get("target_guard_validation")
+                require(isinstance(guard, dict),
+                        f"{result_prefix}: target_guard_validation must be recorded")
+                if not isinstance(guard, dict):
+                    guard = {}
+                require(guard.get("status") == "passed",
+                        f"{result_prefix}: target guard must pass")
+                require(guard.get("subject_ura") == subject_ura,
+                        f"{result_prefix}: target guard must bind selected Resource URA")
+                require(guard.get("session_id") == session_id,
+                        f"{result_prefix}: target guard must bind session_id")
+                require(guard.get("target_kind") == target_kind,
+                        f"{result_prefix}: target guard must bind target_kind")
+                require(guard.get("identity_exact") is True,
+                        f"{result_prefix}: target guard must prove exact identity")
+                require(guard.get("visible") is True,
+                        f"{result_prefix}: target guard must prove visibility")
+                require(guard.get("focused") is True,
+                        f"{result_prefix}: target guard must prove focus")
+                require(guard.get("target_geometry_revision")
+                        == platform.get("target_geometry_revision"),
+                        f"{result_prefix}: target guard must bind geometry revision")
+                require(guard.get("target_focus_epoch")
+                        == platform.get("target_focus_epoch"),
+                        f"{result_prefix}: target guard must bind focus epoch")
+                snapshot_started_at_ms = guard.get("snapshot_started_at_ms")
+                validated_at_ms = guard.get("validated_at_ms")
+                require(isinstance(snapshot_started_at_ms, int)
+                        and isinstance(validated_at_ms, int)
+                        and result.get("host_received_at_ms", 0) <= snapshot_started_at_ms
+                        <= validated_at_ms <= result.get("host_applied_at_ms", -1),
+                        f"{result_prefix}: fresh target snapshot and validation must precede OS apply")
+                if target_kind == "window":
+                    require(guard.get("window_id_exact") is True,
+                            f"{result_prefix}: window guard must prove exact window id")
+                if target_kind == "application":
+                    require(guard.get("window_set_exact") is True,
+                            f"{result_prefix}: application guard must prove exact window set")
             latency = result.get("latency_ms")
             try:
                 latency_value = float(latency)
@@ -475,6 +521,7 @@ for platform_name in sorted(required_platforms):
                 ),
                 "consent_scope": platform.get("consent_scope"),
                 "input_scope": platform.get("input_scope"),
+                "target_kind": target_kind,
                 "focus_validated": platform.get("focus_validated"),
                 "coordinate_mapping_validated": platform.get("coordinate_mapping_validated"),
                 "target_geometry_revision": platform.get("target_geometry_revision"),
@@ -557,7 +604,7 @@ import json
 import pathlib
 import sys
 
-subject = "easynet:///r/localhost/resource/device.macos/streams/display.primary"
+subject = "easynet:///r/localhost/resource/device.macos/streams/application.editor"
 session_id = "rd-input-macos-self-test"
 abilities = [
     {"name": "remote_desktop.create_session", "subject_ura": subject},
@@ -568,11 +615,12 @@ abilities = [
 macos = {
     "platform": "macos",
     "status": "passed",
+    "target_kind": "application",
     "selected_resource_ura": subject,
     "session_id": session_id,
     "permission": {"accessibility_granted": True, "input_injection_granted": True},
     "consent_scope": "input_control",
-    "input_scope": "display_global",
+    "input_scope": "target_local",
     "focus_validated": True,
     "coordinate_mapping_validated": True,
     "target_geometry_revision": 7,
@@ -596,6 +644,20 @@ macos = {
             "observed_effect": "pointer_position_changed",
             "coordinate_mapping": "target_geometry_revision_matched",
             "target_geometry_revision": 7,
+            "target_guard_validation": {
+                "status": "passed",
+                "subject_ura": subject,
+                "session_id": session_id,
+                "target_kind": "application",
+                "identity_exact": True,
+                "visible": True,
+                "focused": True,
+                "window_set_exact": True,
+                "target_geometry_revision": 7,
+                "target_focus_epoch": 11,
+                "snapshot_started_at_ms": 1787331000014,
+                "validated_at_ms": 1787331000015,
+            },
             "os_effect": {
                 "observed": True,
                 "os_effect_probe_source": "macos_accessibility_api",
@@ -629,6 +691,20 @@ macos = {
             "latency_ms": 35,
             "observed_effect": "key_echo_observed",
             "key_code": "KeyA",
+            "target_guard_validation": {
+                "status": "passed",
+                "subject_ura": subject,
+                "session_id": session_id,
+                "target_kind": "application",
+                "identity_exact": True,
+                "visible": True,
+                "focused": True,
+                "window_set_exact": True,
+                "target_geometry_revision": 7,
+                "target_focus_epoch": 11,
+                "snapshot_started_at_ms": 1787331000128,
+                "validated_at_ms": 1787331000130,
+            },
             "os_effect": {
                 "observed": True,
                 "os_effect_probe_source": "macos_accessibility_api",

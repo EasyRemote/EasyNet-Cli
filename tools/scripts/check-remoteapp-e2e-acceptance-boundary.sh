@@ -90,6 +90,8 @@ require 'E2E-10 weak identity ambiguity' "$SPEC" \
   'SPEC must retain weak identity ambiguity acceptance'
 require 'E2E-11 view-only input safety' "$SPEC" \
   'SPEC must retain view-only input safety acceptance'
+require 'E2E-14 guarded target-local input' "$SPEC" \
+  'SPEC must retain guarded target-local input acceptance'
 
 require 'remote_desktop\.permission_status' "$PERMISSION_SUBJECT" \
   'host permission subject E2E must invoke remote_desktop.permission_status'
@@ -162,12 +164,15 @@ require 'create-remote-desktop-session' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must invoke remote_desktop.create_session through the EasyNet CLI'
 require '--mode interactive' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must prove the request asked for interactive input'
+if rg -q -- '--input-control' "$VIEW_ONLY_INPUT_SAFETY"; then
+  fail 'host view-only input E2E must omit explicit input-control consent'
+fi
 require 'show-remote-desktop-session' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must re-read the persisted public session view'
 require 'scope_audit\.input_mode.*view_only|input_mode.*view_only' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must require input_mode=view_only'
-require 'target_scoped_keyboard_pointer_dispatch_unsafe' "$VIEW_ONLY_INPUT_SAFETY" \
-  'host view-only input E2E must require the target-scoped input unsafe downgrade reason'
+require 'input_consent_required' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require an explicit missing-consent reason'
 require 'keyboard_enabled.*false|keyboard_enabled.*False' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must require keyboard input disabled'
 require 'pointer_enabled.*false|pointer_enabled.*False' "$VIEW_ONLY_INPUT_SAFETY" \

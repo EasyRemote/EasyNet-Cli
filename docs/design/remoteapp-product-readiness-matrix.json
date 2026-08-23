@@ -51,9 +51,9 @@
     {
       "id": "input_injection",
       "requirement": "Mouse/keyboard input injection is controllable, low-latency, and permission-correct",
-      "status": "incomplete",
+      "status": "partial",
       "current_evidence": [
-        "app/window sessions downgrade to view_only",
+        "app/window sessions without explicit input-control consent downgrade to view_only with input_consent_required",
         "pointer/key frames are policy-gated",
         "clipboard/file-drop are unsupported",
         "session view projects requested/effective input readiness and blocked reason",
@@ -74,7 +74,10 @@
         "frontend watch_events maps daemon input activation blocks and input frame rejections into visible RemoteApp status without closing media transport",
         "frontend session details separately surface input scope and pointer/keyboard enablement from daemon input_readiness",
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
-        "window/application sessions remain view_only until target-scoped keyboard/pointer dispatch is safe",
+        "macOS window/application sessions with explicit input-control consent resolve target_local scope; non-macOS target-local input remains unsupported",
+        "every target_local pointer/key execution re-enumerates host windows and fails closed on identity, display, visibility, focus, geometry, or application window-set drift before CGEvent posting",
+        "macOS focus observation marks only the first regular visible window of the frontmost process as focused instead of treating every same-process window as the receiver",
+        "CLI create-remote-desktop-session exposes explicit --input-control consent while keeping the default no-input grant fail-closed",
         "pointer input frames carry target_geometry_revision when target-local geometry exists and the daemon rejects stale revisions before OS injection",
         "pointer/key input frames carry target_focus_epoch when the daemon projects one and the daemon rejects missing or stale focus epochs before OS injection",
         "frontend input gate rejects missing or stale pointer target_geometry_revision before WebRTC data-channel send",
@@ -82,8 +85,8 @@
         "remote_desktop.request_permission contract and frontend status expose Accessibility/input-injection permission alongside Screen Recording",
         "frontend exposes Request permission recovery when daemon input_readiness reports input_injection_unavailable",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate current-session input policy implementation test",
-        "device capability projection exposes input_control_support for macOS/Linux/Windows with macOS display tied to runtime permission and non-display/non-macOS input unsupported",
-        "remoteapp-input-injection-e2e.sh verifier for real pointer/keyboard input injection artifacts with monotonic applied sequence, daemon-shaped stable input event identity, transport epoch, accepted-count ordering, stale sequence rejection, independent platform OS-effect observer, post-application observation timing, target geometry/focus epoch binding, bounded pointer position tolerance, and keyboard focus/resource evidence"
+        "device capability projection exposes input_control_support for macOS/Linux/Windows with macOS display/window/application tied to runtime permission and guarded scope while non-macOS input remains unsupported",
+        "remoteapp-input-injection-e2e.sh verifier derives display_global versus target_local from target kind and requires a fresh per-event target guard proof for window/application artifacts in addition to independent OS-effect evidence"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-input-injection-e2e.sh artifact",
@@ -96,6 +99,7 @@
         "stale/replayed client sequence rejection before host application",
         "latency measurements",
         "successful input injection E2E",
+        "live target_local window and application input artifacts with fresh pre-dispatch target guard evidence",
         "observed OS pointer/key effects from a platform observer independent from the injection path",
         "OS effect timestamps after host_applied_at_ms",
         "OS effect binding to selected Resource URA, session id, input_event_id, target_geometry_revision, and target_focus_epoch",

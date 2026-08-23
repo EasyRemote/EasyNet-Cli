@@ -12,6 +12,8 @@
 
 use std::collections::BTreeSet;
 
+use serde_json::{json, Value};
+
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -97,6 +99,87 @@ struct ObservedWindow {
 struct HostTargetSnapshot {
     windows: Vec<ObservedWindow>,
     display_ids: BTreeSet<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) enum TargetInputGuardFailure {
+    UnsupportedPlatform,
+    SnapshotFailed,
+    DisplayUnavailable,
+    TargetNotFound,
+    IdentityMismatch,
+    NotVisible,
+    FocusNotCommitted,
+    NotFocused,
+    GeometryStale,
+    WindowSetStale,
+}
+
+impl TargetInputGuardFailure {
+    pub(in crate::daemon::plugins::remote_desktop) const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedPlatform => "target_input_guard_unsupported_platform",
+            Self::SnapshotFailed => "target_input_guard_snapshot_failed",
+            Self::DisplayUnavailable => "target_input_guard_display_unavailable",
+            Self::TargetNotFound => "target_input_guard_target_not_found",
+            Self::IdentityMismatch => "target_input_guard_identity_mismatch",
+            Self::NotVisible => "target_input_guard_not_visible",
+            Self::FocusNotCommitted => "target_input_guard_focus_not_committed",
+            Self::NotFocused => "target_input_guard_not_focused",
+            Self::GeometryStale => "target_input_guard_geometry_stale",
+            Self::WindowSetStale => "target_input_guard_window_set_stale",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct TargetInputGuardProof {
+    subject_ura: String,
+    target_kind: RemoteDesktopTargetKind,
+    snapshot_started_at_ms: u64,
+    validated_at_ms: u64,
+    target_geometry_revision: u64,
+    target_focus_epoch: u64,
+}
+
+impl TargetInputGuardProof {
+    fn from_validated_target(
+        binding: &RemoteAppTargetBinding,
+        snapshot: &TargetTrackerSnapshot,
+        snapshot_started_at_ms: u64,
+        validated_at_ms: u64,
+    ) -> Self {
+        Self {
+            subject_ura: binding.subject_ura().to_string(),
+            target_kind: binding.target_kind(),
+            snapshot_started_at_ms,
+            validated_at_ms,
+            target_geometry_revision: snapshot.target_geometry_revision(),
+            target_focus_epoch: snapshot.target_focus_epoch(),
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self, session_id: &str) -> Value {
+        let mut proof = json!({
+            "status": "passed",
+            "subject_ura": self.subject_ura,
+            "session_id": session_id,
+            "target_kind": self.target_kind.as_str(),
+            "snapshot_started_at_ms": self.snapshot_started_at_ms,
+            "validated_at_ms": self.validated_at_ms,
+            "identity_exact": true,
+            "visible": true,
+            "focused": true,
+            "target_geometry_revision": self.target_geometry_revision,
+            "target_focus_epoch": self.target_focus_epoch,
+        });
+        match self.target_kind {
+            RemoteDesktopTargetKind::Window => proof["window_id_exact"] = json!(true),
+            RemoteDesktopTargetKind::Application => proof["window_set_exact"] = json!(true),
+            RemoteDesktopTargetKind::Display => {}
+        }
+        proof
+    }
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -191,6 +274,135 @@ where
 pub(in crate::daemon::plugins::remote_desktop) fn sample_platform_target_observations(
 ) -> PlatformTargetObservationSample {
     platform::sample_platform_target_observations()
+}
+
+/// Validate target-local input against a fresh host snapshot immediately
+/// before the caller posts an OS event.
+///
+/// This is deliberately separate from periodic lifecycle observation: an
+/// input decision may not rely on a target/focus sample that became stale
+/// between observer ticks.
+pub(in crate::daemon::plugins::remote_desktop) fn validate_live_target_input(
+    binding: &RemoteAppTargetBinding,
+    snapshot: &TargetTrackerSnapshot,
+) -> Result<TargetInputGuardProof, TargetInputGuardFailure> {
+    let snapshot_started_at_ms = now_ms();
+    let host_snapshot = platform::live_host_target_snapshot()?;
+    validate_target_input_against_host_snapshot(binding, snapshot, &host_snapshot)?;
+    Ok(TargetInputGuardProof::from_validated_target(
+        binding,
+        snapshot,
+        snapshot_started_at_ms,
+        now_ms(),
+    ))
+}
+
+fn validate_target_input_against_host_snapshot(
+    binding: &RemoteAppTargetBinding,
+    snapshot: &TargetTrackerSnapshot,
+    host_snapshot: &HostTargetSnapshot,
+) -> Result<(), TargetInputGuardFailure> {
+    if snapshot.focused() != Some(true) {
+        return Err(TargetInputGuardFailure::FocusNotCommitted);
+    }
+    if let Some(display_id) = binding.native_locator().display_id() {
+        if !host_snapshot.display_ids.contains(&display_id) {
+            return Err(TargetInputGuardFailure::DisplayUnavailable);
+        }
+    }
+    match binding.target_kind() {
+        RemoteDesktopTargetKind::Display => Err(TargetInputGuardFailure::UnsupportedPlatform),
+        RemoteDesktopTargetKind::Window => {
+            validate_window_input(binding, snapshot, &host_snapshot.windows)
+        }
+        RemoteDesktopTargetKind::Application => {
+            validate_application_input(binding, snapshot, &host_snapshot.windows)
+        }
+    }
+}
+
+fn validate_window_input(
+    binding: &RemoteAppTargetBinding,
+    snapshot: &TargetTrackerSnapshot,
+    windows: &[ObservedWindow],
+) -> Result<(), TargetInputGuardFailure> {
+    let window_id = binding
+        .native_locator()
+        .window_id()
+        .ok_or(TargetInputGuardFailure::IdentityMismatch)?;
+    let window = windows
+        .iter()
+        .find(|window| window.window_id == window_id)
+        .ok_or(TargetInputGuardFailure::TargetNotFound)?;
+    if !owner_matches(binding, window) {
+        return Err(TargetInputGuardFailure::IdentityMismatch);
+    }
+    if window.visibility_state != TargetVisibilityState::Visible {
+        return Err(TargetInputGuardFailure::NotVisible);
+    }
+    if !window.focused {
+        return Err(TargetInputGuardFailure::NotFocused);
+    }
+    if snapshot.geometry() != &window.geometry {
+        return Err(TargetInputGuardFailure::GeometryStale);
+    }
+    Ok(())
+}
+
+fn validate_application_input(
+    binding: &RemoteAppTargetBinding,
+    snapshot: &TargetTrackerSnapshot,
+    windows: &[ObservedWindow],
+) -> Result<(), TargetInputGuardFailure> {
+    let locator = binding.native_locator();
+    let display_id = locator
+        .display_id()
+        .ok_or(TargetInputGuardFailure::IdentityMismatch)?;
+    let committed_window_set = binding
+        .committed_app_window_set()
+        .ok_or(TargetInputGuardFailure::IdentityMismatch)?;
+    let owner_windows = windows
+        .iter()
+        .filter(|window| app_owner_matches(binding, window))
+        .collect::<Vec<_>>();
+    if owner_windows.iter().any(|window| {
+        window
+            .display_id
+            .is_some_and(|observed_display| observed_display != display_id)
+    }) {
+        return Err(TargetInputGuardFailure::WindowSetStale);
+    }
+    let matching = owner_windows
+        .into_iter()
+        .filter(|window| window.display_id == Some(display_id))
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return Err(TargetInputGuardFailure::TargetNotFound);
+    }
+    let current_window_set = AppWindowSetProof::new(
+        display_id,
+        locator.bundle_id().map(str::to_string),
+        locator.pid(),
+        matching.iter().map(|window| window.window_id).collect(),
+    );
+    if &current_window_set != committed_window_set {
+        return Err(TargetInputGuardFailure::WindowSetStale);
+    }
+    let visible = matching
+        .into_iter()
+        .filter(|window| window.visibility_state == TargetVisibilityState::Visible)
+        .collect::<Vec<_>>();
+    if visible.is_empty() {
+        return Err(TargetInputGuardFailure::NotVisible);
+    }
+    if !visible.iter().any(|window| window.focused) {
+        return Err(TargetInputGuardFailure::NotFocused);
+    }
+    let geometry = union_geometry(&visible).ok_or(TargetInputGuardFailure::GeometryStale)?;
+    if snapshot.geometry() != &geometry {
+        return Err(TargetInputGuardFailure::GeometryStale);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -446,6 +658,18 @@ fn observe_application(
             observed_at_ms: now_ms(),
         });
     }
+    if snapshot.geometry() != &geometry {
+        return geometry_observation(snapshot, geometry);
+    }
+    let focused = visible_selected_display_windows
+        .iter()
+        .any(|window| window.focused);
+    if snapshot.focused() != Some(focused) {
+        return Some(TargetObservation::FocusChanged {
+            focused,
+            observed_at_ms: now_ms(),
+        });
+    }
     geometry_observation(snapshot, geometry)
 }
 
@@ -689,6 +913,16 @@ mod platform {
         sample_host_target_observations(&MacOsHostTargetSnapshotProvider)
     }
 
+    pub(super) fn live_host_target_snapshot(
+    ) -> Result<HostTargetSnapshot, super::TargetInputGuardFailure> {
+        if !crate::daemon::plugins::remote_desktop::screencapturekit_capture::screen_capture_permission_granted() {
+            return Err(super::TargetInputGuardFailure::SnapshotFailed);
+        }
+        MacOsHostTargetSnapshotProvider
+            .snapshot()
+            .map_err(|_| super::TargetInputGuardFailure::SnapshotFailed)
+    }
+
     impl HostTargetSnapshotProvider for MacOsHostTargetSnapshotProvider {
         fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot> {
             Ok(HostTargetSnapshot {
@@ -715,6 +949,7 @@ mod platform {
         let frontmost_pid = NSWorkspace::sharedWorkspace()
             .frontmostApplication()
             .map(|application| i64::from(application.processIdentifier()));
+        let mut focused_regular_window_selected = false;
         for idx in 0..count {
             let dict = unsafe { CFArrayGetValueAtIndex(array.as_ptr(), idx) as CFDictionaryRef };
             if dict.is_null() {
@@ -732,6 +967,15 @@ mod platform {
             let alpha = get_f64(dict, keys.alpha.as_ptr()).unwrap_or(1.0);
             let onscreen = get_bool(dict, keys.onscreen.as_ptr()).unwrap_or(false);
             let pid = get_i64(dict, keys.owner_pid.as_ptr()).filter(|value| *value >= 0);
+            let focused = !focused_regular_window_selected
+                && pid.is_some()
+                && pid == frontmost_pid
+                && layer == 0
+                && alpha > 0.01
+                && onscreen;
+            if focused {
+                focused_regular_window_selected = true;
+            }
             let bundle_id = pid
                 .and_then(|pid| u32::try_from(pid).ok())
                 .and_then(bundle_id_for_pid);
@@ -741,7 +985,7 @@ mod platform {
                 bundle_id,
                 display_id: display_id_for_rect(rect).map(u64::from),
                 title: get_string(dict, keys.name.as_ptr()),
-                focused: pid.is_some() && pid == frontmost_pid,
+                focused,
                 geometry: TargetGeometry {
                     x: Some(rect.origin.x.round()),
                     y: Some(rect.origin.y.round()),
@@ -914,8 +1158,9 @@ mod tests {
 
     use super::{
         observe_binding_against_host_snapshot, unsupported_platform_target_observation,
-        HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
-        SnapshotBackedTargetObservationProvider,
+        validate_target_input_against_host_snapshot, HostTargetSnapshot,
+        HostTargetSnapshotProvider, ObservedWindow, SnapshotBackedTargetObservationProvider,
+        TargetInputGuardFailure, TargetInputGuardProof,
     };
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
@@ -1097,6 +1342,13 @@ mod tests {
     }
 
     fn application_binding() -> RemoteAppTargetBinding {
+        let window_set_epoch = AppWindowSetProof::new(
+            42,
+            Some("com.example.Editor".to_string()),
+            Some(9001),
+            vec![10, 11],
+        )
+        .window_set_epoch();
         ResourceEntryTargetResolver
             .resolve_for_session(
                 "remote_desktop.create_session",
@@ -1116,7 +1368,7 @@ mod tests {
                         "app_identity": "com.example.Editor",
                         "primary_pid": 9001,
                         "resolved_window_ids": [10, 11],
-                        "window_set_epoch": 123,
+                        "window_set_epoch": window_set_epoch,
                         "primary_x": 10,
                         "primary_y": 20,
                         "primary_width": 100,
@@ -1174,6 +1426,116 @@ mod tests {
             windows: Vec::new(),
             display_ids: BTreeSet::from([42]),
         }
+    }
+
+    fn focused_snapshot(binding: &RemoteAppTargetBinding) -> TargetTrackerSnapshot {
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding.clone());
+        tracker.commit_observation(TargetObservation::FocusChanged {
+            focused: true,
+            observed_at_ms: 10,
+        });
+        tracker.snapshot().clone()
+    }
+
+    #[test]
+    fn target_input_guard_accepts_only_exact_focused_window_state() {
+        let binding = window_binding();
+        let snapshot = focused_snapshot(&binding);
+        let mut host = visible_window_snapshot();
+        host.windows[0].focused = true;
+
+        assert_eq!(
+            validate_target_input_against_host_snapshot(&binding, &snapshot, &host),
+            Ok(())
+        );
+
+        host.windows[0].focused = false;
+        host.windows.push(ObservedWindow {
+            window_id: 11,
+            focused: true,
+            ..host.windows[0].clone()
+        });
+        assert_eq!(
+            validate_target_input_against_host_snapshot(&binding, &snapshot, &host),
+            Err(TargetInputGuardFailure::NotFocused),
+            "frontmost process identity is insufficient when another app window is focused"
+        );
+    }
+
+    #[test]
+    fn target_input_guard_rejects_geometry_drift_before_pointer_dispatch() {
+        let binding = window_binding();
+        let snapshot = focused_snapshot(&binding);
+        let mut host = visible_window_snapshot();
+        host.windows[0].focused = true;
+        host.windows[0].geometry.x = Some(11.0);
+
+        assert_eq!(
+            validate_target_input_against_host_snapshot(&binding, &snapshot, &host),
+            Err(TargetInputGuardFailure::GeometryStale)
+        );
+    }
+
+    #[test]
+    fn target_input_guard_binds_application_to_exact_focused_window_set() {
+        let binding = application_binding();
+        let snapshot = focused_snapshot(&binding);
+        let mut first = app_window(10, 10.0, 50.0);
+        first.focused = true;
+        let host = HostTargetSnapshot {
+            windows: vec![first, app_window(11, 60.0, 50.0)],
+            display_ids: BTreeSet::from([42]),
+        };
+
+        assert_eq!(
+            validate_target_input_against_host_snapshot(&binding, &snapshot, &host),
+            Ok(())
+        );
+
+        let mut drifted = host.clone();
+        drifted.windows.push(app_window(12, 110.0, 40.0));
+        assert_eq!(
+            validate_target_input_against_host_snapshot(&binding, &snapshot, &drifted),
+            Err(TargetInputGuardFailure::WindowSetStale)
+        );
+
+        let mut multi_display = host;
+        let mut other_display = app_window(12, 110.0, 40.0);
+        other_display.display_id = Some(43);
+        multi_display.windows.push(other_display);
+        multi_display.display_ids.insert(43);
+        assert_eq!(
+            validate_target_input_against_host_snapshot(&binding, &snapshot, &multi_display),
+            Err(TargetInputGuardFailure::WindowSetStale),
+            "display-scoped application input must stop when the app spans displays"
+        );
+    }
+
+    #[test]
+    fn target_input_guard_proof_projects_public_execution_evidence() {
+        let binding = application_binding();
+        let snapshot = focused_snapshot(&binding);
+        let proof = TargetInputGuardProof::from_validated_target(&binding, &snapshot, 10, 11)
+            .to_value("rd-target-input-proof");
+
+        assert_eq!(proof["status"], json!("passed"));
+        assert_eq!(proof["subject_ura"], json!(binding.subject_ura()));
+        assert_eq!(proof["session_id"], json!("rd-target-input-proof"));
+        assert_eq!(proof["target_kind"], json!("application"));
+        assert_eq!(proof["identity_exact"], json!(true));
+        assert_eq!(proof["visible"], json!(true));
+        assert_eq!(proof["focused"], json!(true));
+        assert_eq!(proof["window_set_exact"], json!(true));
+        assert_eq!(
+            proof["target_geometry_revision"],
+            json!(snapshot.target_geometry_revision())
+        );
+        assert_eq!(
+            proof["target_focus_epoch"],
+            json!(snapshot.target_focus_epoch())
+        );
+        assert_eq!(proof["snapshot_started_at_ms"], json!(10));
+        assert_eq!(proof["validated_at_ms"], json!(11));
     }
 
     #[test]
@@ -1807,7 +2169,7 @@ mod tests {
     }
 
     #[test]
-    fn application_observation_tracks_display_scoped_window_set_union() {
+    fn application_observation_tracks_exact_window_set_union_as_geometry() {
         let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let observation = observe_binding_against_host_snapshot(
@@ -1852,20 +2214,20 @@ mod tests {
         .expect("application observation");
 
         match observation {
-            TargetObservation::ApplicationWindowSetChanged {
-                app_window_set,
+            TargetObservation::GeometryChanged {
                 geometry,
-                target_identity_epoch,
+                target_geometry_revision,
                 ..
             } => {
-                assert_eq!(app_window_set.resolved_window_count(), 2);
-                assert_eq!(target_identity_epoch, app_window_set.window_set_epoch());
+                assert_eq!(target_geometry_revision, 2);
                 assert_eq!(geometry.x, Some(10.0));
                 assert_eq!(geometry.y, Some(20.0));
                 assert_eq!(geometry.width, Some(190.0));
                 assert_eq!(geometry.height, Some(80.0));
             }
-            other => panic!("expected app window-set rebind with union geometry, got {other:?}"),
+            other => {
+                panic!("expected exact app window set to update union geometry, got {other:?}")
+            }
         }
     }
 
@@ -2078,9 +2440,14 @@ mod tests {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use super::PlatformTargetObservationSample;
+    use super::{HostTargetSnapshot, PlatformTargetObservationSample, TargetInputGuardFailure};
 
     pub(super) fn sample_platform_target_observations() -> PlatformTargetObservationSample {
         PlatformTargetObservationSample::unsupported_platform()
+    }
+
+    pub(super) fn live_host_target_snapshot() -> Result<HostTargetSnapshot, TargetInputGuardFailure>
+    {
+        Err(TargetInputGuardFailure::UnsupportedPlatform)
     }
 }

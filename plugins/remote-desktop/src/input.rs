@@ -22,6 +22,9 @@ use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
+use crate::daemon::plugins::remote_desktop::target_observer::{
+    validate_live_target_input, TargetInputGuardProof,
+};
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapshot;
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
@@ -191,6 +194,7 @@ pub struct FileDropInputFrame {
 pub struct InputApplyOutcome {
     pub applied: bool,
     pub reason: Option<&'static str>,
+    target_guard_validation: Option<TargetInputGuardProof>,
 }
 
 impl InputApplyOutcome {
@@ -199,6 +203,7 @@ impl InputApplyOutcome {
         Self {
             applied: true,
             reason: None,
+            target_guard_validation: None,
         }
     }
 
@@ -206,7 +211,15 @@ impl InputApplyOutcome {
         Self {
             applied: false,
             reason: Some(reason),
+            target_guard_validation: None,
         }
+    }
+
+    fn with_target_guard_validation(mut self, validation: Option<TargetInputGuardProof>) -> Self {
+        if self.applied {
+            self.target_guard_validation = validation;
+        }
+        self
     }
 }
 
@@ -263,7 +276,7 @@ impl RemoteDesktopInputPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct EffectiveRemoteDesktopInputPolicy {
     keyboard_enabled: bool,
     pointer_enabled: bool,
@@ -272,6 +285,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct EffectiveRemoteDesktopInpu
     input_scope: InputScope,
     pointer_target: Option<PointerTargetGeometry>,
     target_focus_epoch: Option<u64>,
+    target_binding: Option<RemoteAppTargetBinding>,
+    target_snapshot: Option<TargetTrackerSnapshot>,
 }
 
 impl EffectiveRemoteDesktopInputPolicy {
@@ -280,7 +295,10 @@ impl EffectiveRemoteDesktopInputPolicy {
         binding: &RemoteAppTargetBinding,
     ) -> Self {
         let snapshot = TargetTrackerSnapshot::from_binding(binding);
-        Self::for_target_state(requested_policy, &snapshot, binding.input_scope())
+        let mut policy = Self::for_target_state(requested_policy, &snapshot, binding.input_scope());
+        policy.target_binding = Some(binding.clone());
+        policy.target_snapshot = Some(snapshot);
+        policy
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn for_target_state(
@@ -296,6 +314,8 @@ impl EffectiveRemoteDesktopInputPolicy {
             input_scope,
             pointer_target: pointer_target_from_snapshot(snapshot),
             target_focus_epoch: target_focus_epoch_from_snapshot(snapshot),
+            target_binding: None,
+            target_snapshot: None,
         };
         policy.apply_scope(input_scope);
         policy
@@ -304,12 +324,14 @@ impl EffectiveRemoteDesktopInputPolicy {
     fn for_current_target(
         &self,
         snapshot: &TargetTrackerSnapshot,
-        input_scope: InputScope,
+        binding: &RemoteAppTargetBinding,
     ) -> Self {
         let mut policy = self.clone();
         policy.pointer_target = pointer_target_from_snapshot(snapshot);
         policy.target_focus_epoch = target_focus_epoch_from_snapshot(snapshot);
-        policy.apply_scope(input_scope);
+        policy.target_binding = Some(binding.clone());
+        policy.target_snapshot = Some(snapshot.clone());
+        policy.apply_scope(binding.input_scope());
         policy
     }
 
@@ -331,6 +353,8 @@ impl EffectiveRemoteDesktopInputPolicy {
                 .get("pointer_target")
                 .and_then(pointer_target_geometry_from_value),
             target_focus_epoch: map.get("target_focus_epoch").and_then(Value::as_u64),
+            target_binding: None,
+            target_snapshot: None,
         };
         policy.apply_scope(input_scope);
         policy
@@ -345,9 +369,7 @@ impl EffectiveRemoteDesktopInputPolicy {
                 self.keyboard_enabled = false;
                 self.pointer_enabled = false;
             }
-            InputScope::TargetLocal => {
-                self.keyboard_enabled = false;
-            }
+            InputScope::TargetLocal => {}
             InputScope::DisplayGlobal => {}
         }
     }
@@ -374,6 +396,20 @@ impl EffectiveRemoteDesktopInputPolicy {
 
     fn pointer_target(&self) -> Option<PointerTargetGeometry> {
         self.pointer_target
+    }
+
+    fn target_input_guard_validation(&self) -> Result<Option<TargetInputGuardProof>, &'static str> {
+        if self.input_scope != InputScope::TargetLocal {
+            return Ok(None);
+        }
+        let (Some(binding), Some(snapshot)) =
+            (self.target_binding.as_ref(), self.target_snapshot.as_ref())
+        else {
+            return Err("target_input_guard_unavailable");
+        };
+        validate_live_target_input(binding, snapshot)
+            .map(Some)
+            .map_err(|failure| failure.as_str())
     }
 
     fn accepted_input_context(&self) -> InputFrameTargetContext {
@@ -467,7 +503,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effecti
             ) {
                 return InputApplyOutcome::rejected(reason);
             }
+            let target_guard_validation = match input_policy.target_input_guard_validation() {
+                Ok(validation) => validation,
+                Err(reason) => return InputApplyOutcome::rejected(reason),
+            };
             apply_pointer_frame(frame, pointer_target)
+                .with_target_guard_validation(target_guard_validation)
         }
         RemoteDesktopInputFrame::Key(frame) => {
             if let Some(reason) = target_focus_epoch_reject_reason(
@@ -476,7 +517,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effecti
             ) {
                 return InputApplyOutcome::rejected(reason);
             }
-            apply_key_frame(frame)
+            let target_guard_validation = match input_policy.target_input_guard_validation() {
+                Ok(validation) => validation,
+                Err(reason) => return InputApplyOutcome::rejected(reason),
+            };
+            apply_key_frame(frame).with_target_guard_validation(target_guard_validation)
         }
         RemoteDesktopInputFrame::Clipboard(_) => {
             InputApplyOutcome::rejected("clipboard_input_unsupported")
@@ -494,7 +539,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_binding(
 ) -> Value {
     let snapshot = TargetTrackerSnapshot::from_binding(binding);
     let mut policy = EffectiveRemoteDesktopInputPolicy::from_test_value(input_policy);
-    policy = policy.for_current_target(&snapshot, binding.input_scope());
+    policy = policy.for_current_target(&snapshot, binding);
     policy.to_value()
 }
 
@@ -714,6 +759,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                                 now_ms(),
                                 client_sequence,
                                 effective_input_policy.accepted_input_context(),
+                                outcome.target_guard_validation.as_ref(),
                             ),
                         );
                     }
@@ -1089,6 +1135,7 @@ fn input_frame_applied_payload(
     host_applied_at_ms: u64,
     client_sequence: Option<u64>,
     input_context: InputFrameTargetContext,
+    target_guard_validation: Option<&TargetInputGuardProof>,
 ) -> Value {
     let mut payload = Map::new();
     payload.insert(
@@ -1113,6 +1160,12 @@ fn input_frame_applied_payload(
     insert_latency_ms(&mut payload, timing.latency_ms_at(host_applied_at_ms));
     insert_client_sequence(&mut payload, client_sequence);
     input_context.insert_into(&mut payload);
+    if let Some(validation) = target_guard_validation {
+        payload.insert(
+            "target_guard_validation".to_string(),
+            validation.to_value(session_id),
+        );
+    }
     Value::Object(payload)
 }
 
@@ -1252,8 +1305,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_effective_inpu
         return None;
     }
     let snapshot = session.target_snapshot();
-    let input_scope = session.target_binding().input_scope();
-    let effective_policy = base_policy.for_current_target(snapshot, input_scope);
+    let binding = session.target_binding();
+    let effective_policy = base_policy.for_current_target(snapshot, binding);
     match transport_guard {
         InputTransportGuard::DirectWebRtc(epoch) => {
             if session.transport_epoch() != Some(epoch.value()) {
@@ -1401,22 +1454,36 @@ fn map_pointer_point(
             y: frame.y.max(0.0),
         };
     };
-    let local_x = map_axis(
-        frame.x,
-        frame.normalized_x,
-        frame.target_width,
+    let local_x = clamp_target_axis(
+        map_axis(
+            frame.x,
+            frame.normalized_x,
+            frame.target_width,
+            target.width,
+        ),
         target.width,
     );
-    let local_y = map_axis(
-        frame.y,
-        frame.normalized_y,
-        frame.target_height,
+    let local_y = clamp_target_axis(
+        map_axis(
+            frame.y,
+            frame.normalized_y,
+            frame.target_height,
+            target.height,
+        ),
         target.height,
     );
     MappedPointerPoint {
         x: target.origin_x + local_x,
         y: target.origin_y + local_y,
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn clamp_target_axis(value: f64, target_span: Option<f64>) -> f64 {
+    let Some(span) = target_span.filter(|span| span.is_finite() && *span > 0.0) else {
+        return value.max(0.0);
+    };
+    value.clamp(0.0, (span - 1.0).max(0.0))
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1588,6 +1655,7 @@ mod platform {
             wheel1: i32,
             wheel2: i32,
         ) -> CGEventRef;
+        fn CGEventSetLocation(event: CGEventRef, location: CGPoint);
         fn CGEventPost(tap: u32, event: CGEventRef);
         fn CFRelease(cf: *const c_void);
         fn AXIsProcessTrusted() -> bool;
@@ -1613,7 +1681,7 @@ mod platform {
             return InputApplyOutcome::rejected(ACCESSIBILITY_DENIED_REASON);
         }
         if frame.action == "wheel" {
-            return apply_wheel_frame(frame);
+            return apply_wheel_frame(frame, target);
         }
         let (event_type, button) = match (frame.action.as_str(), frame.button.unwrap_or(0)) {
             ("move", _) => (K_CG_EVENT_MOUSE_MOVED, K_CG_MOUSE_BUTTON_LEFT),
@@ -1644,9 +1712,6 @@ mod platform {
             request_accessibility_prompt();
             return InputApplyOutcome::rejected(ACCESSIBILITY_DENIED_REASON);
         }
-        if frame.repeat {
-            return InputApplyOutcome::applied();
-        }
         let Some(keycode) =
             keycode_from_dom_code(&frame.code).or_else(|| keycode_from_key(&frame.key))
         else {
@@ -1657,6 +1722,9 @@ mod platform {
             "up" => false,
             _ => return InputApplyOutcome::rejected("unsupported_key_action"),
         };
+        if frame.repeat && !key_down {
+            return InputApplyOutcome::rejected("invalid_key_repeat");
+        }
         unsafe {
             let event = CGEventCreateKeyboardEvent(std::ptr::null_mut(), keycode, key_down);
             if event.is_null() {
@@ -1668,7 +1736,10 @@ mod platform {
         InputApplyOutcome::applied()
     }
 
-    fn apply_wheel_frame(frame: &PointerInputFrame) -> InputApplyOutcome {
+    fn apply_wheel_frame(
+        frame: &PointerInputFrame,
+        target: Option<PointerTargetGeometry>,
+    ) -> InputApplyOutcome {
         let vertical = frame
             .delta_y
             .map(|value| (-value).round() as i32)
@@ -1688,6 +1759,7 @@ mod platform {
             if event.is_null() {
                 return InputApplyOutcome::rejected("cg_event_create_failed");
             }
+            CGEventSetLocation(event, mapped_point(frame, target));
             CGEventPost(K_CG_HID_EVENT_TAP, event);
             CFRelease(event.cast_const());
         }
@@ -1958,6 +2030,7 @@ mod tests {
                 target_geometry_revision: Some(3),
                 target_focus_epoch: Some(5),
             },
+            None,
         );
 
         assert!(payload["input_event_id"]
@@ -1992,6 +2065,7 @@ mod tests {
                 target_geometry_revision: None,
                 target_focus_epoch: Some(9),
             },
+            None,
         );
 
         assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_500_u64));
@@ -2019,6 +2093,7 @@ mod tests {
             1_787_331_000_142,
             Some(9),
             input_context,
+            None,
         );
         let same = input_frame_applied_payload(
             "rd-input-event-stable",
@@ -2031,6 +2106,7 @@ mod tests {
             1_787_331_000_155,
             Some(9),
             input_context,
+            None,
         );
         let different_session = input_frame_applied_payload(
             "rd-input-event-other",
@@ -2043,6 +2119,7 @@ mod tests {
             1_787_331_000_142,
             Some(9),
             input_context,
+            None,
         );
         let different_epoch = input_frame_applied_payload(
             "rd-input-event-stable",
@@ -2055,6 +2132,7 @@ mod tests {
             1_787_331_000_142,
             Some(9),
             input_context,
+            None,
         );
 
         assert_eq!(
@@ -2308,6 +2386,30 @@ mod tests {
         assert!(
             !input_policy_allows(&policy, "pointer"),
             "view-only window binding must not leave global pointer injection enabled"
+        );
+    }
+
+    #[test]
+    fn target_pointer_mapping_clamps_raw_coordinates_inside_bound_surface() {
+        let frame = match parse_input_frame(r#"{"type":"pointer","action":"move","x":900,"y":-50}"#)
+            .unwrap()
+        {
+            RemoteDesktopInputFrame::Pointer(frame) => frame,
+            _ => unreachable!(),
+        };
+        let target = PointerTargetGeometry {
+            origin_x: 100.0,
+            origin_y: 200.0,
+            width: Some(800.0),
+            height: Some(600.0),
+            target_geometry_revision: Some(1),
+            target_focus_epoch: Some(1),
+        };
+
+        assert_eq!(
+            map_pointer_point(&frame, Some(target)),
+            MappedPointerPoint { x: 899.0, y: 200.0 },
+            "target-local input coordinates must never escape the selected surface"
         );
     }
 
@@ -2660,6 +2762,37 @@ mod tests {
     }
 
     #[test]
+    fn target_local_input_without_bound_host_proof_fails_closed_before_os_injection() {
+        let pointer = parse_input_frame(
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"target_geometry_revision":7,"target_focus_epoch":3}"#,
+        )
+        .unwrap();
+        let key = parse_input_frame(
+            r#"{"type":"key","action":"down","code":"KeyA","target_focus_epoch":3}"#,
+        )
+        .unwrap();
+        let policy = EffectiveRemoteDesktopInputPolicy::from_test_value(json!({
+            "input_scope": "target_local",
+            "pointer_enabled": true,
+            "keyboard_enabled": true,
+            "target_focus_epoch": 3,
+            "pointer_target": {
+                "origin_x": 100.0,
+                "origin_y": 200.0,
+                "width": 800.0,
+                "height": 600.0,
+                "target_geometry_revision": 7,
+            },
+        }));
+
+        for frame in [&pointer, &key] {
+            let outcome = apply_input_frame_with_effective_policy(&policy, frame);
+            assert!(!outcome.applied);
+            assert_eq!(outcome.reason, Some("target_input_guard_unavailable"));
+        }
+    }
+
+    #[test]
     fn input_rejects_stale_target_focus_epoch_before_os_injection() {
         let missing_focus =
             parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
@@ -2777,6 +2910,52 @@ mod tests {
         let view_only_key = apply_input_frame_with_effective_policy(&view_only_policy, &key);
         assert!(!view_only_key.applied);
         assert_eq!(view_only_key.reason, Some("input_scope_unsupported"));
+    }
+
+    #[test]
+    fn current_target_policy_replaces_creation_binding_after_rebind() {
+        let entry = |suffix: &str, window_id: u64| ResourceEntry {
+            resource_ura: format!("easynet:///r/acme/resource/window.{suffix}"),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: format!("window:macos:cgwindow:10:{window_id}"),
+            display_name: format!("Window {suffix}"),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": window_id,
+                "pid": 10,
+                "app_name": "Editor",
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let creation_binding = binding_for(&entry("old", 41));
+        let rebound_binding = binding_for(&entry("new", 42));
+        let rebound_snapshot = TargetTrackerSnapshot::from_binding(&rebound_binding);
+        let base = EffectiveRemoteDesktopInputPolicy::for_binding(
+            &RemoteDesktopInputPolicy::new(true, true),
+            &creation_binding,
+        );
+
+        let current = base.for_current_target(&rebound_snapshot, &rebound_binding);
+
+        assert_eq!(
+            current
+                .target_binding
+                .as_ref()
+                .expect("current binding")
+                .subject_ura(),
+            rebound_binding.subject_ura()
+        );
+        let current_snapshot = current.target_snapshot.as_ref().expect("current snapshot");
+        assert_eq!(current_snapshot.geometry(), rebound_snapshot.geometry());
+        assert_eq!(
+            current_snapshot.target_geometry_revision(),
+            rebound_snapshot.target_geometry_revision()
+        );
     }
 
     #[test]
