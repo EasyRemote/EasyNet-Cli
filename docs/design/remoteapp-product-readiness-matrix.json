@@ -86,7 +86,9 @@
         "frontend exposes Request permission recovery when daemon input_readiness reports input_injection_unavailable",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate current-session input policy implementation test",
         "device capability projection exposes input_control_support for macOS/Linux/Windows with macOS display/window/application tied to runtime permission and guarded scope while non-macOS input remains unsupported",
-        "remoteapp-input-injection-e2e.sh verifier derives display_global versus target_local from target kind and requires a fresh per-event target guard proof for window/application artifacts in addition to independent OS-effect evidence"
+        "remoteapp-input-injection-e2e.sh verifier derives display_global versus target_local from target kind and requires a fresh per-event target guard proof for window/application artifacts in addition to independent OS-effect evidence",
+        "host-remoteapp-target-input-e2e.sh drives the production WebRTC media and easynet.remote_desktop.input.v1 data-channel paths in one session, requests explicit input-control consent, observes daemon applied/rejected events, and closes through public watch_events/end_session abilities",
+        "the host fixture runs selected and unrelated AppKit processes with independent mouse/key callback logs; the first live window attempt reached the real create_session boundary and failed closed because target/debug/easynet-daemon lacked macOS Screen Recording permission"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-input-injection-e2e.sh artifact",
@@ -113,7 +115,8 @@
         "daemon latency telemetry does not prove observed OS pointer/key effects",
         "runtime permission block projection does not prove live macOS permission revocation E2E",
         "input readiness and policy gates do not prove successful OS injection",
-        "the input injection verifier self-test does not prove live host input control"
+        "the input injection verifier self-test does not prove live host input control",
+        "a permission-gated host-runner failure does not prove pointer or keyboard injection"
       ]
     },
     {

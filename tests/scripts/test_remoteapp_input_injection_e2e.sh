@@ -34,7 +34,7 @@ assert summary["selected_resource_ura"].startswith("easynet:///")
 assert summary["session_id"]
 assert summary["permission_granted"] is True
 assert summary["consent_scope"] == "input_control"
-assert summary["input_scope"] == "display_global"
+assert summary["input_scope"] == "target_local"
 assert summary["focus_validated"] is True
 assert summary["coordinate_mapping_validated"] is True
 assert summary["target_geometry_revision"] > 0
@@ -44,6 +44,10 @@ assert summary["policy_only"] is False
 assert summary["stale_client_sequence_rejected"] is True
 assert summary["terminal_receipt_visible"] is True
 assert summary["terminal_receipt_session_bound"] is True
+evidence = json.load(open(sys.argv[1].replace("report.json", "evidence.json"), encoding="utf-8"))
+abilities = {item["name"] for item in evidence["platforms"][0]["abilities"]}
+assert "remote_desktop.set_description" in abilities
+assert "remote_desktop.attach" not in abilities
 applied = {entry["kind"]: entry for entry in summary["applied_inputs"]}
 assert set(applied) == {"pointer", "keyboard"}
 for entry in applied.values():

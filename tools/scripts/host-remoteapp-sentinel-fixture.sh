@@ -116,16 +116,71 @@ import AppKit
 final class SentinelView: NSView {
     let color: NSColor
     let label: String
+    let eventPath: String
 
-    init(frame frameRect: NSRect, color: NSColor, label: String) {
+    init(frame frameRect: NSRect, color: NSColor, label: String, eventPath: String) {
         self.color = color
         self.label = label
+        self.eventPath = eventPath
         super.init(frame: frameRect)
         wantsLayer = true
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    private func appendEvent(kind: String, action: String, event: NSEvent, keyCode: String? = nil) {
+        let point = event.cgEvent?.location ?? .zero
+        var record: [String: Any] = [
+            "kind": kind,
+            "action": action,
+            "label": label,
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "observed_at_ms": Int64((Date().timeIntervalSince1970 * 1000.0).rounded()),
+            "global_position": ["x": point.x, "y": point.y],
+        ]
+        if let keyCode {
+            record["key_code"] = keyCode
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: record),
+              var line = String(data: data, encoding: .utf8) else {
+            return
+        }
+        line.append("\n")
+        if !FileManager.default.fileExists(atPath: eventPath) {
+            FileManager.default.createFile(atPath: eventPath, contents: nil)
+        }
+        guard let handle = FileHandle(forWritingAtPath: eventPath) else { return }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            if let bytes = line.data(using: .utf8) {
+                try handle.write(contentsOf: bytes)
+            }
+        } catch {
+            fputs("event log write failed: \(error)\n", stderr)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        appendEvent(kind: "pointer", action: "down", event: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        appendEvent(kind: "pointer", action: "up", event: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let code = event.keyCode == 0 ? "KeyA" : "MacKeyCode\(event.keyCode)"
+        appendEvent(kind: "keyboard", action: "down", event: event, keyCode: code)
+    }
+
+    override func keyUp(with event: NSEvent) {
+        let code = event.keyCode == 0 ? "KeyA" : "MacKeyCode\(event.keyCode)"
+        appendEvent(kind: "keyboard", action: "up", event: event, keyCode: code)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -152,8 +207,8 @@ func parseByte(_ value: String) -> CGFloat {
 }
 
 let args = CommandLine.arguments
-guard args.count == 10 else {
-    fputs("usage: SentinelWindow <title> <r,g,b> <x> <y> <width> <height> <activation> <command-file> <ack-file>\n", stderr)
+guard args.count == 11 else {
+    fputs("usage: SentinelWindow <title> <r,g,b> <x> <y> <width> <height> <activation> <command-file> <ack-file> <event-log>\n", stderr)
     exit(64)
 }
 
@@ -171,6 +226,7 @@ let height = Double(args[6]) ?? 260
 let activation = args[7]
 let commandPath = args[8]
 let ackPath = args[9]
+let eventPath = args[10]
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
@@ -189,11 +245,20 @@ let window = NSWindow(
     defer: false
 )
 window.title = title
-window.contentView = SentinelView(frame: NSRect(x: 0, y: 0, width: width, height: height), color: color, label: title)
+let sentinelView = SentinelView(
+    frame: NSRect(x: 0, y: 0, width: width, height: height),
+    color: color,
+    label: title,
+    eventPath: eventPath
+)
+window.contentView = sentinelView
 window.isReleasedWhenClosed = false
+window.acceptsMouseMovedEvents = true
 window.orderFrontRegardless()
 if activation == "activate" {
     app.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
+    window.makeFirstResponder(sentinelView)
 }
 
 var lastCommand = ""
@@ -226,6 +291,11 @@ Timer.scheduledTimer(withTimeInterval: 0.10, repeats: true) { _ in
         window.setFrame(next, display: true, animate: false)
         window.contentView?.frame = NSRect(x: 0, y: 0, width: nextWidth, height: nextHeight)
         try? "move_resize".write(toFile: ackPath, atomically: true, encoding: .utf8)
+    } else if action == "focus" {
+        app.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(sentinelView)
+        try? "focus".write(toFile: ackPath, atomically: true, encoding: .utf8)
     } else if action == "close" {
         try? "close".write(toFile: ackPath, atomically: true, encoding: .utf8)
         window.close()
@@ -244,13 +314,17 @@ chmod +x "$SELECTED_BIN" "$UNRELATED_BIN"
 SELECTED_COMMAND_FILE="$OUT_DIR/selected-command.txt"
 SELECTED_ACK_FILE="$OUT_DIR/selected-ack.txt"
 SELECTED_CONTROL_SH="$OUT_DIR/selected-control.sh"
-rm -f "$PIDS_FILE" "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE"
+SELECTED_EVENT_LOG="$OUT_DIR/selected-input-events.jsonl"
+UNRELATED_EVENT_LOG="$OUT_DIR/unrelated-input-events.jsonl"
+rm -f "$PIDS_FILE" "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE" "$SELECTED_EVENT_LOG" "$UNRELATED_EVENT_LOG"
 "$SELECTED_BIN" "$SELECTED_LABEL" "$SELECTED_RGB" 80 160 460 300 activate "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE" \
+  "$SELECTED_EVENT_LOG" \
   >"$OUT_DIR/selected.log" 2>&1 &
 SELECTED_PID="$!"
 printf '%s\n' "$SELECTED_PID" >>"$PIDS_FILE"
 
 "$UNRELATED_BIN" "$UNRELATED_LABEL" "$UNRELATED_RGB" 620 160 460 300 activate "$OUT_DIR/unrelated-command.txt" "$OUT_DIR/unrelated-ack.txt" \
+  "$UNRELATED_EVENT_LOG" \
   >"$OUT_DIR/unrelated.log" 2>&1 &
 UNRELATED_PID="$!"
 printf '%s\n' "$UNRELATED_PID" >>"$PIDS_FILE"
@@ -264,9 +338,23 @@ for pid in "$SELECTED_PID" "$UNRELATED_PID"; do
   fi
 done
 
+rm -f "$SELECTED_ACK_FILE"
+printf 'focus\n' >"$SELECTED_COMMAND_FILE"
+python3 - "$SELECTED_ACK_FILE" <<'PY'
+import pathlib, sys, time
+ack = pathlib.Path(sys.argv[1])
+deadline = time.time() + 5.0
+while time.time() < deadline:
+    if ack.exists() and ack.read_text(encoding="utf-8").strip() == "focus":
+        raise SystemExit(0)
+    time.sleep(0.05)
+raise SystemExit("selected sentinel did not acknowledge focus")
+PY
+
 python3 - "$ENV_FILE" "$MANIFEST_JSON" "$CLEANUP_SH" "$SELECTED_CONTROL_SH" "$OUT_DIR" "$REPO_ROOT" \
   "$TARGET_KIND" "$SELECTED_LABEL" "$UNRELATED_LABEL" "$SELECTED_RGB" "$UNRELATED_RGB" \
-  "$UNRELATED_PLACEMENT" "$SELECTED_PID" "$UNRELATED_PID" "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE" <<'PY'
+  "$UNRELATED_PLACEMENT" "$SELECTED_PID" "$UNRELATED_PID" "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE" \
+  "$SELECTED_EVENT_LOG" "$UNRELATED_EVENT_LOG" <<'PY'
 import json
 import shlex
 import sys
@@ -288,7 +376,9 @@ import sys
     unrelated_pid,
     selected_command_file,
     selected_ack_file,
-) = sys.argv[1:17]
+    selected_event_log,
+    unrelated_event_log,
+) = sys.argv[1:19]
 
 exports = {
     "EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB": selected_rgb,
@@ -302,6 +392,8 @@ exports = {
     "EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID": unrelated_pid,
     "EASYNET_REMOTEAPP_SENTINEL_FIXTURE_MANIFEST": manifest_path,
     "EASYNET_REMOTEAPP_SELECTED_CONTROL_SH": control_path,
+    "EASYNET_REMOTEAPP_SELECTED_INPUT_EVENT_LOG": selected_event_log,
+    "EASYNET_REMOTEAPP_UNRELATED_INPUT_EVENT_LOG": unrelated_event_log,
 }
 
 with open(env_path, "w", encoding="utf-8") as f:
@@ -315,12 +407,14 @@ manifest = {
         "label": selected_label,
         "rgb": [int(part) for part in selected_rgb.split(",")],
         "pid": int(selected_pid),
+        "input_event_log": selected_event_log,
     },
     "unrelated": {
         "label": unrelated_label,
         "rgb": [int(part) for part in unrelated_rgb.split(",")],
         "pid": int(unrelated_pid),
         "placement": unrelated_placement,
+        "input_event_log": unrelated_event_log,
     },
 }
 with open(manifest_path, "w", encoding="utf-8") as f:

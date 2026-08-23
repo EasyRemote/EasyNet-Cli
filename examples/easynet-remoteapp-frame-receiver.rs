@@ -19,7 +19,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
@@ -37,6 +37,7 @@ use rtc::rtp_transceiver::rtp_sender::{RTCRtpCodec, RTCRtpCodecParameters, RtpCo
 use rtc::rtp_transceiver::{RTCRtpTransceiverDirection, RTCRtpTransceiverInit};
 use serde::Serialize;
 use serde_json::{json, Value};
+use webrtc::data_channel::{DataChannel, RTCDataChannelState};
 use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCIceGatheringState,
@@ -56,6 +57,9 @@ const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_TOLERANCE: u8 = 64;
 const DEFAULT_MIN_SELECTED_PIXELS: usize = 8;
 const MAX_DECODE_ERRORS_BEFORE_FAILURE_OBSERVATION: usize = 64;
+const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
+const INPUT_CHANNEL_OPEN_TIMEOUT_MS: u64 = 5_000;
+const INPUT_SETTLE_MS: u64 = 750;
 
 fn main() -> Result<()> {
     let runtime = default_runtime().ok_or_else(|| anyhow!("no WebRTC async runtime available"))?;
@@ -116,6 +120,7 @@ struct ReceiverConfig {
     timeout: Duration,
     assertions: PixelAssertions,
     session_artifact: SessionArtifactBinding,
+    input_transmission_json: Option<PathBuf>,
 }
 
 impl ReceiverConfig {
@@ -133,6 +138,9 @@ impl ReceiverConfig {
         )?);
         let assertions = PixelAssertions::from_env()?;
         let session_artifact = SessionArtifactBinding::from_session_json(&session_json)?;
+        let input_transmission_json = std::env::var_os("EASYNET_REMOTEAPP_INPUT_TRANSMISSION_JSON")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty());
         Ok(Self {
             session_json,
             frame_analysis_json,
@@ -141,6 +149,7 @@ impl ReceiverConfig {
             timeout,
             assertions,
             session_artifact,
+            input_transmission_json,
         })
     }
 }
@@ -497,6 +506,17 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
         )
         .await?;
 
+    let input_channel = if config.input_transmission_json.is_some() {
+        Some(
+            peer_connection
+                .create_data_channel(INPUT_DATA_CHANNEL_LABEL, None)
+                .await
+                .context("create canonical RemoteApp input data channel")?,
+        )
+    } else {
+        None
+    };
+
     let offer = peer_connection.create_offer(None).await?;
     peer_connection.set_local_description(offer).await?;
     wait_for_local_ice_gathering(runtime.as_ref(), &mut gather_complete_rx).await;
@@ -517,8 +537,18 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
                 if observation.assertions_satisfied() {
                     report_client_presenting(config, signal.transport_epoch)
                         .context("invoke remote_desktop.report_client_state after decoded frame")?;
+                    if let Some(input_channel) = input_channel.as_ref() {
+                        exercise_target_local_input(
+                            config,
+                            Arc::clone(input_channel),
+                            signal.transport_epoch,
+                            runtime.as_ref(),
+                        )
+                        .await
+                        .context("exercise target-local input through WebRTC data channel")?;
+                    }
                     let latest_session_view = show_session_view(config)
-                        .context("invoke remote_desktop.show_session after decoded frame")
+                        .context("invoke remote_desktop.show_session after receiver proof")
                         .ok();
                     peer_connection.close().await?;
                     return Ok(ReceiverObservation {
@@ -559,6 +589,228 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
         }
         runtime.sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn exercise_target_local_input(
+    config: &ReceiverConfig,
+    input_channel: Arc<dyn DataChannel>,
+    transport_epoch: u64,
+    runtime: &dyn Runtime,
+) -> Result<()> {
+    let input_path = config
+        .input_transmission_json
+        .as_ref()
+        .ok_or_else(|| anyhow!("input transmission artifact path missing"))?;
+    let session_view = show_session_view(config)
+        .context("read current session input policy before input transmission")?;
+    let policy = session_view
+        .get("input_policy")
+        .ok_or_else(|| anyhow!("session view missing input_policy"))?;
+    let readiness = session_view
+        .get("input_readiness")
+        .ok_or_else(|| anyhow!("session view missing input_readiness"))?;
+    if readiness.get("interactive_ready") != Some(&Value::Bool(true)) {
+        bail!(
+            "session input is not interactively ready: {}",
+            readiness
+                .get("blocked_reason")
+                .cloned()
+                .unwrap_or(Value::Null)
+        );
+    }
+    if policy.get("input_scope").and_then(Value::as_str) != Some("target_local") {
+        bail!("live target input proof requires input_policy.input_scope=target_local");
+    }
+    if policy.get("pointer_enabled") != Some(&Value::Bool(true))
+        || policy.get("keyboard_enabled") != Some(&Value::Bool(true))
+    {
+        bail!("live target input proof requires pointer and keyboard policy enablement");
+    }
+    let pointer_target = policy
+        .get("pointer_target")
+        .ok_or_else(|| anyhow!("target-local input policy missing pointer_target"))?;
+    let target_geometry_revision = positive_u64(
+        pointer_target.get("target_geometry_revision"),
+        "input_policy.pointer_target.target_geometry_revision",
+    )?;
+    let target_focus_epoch = positive_u64(
+        policy.get("target_focus_epoch"),
+        "input_policy.target_focus_epoch",
+    )?;
+    let origin_x = finite_f64(pointer_target.get("origin_x"), "pointer_target.origin_x")?;
+    let origin_y = finite_f64(pointer_target.get("origin_y"), "pointer_target.origin_y")?;
+    let width = positive_f64(pointer_target.get("width"), "pointer_target.width")?;
+    let height = positive_f64(pointer_target.get("height"), "pointer_target.height")?;
+
+    wait_for_input_channel_open(runtime, input_channel.as_ref()).await?;
+
+    let pointer_sent_at_ms = wall_clock_ms()?;
+    let pointer_frame = json!({
+        "type": "pointer",
+        "action": "down",
+        "normalized_x": 0.5,
+        "normalized_y": 0.5,
+        "button": 0,
+        "target_geometry_revision": target_geometry_revision,
+        "target_focus_epoch": target_focus_epoch,
+        "sent_at_ms": pointer_sent_at_ms,
+        "client_sequence": 1,
+    });
+    input_channel
+        .send_text(&serde_json::to_string(&pointer_frame)?)
+        .await
+        .context("send target-local pointer-down frame")?;
+
+    let pointer_up_frame = json!({
+        "type": "pointer",
+        "action": "up",
+        "normalized_x": 0.5,
+        "normalized_y": 0.5,
+        "button": 0,
+        "target_geometry_revision": target_geometry_revision,
+        "target_focus_epoch": target_focus_epoch,
+        "sent_at_ms": wall_clock_ms()?,
+        "client_sequence": 2,
+    });
+    input_channel
+        .send_text(&serde_json::to_string(&pointer_up_frame)?)
+        .await
+        .context("send target-local pointer-up frame")?;
+
+    let key_down_sent_at_ms = wall_clock_ms()?;
+    let key_down_frame = json!({
+        "type": "key",
+        "action": "down",
+        "key": "a",
+        "code": "KeyA",
+        "repeat": false,
+        "target_focus_epoch": target_focus_epoch,
+        "sent_at_ms": key_down_sent_at_ms,
+        "client_sequence": 3,
+    });
+    input_channel
+        .send_text(&serde_json::to_string(&key_down_frame)?)
+        .await
+        .context("send target-local key-down frame")?;
+
+    let key_up_frame = json!({
+        "type": "key",
+        "action": "up",
+        "key": "a",
+        "code": "KeyA",
+        "repeat": false,
+        "target_focus_epoch": target_focus_epoch,
+        "sent_at_ms": wall_clock_ms()?,
+        "client_sequence": 4,
+    });
+    input_channel
+        .send_text(&serde_json::to_string(&key_up_frame)?)
+        .await
+        .context("send target-local key-up frame")?;
+
+    let stale_frame = json!({
+        "type": "pointer",
+        "action": "down",
+        "normalized_x": 0.5,
+        "normalized_y": 0.5,
+        "button": 0,
+        "target_geometry_revision": target_geometry_revision,
+        "target_focus_epoch": target_focus_epoch,
+        "sent_at_ms": wall_clock_ms()?,
+        "client_sequence": 1,
+    });
+    input_channel
+        .send_text(&serde_json::to_string(&stale_frame)?)
+        .await
+        .context("send stale-sequence rejection probe")?;
+
+    runtime.sleep(Duration::from_millis(INPUT_SETTLE_MS)).await;
+    input_channel
+        .close()
+        .await
+        .context("close input proof channel")?;
+    runtime.sleep(Duration::from_millis(INPUT_SETTLE_MS)).await;
+    let post_input_session_view =
+        show_session_view(config).context("read session events after input transmission")?;
+    let artifact = json!({
+        "status": "passed",
+        "channel": {
+            "label": INPUT_DATA_CHANNEL_LABEL,
+            "opened": true,
+        },
+        "session_id": config.session_artifact.session_id,
+        "subject_ura": config.session_artifact.subject_ura,
+        "transport_epoch": transport_epoch,
+        "input_scope": "target_local",
+        "target_geometry_revision": target_geometry_revision,
+        "target_focus_epoch": target_focus_epoch,
+        "expected_pointer_position": {
+            "x": origin_x + width * 0.5,
+            "y": origin_y + height * 0.5,
+        },
+        "frames": [pointer_frame, pointer_up_frame, key_down_frame, key_up_frame, stale_frame],
+        "session_view_before_input": session_view,
+        "session_view_after_input": post_input_session_view,
+    });
+    fs::write(input_path, serde_json::to_vec_pretty(&artifact)?)
+        .with_context(|| format!("write input transmission JSON {}", input_path.display()))
+}
+
+async fn wait_for_input_channel_open(
+    runtime: &dyn Runtime,
+    channel: &dyn DataChannel,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        match channel.ready_state().await? {
+            RTCDataChannelState::Open => return Ok(()),
+            RTCDataChannelState::Closing | RTCDataChannelState::Closed => {
+                bail!("RemoteApp input data channel closed before opening")
+            }
+            RTCDataChannelState::Connecting => {}
+            _ => {}
+        }
+        if started.elapsed() >= Duration::from_millis(INPUT_CHANNEL_OPEN_TIMEOUT_MS) {
+            bail!(
+                "timed out after {} ms waiting for RemoteApp input data channel",
+                INPUT_CHANNEL_OPEN_TIMEOUT_MS
+            );
+        }
+        runtime.sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn positive_u64(value: Option<&Value>, field: &str) -> Result<u64> {
+    value
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| anyhow!("{field} must be a positive integer"))
+}
+
+fn finite_f64(value: Option<&Value>, field: &str) -> Result<f64> {
+    value
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| anyhow!("{field} must be finite"))
+}
+
+fn positive_f64(value: Option<&Value>, field: &str) -> Result<f64> {
+    finite_f64(value, field).and_then(|value| {
+        if value > 0.0 {
+            Ok(value)
+        } else {
+            bail!("{field} must be positive")
+        }
+    })
+}
+
+fn wall_clock_ms() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock precedes Unix epoch")?
+        .as_millis()
+        .try_into()
+        .context("wall-clock millisecond timestamp exceeds u64")?)
 }
 
 async fn wait_for_local_ice_gathering(

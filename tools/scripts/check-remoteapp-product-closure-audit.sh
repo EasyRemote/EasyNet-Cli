@@ -12,6 +12,7 @@ PRODUCT_COMPLETION="$ROOT/tools/scripts/remoteapp-product-completion-e2e.sh"
 MAIN_CRATE_IMPL_TESTS="$ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
+TARGET_INPUT_RUNNER="$ROOT/tools/scripts/host-remoteapp-target-input-e2e.sh"
 MEDIA_ADAPTATION="$ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 MULTI_WINDOW_TRACKING="$ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
@@ -86,6 +87,7 @@ reject() {
 [[ -f "$MAIN_CRATE_IMPL_TESTS" ]] || fail "missing RemoteApp main-crate implementation test gate"
 [[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
 [[ -f "$INPUT_INJECTION" ]] || fail "missing RemoteApp input injection verifier"
+[[ -x "$TARGET_INPUT_RUNNER" ]] || fail "missing executable RemoteApp target-local input host runner"
 [[ -f "$MEDIA_ADAPTATION" ]] || fail "missing RemoteApp media adaptation evidence verifier"
 [[ -f "$MULTI_WINDOW_TRACKING" ]] || fail "missing RemoteApp multi-window tracking evidence verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
@@ -909,6 +911,18 @@ require 'terminal_receipt' "$INPUT_INJECTION" \
   'input injection verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$INPUT_INJECTION" \
   'input injection verifier must reject product completion claims'
+require 'EASYNET_REMOTEAPP_INPUT_PROOF=1' "$TARGET_INPUT_RUNNER" \
+  'target-local input runner must enable production WebRTC input proof mode'
+require 'remote_desktop\.set_description' "$TARGET_INPUT_RUNNER" \
+  'target-local input runner must record the actual WebRTC signaling ability'
+require 'remote_desktop\.watch_events' "$TARGET_INPUT_RUNNER" \
+  'target-local input runner must observe session events through the public watch ability'
+require 'remote_desktop\.end_session' "$TARGET_INPUT_RUNNER" \
+  'target-local input runner must close through the public end-session ability'
+require 'macos_appkit_target_observer' "$TARGET_INPUT_RUNNER" \
+  'target-local input runner must bind independent AppKit target observations'
+require 'unrelated AppKit target received RemoteApp input' "$TARGET_INPUT_RUNNER" \
+  'target-local input runner must fail on unrelated target leakage'
 require 'real_media_adaptation_matrix' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require real media adaptation proof mode'
 require 'component_mock.*False|component_mock.*false' "$MEDIA_ADAPTATION" \

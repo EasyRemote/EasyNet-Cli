@@ -32,6 +32,11 @@ case "$PRE_MEDIA_RESOURCE_REFRESH" in
   0|1) ;;
   *) echo "[FAIL] invalid EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH: $PRE_MEDIA_RESOURCE_REFRESH" >&2; exit 64 ;;
 esac
+INPUT_PROOF="${EASYNET_REMOTEAPP_INPUT_PROOF:-0}"
+case "$INPUT_PROOF" in
+  0|1) ;;
+  *) echo "[FAIL] invalid EASYNET_REMOTEAPP_INPUT_PROOF: $INPUT_PROOF" >&2; exit 64 ;;
+esac
 
 EVIDENCE_JSON="${EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON:-}"
 [[ -n "$EVIDENCE_JSON" ]] || {
@@ -46,6 +51,7 @@ LIVE_INVENTORY_JSON="$OUT_DIR/live-inventory.json"
 SELECTED_RESOURCE_JSON="$OUT_DIR/selected-resource.json"
 SESSION_JSON="$OUT_DIR/session.json"
 FRAME_ANALYSIS_JSON="$OUT_DIR/frame-analysis.json"
+INPUT_TRANSMISSION_JSON="$OUT_DIR/input-transmission.json"
 LIFECYCLE_EVENTS_JSON="$OUT_DIR/lifecycle-events.json"
 LIFECYCLE_SESSION_JSON="$OUT_DIR/lifecycle-session.json"
 PRE_MEDIA_REFRESH_JSON="$OUT_DIR/pre-media-refresh.json"
@@ -209,11 +215,20 @@ with open(sys.argv[1], encoding="utf-8") as f:
 PY
 )"
 
-run_easynet ability create-remote-desktop-session \
-  --subject "$SELECTED_RESOURCE_URA" \
-  --mode view_only \
-  --transport webrtc \
-  --format json >"$SESSION_JSON"
+if [[ "$INPUT_PROOF" == "1" ]]; then
+  run_easynet ability create-remote-desktop-session \
+    --subject "$SELECTED_RESOURCE_URA" \
+    --mode interactive \
+    --input-control \
+    --transport webrtc \
+    --format json >"$SESSION_JSON"
+else
+  run_easynet ability create-remote-desktop-session \
+    --subject "$SELECTED_RESOURCE_URA" \
+    --mode view_only \
+    --transport webrtc \
+    --format json >"$SESSION_JSON"
+fi
 
 if [[ "$PRE_MEDIA_RESOURCE_REFRESH" == "1" ]]; then
   run_easynet ability refresh-remote-targets \
@@ -228,9 +243,17 @@ export EASYNET_REMOTEAPP_SELECTED_RESOURCE_URA="$SELECTED_RESOURCE_URA"
 export EASYNET_REMOTEAPP_SESSION_JSON="$SESSION_JSON"
 export EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON="$FRAME_ANALYSIS_JSON"
 export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
+if [[ "$INPUT_PROOF" == "1" ]]; then
+  rm -f "$INPUT_TRANSMISSION_JSON"
+  export EASYNET_REMOTEAPP_INPUT_TRANSMISSION_JSON="$INPUT_TRANSMISSION_JSON"
+fi
 
 bash -lc "$FRAME_RECEIVER_CMD"
 [[ -s "$FRAME_ANALYSIS_JSON" ]] || die "frame receiver did not write frame analysis JSON: $FRAME_ANALYSIS_JSON"
+if [[ "$INPUT_PROOF" == "1" ]]; then
+  [[ -s "$INPUT_TRANSMISSION_JSON" ]] || die \
+    "frame receiver did not write input transmission JSON: $INPUT_TRANSMISSION_JSON"
+fi
 
 run_lifecycle_scenario() {
   [[ "$LIFECYCLE_SCENARIO" == "none" ]] && return 0

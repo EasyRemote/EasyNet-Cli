@@ -20,6 +20,7 @@ mkdir -p \
   "$SB/src/daemon/plugins" \
   "$SB/src/daemon/ability/builtins" \
   "$SB/plugins/remote-desktop/src/media" \
+  "$SB/plugins/remote-desktop/src/transport" \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
@@ -28,6 +29,7 @@ cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scr
 cp "$REPO_ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh" "$SB/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-target-input-e2e.sh" "$SB/tools/scripts/host-remoteapp-target-input-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
@@ -69,6 +71,12 @@ cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/create_session.rs" "$SB/plugi
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/refresh_lease.rs" "$SB/plugins/remote-desktop/src/handlers/refresh_lease.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/show_session.rs" "$SB/plugins/remote-desktop/src/handlers/show_session.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/end_session.rs" "$SB/plugins/remote-desktop/src/handlers/end_session.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/report_client_state.rs" "$SB/plugins/remote-desktop/src/handlers/report_client_state.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/schema.rs" "$SB/plugins/remote-desktop/src/schema.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/transport/webrtc_native_media.rs" "$SB/plugins/remote-desktop/src/transport/webrtc_native_media.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/transport/webrtc_endpoint.rs" "$SB/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/screencapturekit_audio.rs" "$SB/plugins/remote-desktop/src/screencapturekit_audio.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/screencapturekit_capture.rs" "$SB/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
 perl -0pi -e 's#bidi_wire_kind = "metadata_json_plus_binary"#bidi_wire_kind = "json_frames"#' \
   "$SB/plugins/remote-desktop/plugin.toml"

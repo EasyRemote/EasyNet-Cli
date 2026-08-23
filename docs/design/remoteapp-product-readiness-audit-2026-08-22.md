@@ -412,6 +412,18 @@ still the E2E-11 view-only path. This moves the implementation status from
 incomplete to partial, but does not satisfy product closure until live E2E-14
 artifacts independently observe selected-target OS effects and bounded latency.
 
+Live-input runner update (2026-08-24):
+`host-remoteapp-target-input-e2e.sh` now composes the existing decoded-frame
+receiver with the canonical `easynet.remote_desktop.input.v1` WebRTC data
+channel, explicit `--input-control` consent, daemon applied/rejected events,
+public `watch_events`/`end_session`, and two independent AppKit processes that
+record selected and unrelated mouse/key callbacks. The first local window run
+reached the real `remote_desktop.create_session` permission gate and failed
+closed because Screen Recording was not granted to
+`target/debug/easynet-daemon`. Therefore the implementation and executable
+runner exist, while E2E-14 remains unpassed until permissions are granted and
+both window and application artifacts pass.
+
 | Requirement | Current status | Evidence that exists | Evidence still required before product-complete |
 |---|---|---|---|
 | Application/window selection and stable capture across macOS/Windows/Linux | Partial | macOS ScreenCaptureKit target model and host decoded-frame harnesses; macOS application capture passes uncommitted same-app same-display windows as `exceptingWindows` so committed window-set sessions do not widen to every same-app window; non-macOS app/window target observation fails closed; frontend session details surface daemon target loss reason/recovery action and the action row can execute `refresh_targets` by refetching target inventory; `check-remoteapp-main-crate-implementation-tests.sh` runs the main-crate app/window target observation and fail-closed implementation tests; device capability projection advertises `production_target_subjects` only when the production gate is ready, keeps `diagnostic_target_subjects` display-only, and exposes `platform_support` for macOS/Linux/Windows with Linux app/window and Windows capture explicitly unsupported; `remoteapp-cross-platform-capture-e2e.sh` verifier defines the live macOS/Windows/Linux capture or explicit unsupported artifact contract with decoded-frame probe evidence bound to target identity/frame source/geometry revision, selected sentinel hash rendering, and unrelated sentinel leakage rejection | Live `remoteapp-cross-platform-capture-e2e.sh` artifact proving macOS display/window/application capture, Windows/Linux capture or explicit product unsupported state, no display fallback for window/application targets, rendered frames for passing scenarios, decoded-frame probe binding to selected Resource URA/session/target kind/frame source/geometry revision, selected sentinel id/hash content for passing scenarios, unrelated sentinel absence for passing window/application scenarios, selected Resource URA session subjects, and visible terminal receipts |

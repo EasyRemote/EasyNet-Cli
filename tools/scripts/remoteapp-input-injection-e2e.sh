@@ -150,6 +150,7 @@ required_inputs = {"pointer", "keyboard"}
 terminal_reasons = {"caller_ended", "user_cancelled", "input_injection_e2e_cleanup"}
 os_effect_probe_sources = {
     "macos_accessibility_api",
+    "macos_appkit_target_observer",
     "macos_cgevent_observer",
     "win32_sendinput_observer",
     "linux_uinput_observer",
@@ -241,7 +242,7 @@ for platform_name in sorted(required_platforms):
                     ability_by_name[ability["name"]] = ability
         for ability_name in (
             "remote_desktop.create_session",
-            "remote_desktop.attach",
+            "remote_desktop.set_description",
             "remote_desktop.watch_events",
             "remote_desktop.end_session",
         ):
@@ -608,7 +609,7 @@ subject = "easynet:///r/localhost/resource/device.macos/streams/application.edit
 session_id = "rd-input-macos-self-test"
 abilities = [
     {"name": "remote_desktop.create_session", "subject_ura": subject},
-    {"name": "remote_desktop.attach", "subject_ura": subject, "session_id": session_id},
+    {"name": "remote_desktop.set_description", "subject_ura": subject, "session_id": session_id},
     {"name": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id},
     {"name": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id},
 ]
