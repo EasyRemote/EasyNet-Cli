@@ -165,15 +165,16 @@
         "frontend session details surface target tracking recovery state instead of opaque failure",
         "frontend exposes a Refresh targets CTA for target tracking recovery instead of leaving lost targets as a dead end",
         "check-remoteapp-main-crate-implementation-tests.sh runs main-crate app/window target rebind implementation tests",
-        "remoteapp-multi-window-tracking-e2e.sh verifier for real independent app/window tracking artifacts"
+        "remoteapp-multi-window-tracking-e2e.sh verifier for real independent app/window tracking artifacts with per-stream decoded-frame probes bound to each selected Resource/session/stream/frame source/media epoch/sentinel"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-multi-window-tracking-e2e.sh artifact",
         "independent concurrent window streams",
         "distinct Resource URAs, session ids, stream ids, media source epochs, and frame source ids",
+        "decoded-frame probe bound to each independent stream's selected Resource URA, session id, stream id, frame source id, media source epoch, and selected sentinel id/hash",
         "non-interleaved frames for independently tracked streams",
         "selected target sentinel rendering for each independently tracked stream",
-        "no foreign or cross-stream sentinel leakage between independently tracked streams",
+        "no foreign or cross-stream sentinel leakage between independently tracked streams in stream summaries or decoded-frame probes",
         "move/resize geometry churn with increasing target_geometry_revision",
         "same-display application window-set churn with pending media rebind and TARGET_REBOUND",
         "committed window-set sentinel rendering after application rebind",

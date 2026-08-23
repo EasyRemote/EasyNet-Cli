@@ -729,6 +729,24 @@ require 'sentinel_owner_resource_ura' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must bind rendered sentinel to selected Resource URA'
 require 'cross_stream_sentinel_leakage' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must reject cross-stream sentinel leakage'
+require 'rendered_frame_probe must be present' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require decoded per-stream frame probe evidence'
+require 'rendered_frame_probe\.probe_source must be decoded_frame' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require decoded-frame stream probe source'
+require 'rendered_frame_probe selected_resource_ura must bind selected stream' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must bind frame probe to selected stream Resource URA'
+require 'rendered_frame_probe session_id must bind stream session' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must bind frame probe to stream session'
+require 'rendered_frame_probe stream_id must bind stream' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must bind frame probe to stream id'
+require 'rendered_frame_probe frame_source_id must bind stream frame source' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must bind frame probe to stream frame source'
+require 'rendered_frame_probe media_source_epoch must bind stream' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must bind frame probe to media source epoch'
+require 'rendered_frame_probe selected_sentinel_hash must be recorded' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must require per-stream sentinel hash evidence'
+require 'rendered_frame_probe foreign_sentinel_rendered must be false' "$MULTI_WINDOW_TRACKING" \
+  'multi-window tracking verifier must reject foreign sentinel leakage in decoded stream probe'
 require 'TARGET_MOVED' "$MULTI_WINDOW_TRACKING" \
   'multi-window tracking verifier must inspect target move events'
 require 'TARGET_RESIZED' "$MULTI_WINDOW_TRACKING" \

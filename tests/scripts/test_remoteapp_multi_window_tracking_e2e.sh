@@ -38,6 +38,54 @@ fi
 grep -q "frames_interleaved must be false" /tmp/remoteapp-multi-window-tracking-interleaved.out || \
   fail "interleaved stream failure was not explicit"
 
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-stream-probe.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+for scenario in evidence["scenarios"]:
+    if scenario["scenario"] == "independent_window_streams":
+        del scenario["streams"][0]["rendered_frame_probe"]
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/no-stream-probe.json" --out-dir "$OUT_DIR/no-stream-probe" >/tmp/remoteapp-multi-window-tracking-no-stream-probe.out 2>&1; then
+  fail "verifier accepted independent stream without decoded frame probe"
+fi
+grep -q "rendered_frame_probe must be present" /tmp/remoteapp-multi-window-tracking-no-stream-probe.out || \
+  fail "missing stream frame probe failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/wrong-stream-probe-source.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+for scenario in evidence["scenarios"]:
+    if scenario["scenario"] == "independent_window_streams":
+        scenario["streams"][0]["rendered_frame_probe"]["frame_source_id"] = "unrelated-frame-source"
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/wrong-stream-probe-source.json" --out-dir "$OUT_DIR/wrong-stream-probe-source" >/tmp/remoteapp-multi-window-tracking-wrong-stream-probe-source.out 2>&1; then
+  fail "verifier accepted stream probe bound to a different frame source"
+fi
+grep -q "rendered_frame_probe frame_source_id must bind stream frame source" /tmp/remoteapp-multi-window-tracking-wrong-stream-probe-source.out || \
+  fail "stream frame-source probe failure was not explicit"
+
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/stream-probe-leakage.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+for scenario in evidence["scenarios"]:
+    if scenario["scenario"] == "independent_window_streams":
+        scenario["streams"][0]["rendered_frame_probe"]["foreign_sentinel_rendered"] = True
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/stream-probe-leakage.json" --out-dir "$OUT_DIR/stream-probe-leakage" >/tmp/remoteapp-multi-window-tracking-stream-probe-leakage.out 2>&1; then
+  fail "verifier accepted decoded stream probe with foreign sentinel leakage"
+fi
+grep -q "rendered_frame_probe foreign_sentinel_rendered must be false" /tmp/remoteapp-multi-window-tracking-stream-probe-leakage.out || \
+  fail "stream probe foreign sentinel failure was not explicit"
+
 python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-resize.json" <<'PY'
 import json
 import sys

@@ -46,10 +46,10 @@ Evidence contract:
   application_window_set_churn, target_loss_rebind, and multi_display_application
   scenarios with public RemoteApp session abilities, selected Resource URA
   subject binding, ordered target lifecycle events, rendered frames, stream
-  isolation, selected target sentinel binding, no cross-stream sentinel
-  leakage, application window-set rebind evidence, and visible terminal
-  receipts. Multi-display application may report explicit product unsupported
-  state.
+  isolation, decoded-frame probes bound to each selected stream/frame source,
+  selected target sentinel binding, no cross-stream sentinel leakage,
+  application window-set rebind evidence, and visible terminal receipts.
+  Multi-display application may report explicit product unsupported state.
 
 Non-claims:
   A skipped report or self-test does not prove multi-window tracking product
@@ -300,6 +300,35 @@ for scenario_name in sorted(required_scenarios):
                     f"{stream_prefix}: selected_sentinel_rendered must be true")
             require(stream.get("foreign_sentinel_rendered") is False,
                     f"{stream_prefix}: foreign_sentinel_rendered must be false")
+            rendered_probe = stream.get("rendered_frame_probe")
+            require(isinstance(rendered_probe, dict),
+                    f"{stream_prefix}: rendered_frame_probe must be present")
+            if not isinstance(rendered_probe, dict):
+                rendered_probe = {}
+            require(rendered_probe.get("probe_source") == "decoded_frame",
+                    f"{stream_prefix}: rendered_frame_probe.probe_source must be decoded_frame")
+            require(rendered_probe.get("selected_resource_ura") == selected_resource_ura,
+                    f"{stream_prefix}: rendered_frame_probe selected_resource_ura must bind selected stream")
+            require(rendered_probe.get("session_id") == stream.get("session_id"),
+                    f"{stream_prefix}: rendered_frame_probe session_id must bind stream session")
+            require(rendered_probe.get("stream_id") == stream.get("stream_id"),
+                    f"{stream_prefix}: rendered_frame_probe stream_id must bind stream")
+            require(rendered_probe.get("frame_source_id") == stream.get("frame_source_id"),
+                    f"{stream_prefix}: rendered_frame_probe frame_source_id must bind stream frame source")
+            require(rendered_probe.get("media_source_epoch") == stream.get("media_source_epoch"),
+                    f"{stream_prefix}: rendered_frame_probe media_source_epoch must bind stream")
+            require(isinstance(rendered_probe.get("observed_at_ms"), int)
+                    and rendered_probe.get("observed_at_ms") > 0,
+                    f"{stream_prefix}: rendered_frame_probe observed_at_ms must be recorded")
+            require(rendered_probe.get("selected_sentinel_id") == stream.get("selected_sentinel_id"),
+                    f"{stream_prefix}: rendered_frame_probe selected_sentinel_id must bind selected sentinel")
+            require(isinstance(rendered_probe.get("selected_sentinel_hash"), str)
+                    and rendered_probe.get("selected_sentinel_hash"),
+                    f"{stream_prefix}: rendered_frame_probe selected_sentinel_hash must be recorded")
+            require(rendered_probe.get("selected_sentinel_rendered") is True,
+                    f"{stream_prefix}: rendered_frame_probe selected_sentinel_rendered must be true")
+            require(rendered_probe.get("foreign_sentinel_rendered") is False,
+                    f"{stream_prefix}: rendered_frame_probe foreign_sentinel_rendered must be false")
             stream_ids.add(stream.get("stream_id"))
             session_ids.add(stream.get("session_id"))
             subject_uras.add(stream.get("selected_resource_ura"))
@@ -467,6 +496,19 @@ independent["streams"] = [
         "sentinel_owner_resource_ura": "easynet:///r/acme/resource/device.dev/window.a",
         "selected_sentinel_rendered": True,
         "foreign_sentinel_rendered": False,
+        "rendered_frame_probe": {
+            "probe_source": "decoded_frame",
+            "selected_resource_ura": "easynet:///r/acme/resource/device.dev/window.a",
+            "session_id": "sess-window-a",
+            "stream_id": "stream-window-a",
+            "frame_source_id": "cg-window-a",
+            "media_source_epoch": 11,
+            "observed_at_ms": 1787335001000,
+            "selected_sentinel_id": "sentinel-window-a",
+            "selected_sentinel_hash": "sha256:sentinel-window-a",
+            "selected_sentinel_rendered": True,
+            "foreign_sentinel_rendered": False,
+        },
     },
     {
         "selected_resource_ura": "easynet:///r/acme/resource/device.dev/window.b",
@@ -480,6 +522,19 @@ independent["streams"] = [
         "sentinel_owner_resource_ura": "easynet:///r/acme/resource/device.dev/window.b",
         "selected_sentinel_rendered": True,
         "foreign_sentinel_rendered": False,
+        "rendered_frame_probe": {
+            "probe_source": "decoded_frame",
+            "selected_resource_ura": "easynet:///r/acme/resource/device.dev/window.b",
+            "session_id": "sess-window-b",
+            "stream_id": "stream-window-b",
+            "frame_source_id": "cg-window-b",
+            "media_source_epoch": 12,
+            "observed_at_ms": 1787335001100,
+            "selected_sentinel_id": "sentinel-window-b",
+            "selected_sentinel_hash": "sha256:sentinel-window-b",
+            "selected_sentinel_rendered": True,
+            "foreign_sentinel_rendered": False,
+        },
     },
 ]
 independent["frames_interleaved"] = False

@@ -487,6 +487,42 @@ grep -q "multi-window tracking verifier must require selected target sentinel re
   fail "expected multi-window tracking selected-sentinel rendering failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 
+perl -0pi -e 's#rendered_frame_probe must be present#rendered_frame_probe may be absent#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-frame-probe.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without decoded per-stream frame probe"
+fi
+grep -q "multi-window tracking verifier must require decoded per-stream frame probe evidence" /tmp/check-remoteapp-product-closure-tracking-frame-probe.out || \
+  fail "expected multi-window tracking frame-probe failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
+perl -0pi -e 's#rendered_frame_probe frame_source_id must bind stream frame source#rendered_frame_probe frame_source_id may differ#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-frame-source.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without frame-probe source binding"
+fi
+grep -q "multi-window tracking verifier must bind frame probe to stream frame source" /tmp/check-remoteapp-product-closure-tracking-frame-source.out || \
+  fail "expected multi-window tracking frame-source binding failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
+perl -0pi -e 's#rendered_frame_probe selected_sentinel_hash must be recorded#rendered_frame_probe selected_sentinel_hash may be absent#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-frame-sentinel-hash.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without per-stream sentinel hash evidence"
+fi
+grep -q "multi-window tracking verifier must require per-stream sentinel hash evidence" /tmp/check-remoteapp-product-closure-tracking-frame-sentinel-hash.out || \
+  fail "expected multi-window tracking sentinel hash failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
+perl -0pi -e 's#rendered_frame_probe foreign_sentinel_rendered must be false#rendered_frame_probe foreign_sentinel_rendered may be true#g' \
+  "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-frame-leakage.out 2>&1; then
+  fail "checker accepted multi-window tracking verifier without decoded-probe foreign sentinel rejection"
+fi
+grep -q "multi-window tracking verifier must reject foreign sentinel leakage in decoded stream probe" /tmp/check-remoteapp-product-closure-tracking-frame-leakage.out || \
+  fail "expected multi-window tracking decoded-probe leakage failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
+
 perl -0pi -e 's#uncommitted_same_app_sentinel_rendered#uncommitted_same_app_sentinel_visible#g' \
   "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-tracking-uncommitted-sentinel.out 2>&1; then
