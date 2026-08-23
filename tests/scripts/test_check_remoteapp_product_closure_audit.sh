@@ -17,6 +17,7 @@ mkdir -p \
   "$SB/docs/design" \
   "$SB/pr/20260822-remoteapp-product-closure" \
   "$SB/tools/scripts" \
+  "$SB/src/daemon/plugins" \
   "$SB/plugins/remote-desktop/src/media" \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
@@ -58,6 +59,8 @@ cp "$REPO_ROOT/plugins/remote-desktop/src/target_tracking.rs" "$SB/plugins/remot
 cp "$REPO_ROOT/plugins/remote-desktop/src/target_monitor.rs" "$SB/plugins/remote-desktop/src/target_monitor.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SB/plugins/remote-desktop/src/input.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/plugin.toml" "$SB/plugins/remote-desktop/plugin.toml"
+cp "$REPO_ROOT/plugins/remote-desktop/src/registration.rs" "$SB/plugins/remote-desktop/src/registration.rs"
+cp "$REPO_ROOT/src/daemon/plugins/surface.rs" "$SB/src/daemon/plugins/surface.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/media/native.rs" "$SB/plugins/remote-desktop/src/media/native.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/mod.rs" "$SB/plugins/remote-desktop/src/handlers/mod.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/create_session.rs" "$SB/plugins/remote-desktop/src/handlers/create_session.rs"
@@ -82,6 +85,15 @@ fi
 grep -q "RemoteApp compiled attach spec must declare metadata/binary bidi framing" /tmp/check-remoteapp-product-closure-attach-wire-registration.out || \
   fail "expected RemoteApp attach registration wire-kind failure"
 cp "$REPO_ROOT/plugins/remote-desktop/src/registration.rs" "$SB/plugins/remote-desktop/src/registration.rs"
+
+perl -0pi -e 's#bidi_wire_kind: ability\.bidi_wire_kind\(\)\.map\(Into::into\),#bidi_wire_kind: None,#' \
+  "$SB/src/daemon/plugins/surface.rs"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-surface-wire-projection.out 2>&1; then
+  fail "checker accepted plugin surface without declared bidi wire-kind projection"
+fi
+grep -q "plugin surface must project declared bidi wire kind" /tmp/check-remoteapp-product-closure-surface-wire-projection.out || \
+  fail "expected plugin surface wire-kind projection failure"
+cp "$REPO_ROOT/src/daemon/plugins/surface.rs" "$SB/src/daemon/plugins/surface.rs"
 
 perl -0pi -e 's/full RemoteApp product closure incomplete as of 2026-08-22/implemented; full acceptance verified 2026-08-16/' \
   "$SB/docs/design/remoteapp-targeted-session-spec.md"

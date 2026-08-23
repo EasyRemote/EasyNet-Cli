@@ -13,7 +13,7 @@ use crate::daemon::plugins::companion::DesktopCompanionManager;
 use crate::daemon::plugins::index::PluginPackageIndex;
 use crate::daemon::plugins::index::PluginPackageIndexError;
 use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadStatus};
-use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginKind};
+use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginBidiWireKind, PluginKind};
 use crate::daemon::plugins::realtime::{
     activation_plans_for_manifest, PluginRealtimeActivationPlan,
 };
@@ -75,6 +75,8 @@ pub struct PluginAbilitySurfaceRecord {
     pub kind: PluginKindView,
     pub layer: PluginAbilityLayerView,
     pub call_mode: CallModeView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bidi_wire_kind: Option<PluginBidiWireKindView>,
     pub planned_load_status: String,
     pub daemon_runtime_status: String,
     #[serde(default)]
@@ -116,6 +118,14 @@ pub enum CallModeView {
     Stream,
     Bidi,
     Unknown,
+}
+
+/// Serializable bidi data-plane profile for plugin ability discovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginBidiWireKindView {
+    JsonFrames,
+    MetadataJsonPlusBinary,
 }
 
 /// Project package index and load plan into the product-facing plugin list.
@@ -304,6 +314,7 @@ impl PluginSurfaceProjector {
                     kind: package.manifest().kind().into(),
                     layer: ability.layer().into(),
                     call_mode: ability.call_mode().into(),
+                    bidi_wire_kind: ability.bidi_wire_kind().map(Into::into),
                     planned_load_status: planned_load_status.clone(),
                     daemon_runtime_status,
                     load_status: planned_load_status.clone(),
@@ -322,6 +333,7 @@ impl PluginSurfaceProjector {
                 kind: PluginKindView::Unknown,
                 layer: PluginAbilityLayerView::Unknown,
                 call_mode: CallModeView::Unknown,
+                bidi_wire_kind: None,
                 planned_load_status: "index_error".to_string(),
                 daemon_runtime_status: daemon_abilities
                     .map(|_| "not_loaded")
@@ -396,6 +408,15 @@ impl From<CallMode> for CallModeView {
             CallMode::Rpc => Self::Rpc,
             CallMode::Stream => Self::Stream,
             CallMode::Bidi => Self::Bidi,
+        }
+    }
+}
+
+impl From<PluginBidiWireKind> for PluginBidiWireKindView {
+    fn from(value: PluginBidiWireKind) -> Self {
+        match value {
+            PluginBidiWireKind::JsonFrames => Self::JsonFrames,
+            PluginBidiWireKind::MetadataJsonPlusBinary => Self::MetadataJsonPlusBinary,
         }
     }
 }
@@ -518,6 +539,28 @@ mod tests {
     }
 
     #[test]
+    fn plugin_host_surface_projects_declared_bidi_wire_kind() {
+        let root = tempfile::tempdir().expect("root");
+        write_mixed_bidi_package(root.path());
+        let package = PluginPackage::from_installed(root.path(), None).expect("mixed package");
+        let index = PluginPackageIndex::from_packages(vec![Arc::new(package)]).expect("index");
+        let plan = PluginLoadPlanner::new("linux").plan(&index);
+
+        let report = PluginSurfaceProjector::project_report(&index, &plan);
+        let ability = report
+            .abilities
+            .iter()
+            .find(|ability| ability.ability == "test.remoteapp.attach")
+            .expect("mixed bidi row");
+
+        assert_eq!(ability.call_mode, CallModeView::Bidi);
+        assert_eq!(
+            ability.bidi_wire_kind,
+            Some(PluginBidiWireKindView::MetadataJsonPlusBinary)
+        );
+    }
+
+    #[test]
     fn plugin_host_surface_projects_desktop_companion_as_package_only() {
         let _home = HomeGuard::new();
         let root = tempfile::tempdir().expect("root");
@@ -612,6 +655,40 @@ quick_add = true
         std::fs::write(
             root.join("abilities/test.camera.ability.toml"),
             crate::daemon::plugins::package::tests::test_descriptor("test.camera"),
+        )
+        .expect("descriptor");
+    }
+
+    fn write_mixed_bidi_package(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("abilities")).expect("abilities dir");
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "test.remoteapp"
+version = "0.1.0"
+kind = "sidecar"
+entrypoint = "bin/plugin"
+abilities = ["abilities/*.ability.toml"]
+permissions = ["screen_capture", "input_control"]
+resources = ["screen", "keyboard", "mouse"]
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 2
+
+[[ability_metadata]]
+name = "test.remoteapp.attach"
+layer = "operational"
+call_mode = "bidi"
+bidi_wire_kind = "metadata_json_plus_binary"
+"#,
+        )
+        .expect("manifest");
+        std::fs::write(
+            root.join("abilities/test.remoteapp.attach.ability.toml"),
+            crate::daemon::plugins::package::tests::test_descriptor("test.remoteapp.attach"),
         )
         .expect("descriptor");
     }

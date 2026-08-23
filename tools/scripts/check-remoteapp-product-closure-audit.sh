@@ -45,6 +45,7 @@ TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
 INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
 REMOTE_DESKTOP_PLUGIN_MANIFEST="$ROOT/plugins/remote-desktop/plugin.toml"
 REMOTE_DESKTOP_REGISTRATION="$ROOT/plugins/remote-desktop/src/registration.rs"
+PLUGIN_SURFACE="$ROOT/src/daemon/plugins/surface.rs"
 
 fail() {
   printf 'check-remoteapp-product-closure-audit: %s\n' "$1" >&2
@@ -110,6 +111,7 @@ reject() {
 [[ -f "$INPUT" ]] || fail "missing RemoteApp input execution plane"
 [[ -f "$REMOTE_DESKTOP_PLUGIN_MANIFEST" ]] || fail "missing RemoteApp plugin manifest"
 [[ -f "$REMOTE_DESKTOP_REGISTRATION" ]] || fail "missing RemoteApp compiled registration"
+[[ -f "$PLUGIN_SURFACE" ]] || fail "missing plugin operator surface projection"
 
 for lifecycle_harness in "$SESSION_TIMEOUT" "$SESSION_CANCEL" "$SESSION_RESUME"; do
   require 'remoteapp-lifecycle-harness-lib\.sh' "$lifecycle_harness" \
@@ -153,6 +155,12 @@ require 'PluginBidiWireKind::MetadataJsonPlusBinary' "$REMOTE_DESKTOP_REGISTRATI
   'RemoteApp compiled attach spec must declare metadata/binary bidi framing'
 reject 'PluginBidiWireKind::JsonFrames' "$REMOTE_DESKTOP_REGISTRATION" \
   'RemoteApp compiled attach spec must not regress to JSON-only bidi framing'
+require 'bidi_wire_kind: ability\.bidi_wire_kind\(\)\.map\(Into::into\)' "$PLUGIN_SURFACE" \
+  'plugin surface must project declared bidi wire kind for frontend/catalog discovery'
+require 'PluginBidiWireKindView::MetadataJsonPlusBinary' "$PLUGIN_SURFACE" \
+  'plugin surface must expose metadata_json_plus_binary bidi framing'
+require 'plugin_host_surface_projects_declared_bidi_wire_kind' "$PLUGIN_SURFACE" \
+  'plugin surface must test declared bidi wire-kind projection'
 
 python3 - "$MATRIX" <<'PY' || fail "RemoteApp product readiness matrix is invalid"
 import json
