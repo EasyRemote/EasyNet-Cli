@@ -410,7 +410,7 @@ class ManagedSigningTests(unittest.TestCase):
         self.assertEqual(
             base64.b64decode(invocation_signature.signature_base64), signature
         )
-        self.assertEqual(invocation_signature.key_id_hint, handle.signer_id)
+        self.assertEqual(invocation_signature.key_id_hint, _b64(public_key))
         self.assertEqual(
             invocation_signature.signer_public_key_base64, _b64(public_key)
         )

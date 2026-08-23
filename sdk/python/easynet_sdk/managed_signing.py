@@ -579,7 +579,7 @@ class ManagedSigner(SignatureProvider):
         return InvocationSignature(
             algorithm="ed25519",
             signature_base64=base64.b64encode(signature).decode("ascii"),
-            key_id_hint=handle.signer_id,
+            key_id_hint=expected_public_key,
             signer_public_key_base64=expected_public_key,
         )
 

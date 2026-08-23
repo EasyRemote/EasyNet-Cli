@@ -48,6 +48,8 @@ PREPARED_FIXTURE = b"""{
   "submit_ready": false
 }"""
 
+TEST_PUBLIC_KEY_BASE64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
 
 class FixedSignatureProvider:
     def __init__(self, signature: InvocationSignature):
@@ -479,7 +481,7 @@ class SigningTests(unittest.TestCase):
         self.assertTrue(signed.submit_ready())
         self.assertEqual(signed.signer_id, handle.signer_id)
         self.assertEqual(signed.signature.algorithm, handle.algorithm)
-        self.assertEqual(signed.signature.key_id_hint, handle.signer_id)
+        self.assertEqual(signed.signature.key_id_hint, TEST_PUBLIC_KEY_BASE64)
         self.assertEqual(provider.material, prepared.signing_material)
         self.assertEqual(provider.handle, handle)
 
@@ -603,7 +605,7 @@ class SigningTests(unittest.TestCase):
         self.assertTrue(signed.submit_ready())
         self.assertEqual(signed.signer_id, handle.signer_id)
         self.assertEqual(signed.signature.algorithm, "ed25519")
-        self.assertEqual(signed.signature.key_id_hint, handle.signer_id)
+        self.assertEqual(signed.signature.key_id_hint, public_key_base64)
         self.assertEqual(signed.signature.signer_public_key_base64, public_key_base64)
         verify_ed25519_signature(
             seed,
@@ -679,7 +681,7 @@ class SigningTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
 
-def signer_handle(public_key_base64: str = "") -> SignerHandle:
+def signer_handle(public_key_base64: str = TEST_PUBLIC_KEY_BASE64) -> SignerHandle:
     policy_ref = "provider-key-inventory:sha256:test-policy"
     metadata = {"source": "provider_key_inventory", "policy_ref": policy_ref}
     if public_key_base64:

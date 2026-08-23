@@ -135,9 +135,7 @@ class Signer:
         _validate_signer_policy(prepared.signing_material.signer_policy, self.handle)
         normalized = _normalize_signature(self.handle, signature)
         signed = prepared.sign_with_caller_signature(normalized)
-        if signed.signer_id != self.handle.signer_id:
-            raise _invalid_prepared("signed invocation signer does not match handle")
-        return signed
+        return replace(signed, signer_id=self.handle.signer_id)
 
 
 @dataclass(frozen=True)
@@ -365,15 +363,29 @@ def _normalize_signature(
         raise _invalid_prepared("signature.algorithm is required")
     if handle.algorithm and algorithm != handle.algorithm:
         raise _invalid_prepared("signature algorithm does not match signer handle")
-    key_id_hint = signature.key_id_hint or handle.signer_id
-    if key_id_hint not in {handle.signer_id, handle.key_id}:
+    public_key_base64 = _handle_public_key_base64(handle)
+    if signature.signer_public_key_base64:
+        if public_key_base64 and signature.signer_public_key_base64 != public_key_base64:
+            raise _invalid_prepared("signature public key does not match signer handle")
+        public_key_base64 = signature.signer_public_key_base64
+    if not public_key_base64:
+        raise _invalid_prepared("signer handle public_key_base64 is required")
+    key_id_hint = signature.key_id_hint or public_key_base64
+    if key_id_hint not in {handle.signer_id, handle.key_id, public_key_base64}:
         raise _invalid_prepared("signature key_id_hint does not match signer handle")
     return InvocationSignature(
         algorithm=algorithm,
         signature_base64=signature.signature_base64,
-        key_id_hint=handle.signer_id,
-        signer_public_key_base64=signature.signer_public_key_base64,
+        key_id_hint=public_key_base64,
+        signer_public_key_base64=public_key_base64,
     )
+
+
+def _handle_public_key_base64(handle: SignerHandle) -> str:
+    public_key = handle.metadata.get("public_key_base64")
+    if not isinstance(public_key, str) or not public_key.strip():
+        return ""
+    return public_key.strip()
 
 
 def _validate_canonical_material_hash(
