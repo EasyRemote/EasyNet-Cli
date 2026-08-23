@@ -20,6 +20,7 @@ use crate::daemon::plugins::remote_desktop::media::{
     XCAP_OPENH264_BACKEND_ID, XCAP_OPENH264_WEBRTC_BACKEND,
 };
 
+#[cfg(not(target_os = "macos"))]
 pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &str =
     "host_audio_not_implemented";
 const PLATFORM_REASON_MACOS_NATIVE_BACKEND_READY: &str =
@@ -134,6 +135,33 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "xcap.avcapture_screen_input"
     };
     let audio = audio_support_view();
+    let mut unsupported_capabilities = vec![
+        json!({
+            "capability": "clipboard",
+            "reason": "split_ability_required",
+            "future_abilities": [
+                "remote_desktop.clipboard.read",
+                "remote_desktop.clipboard.write",
+                "remote_desktop.clipboard.watch"
+            ]
+        }),
+        json!({
+            "capability": "file_transfer",
+            "reason": "split_ability_required",
+            "future_abilities": [
+                "remote_desktop.file_transfer.create",
+                "remote_desktop.file_transfer.accept",
+                "remote_desktop.file_transfer.send",
+                "remote_desktop.file_transfer.cancel"
+            ]
+        }),
+    ];
+    if audio["supported"] != json!(true) {
+        unsupported_capabilities.push(json!({
+            "capability": "host_audio",
+            "reason": audio["blocked_reason"],
+        }));
+    }
     let production_target_subjects = if production_ready {
         production_backend.supported_subjects_value()
     } else {
@@ -168,36 +196,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
         "supported_input_events": ["pointer.move", "pointer.down", "pointer.up", "key.down", "key.up"],
         "unsupported_input_types": unsupported_input_channel_types_value(),
-        "unsupported_capabilities": [
-            {
-                "capability": "clipboard",
-                "reason": "split_ability_required",
-                "future_abilities": [
-                    "remote_desktop.clipboard.read",
-                    "remote_desktop.clipboard.write",
-                    "remote_desktop.clipboard.watch"
-                ]
-            },
-            {
-                "capability": "file_transfer",
-                "reason": "split_ability_required",
-                "future_abilities": [
-                    "remote_desktop.file_transfer.create",
-                    "remote_desktop.file_transfer.accept",
-                    "remote_desktop.file_transfer.send",
-                    "remote_desktop.file_transfer.cancel"
-                ]
-            },
-            {
-                "capability": "host_audio",
-                "reason": AUDIO_UNSUPPORTED_REASON,
-                "future_abilities": [
-                    "remote_desktop.audio.capture",
-                    "remote_desktop.audio.set_description",
-                    "remote_desktop.audio.stop"
-                ]
-            }
-        ],
+        "unsupported_capabilities": unsupported_capabilities,
         "input_plane": {
             "kind": "webrtc_data_channel",
             "label": INPUT_DATA_CHANNEL_LABEL,
@@ -267,14 +266,16 @@ fn media_pipeline_support_view(
         "static_bitrate_with_bounded_stale_frame_drop"
     };
 
+    let audio_ready = audio["capture_ready"] == json!(true) && audio["send_ready"] == json!(true);
+    let mut product_blockers = vec![json!("remoteapp_media_adaptation_e2e_artifact_missing")];
+    if !audio_ready {
+        product_blockers.insert(0, audio["blocked_reason"].clone());
+    }
     json!({
         "schema_version": 1,
-        "media_scope": "video_only",
+        "media_scope": if audio_ready { "audio_video" } else { "video_only" },
         "product_ready": false,
-        "product_blockers": [
-            AUDIO_UNSUPPORTED_REASON,
-            "remoteapp_media_adaptation_e2e_artifact_missing"
-        ],
+        "product_blockers": product_blockers,
         "video": {
             "status": video_status,
             "backend_id": video_backend.backend_id(),
@@ -412,10 +413,32 @@ fn platform_support_view(
     })
 }
 
-/// Product-visible audio state. RemoteApp currently owns video transport only;
-/// audio must stay an explicit unsupported state until a real host-audio
-/// capture/encode/WebRTC path exists.
 pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view() -> Value {
+    #[cfg(target_os = "macos")]
+    {
+        let backend = native_webrtc_backend_runtime_descriptor();
+        let ready = backend.production_ready();
+        return json!({
+            "supported": true,
+            "capture_ready": ready,
+            "send_ready": ready,
+            "codec_profiles": [{
+                "codec": "opus",
+                "sample_rate_hz": 48000,
+                "channels": 2,
+                "frame_duration_ms": 20,
+                "transport": "webrtc",
+            }],
+            "blocked_reason": if ready {
+                Value::Null
+            } else {
+                json!(backend.unavailable_reason().unwrap_or("native_media_backend_not_ready"))
+            },
+            "transport": "webrtc",
+            "non_claim": "capability metadata does not replace live decoded host-audio E2E evidence",
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
     json!({
         "supported": false,
         "capture_ready": false,
@@ -423,7 +446,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view() -> Value 
         "codec_profiles": [],
         "blocked_reason": AUDIO_UNSUPPORTED_REASON,
         "transport": Value::Null,
-        "non_claim": "video transport readiness does not prove host audio readiness",
+        "non_claim": "host audio remains unsupported on this platform",
     })
 }
 
@@ -480,28 +503,59 @@ mod tests {
             capabilities["unsupported_capabilities"][1]["future_abilities"][2],
             json!("remote_desktop.file_transfer.send")
         );
+        #[cfg(target_os = "macos")]
         assert_eq!(
-            capabilities["unsupported_capabilities"][2]["capability"],
-            json!("host_audio")
+            capabilities["unsupported_capabilities"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
         );
-        assert_eq!(
-            capabilities["unsupported_capabilities"][2]["reason"],
-            json!("host_audio_not_implemented")
-        );
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(
+                capabilities["unsupported_capabilities"][2]["capability"],
+                json!("host_audio")
+            );
+            assert_eq!(
+                capabilities["unsupported_capabilities"][2]["reason"],
+                json!("host_audio_not_implemented")
+            );
+        }
     }
 
     #[test]
-    fn device_capabilities_report_host_audio_as_explicitly_unsupported() {
+    fn device_capabilities_report_platform_host_audio_support() {
         let capabilities = device_capabilities_view();
 
-        assert_eq!(capabilities["audio"]["supported"], json!(false));
-        assert_eq!(capabilities["audio"]["capture_ready"], json!(false));
-        assert_eq!(capabilities["audio"]["send_ready"], json!(false));
-        assert_eq!(
-            capabilities["audio"]["blocked_reason"],
-            json!("host_audio_not_implemented")
-        );
-        assert_eq!(capabilities["audio"]["codec_profiles"], json!([]));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(capabilities["audio"]["supported"], json!(true));
+            assert_eq!(
+                capabilities["audio"]["codec_profiles"][0]["codec"],
+                json!("opus")
+            );
+            assert_eq!(
+                capabilities["audio"]["codec_profiles"][0]["sample_rate_hz"],
+                json!(48_000)
+            );
+            assert_eq!(
+                capabilities["audio"]["codec_profiles"][0]["channels"],
+                json!(2)
+            );
+            assert_eq!(capabilities["audio"]["transport"], json!("webrtc"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(capabilities["audio"]["supported"], json!(false));
+            assert_eq!(capabilities["audio"]["capture_ready"], json!(false));
+            assert_eq!(capabilities["audio"]["send_ready"], json!(false));
+            assert_eq!(
+                capabilities["audio"]["blocked_reason"],
+                json!("host_audio_not_implemented")
+            );
+            assert_eq!(capabilities["audio"]["codec_profiles"], json!([]));
+        }
     }
 
     #[test]
@@ -650,16 +704,32 @@ mod tests {
         let media_support = &capabilities["metadata"]["media_pipeline_support"];
 
         assert_eq!(media_support["schema_version"], json!(1));
-        assert_eq!(media_support["media_scope"], json!("video_only"));
+        let audio_ready = capabilities["audio"]["capture_ready"] == json!(true)
+            && capabilities["audio"]["send_ready"] == json!(true);
+        assert_eq!(
+            media_support["media_scope"],
+            json!(if audio_ready {
+                "audio_video"
+            } else {
+                "video_only"
+            })
+        );
         assert_eq!(media_support["product_ready"], json!(false));
-        assert_eq!(
-            media_support["product_blockers"][0],
-            json!("host_audio_not_implemented")
-        );
-        assert_eq!(
-            media_support["product_blockers"][1],
-            json!("remoteapp_media_adaptation_e2e_artifact_missing")
-        );
+        if audio_ready {
+            assert_eq!(
+                media_support["product_blockers"],
+                json!(["remoteapp_media_adaptation_e2e_artifact_missing"])
+            );
+        } else {
+            assert_eq!(
+                media_support["product_blockers"][0],
+                capabilities["audio"]["blocked_reason"]
+            );
+            assert_eq!(
+                media_support["product_blockers"][1],
+                json!("remoteapp_media_adaptation_e2e_artifact_missing")
+            );
+        }
         assert_eq!(media_support["video"]["codec"], json!("h264"));
         assert_eq!(
             media_support["video"]["payload_content_type"],
@@ -699,10 +769,7 @@ mod tests {
                 json!("static_bitrate_with_bounded_stale_frame_drop")
             );
         }
-        assert_eq!(
-            media_support["audio"]["blocked_reason"],
-            json!("host_audio_not_implemented")
-        );
+        assert_eq!(media_support["audio"], capabilities["audio"]);
         assert!(media_support["non_claim"]
             .as_str()
             .is_some_and(|message| { message.contains("live codec/audio/adaptation E2E") }));

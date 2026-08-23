@@ -31,6 +31,8 @@ pub(crate) mod resource;
 pub(crate) mod runtime;
 pub(crate) mod schema;
 #[cfg(target_os = "macos")]
+pub(crate) mod screencapturekit_audio;
+#[cfg(target_os = "macos")]
 pub(crate) mod screencapturekit_capture;
 pub(crate) mod sdp;
 pub(crate) mod session;

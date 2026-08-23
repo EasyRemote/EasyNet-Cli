@@ -15,7 +15,6 @@ use crate::daemon::plugins::remote_desktop::media::{
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::daemon::plugins::remote_desktop::view_device::{
     audio_support_view, device_capabilities_view, empty_pipeline_metrics, quality_targets,
-    AUDIO_UNSUPPORTED_REASON,
 };
 use crate::daemon::plugins::remote_desktop::view_transport::RemoteDesktopTransportView;
 
@@ -143,14 +142,39 @@ fn production_readiness_view(
     session: &RemoteDesktopSession,
     transport_view: &RemoteDesktopTransportView,
 ) -> Value {
-    let ready = transport_view.production_ready(session);
+    let video_ready = transport_view.production_ready(session);
+    let media_stats = session.media_stats();
+    let audio_support = audio_support_view();
+    let audio_ready = media_stats
+        .as_ref()
+        .and_then(|stats| stats.get("audio_ready"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let audio_blocked_reason = if audio_ready {
+        Value::Null
+    } else {
+        media_stats
+            .as_ref()
+            .and_then(|stats| stats.get("audio_blocker"))
+            .filter(|reason| !reason.is_null())
+            .cloned()
+            .or_else(|| audio_support.get("blocked_reason").cloned())
+            .filter(|reason| !reason.is_null())
+            .unwrap_or_else(|| json!("host_audio_not_yet_ready"))
+    };
+    let ready = video_ready && audio_ready;
     json!({
         "ready": ready,
-        "blocked_reason": production_readiness_blocked_reason(session, transport_view),
+        "blocked_reason": production_readiness_blocked_reason(
+            session,
+            transport_view,
+            audio_ready,
+            &audio_blocked_reason,
+        ),
         "target_scope_ready": session.target_scope_ready(),
-        "media_scope": "video_only",
-        "audio_ready": false,
-        "audio_blocked_reason": AUDIO_UNSUPPORTED_REASON,
+        "media_scope": if audio_support["supported"] == json!(true) { "audio_video" } else { "video_only" },
+        "audio_ready": audio_ready,
+        "audio_blocked_reason": audio_blocked_reason,
         "requires_production_codec": true,
         "production_codec_negotiated": session.production_codec_negotiated(),
         "media_transport_ready": session.media_transport_ready(),
@@ -164,10 +188,10 @@ fn production_readiness_view(
 fn production_readiness_blocked_reason(
     session: &RemoteDesktopSession,
     transport_view: &RemoteDesktopTransportView,
+    audio_ready: bool,
+    audio_blocked_reason: &Value,
 ) -> Value {
-    if transport_view.production_ready(session) {
-        Value::Null
-    } else if !session.target_scope_ready() {
+    if !session.target_scope_ready() {
         json!("target_scope_not_ready")
     } else if !session.production_codec_negotiated() {
         json!("production_codec_not_negotiated")
@@ -177,6 +201,10 @@ fn production_readiness_blocked_reason(
         json!("client_media_not_presenting")
     } else if !transport_view.production_route_ready() {
         json!("production_route_not_ready")
+    } else if !audio_ready {
+        audio_blocked_reason.clone()
+    } else if transport_view.production_ready(session) {
+        Value::Null
     } else {
         json!("production_readiness_incomplete")
     }
@@ -484,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn session_view_reports_audio_as_explicitly_unsupported_product_state() {
+    fn session_view_reports_platform_audio_product_state() {
         let session = RemoteDesktopSession::new(test_session_init(
             "rd-view-audio-product-state",
             "easynet:///r/acme/resource/display.audio",
@@ -493,21 +521,36 @@ mod tests {
 
         let view = serialize_session(&session);
 
-        assert_eq!(view["audio"]["supported"], json!(false));
-        assert_eq!(
-            view["audio"]["blocked_reason"],
-            json!("host_audio_not_implemented")
-        );
         assert_eq!(view["device_capabilities"]["audio"], view["audio"]);
-        assert_eq!(
-            view["production_readiness"]["media_scope"],
-            json!("video_only")
-        );
         assert_eq!(view["production_readiness"]["audio_ready"], json!(false));
-        assert_eq!(
-            view["production_readiness"]["audio_blocked_reason"],
-            json!("host_audio_not_implemented")
-        );
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(view["audio"]["supported"], json!(true));
+            assert_eq!(
+                view["production_readiness"]["media_scope"],
+                json!("audio_video")
+            );
+            assert_eq!(
+                view["production_readiness"]["audio_blocked_reason"],
+                json!("host_audio_not_yet_ready")
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(view["audio"]["supported"], json!(false));
+            assert_eq!(
+                view["audio"]["blocked_reason"],
+                json!("host_audio_not_implemented")
+            );
+            assert_eq!(
+                view["production_readiness"]["media_scope"],
+                json!("video_only")
+            );
+            assert_eq!(
+                view["production_readiness"]["audio_blocked_reason"],
+                json!("host_audio_not_implemented")
+            );
+        }
     }
 
     #[test]

@@ -28,7 +28,9 @@ use rtc::ice::mdns::MulticastDnsMode;
 use rtc::interceptor::Registry;
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
-use rtc::peer_connection::configuration::media_engine::{MediaEngine, MIME_TYPE_H264};
+use rtc::peer_connection::configuration::media_engine::{
+    MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS,
+};
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
 use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::rtp_transceiver::rtp_sender::{
@@ -58,7 +60,8 @@ use crate::daemon::plugins::remote_desktop::network::{
     DirectWebRtcIceServerConfig, DirectWebRtcRouteCandidateProvider,
 };
 use crate::daemon::plugins::remote_desktop::sdp::{
-    ensure_answer_sends_video, normalize_browser_answer_sdp, normalize_remote_offer_sdp,
+    ensure_answer_sends_audio, ensure_answer_sends_video, normalize_browser_answer_sdp,
+    normalize_remote_offer_sdp, remote_offer_accepts_audio,
 };
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
@@ -70,6 +73,7 @@ use crate::daemon::plugins::remote_desktop::transport::{
 };
 
 const DIRECT_WEBRTC_ICE_GATHER_TIMEOUT_MS: u64 = 2_500;
+const DIRECT_WEBRTC_OPUS_PAYLOAD_TYPE: PayloadType = 111;
 
 fn assert_direct_webrtc_endpoint_start_unlocked() {
     RemoteDesktopSessionStore::assert_current_thread_unlocked(
@@ -184,6 +188,17 @@ async fn create_direct_webrtc_endpoint(
         payload_type: DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE,
     };
     media_engine.register_codec(video_codec.clone(), RtpCodecKind::Video)?;
+    let audio_codec = RTCRtpCodecParameters {
+        rtp_codec: RTCRtpCodec {
+            mime_type: MIME_TYPE_OPUS.to_owned(),
+            clock_rate: 48_000,
+            channels: 2,
+            sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+            rtcp_feedback: vec![],
+        },
+        payload_type: DIRECT_WEBRTC_OPUS_PAYLOAD_TYPE,
+    };
+    media_engine.register_codec(audio_codec.clone(), RtpCodecKind::Audio)?;
     let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
     let route_candidate_provider = ConfiguredDirectWebRtcRouteProvider::from_env()?;
     let route_candidates = route_candidate_provider.route_candidates();
@@ -253,6 +268,7 @@ async fn create_direct_webrtc_endpoint(
     // sender in rtc rc.4: ICE/data channels connect and RTP is written, but the
     // browser never receives an ontrack event.
     let offer_sdp = normalize_remote_offer_sdp(&endpoint_config.offer_sdp);
+    let audio_offered = remote_offer_accepts_audio(&offer_sdp);
     let offer: RTCSessionDescription =
         serde_json::from_value(json!({ "type": "offer", "sdp": offer_sdp }))?;
     peer_connection.set_remote_description(offer).await?;
@@ -275,8 +291,34 @@ async fn create_direct_webrtc_endpoint(
         .add_track(Arc::clone(&track) as Arc<dyn TrackLocal>)
         .await?;
 
+    let audio_track_and_sender = if audio_offered {
+        let audio_track = Arc::new(TrackLocalStaticSample::new(MediaStreamTrack::new(
+            format!("easynet-rd-stream-{}", endpoint_config.session_id),
+            format!("easynet-rd-audio-{}", endpoint_config.session_id),
+            "EasyNet Remote Desktop Audio".to_string(),
+            RtpCodecKind::Audio,
+            vec![RTCRtpEncodingParameters {
+                rtp_coding_parameters: RTCRtpCodingParameters {
+                    ssrc: Some(rand::random::<u32>()),
+                    ..Default::default()
+                },
+                codec: audio_codec.rtp_codec.clone(),
+                ..Default::default()
+            }],
+        ))?);
+        let sender = peer_connection
+            .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal>)
+            .await?;
+        Some((audio_track, sender))
+    } else {
+        None
+    };
+
     let answer = peer_connection.create_answer(None).await?;
     ensure_answer_sends_video(&answer.sdp)?;
+    if audio_offered {
+        ensure_answer_sends_audio(&answer.sdp)?;
+    }
     peer_connection.set_local_description(answer).await?;
     let _ = tokio::time::timeout(
         Duration::from_millis(DIRECT_WEBRTC_ICE_GATHER_TIMEOUT_MS),
@@ -296,6 +338,22 @@ async fn create_direct_webrtc_endpoint(
         .first()
         .map(|codec| codec.payload_type)
         .ok_or_else(|| anyhow::anyhow!("direct WebRTC sender has no negotiated codec"))?;
+    let (audio_track, audio_payload_type) = match audio_track_and_sender {
+        Some((track, sender)) => {
+            let payload_type = sender
+                .get_parameters()
+                .await?
+                .rtp_parameters
+                .codecs
+                .first()
+                .map(|codec| codec.payload_type)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("direct WebRTC audio sender has no negotiated codec")
+                })?;
+            (Some(track), Some(payload_type))
+        }
+        None => (None, None),
+    };
     let answer_sdp = normalize_browser_answer_sdp(&local.sdp);
     eprintln!(
         "[remote-desktop-webrtc] answer_candidate_lines={} negotiated_payload_type={payload_type}",
@@ -310,6 +368,8 @@ async fn create_direct_webrtc_endpoint(
         "transport": TRANSPORT_WEBRTC,
         "endpoint_ura": direct_webrtc_endpoint_ura(&endpoint_config.session_id),
         "codec": "h264",
+        "audio_codec": audio_offered.then_some("opus"),
+        "media_scope": if audio_offered { "audio_video" } else { "video_only" },
         "carrier": "rtp_srtp",
         "route_candidate_evidence": route_candidate_evidence,
     });
@@ -330,6 +390,8 @@ async fn create_direct_webrtc_endpoint(
                     peer_connection,
                     track,
                     payload_type,
+                    audio_track,
+                    audio_payload_type,
                     target_binding: endpoint_config.target_binding,
                     options: endpoint_config.options,
                     config: media_config,

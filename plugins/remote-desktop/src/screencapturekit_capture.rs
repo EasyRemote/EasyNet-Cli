@@ -57,6 +57,9 @@ use objc2_screen_capture_kit::{
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     bgra_bytes_to_rgb_frame, rgb_frame_to_jpeg, EncodedFrame, ScreenCaptureOptions,
 };
+use crate::daemon::plugins::remote_desktop::screencapturekit_audio::{
+    captured_audio_chunk, AudioSink,
+};
 use crate::daemon::plugins::remote_desktop::target::{
     AppWindowSetProof, NativeAppIdentityCandidate, NativeAppIdentityExpectation,
     NativeAppIdentityMatch, RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
@@ -87,6 +90,17 @@ unsafe impl Send for CapturedFrame {}
 /// Callback invoked on the capture queue for every screen sample.
 pub type FrameSink = Arc<dyn Fn(CapturedFrame) + Send + Sync>;
 
+pub struct ScreenCaptureKitSinks {
+    pub video: FrameSink,
+    pub audio: Option<AudioSink>,
+}
+
+impl ScreenCaptureKitSinks {
+    pub fn video_only(video: FrameSink) -> Self {
+        Self { video, audio: None }
+    }
+}
+
 /// Holds the capture stream + delegate alive for the session lifetime.
 pub struct ScreenCaptureKitStream {
     stream: Retained<SCStream>,
@@ -114,7 +128,7 @@ impl ScreenCaptureKitTarget {
 }
 
 struct DelegateIvars {
-    sink: FrameSink,
+    sinks: ScreenCaptureKitSinks,
 }
 
 define_class!(
@@ -135,25 +149,32 @@ define_class!(
             sample_buffer: &CMSampleBuffer,
             output_type: SCStreamOutputType,
         ) {
-            if output_type != SCStreamOutputType::Screen {
-                return;
+            match output_type {
+                SCStreamOutputType::Screen => {
+                    // Only forward samples that carry a ready image buffer.
+                    let Some(image_buffer) = (unsafe { sample_buffer.image_buffer() }) else {
+                        return;
+                    };
+                    let pts = unsafe { sample_buffer.presentation_time_stamp() };
+                    (self.ivars().sinks.video)(CapturedFrame {
+                        image_buffer: image_buffer.into(),
+                        pts,
+                    });
+                }
+                SCStreamOutputType::Audio => {
+                    if let Some(audio) = &self.ivars().sinks.audio {
+                        audio(captured_audio_chunk(sample_buffer));
+                    }
+                }
+                _ => {}
             }
-            // Only forward samples that carry a ready image buffer.
-            let Some(image_buffer) = (unsafe { sample_buffer.image_buffer() }) else {
-                return;
-            };
-            let pts = unsafe { sample_buffer.presentation_time_stamp() };
-            (self.ivars().sink)(CapturedFrame {
-                image_buffer: image_buffer.into(),
-                pts,
-            });
         }
     }
 );
 
 impl StreamOutputDelegate {
-    fn new(sink: FrameSink) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(DelegateIvars { sink });
+    fn new(sinks: ScreenCaptureKitSinks) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(DelegateIvars { sinks });
         unsafe { msg_send![super(this), init] }
     }
 }
@@ -262,7 +283,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn capture_jpeg_for_binding(
             }
         })
     };
-    let stream = ScreenCaptureKitStream::start(ability, target, width, height, options.fps, sink)?;
+    let stream = ScreenCaptureKitStream::start(
+        ability,
+        target,
+        width,
+        height,
+        options.fps,
+        ScreenCaptureKitSinks::video_only(sink),
+    )?;
     let frame = rx.recv_timeout(Duration::from_secs(3)).map_err(|err| {
         anyhow::anyhow!(
             "{ability}: ScreenCaptureKit did not produce a diagnostic frame for binding {}: {err}; \
@@ -581,7 +609,7 @@ impl ScreenCaptureKitStream {
         width: usize,
         height: usize,
         fps: u32,
-        sink: FrameSink,
+        sinks: ScreenCaptureKitSinks,
     ) -> Result<Self, RemoteAppTargetError> {
         let config = unsafe {
             let c = SCStreamConfiguration::new();
@@ -597,10 +625,17 @@ impl ScreenCaptureKitStream {
                 epoch: 0,
             });
             c.setQueueDepth(SCK_LIVE_QUEUE_DEPTH);
+            c.setCapturesAudio(sinks.audio.is_some());
+            if sinks.audio.is_some() {
+                c.setSampleRate(48_000);
+                c.setChannelCount(2);
+                c.setExcludesCurrentProcessAudio(true);
+            }
             c
         };
 
-        let delegate = StreamOutputDelegate::new(sink);
+        let captures_audio = sinks.audio.is_some();
+        let delegate = StreamOutputDelegate::new(sinks);
         let stream = unsafe {
             SCStream::initWithFilter_configuration_delegate(
                 SCStream::alloc(),
@@ -630,6 +665,24 @@ impl ScreenCaptureKitStream {
                         ),
                     )
                 })?;
+            if captures_audio {
+                stream
+                    .addStreamOutput_type_sampleHandlerQueue_error(
+                        output_proto,
+                        SCStreamOutputType::Audio,
+                        Some(&audio_capture_queue()),
+                    )
+                    .map_err(|err| {
+                        RemoteAppTargetError::new(
+                            ability,
+                            TargetResolutionError::ScreenCaptureKitFilterFailed,
+                            format!(
+                                "SCStream add audio output failed: {}",
+                                err.localizedDescription()
+                            ),
+                        )
+                    })?;
+            }
         }
 
         start_capture_sync(ability, &stream)?;
@@ -938,6 +991,10 @@ fn capture_queue() -> DispatchRetained<DispatchQueue> {
     // dispatch_queue_create via the dispatch2 crate; a serial queue keeps
     // sample ordering and avoids re-entrant callbacks.
     DispatchQueue::new("tech.easynet.remote-desktop.capture", None)
+}
+
+fn audio_capture_queue() -> DispatchRetained<DispatchQueue> {
+    DispatchQueue::new("tech.easynet.remote-desktop.audio-capture", None)
 }
 
 #[cfg(test)]

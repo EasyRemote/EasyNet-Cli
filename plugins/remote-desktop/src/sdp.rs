@@ -6,8 +6,8 @@
 //              transport path.
 //
 // Protocol Responsibility:
-// - Preserve browser/device SDP semantics while enforcing one negotiated
-//   device-to-browser video sender.
+// - Preserve browser/device SDP semantics while enforcing negotiated
+//   device-to-browser video and, when offered, audio senders.
 //
 // Implementation Approach:
 // - Normalize line endings/candidates and inspect media-section direction
@@ -153,27 +153,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn validate_ice_candidate_row(
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_answer_sends_video(
     sdp: &str,
 ) -> anyhow::Result<()> {
-    let mut in_video_section = false;
-    let mut video_direction = None;
-    for line in sdp.lines().map(str::trim_end) {
-        if line.starts_with("m=") {
-            if in_video_section {
-                break;
-            }
-            in_video_section = line.starts_with("m=video ");
-            continue;
-        }
-        if !in_video_section {
-            continue;
-        }
-        video_direction = match line {
-            "a=sendonly" => Some("sendonly"),
-            "a=sendrecv" => Some("sendrecv"),
-            "a=recvonly" => Some("recvonly"),
-            "a=inactive" => Some("inactive"),
-            _ => video_direction,
-        };
-    }
+    let video_direction = media_section_direction(sdp, "video");
 
     if matches!(video_direction, Some("sendonly" | "sendrecv")) {
         return Ok(());
@@ -183,6 +163,50 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_answer_sends_video(
          direction={}; reason=webrtc_video_sender_not_negotiated",
         video_direction.unwrap_or("missing")
     )
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn remote_offer_accepts_audio(sdp: &str) -> bool {
+    media_section_direction(sdp, "audio")
+        .is_some_and(|direction| matches!(direction, "recvonly" | "sendrecv"))
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn ensure_answer_sends_audio(
+    sdp: &str,
+) -> anyhow::Result<()> {
+    let direction = media_section_direction(sdp, "audio");
+    if matches!(direction, Some("sendonly" | "sendrecv")) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "direct WebRTC answer has no device-to-browser audio sender; \
+         direction={}; reason=webrtc_audio_sender_not_negotiated",
+        direction.unwrap_or("missing")
+    )
+}
+
+fn media_section_direction<'a>(sdp: &'a str, media_kind: &str) -> Option<&'a str> {
+    let mut in_section = false;
+    let mut direction = None;
+    for line in sdp.lines().map(str::trim_end) {
+        if line.starts_with("m=") {
+            if in_section {
+                break;
+            }
+            in_section = line.starts_with(&format!("m={media_kind} "));
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        direction = match line {
+            "a=sendonly" => Some("sendonly"),
+            "a=sendrecv" => Some("sendrecv"),
+            "a=recvonly" => Some("recvonly"),
+            "a=inactive" => Some("inactive"),
+            _ => direction,
+        };
+    }
+    direction
 }
 
 fn is_rtcp_component_candidate(line: &str) -> bool {
@@ -353,5 +377,22 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("direction=missing"));
+    }
+
+    #[test]
+    fn audio_sender_is_required_only_when_offer_accepts_audio() {
+        let offer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na=recvonly\r\n\
+                     m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n";
+        assert!(remote_offer_accepts_audio(offer));
+        let answer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na=sendonly\r\n\
+                      m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n";
+        ensure_answer_sends_audio(answer).unwrap();
+
+        let video_only = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na=recvonly\r\n";
+        assert!(!remote_offer_accepts_audio(video_only));
+        let err = ensure_answer_sends_audio(video_only)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("webrtc_audio_sender_not_negotiated"));
     }
 }

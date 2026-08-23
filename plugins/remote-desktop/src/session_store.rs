@@ -1047,6 +1047,15 @@ mod tests {
                 )
                 .expect("relay route candidate records");
         });
+        store.record_media_pipeline_stats(
+            "rd-production-ready",
+            TransportEpoch::new(1),
+            json!({
+                "audio_ready": true,
+                "audio_media_observed": false,
+                "audio_blocker": null,
+            }),
+        );
         store.with_sessions(|sessions| {
             let view = serialize_session(sessions.get("rd-production-ready").unwrap());
             assert_eq!(view["media_transport_ready"], json!(true));

@@ -30,6 +30,9 @@ LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_EVENTS="$ROOT/plugins/remote-desktop/src/session_events.rs"
 NATIVE_WEBRTC_MEDIA="$ROOT/plugins/remote-desktop/src/transport/webrtc_native_media.rs"
+SCREENCAPTUREKIT_AUDIO="$ROOT/plugins/remote-desktop/src/screencapturekit_audio.rs"
+SCREENCAPTUREKIT_CAPTURE="$ROOT/plugins/remote-desktop/src/screencapturekit_capture.rs"
+WEBRTC_ENDPOINT="$ROOT/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
 TARGET_TRACKING="$ROOT/plugins/remote-desktop/src/target_tracking.rs"
 SESSION_RECOVERY="$ROOT/plugins/remote-desktop/src/session_recovery.rs"
 SESSION_STATE="$ROOT/plugins/remote-desktop/src/session_state.rs"
@@ -100,6 +103,9 @@ reject() {
 [[ -f "$LIFECYCLE_HARNESS_LIB" ]] || fail "missing RemoteApp lifecycle harness helper library"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
 [[ -f "$NATIVE_WEBRTC_MEDIA" ]] || fail "missing RemoteApp native WebRTC media loop"
+[[ -f "$SCREENCAPTUREKIT_AUDIO" ]] || fail "missing RemoteApp ScreenCaptureKit audio pipeline"
+[[ -f "$SCREENCAPTUREKIT_CAPTURE" ]] || fail "missing RemoteApp ScreenCaptureKit capture adapter"
+[[ -f "$WEBRTC_ENDPOINT" ]] || fail "missing RemoteApp WebRTC endpoint"
 [[ -f "$TARGET_TRACKING" ]] || fail "missing RemoteApp target tracking state machine"
 [[ -f "$SESSION_RECOVERY" ]] || fail "missing RemoteApp session recovery snapshot store"
 [[ -f "$SESSION_STATE" ]] || fail "missing RemoteApp session lifecycle state machine"
@@ -317,8 +323,8 @@ require 'input_control_support' "$AUDIT" \
   'audit must record input control support projection semantics'
 require 'media_pipeline_support' "$AUDIT" \
   'audit must record media pipeline support projection semantics'
-require 'video-only scope' "$AUDIT" \
-  'audit must record that current media pipeline support is video-only'
+require 'audio/video scope' "$AUDIT" \
+  'audit must record conditional audio/video media pipeline scope'
 require 'missing media-adaptation E2E as a product blocker' "$AUDIT" \
   'audit must record missing media-adaptation E2E as a product blocker'
 require 'media_pipeline_support' "$MATRIX" \
@@ -945,8 +951,14 @@ require 'bounded_queue_drop_stale_frames' "$NATIVE_WEBRTC_MEDIA" \
   'native WebRTC media stats must expose the bounded stale-frame drop policy'
 require 'native_media_adaptation_event' "$NATIVE_WEBRTC_MEDIA" \
   'native WebRTC media loop must bind adaptation events to session and pipeline context'
-require 'host_audio_not_implemented' "$NATIVE_WEBRTC_MEDIA" \
-  'native WebRTC media stats must keep host-audio unsupported state explicit'
+require 'audio_media_observed' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must distinguish pipeline readiness from observed audio media'
+require 'RemoteAppOpusEncoder' "$SCREENCAPTUREKIT_AUDIO" \
+  'ScreenCaptureKit audio path must encode bounded PCM frames as Opus'
+require 'SCStreamOutputType::Audio' "$SCREENCAPTUREKIT_CAPTURE" \
+  'ScreenCaptureKit adapter must register system-audio output'
+require 'MIME_TYPE_OPUS' "$WEBRTC_ENDPOINT" \
+  'WebRTC endpoint must register the Opus codec on the shared peer connection'
 require 'scenario_started_at_ms must be recorded' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require scenario start timestamp evidence'
 require 'impairment_applied_at_ms must be after scenario_started_at_ms' "$MEDIA_ADAPTATION" \

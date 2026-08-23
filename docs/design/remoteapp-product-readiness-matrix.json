@@ -121,14 +121,15 @@
         "VideoToolbox descriptor",
         "adaptive bitrate helper",
         "queue/drop boundary tests",
-        "session/device capability view explicitly reports host_audio_not_implemented",
-        "device capability projection exposes media_pipeline_support with video-only scope, H.264 payload metadata, bounded queue stale-frame drop policy, native adaptation policy, diagnostic stale-frame policy, host_audio_not_implemented, and missing media-adaptation E2E as a product blocker",
-        "frontend session details surface host_audio_not_implemented from daemon audio readiness projection",
+        "macOS device capability view projects ScreenCaptureKit host-audio capture, 48 kHz stereo Opus encoding, and the shared WebRTC transport; unsupported platforms remain explicit",
+        "device capability projection exposes media_pipeline_support with audio-video scope when the native macOS backend is ready, H.264/Opus payload metadata, bounded queue stale-frame drop policy, native adaptation policy, diagnostic stale-frame policy, and missing media-adaptation E2E as a product blocker",
+        "frontend WebRTC setup requests recvonly audio, combines remote audio/video tracks into one presentation stream, exposes autoplay recovery, and surfaces daemon/browser audio evidence",
         "frontend session details surface media bitrate, FPS, drops, and backpressure from daemon/browser media stats",
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",
         "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate WebRTC app/window display-fallback rejection and native plugin catalogue implementation tests",
-        "native ScreenCaptureKit + VideoToolbox WebRTC media loop emits remoteapp_media_pipeline_stats_v1 stats bound to selected Resource URA, session id, transport epoch, media source epoch, media pipeline id, negotiated H.264 payload content type, WebRTC transport, requested/effective/measured FPS, target/observed bitrate, bounded queue stale-frame drop policy, and drop/backpressure/adaptation events without claiming host audio readiness",
+        "native ScreenCaptureKit stream captures screen and system audio together; VideoToolbox emits H.264 and the bounded host-audio path emits 20 ms Opus frames into tracks on the same WebRTC PeerConnection",
+        "native WebRTC media loop emits remoteapp_media_pipeline_stats_v1 stats bound to selected Resource URA, session id, transport epoch, media source epoch, media pipeline id, negotiated H.264/Opus payload metadata, WebRTC transport, requested/effective/measured FPS, target/observed bitrate, bounded video/audio queue and backpressure counters, audio pipeline readiness, separately observed audio media, and adaptation events",
         "remoteapp-media-adaptation-e2e.sh verifier requires real audio/video artifacts with cross-scenario degraded target/observed bitrate delta, FPS/drop delta, backpressure frame-drop delta versus baseline, same target/pipeline/codec comparability, adaptation events bound to the scenario Resource/session/pipeline, impairment-time ordering, and decoded media render-probe payload evidence after adaptation events",
         "remote_desktop.attach plugin manifest and compiled registration declare metadata_json_plus_binary bidi framing instead of JSON-only framing, while preserving canonical Invocation/session metadata outside raw media payloads"
       ],
@@ -153,7 +154,8 @@
         "visible terminal receipt"
       ],
       "non_claims": [
-        "explicit host audio unsupported state does not implement audio capture",
+        "implemented host-audio code and passing unit tests do not prove decoded host audio on a second device",
+        "audio pipeline readiness does not imply audio media was observed; product evidence must record positive decoded packets or samples",
         "synthetic media carrier does not prove host audio/video product readiness",
         "the media adaptation verifier self-test does not prove live media product behavior"
       ]
@@ -301,7 +303,7 @@
         "frontend protocol/store/UI coverage for daemon terminal_receipt projection after end_session",
         "frontend permission-revoked recovery synchronizes daemon terminal_receipt through show_session",
         "frontend session details render daemon-projected target recovery status/reason/action",
-        "frontend session details render daemon-projected media_pipeline_support with video-only/H.264/drop-policy/product-blocker visibility",
+        "frontend session details render daemon-projected H.264/Opus media_pipeline_support, audio/video track evidence, drop policy, and product blockers",
         "frontend action row executes daemon-guided target refresh recovery",
         "frontend action row executes daemon-guided retry_session recovery by ending then creating a session",
         "frontend share picker exposes host-local remote_desktop.permission_status preflight before create_session",
@@ -318,7 +320,7 @@
         "picker to permission to consent to create_session",
         "WebRTC attach and watch_events recovery",
         "media presentation",
-        "visible media_pipeline_support with video-only/H.264/drop-policy/product-blocker state",
+        "visible H.264/Opus media_pipeline_support with audio/video track evidence, drop-policy, and product-blocker state",
         "input/control or policy-block and end_session",
         "if input is applied, submitted data-channel frame and daemon applied event target_focus_epoch must match the runtime session target focus epoch",
         "visible terminal receipt"

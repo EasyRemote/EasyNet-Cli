@@ -54,6 +54,7 @@ browser-cdp = ["dep:tokio-tungstenite", "dep:url"]
 # not change descriptor generation.
 remote-desktop = [
     "dep:openh264",
+    "dep:opus",
     "dep:webrtc",
     "dep:rtc",
     "dep:objc2-screen-capture-kit",
@@ -411,6 +412,7 @@ objc2-app-kit = { version = "0.3", features = [
     "libc",
 ] }
 objc2-core-media = "0.3"
+objc2-core-audio-types = "0.3"
 objc2-core-video = "0.3"
 objc2-core-foundation = "0.3"
 objc2-screen-capture-kit = { version = "0.3", features = [
@@ -424,6 +426,7 @@ objc2-screen-capture-kit = { version = "0.3", features = [
     "dispatch2",
     "libc",
 ], optional = true }
+opus = { version = "0.3.1", optional = true }
 objc2-video-toolbox = { version = "0.3", features = [
     "VTCompressionSession",
     "VTCompressionProperties",

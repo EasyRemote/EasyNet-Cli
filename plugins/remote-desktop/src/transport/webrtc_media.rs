@@ -51,6 +51,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) track: Arc<TrackLocalStaticSample>,
     /// Payload type selected by the completed offer/answer negotiation.
     pub(in crate::daemon::plugins::remote_desktop) payload_type: PayloadType,
+    pub(in crate::daemon::plugins::remote_desktop) audio_track: Option<Arc<TrackLocalStaticSample>>,
+    pub(in crate::daemon::plugins::remote_desktop) audio_payload_type: Option<PayloadType>,
     pub(in crate::daemon::plugins::remote_desktop) target_binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) config: BuiltinH264Config,
@@ -144,6 +146,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         peer_connection,
         track,
         payload_type,
+        audio_track,
+        audio_payload_type,
         target_binding,
         options,
         config,
@@ -178,8 +182,15 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         Ok(RemoteAppMediaSource::NativeProduction) => {
             #[cfg(target_os = "macos")]
             {
-                let native_inputs =
-                    NativeMediaInputs::new(&track, ssrc, payload_type, &options, &config);
+                let native_inputs = NativeMediaInputs::new(
+                    &track,
+                    ssrc,
+                    payload_type,
+                    audio_track.as_ref(),
+                    audio_payload_type,
+                    &options,
+                    &config,
+                );
                 match run_direct_webrtc_native_stream(
                     &mut execution,
                     &peer_connection,

@@ -4,6 +4,8 @@
 // File: plugins/remote-desktop/src/transport/webrtc_native_media.rs
 // Description: macOS ScreenCaptureKit + VideoToolbox strategy for direct WebRTC.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, TrySendError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,6 +13,7 @@ use bytes::Bytes;
 use rtc::media::Sample;
 use serde_json::{json, Map, Value};
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
+use webrtc::media_stream::Track;
 use webrtc::peer_connection::PeerConnection;
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
@@ -21,8 +24,12 @@ use crate::daemon::plugins::remote_desktop::media::native::{
     native_rtp_sample_duration, webrtc_cmtime, webrtc_stats_snapshot, NativeAdaptiveBitrate,
     NativeLatencyStats,
 };
+use crate::daemon::plugins::remote_desktop::screencapturekit_audio::{
+    AudioCaptureEvent, AudioSink, RemoteAppOpusEncoder, REMOTEAPP_AUDIO_CHANNELS,
+    REMOTEAPP_AUDIO_SAMPLE_RATE_HZ,
+};
 use crate::daemon::plugins::remote_desktop::screencapturekit_capture::{
-    target_for_binding, CapturedFrame, ScreenCaptureKitStream,
+    target_for_binding, CapturedFrame, ScreenCaptureKitSinks, ScreenCaptureKitStream,
 };
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -36,7 +43,10 @@ use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEn
 const NATIVE_WEBRTC_VIDEO_CODEC: &str = "h264";
 const NATIVE_WEBRTC_VIDEO_PAYLOAD_CONTENT_TYPE: &str = "video/h264; stream-format=annexb";
 const NATIVE_WEBRTC_VIDEO_TRANSPORT: &str = "webrtc";
+const NATIVE_WEBRTC_AUDIO_CODEC: &str = "opus";
+const NATIVE_WEBRTC_AUDIO_PAYLOAD_CONTENT_TYPE: &str = "audio/opus";
 const NATIVE_MEDIA_PIPELINE_STATS_CONTRACT: &str = "remoteapp_media_pipeline_stats_v1";
+const NATIVE_AUDIO_CAPTURE_QUEUE_DEPTH: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 struct NativeMediaDropCounters {
@@ -44,6 +54,141 @@ struct NativeMediaDropCounters {
     output_dropped_units: u64,
     rtp_stale_units_dropped: u64,
     rtp_sender_backpressure_drops: u64,
+}
+
+#[derive(Debug, Clone)]
+struct NativeAudioStats {
+    negotiated: bool,
+    packets_written: u64,
+    bytes_written: u64,
+    capture_chunks_dropped: u64,
+    sender_backpressure_drops: u64,
+    blocker: Option<String>,
+}
+
+struct NativeAudioPipeline {
+    track: Arc<TrackLocalStaticSample>,
+    ssrc: u32,
+    payload_type: u8,
+    encoder: Option<RemoteAppOpusEncoder>,
+    capture_rx: Receiver<AudioCaptureEvent>,
+    capture_chunks_dropped: Arc<AtomicU64>,
+    packets_written: u64,
+    bytes_written: u64,
+    sender_backpressure_drops: u64,
+    blocker: Option<String>,
+}
+
+impl NativeAudioPipeline {
+    async fn new(
+        track: &Arc<TrackLocalStaticSample>,
+        payload_type: u8,
+    ) -> anyhow::Result<(AudioSink, Self)> {
+        let ssrc = track
+            .ssrcs()
+            .await
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("direct WebRTC audio track has no SSRC"))?;
+        let (capture_tx, capture_rx) = sync_channel(NATIVE_AUDIO_CAPTURE_QUEUE_DEPTH);
+        let capture_chunks_dropped = Arc::new(AtomicU64::new(0));
+        let dropped_for_sink = Arc::clone(&capture_chunks_dropped);
+        let sink: AudioSink = Arc::new(move |event| {
+            if let Err(error) = capture_tx.try_send(event) {
+                if matches!(error, TrySendError::Full(_)) {
+                    dropped_for_sink.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        Ok((
+            sink,
+            Self {
+                track: Arc::clone(track),
+                ssrc,
+                payload_type,
+                encoder: Some(RemoteAppOpusEncoder::new()?),
+                capture_rx,
+                capture_chunks_dropped,
+                packets_written: 0,
+                bytes_written: 0,
+                sender_backpressure_drops: 0,
+                blocker: None,
+            },
+        ))
+    }
+
+    async fn drain(&mut self) {
+        while let Ok(event) = self.capture_rx.try_recv() {
+            let chunk = match event {
+                Ok(chunk) => chunk,
+                Err(reason) => {
+                    self.blocker = Some(format!("host_audio_capture_failed: {reason}"));
+                    self.encoder = None;
+                    continue;
+                }
+            };
+            let Some(encoder) = self.encoder.as_mut() else {
+                continue;
+            };
+            let packets = match encoder.push_chunk(chunk) {
+                Ok(packets) => packets,
+                Err(err) => {
+                    self.blocker = Some(format!("host_audio_encode_failed: {err}"));
+                    self.encoder = None;
+                    continue;
+                }
+            };
+            for packet in packets {
+                let bytes = packet.payload.len() as u64;
+                let result = self
+                    .track
+                    .sample_writer(self.ssrc, self.payload_type)
+                    .write_sample(&Sample {
+                        data: Bytes::from(packet.payload),
+                        duration: packet.duration,
+                        ..Default::default()
+                    })
+                    .await;
+                match result {
+                    Ok(()) => {
+                        self.packets_written = self.packets_written.saturating_add(1);
+                        self.bytes_written = self.bytes_written.saturating_add(bytes);
+                    }
+                    Err(err) if is_webrtc_sender_backpressure(&err) => {
+                        self.sender_backpressure_drops =
+                            self.sender_backpressure_drops.saturating_add(1);
+                    }
+                    Err(err) => {
+                        self.blocker = Some(format!("host_audio_send_failed: {err}"));
+                        self.encoder = None;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn stats(&self) -> NativeAudioStats {
+        NativeAudioStats {
+            negotiated: true,
+            packets_written: self.packets_written,
+            bytes_written: self.bytes_written,
+            capture_chunks_dropped: self.capture_chunks_dropped.load(Ordering::Relaxed),
+            sender_backpressure_drops: self.sender_backpressure_drops,
+            blocker: self.blocker.clone(),
+        }
+    }
+}
+
+fn audio_stats_not_negotiated() -> NativeAudioStats {
+    NativeAudioStats {
+        negotiated: false,
+        packets_written: 0,
+        bytes_written: 0,
+        capture_chunks_dropped: 0,
+        sender_backpressure_drops: 0,
+        blocker: Some("host_audio_not_negotiated".to_string()),
+    }
 }
 
 impl NativeMediaDropCounters {
@@ -81,6 +226,7 @@ struct NativeMediaStatsSample<'a> {
     webrtc_stats: Value,
     latency_stats: Value,
     terminal: bool,
+    audio: NativeAudioStats,
 }
 
 impl NativeMediaStatsSample<'_> {
@@ -226,12 +372,54 @@ impl NativeMediaStatsSample<'_> {
             "adaptation_event_types".to_string(),
             json!(adaptation_event_types),
         );
-        payload.insert("audio_codec".to_string(), Value::Null);
-        payload.insert("audio_ready".to_string(), json!(false));
-        payload.insert("host_audio_not_implemented".to_string(), json!(true));
+        let audio_ready = self.audio.negotiated && self.audio.blocker.is_none();
+        payload.insert(
+            "audio_codec".to_string(),
+            self.audio
+                .negotiated
+                .then(|| json!(NATIVE_WEBRTC_AUDIO_CODEC))
+                .unwrap_or(Value::Null),
+        );
+        payload.insert("audio_ready".to_string(), json!(audio_ready));
+        payload.insert(
+            "audio_media_observed".to_string(),
+            json!(self.audio.packets_written > 0),
+        );
+        payload.insert("host_audio_not_implemented".to_string(), json!(false));
         payload.insert(
             "audio_blocker".to_string(),
-            json!("host_audio_not_implemented"),
+            self.audio.blocker.map(Value::String).unwrap_or(Value::Null),
+        );
+        payload.insert(
+            "audio_payload_content_type".to_string(),
+            self.audio
+                .negotiated
+                .then(|| json!(NATIVE_WEBRTC_AUDIO_PAYLOAD_CONTENT_TYPE))
+                .unwrap_or(Value::Null),
+        );
+        payload.insert(
+            "audio_sample_rate_hz".to_string(),
+            json!(REMOTEAPP_AUDIO_SAMPLE_RATE_HZ),
+        );
+        payload.insert(
+            "audio_channels".to_string(),
+            json!(REMOTEAPP_AUDIO_CHANNELS),
+        );
+        payload.insert(
+            "audio_packets_written".to_string(),
+            json!(self.audio.packets_written),
+        );
+        payload.insert(
+            "audio_bytes_written".to_string(),
+            json!(self.audio.bytes_written),
+        );
+        payload.insert(
+            "audio_capture_chunks_dropped".to_string(),
+            json!(self.audio.capture_chunks_dropped),
+        );
+        payload.insert(
+            "audio_sender_backpressure_drops".to_string(),
+            json!(self.audio.sender_backpressure_drops),
         );
         payload.insert(
             "adaptive_bitrate".to_string(),
@@ -286,6 +474,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct NativeMediaInputs<'a> {
     track: &'a Arc<TrackLocalStaticSample>,
     ssrc: u32,
     payload_type: u8,
+    audio_track: Option<&'a Arc<TrackLocalStaticSample>>,
+    audio_payload_type: Option<u8>,
     options: &'a ScreenCaptureOptions,
     config: &'a BuiltinH264Config,
 }
@@ -296,6 +486,8 @@ impl<'a> NativeMediaInputs<'a> {
         track: &'a Arc<TrackLocalStaticSample>,
         ssrc: u32,
         payload_type: u8,
+        audio_track: Option<&'a Arc<TrackLocalStaticSample>>,
+        audio_payload_type: Option<u8>,
         options: &'a ScreenCaptureOptions,
         config: &'a BuiltinH264Config,
     ) -> Self {
@@ -303,6 +495,8 @@ impl<'a> NativeMediaInputs<'a> {
             track,
             ssrc,
             payload_type,
+            audio_track,
+            audio_payload_type,
             options,
             config,
         }
@@ -321,6 +515,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         track,
         ssrc,
         payload_type,
+        audio_track,
+        audio_payload_type,
         options,
         config,
     } = *inputs;
@@ -351,13 +547,25 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             let _ = encoder_for_sink.encode(&frame.image_buffer, pts, duration);
         });
 
+    let (audio_sink, mut audio_pipeline) = match (audio_track, audio_payload_type) {
+        (Some(track), Some(payload_type)) => {
+            let (sink, pipeline) = NativeAudioPipeline::new(track, payload_type).await?;
+            (Some(sink), Some(pipeline))
+        }
+        (None, None) => (None, None),
+        _ => anyhow::bail!("direct WebRTC audio track/payload negotiation is inconsistent"),
+    };
+
     let capture = ScreenCaptureKitStream::start(
         ABILITY_SET_DESCRIPTION,
         capture_target,
         req_width,
         req_height,
         fps,
-        sink,
+        ScreenCaptureKitSinks {
+            video: sink,
+            audio: audio_sink,
+        },
     )?;
     let mut active_media_source_epoch = target_binding.media_source_epoch();
 
@@ -387,6 +595,9 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             execution.epoch(),
             active_media_source_epoch,
         )?;
+        if let Some(audio) = audio_pipeline.as_mut() {
+            audio.drain().await;
+        }
         let (units, stale_dropped) = latest_native_rtp_units(encoder.poll(), decoder_primed);
         rtp_stale_units_dropped = rtp_stale_units_dropped.saturating_add(stale_dropped as u64);
         for unit in units {
@@ -557,6 +768,10 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     webrtc_stats,
                     latency_stats: latency_stats.to_json(),
                     terminal: false,
+                    audio: audio_pipeline
+                        .as_ref()
+                        .map(NativeAudioPipeline::stats)
+                        .unwrap_or_else(audio_stats_not_negotiated),
                 }
                 .to_json(),
             );
@@ -602,6 +817,10 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             webrtc_stats,
             latency_stats: latency_stats.to_json(),
             terminal: true,
+            audio: audio_pipeline
+                .as_ref()
+                .map(NativeAudioPipeline::stats)
+                .unwrap_or_else(audio_stats_not_negotiated),
         }
         .to_json(),
     );
@@ -854,6 +1073,14 @@ mod tests {
                 }
             }),
             terminal: false,
+            audio: NativeAudioStats {
+                negotiated: true,
+                packets_written: 96,
+                bytes_written: 24_000,
+                capture_chunks_dropped: 2,
+                sender_backpressure_drops: 1,
+                blocker: None,
+            },
         }
         .to_json();
 
@@ -904,9 +1131,12 @@ mod tests {
             stats["adaptation_events"][0]["media_pipeline_id"],
             json!(config.backend.backend_id())
         );
-        assert_eq!(stats["host_audio_not_implemented"], json!(true));
-        assert_eq!(stats["audio_ready"], json!(false));
-        assert!(stats["audio_codec"].is_null());
+        assert_eq!(stats["host_audio_not_implemented"], json!(false));
+        assert_eq!(stats["audio_ready"], json!(true));
+        assert_eq!(stats["audio_media_observed"], json!(true));
+        assert_eq!(stats["audio_codec"], json!("opus"));
+        assert_eq!(stats["audio_packets_written"], json!(96));
+        assert_eq!(stats["audio_capture_chunks_dropped"], json!(2));
         assert_eq!(stats["terminal"], json!(false));
     }
 }
