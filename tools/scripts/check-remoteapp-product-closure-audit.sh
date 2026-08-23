@@ -46,6 +46,7 @@ INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
 REMOTE_DESKTOP_PLUGIN_MANIFEST="$ROOT/plugins/remote-desktop/plugin.toml"
 REMOTE_DESKTOP_REGISTRATION="$ROOT/plugins/remote-desktop/src/registration.rs"
 PLUGIN_SURFACE="$ROOT/src/daemon/plugins/surface.rs"
+REAL_INVOKE_TESTS="$ROOT/src/daemon/ability/builtins/real_invoke_tests.rs"
 
 fail() {
   printf 'check-remoteapp-product-closure-audit: %s\n' "$1" >&2
@@ -112,6 +113,7 @@ reject() {
 [[ -f "$REMOTE_DESKTOP_PLUGIN_MANIFEST" ]] || fail "missing RemoteApp plugin manifest"
 [[ -f "$REMOTE_DESKTOP_REGISTRATION" ]] || fail "missing RemoteApp compiled registration"
 [[ -f "$PLUGIN_SURFACE" ]] || fail "missing plugin operator surface projection"
+[[ -f "$REAL_INVOKE_TESTS" ]] || fail "missing real invoke tests"
 
 for lifecycle_harness in "$SESSION_TIMEOUT" "$SESSION_CANCEL" "$SESSION_RESUME"; do
   require 'remoteapp-lifecycle-harness-lib\.sh' "$lifecycle_harness" \
@@ -161,6 +163,10 @@ require 'PluginBidiWireKindView::MetadataJsonPlusBinary' "$PLUGIN_SURFACE" \
   'plugin surface must expose metadata_json_plus_binary bidi framing'
 require 'plugin_host_surface_projects_declared_bidi_wire_kind' "$PLUGIN_SURFACE" \
   'plugin surface must test declared bidi wire-kind projection'
+require 'real_device_plugin_status_surfaces_remoteapp_attach_wire_kind' "$REAL_INVOKE_TESTS" \
+  'real plugin.status test must assert RemoteApp attach wire-kind projection'
+require 'metadata_json_plus_binary' "$REAL_INVOKE_TESTS" \
+  'real plugin.status test must assert metadata_json_plus_binary for RemoteApp attach'
 
 python3 - "$MATRIX" <<'PY' || fail "RemoteApp product readiness matrix is invalid"
 import json

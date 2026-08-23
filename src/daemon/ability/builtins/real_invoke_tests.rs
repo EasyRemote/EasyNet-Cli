@@ -2962,6 +2962,27 @@ fn real_device_plugin_status_reports_runtime_surface() {
 }
 
 #[test]
+#[cfg(feature = "remote-desktop")]
+fn real_device_plugin_status_surfaces_remoteapp_attach_wire_kind() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let d = dispatcher_for(reg);
+    let status = d
+        .execute_rpc(target("plugin.status", json!({})))
+        .expect("plugin.status must dispatch through plugin lifecycle ability");
+    let abilities = status["abilities"]
+        .as_array()
+        .expect("plugin.status abilities must be an array");
+    let attach = abilities
+        .iter()
+        .find(|row| row["ability"] == "remote_desktop.attach")
+        .expect("RemoteApp attach must appear in plugin.status abilities");
+
+    assert_eq!(attach["call_mode"], "bidi");
+    assert_eq!(attach["bidi_wire_kind"], "metadata_json_plus_binary");
+}
+
+#[test]
 fn real_device_plugin_reload_reports_registration_diff() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry_for_test_execution().expect("build executable test registry");

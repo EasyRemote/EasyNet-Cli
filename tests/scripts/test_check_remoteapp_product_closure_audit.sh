@@ -18,6 +18,7 @@ mkdir -p \
   "$SB/pr/20260822-remoteapp-product-closure" \
   "$SB/tools/scripts" \
   "$SB/src/daemon/plugins" \
+  "$SB/src/daemon/ability/builtins" \
   "$SB/plugins/remote-desktop/src/media" \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
@@ -61,6 +62,7 @@ cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SB/plugins/remote-desktop/
 cp "$REPO_ROOT/plugins/remote-desktop/plugin.toml" "$SB/plugins/remote-desktop/plugin.toml"
 cp "$REPO_ROOT/plugins/remote-desktop/src/registration.rs" "$SB/plugins/remote-desktop/src/registration.rs"
 cp "$REPO_ROOT/src/daemon/plugins/surface.rs" "$SB/src/daemon/plugins/surface.rs"
+cp "$REPO_ROOT/src/daemon/ability/builtins/real_invoke_tests.rs" "$SB/src/daemon/ability/builtins/real_invoke_tests.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/media/native.rs" "$SB/plugins/remote-desktop/src/media/native.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/mod.rs" "$SB/plugins/remote-desktop/src/handlers/mod.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/create_session.rs" "$SB/plugins/remote-desktop/src/handlers/create_session.rs"
@@ -94,6 +96,15 @@ fi
 grep -q "plugin surface must project declared bidi wire kind" /tmp/check-remoteapp-product-closure-surface-wire-projection.out || \
   fail "expected plugin surface wire-kind projection failure"
 cp "$REPO_ROOT/src/daemon/plugins/surface.rs" "$SB/src/daemon/plugins/surface.rs"
+
+perl -0pi -e 's#metadata_json_plus_binary#json_frames#' \
+  "$SB/src/daemon/ability/builtins/real_invoke_tests.rs"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-real-plugin-status-wire.out 2>&1; then
+  fail "checker accepted real plugin.status test without RemoteApp metadata_json_plus_binary assertion"
+fi
+grep -q "real plugin.status test must assert metadata_json_plus_binary" /tmp/check-remoteapp-product-closure-real-plugin-status-wire.out || \
+  fail "expected real plugin.status wire-kind assertion failure"
+cp "$REPO_ROOT/src/daemon/ability/builtins/real_invoke_tests.rs" "$SB/src/daemon/ability/builtins/real_invoke_tests.rs"
 
 perl -0pi -e 's/full RemoteApp product closure incomplete as of 2026-08-22/implemented; full acceptance verified 2026-08-16/' \
   "$SB/docs/design/remoteapp-targeted-session-spec.md"
