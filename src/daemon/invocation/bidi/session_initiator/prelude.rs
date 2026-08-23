@@ -971,6 +971,20 @@ async fn attach_owner_projection_authority(
         PreludeOwnerProjectionAuthority::SponsorDevice => device_signer,
         PreludeOwnerProjectionAuthority::UserDelegation(user_signer) => user_signer,
     };
+    let metadata =
+        owner_projection_delegation_metadata(owner_ura, device_signer, issuer_signer).await?;
+    request.metadata.insert(
+        crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
+        metadata,
+    );
+    Ok(())
+}
+
+pub(crate) async fn owner_projection_delegation_metadata(
+    owner_ura: &str,
+    device_signer: &dyn CanonicalSigner,
+    issuer_signer: &dyn CanonicalSigner,
+) -> Result<String, tonic::Status> {
     let now_ms = i64::try_from(crate::daemon::invocation::admission::runtime_trust::now_unix_ms())
         .map_err(|_| tonic::Status::internal("runtime clock exceeded signed delegation range"))?;
     let hub_ura = session_hub_ura(device_signer.owner_ura())?;
@@ -996,11 +1010,7 @@ async fn attach_owner_projection_authority(
                 "federation.advertise_abilities delegation signing: {error}"
             ))
         })?;
-    request.metadata.insert(
-        crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
-        metadata,
-    );
-    Ok(())
+    Ok(metadata)
 }
 
 pub(super) async fn signed_prelude_request(
@@ -1120,7 +1130,10 @@ impl PairedUserTrustSigner {
         }
     }
 
-    async fn load(&self, user_ura: &str) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
+    pub(crate) async fn load(
+        &self,
+        user_ura: &str,
+    ) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
         match &self.source {
             PairedUserTrustSignerSource::RuntimeCaller => {
                 let user_ura = user_ura.to_string();

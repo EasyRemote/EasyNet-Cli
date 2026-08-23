@@ -58,12 +58,31 @@ impl OwnerProjectionPublicationAuthority {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn verify_admitted_session(
         caller_device_ura: &str,
         hub_ura: &str,
         publication: &OwnerProjectionPublication,
         advertised_agents: &AdvertisedAgentStore,
         trust_anchor: &RealmTrustAnchor,
+    ) -> Result<(), OwnerProjectionPublicationError> {
+        Self::verify_admitted_session_with_authority(
+            caller_device_ura,
+            hub_ura,
+            publication,
+            advertised_agents,
+            trust_anchor,
+            None,
+        )
+    }
+
+    pub(crate) fn verify_admitted_session_with_authority(
+        caller_device_ura: &str,
+        hub_ura: &str,
+        publication: &OwnerProjectionPublication,
+        advertised_agents: &AdvertisedAgentStore,
+        trust_anchor: &RealmTrustAnchor,
+        authority_binding: Option<&AuthorityOrBootstrap>,
     ) -> Result<(), OwnerProjectionPublicationError> {
         Self::verify_uras(
             caller_device_ura,
@@ -73,7 +92,7 @@ impl OwnerProjectionPublicationAuthority {
             advertised_agents,
             trust_anchor,
             Some(hub_ura),
-            None,
+            authority_binding,
         )
     }
 

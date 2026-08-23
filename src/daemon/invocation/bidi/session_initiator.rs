@@ -110,6 +110,7 @@ pub(crate) use connection_state::{
 };
 pub use envelope::build_session_envelope_open;
 use frame_loop::{run_live_session, LiveSessionRun};
+pub(crate) use prelude::owner_projection_delegation_metadata;
 #[cfg(test)]
 use prelude::{committed_device_native_owner_descriptors, committed_owner_ability_descriptors};
 use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};

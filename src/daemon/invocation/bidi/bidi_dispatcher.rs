@@ -185,6 +185,7 @@ struct SessionControlRequest {
     kind: SessionControlRequestKind,
     caller_device_ura: String,
     args: Vec<u8>,
+    metadata: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -309,6 +310,7 @@ impl SessionControlRequest {
         caller_device_ura: &str,
         args: &[u8],
         args_content_envelope: &SessionContentEnvelope,
+        metadata: HashMap<String, String>,
     ) -> Result<Self, SessionRequestError> {
         Self::validate_content(kind, args_content_envelope)?;
         let caller_device_ura = caller_device_ura.trim();
@@ -332,6 +334,7 @@ impl SessionControlRequest {
             kind,
             caller_device_ura: caller_device_ura.to_string(),
             args: args.to_vec(),
+            metadata,
         })
     }
 
@@ -743,9 +746,40 @@ impl BidiDispatcher {
                                     payload,
                                     result_content_type,
                                 )
-                                .map(|finalized| InvokeBidiDown {
-                                    payload: Some(DownPayload::Receipt(finalized.terminal_receipt)),
-                                    ..InvokeBidiDown::default()
+                                .and_then(|finalized| {
+                                    let carrier_terminal = InvokeBidiDown {
+                                        payload: Some(DownPayload::ReverseDispatchResult(
+                                            axon_sdk::pb::axon::v1::ReverseDispatchResult {
+                                                payload: finalized.output.clone(),
+                                                result_content_type: finalized
+                                                    .output_content_type
+                                                    .clone(),
+                                                terminal: true,
+                                                failure: finalized.failure.clone(),
+                                                admission_receipt: Some(
+                                                    finalized.admission_receipt.clone(),
+                                                ),
+                                                terminal_receipt: Some(
+                                                    finalized.terminal_receipt.clone(),
+                                                ),
+                                                ..Default::default()
+                                            },
+                                        )),
+                                        ..InvokeBidiDown::default()
+                                    };
+                                    down_tx_for_results.try_send(Ok(carrier_terminal)).map_err(
+                                        |_| {
+                                            Status::unavailable(
+                                                "remote bidi terminal carrier result dropped",
+                                            )
+                                        },
+                                    )?;
+                                    Ok(InvokeBidiDown {
+                                        payload: Some(DownPayload::Receipt(
+                                            finalized.terminal_receipt,
+                                        )),
+                                        ..InvokeBidiDown::default()
+                                    })
                                 }),
                             None => {
                                 let detail = failure
@@ -2381,6 +2415,7 @@ impl BidiDispatcher {
         ability_ura: &str,
         args: &[u8],
         args_content_envelope: &SessionContentEnvelope,
+        metadata: HashMap<String, String>,
     ) -> Result<SessionControlLifecycle, SessionRequestError> {
         let kind =
             match session_control_kind_for_hub(self.identity.session_realm.as_deref(), ability_ura)
@@ -2395,6 +2430,7 @@ impl BidiDispatcher {
             caller_device_ura,
             args,
             args_content_envelope,
+            metadata,
         )?;
         Ok(SessionControlLifecycle::validated(request).schedule())
     }
@@ -2415,6 +2451,7 @@ impl BidiDispatcher {
                 .dispatch_federation_advertise_abilities_from_session(
                     &request.args,
                     &request.caller_device_ura,
+                    &request.metadata,
                 ),
             SessionControlRequestKind::NamespaceResolve => {
                 self.unary.dispatch_namespace_resolve(&request.args).await
@@ -3032,9 +3069,28 @@ fn build_reverse_dispatch_bidi_result_frame(
                     ..ReverseDispatchResult::default()
                 }
             } else {
+                let terminal_state = receipt.state;
+                let terminal_payload = receipt.payload.clone();
+                let terminal_content_type = receipt.payload_content_type.clone();
+                let terminal_failure = receipt.failure.clone();
                 ReverseDispatchResult {
                     call_id: call_id.to_vec(),
                     terminal: true,
+                    payload: if terminal_state
+                        == axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
+                    {
+                        terminal_payload
+                    } else {
+                        Vec::new()
+                    },
+                    result_content_type: if terminal_state
+                        == axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
+                    {
+                        terminal_content_type
+                    } else {
+                        String::new()
+                    },
+                    failure: terminal_failure,
                     terminal_receipt: Some(receipt),
                     ..ReverseDispatchResult::default()
                 }
@@ -3045,9 +3101,11 @@ fn build_reverse_dispatch_bidi_result_frame(
             payload: chunk.data,
             ..ReverseDispatchResult::default()
         },
-        DownPayload::Control(_)
-        | DownPayload::DispatchCall(_)
-        | DownPayload::ReverseDispatchResult(_) => return None,
+        DownPayload::ReverseDispatchResult(mut result) => {
+            result.call_id = call_id.to_vec();
+            result
+        }
+        DownPayload::Control(_) | DownPayload::DispatchCall(_) => return None,
     };
     Some(DispatchFrame::control(InvokeBidiDown {
         payload: Some(DownPayload::ReverseDispatchResult(result)),
@@ -3786,6 +3844,7 @@ async fn drain_session_runtime_up_stream(
                 ability_ura,
                 args,
                 args_content_envelope,
+                metadata,
             } => {
                 // Daemon-owned bootstrap/publication control request.
                 // Product invocations arrive through the typed
@@ -3805,6 +3864,7 @@ async fn drain_session_runtime_up_stream(
                     &ability_ura,
                     &args,
                     &args_content_envelope,
+                    metadata,
                 ) {
                     Ok(lifecycle) => lifecycle,
                     Err(error) => {
@@ -4306,6 +4366,73 @@ mod tests {
         let failure = result.failure.expect("typed failure");
         assert_eq!(failure.code, "INVALID_ARGUMENT");
         assert!(!failure.retryable);
+    }
+
+    #[test]
+    fn reverse_bidi_result_frame_preserves_carrier_terminal_payload_type() {
+        let call_id = [4; 16];
+        let terminal = InvokeBidiDown {
+            payload: Some(DownPayload::ReverseDispatchResult(
+                axon_sdk::pb::axon::v1::ReverseDispatchResult {
+                    call_id: vec![0; 16],
+                    payload: br#"{"type":"complete"}"#.to_vec(),
+                    result_content_type: "application/json".to_string(),
+                    terminal: true,
+                    admission_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                        state: axon_sdk::invocation::InvocationState::Admitted.to_wire_i32(),
+                        ..Default::default()
+                    }),
+                    terminal_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                        state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let frame = build_reverse_dispatch_bidi_result_frame(call_id, terminal)
+            .expect("carrier terminal must be forwarded");
+        let Some(DownPayload::ReverseDispatchResult(result)) = frame.frame.payload else {
+            panic!("expected ReverseDispatchResult");
+        };
+
+        assert_eq!(result.call_id, call_id);
+        assert_eq!(result.payload, br#"{"type":"complete"}"#);
+        assert_eq!(result.result_content_type, "application/json");
+        assert!(result.terminal);
+        assert!(result.admission_receipt.is_some());
+        assert!(result.terminal_receipt.is_some());
+    }
+
+    #[test]
+    fn reverse_bidi_receipt_frame_projects_signed_terminal_payload_type() {
+        let call_id = [5; 16];
+        let terminal_payload = br#"{"type":"complete","bytes":3}"#.to_vec();
+        let terminal = InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(
+                axon_sdk::pb::axon::v1::InvocationReceipt {
+                    state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
+                    payload: terminal_payload.clone(),
+                    payload_content_type: "application/json".to_string(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let frame = build_reverse_dispatch_bidi_result_frame(call_id, terminal)
+            .expect("terminal receipt must be projected");
+        let Some(DownPayload::ReverseDispatchResult(result)) = frame.frame.payload else {
+            panic!("expected ReverseDispatchResult");
+        };
+
+        assert_eq!(result.call_id, call_id);
+        assert!(result.terminal);
+        assert_eq!(result.payload, terminal_payload);
+        assert_eq!(result.result_content_type, "application/json");
+        assert!(result.terminal_receipt.is_some());
     }
 
     #[tokio::test]
@@ -4940,6 +5067,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             br#"{"agent":true}"#,
             &SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )
         .expect("valid control request");
         let lifecycle = SessionControlLifecycle::validated(request).schedule();
@@ -4953,6 +5081,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             br#"{"key":true}"#,
             &SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )
         .expect("valid inline control request");
         let lifecycle = SessionControlLifecycle::validated(request).schedule();
@@ -4966,6 +5095,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             br#"{"query_name":"easynet:///r/test/device/d2","qtype":"RESOLVE_TYPE_ROUTE"}"#,
             &SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )
         .expect("valid namespace.resolve control request");
         let lifecycle = SessionControlLifecycle::validated(request).schedule();
@@ -4983,6 +5113,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             b"{}",
             &encrypted,
+            HashMap::new(),
         )
         .expect_err("encrypted JSON control args fail closed");
         assert!(matches!(err, SessionRequestError::PermissionDenied { .. }));

@@ -152,12 +152,16 @@ fn project_receipt_payload_json(content_type: &str, payload: &[u8]) -> anyhow::R
         return Ok(Value::Null);
     }
     if !is_json_content_type(content_type) {
-        let content_type = if content_type.trim().is_empty() {
-            "<missing>"
-        } else {
-            content_type.trim()
-        };
-        anyhow::bail!("InvokeBidi receipt payload declares non-JSON content_type `{content_type}`");
+        return serde_json::from_slice(payload).map_err(|_| {
+            let content_type = if content_type.trim().is_empty() {
+                "<missing>"
+            } else {
+                content_type.trim()
+            };
+            anyhow::anyhow!(
+                "InvokeBidi receipt payload declares non-JSON content_type `{content_type}`"
+            )
+        });
     }
     serde_json::from_slice(payload)
         .map_err(|err| anyhow::anyhow!("InvokeBidi receipt payload is not valid JSON: {err}"))
@@ -2589,6 +2593,28 @@ mod tests {
             error.to_string().contains("non-JSON content_type"),
             "wrong error: {error}"
         );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_receipt_projection_accepts_json_payload_with_octet_stream_receipt_type() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, InvocationReceipt, InvokeBidiDown,
+        };
+
+        let frame = project_invoke_bidi_down_frame(InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(InvocationReceipt {
+                payload_content_type: "application/octet-stream".to_string(),
+                payload: br#"{"type":"complete","bytes":3}"#.to_vec(),
+                ..InvocationReceipt::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect("octet-stream JSON receipt payload remains parseable")
+        .expect("receipt projects to local frame");
+
+        assert_eq!(frame.payload["payload"]["type"], "complete");
+        assert_eq!(frame.payload["payload"]["bytes"], 3);
     }
 
     #[cfg(feature = "axon-pb")]

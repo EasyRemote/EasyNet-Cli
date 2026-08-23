@@ -21,25 +21,26 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     args: Value,
 ) -> anyhow::Result<Value> {
     let session_id = require_str(&args, "session_id", ABILITY_SHOW_SESSION)?;
-    let (recovery_snapshot, view) = plugin
-        .session_store()
-        .with_sessions(|sessions| -> anyhow::Result<_> {
-            let session = sessions.get_mut(session_id).ok_or_else(|| {
-                RemoteDesktopError::SessionNotFound {
-                    ability: ABILITY_SHOW_SESSION,
-                    session_id: session_id.to_string(),
-                }
+    let (recovery_snapshot, view) =
+        plugin
+            .session_store()
+            .with_sessions(|sessions| -> anyhow::Result<_> {
+                let session = sessions.get_mut(session_id).ok_or_else(|| {
+                    RemoteDesktopError::SessionNotFound {
+                        ability: ABILITY_SHOW_SESSION,
+                        session_id: session_id.to_string(),
+                    }
+                })?;
+                ensure_session_control_audit_access(
+                    &plugin,
+                    ABILITY_SHOW_SESSION,
+                    &env,
+                    &args,
+                    session,
+                )?;
+                let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
+                Ok((recovery_snapshot, serialize_session(session)))
             })?;
-            ensure_session_control_audit_access(
-                &plugin,
-                ABILITY_SHOW_SESSION,
-                &env,
-                &args,
-                session,
-            )?;
-            let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
-            Ok((recovery_snapshot, serialize_session(session)))
-        })?;
     plugin.persist_recovery_snapshot(&recovery_snapshot)?;
     Ok(view)
 }

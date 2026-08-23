@@ -27,29 +27,30 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         .and_then(Value::as_str)
         .unwrap_or("caller_ended")
         .to_string();
-    let (recovery_snapshot, view) = plugin
-        .session_store()
-        .with_sessions(|sessions| -> anyhow::Result<_> {
-            let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                RemoteDesktopError::SessionNotFound {
-                    ability: ABILITY_END_SESSION,
-                    session_id: session_id.clone(),
+    let (recovery_snapshot, view) =
+        plugin
+            .session_store()
+            .with_sessions(|sessions| -> anyhow::Result<_> {
+                let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                    RemoteDesktopError::SessionNotFound {
+                        ability: ABILITY_END_SESSION,
+                        session_id: session_id.clone(),
+                    }
+                })?;
+                ensure_session_control_identity(ABILITY_END_SESSION, &env, &args, session)?;
+                if session.is_terminal() {
+                    let mut view = serialize_session(session);
+                    if let Some(map) = view.as_object_mut() {
+                        map.insert("already_ended".into(), json!(true));
+                    }
+                    let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
+                    return Ok((recovery_snapshot, view));
                 }
-            })?;
-            ensure_session_control_identity(ABILITY_END_SESSION, &env, &args, session)?;
-            if session.is_terminal() {
-                let mut view = serialize_session(session);
-                if let Some(map) = view.as_object_mut() {
-                    map.insert("already_ended".into(), json!(true));
-                }
+                stop_session_transports(&plugin, &session_id, session);
+                session.close(&reason);
                 let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
-                return Ok((recovery_snapshot, view));
-            }
-            stop_session_transports(&plugin, &session_id, session);
-            session.close(&reason);
-            let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
-            Ok((recovery_snapshot, serialize_session(session)))
-        })?;
+                Ok((recovery_snapshot, serialize_session(session)))
+            })?;
     plugin.persist_recovery_snapshot(&recovery_snapshot)?;
     Ok(view)
 }

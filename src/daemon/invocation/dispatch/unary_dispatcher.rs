@@ -28,7 +28,7 @@
 
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -43,7 +43,7 @@ use crate::daemon::federation::client::FederationClientError;
 use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::federation::resolver_contract::{RecordType, ResolveAnswerKind, ResolveType};
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
-use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
+use crate::daemon::invocation::admission::decision::{AccessAction, SignatureDecisionReason};
 use crate::daemon::invocation::admission::hosted_agent_delegation::{
     HostedAgentDelegationIngress, HostedAgentDelegationIssuer,
 };
@@ -766,6 +766,7 @@ impl UnaryDispatcher {
         &self,
         arguments: &[u8],
         caller_device_ura: &str,
+        metadata: &HashMap<String, String>,
     ) -> Result<Vec<u8>, Status> {
         let _transition = self
             .directory
@@ -779,12 +780,20 @@ impl UnaryDispatcher {
             )
         })?;
         let trust_anchor = self.admission.trust_anchor_snapshot();
-        OwnerProjectionPublicationAuthority::verify_admitted_session(
+        let authority_binding = self.admission.verify_session_control_authority_metadata(
+            caller_device_ura,
+            &request.owner_ura,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            AccessAction::Manage,
+            metadata,
+        )?;
+        OwnerProjectionPublicationAuthority::verify_admitted_session_with_authority(
             caller_device_ura,
             hub_ura,
             &request,
             self.directory.advertised_agents.as_ref(),
             trust_anchor.as_ref(),
+            authority_binding.as_ref(),
         )
         .map_err(|err| {
             Status::permission_denied(format!(

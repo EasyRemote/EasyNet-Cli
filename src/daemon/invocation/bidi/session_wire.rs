@@ -141,6 +141,8 @@ pub enum SessionDispatch {
         ability_ura: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
+        #[serde(default)]
+        metadata: std::collections::HashMap<String, String>,
     },
     /// Hub → device. Reverse direction of `Request`. The hub
     /// resolved the target via its PresenceRegistry (same-realm

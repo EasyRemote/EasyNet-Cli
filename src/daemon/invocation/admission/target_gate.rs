@@ -49,6 +49,12 @@ use crate::daemon::persistence::agent_aggregate::{
 };
 use axon_sdk::pb::axon::v1::{Envelope, InvocationTarget};
 
+const HUB_SESSION_ROUTE_CONVERGENCE_RETRY_DELAY: std::time::Duration =
+    std::time::Duration::from_millis(150);
+const HUB_SESSION_ROUTE_CONVERGENCE_RETRY_ATTEMPTS: usize = 20;
+const HUB_ROUTE_CONVERGENCE_DETAIL_OWNER_MISSING_ABILITY: &str =
+    "owner is online but does not publish the requested ability";
+
 /// Resolve-first gate over the daemon's routing authorities. Cheap to
 /// construct (every plane is `Arc`-shaped); the service builds one per
 /// dispatch via `DaemonInvocationService::target_gate()`.
@@ -149,84 +155,106 @@ impl TargetGate {
         // returns either a same-realm FINAL_ROUTE or a cross-realm
         // DELEGATION. The latter is forwarding authority for the upstream
         // Hub, not an executable route for the Device.
-        let args = serde_json::to_vec(&namespace_route_query(target_ura, ability_ura)).map_err(
-            |error| {
-                ResolveRouteFailure::new(
-                    ability_ura,
-                    NegativeReason::Refused,
-                    format!("Hub route provider request encoding failed: {error}"),
-                )
-            },
-        )?;
-        let answer: serde_json::Value = match escalation
-            .escalate(ABILITY_NAMESPACE_RESOLVE.to_string(), args)
-            .await
-        {
-            RequestOutcome::Ok { result_bytes } => {
-                serde_json::from_slice(&result_bytes).map_err(|error| {
-                    ResolveRouteFailure::new(
-                        ability_ura,
-                        NegativeReason::Nodata,
-                        format!("Hub route provider returned unreadable JSON: {error}"),
-                    )
-                })?
-            }
-            RequestOutcome::Err { error } => {
-                return Err(session_request_error_route_failure(
-                    ability_ura,
-                    error,
-                    local_failure,
-                ))
-            }
-        };
-        match answer
-            .get("answer_kind")
-            .and_then(serde_json::Value::as_str)
-            .and_then(ResolveAnswerKind::from_str_name)
-        {
-            Some(ResolveAnswerKind::FinalRoute) => {
-                let selected_route = SelectedInvokeRoute::from_hub_final_route_answer_json(
-                    &answer,
-                    target_ura,
-                    ability_ura,
-                )?;
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = hub_session_final_route_selected,
-                    target_ura = target_ura,
-                    ability = ability_ura,
-                    route_ura = selected_route.route_ura.as_str(),
-                    execution_host_ura = selected_route.execution_host_ura.as_str(),
-                );
-                Ok(CanonicalRouteSelection::hub_session(
-                    call_mode,
-                    selected_route,
-                ))
-            }
-            Some(ResolveAnswerKind::Delegation) => {
-                let delegated_route = DelegatedInvokeRoute::from_hub_delegation_answer_json(
-                    &answer,
-                    target_ura,
-                    ability_ura,
-                )?;
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = upstream_hub_peer_delegation_selected,
-                    target_ura = target_ura,
-                    ability = ability_ura,
-                    peer_realm = delegated_route.realm.as_str(),
-                    peer_hub_ura = delegated_route.hub_ura.as_str(),
-                );
-                Ok(CanonicalRouteSelection::upstream_hub(
-                    call_mode,
-                    delegated_route,
-                ))
-            }
-            _ => Err(ResolveRouteFailure::new(
+        let args = serde_json::to_vec(&namespace_route_query(target_ura, ability_ura, call_mode))
+            .map_err(|error| {
+            ResolveRouteFailure::new(
                 ability_ura,
-                NegativeReason::Noroute,
-                "Hub route provider returned a missing or unsupported answer_kind",
-            )),
+                NegativeReason::Refused,
+                format!("Hub route provider request encoding failed: {error}"),
+            )
+        })?;
+        let mut attempt = 0usize;
+        loop {
+            let answer: serde_json::Value = match escalation
+                .escalate(ABILITY_NAMESPACE_RESOLVE.to_string(), args.clone())
+                .await
+            {
+                RequestOutcome::Ok { result_bytes } => serde_json::from_slice(&result_bytes)
+                    .map_err(|error| {
+                        ResolveRouteFailure::new(
+                            ability_ura,
+                            NegativeReason::Nodata,
+                            format!("Hub route provider returned unreadable JSON: {error}"),
+                        )
+                    })?,
+                RequestOutcome::Err { error } => {
+                    return Err(session_request_error_route_failure(
+                        ability_ura,
+                        error,
+                        local_failure,
+                    ))
+                }
+            };
+            match answer
+                .get("answer_kind")
+                .and_then(serde_json::Value::as_str)
+                .and_then(ResolveAnswerKind::from_str_name)
+            {
+                Some(ResolveAnswerKind::FinalRoute) => {
+                    let selected_route = SelectedInvokeRoute::from_hub_final_route_answer_json(
+                        &answer,
+                        target_ura,
+                        ability_ura,
+                    )?;
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = hub_session_final_route_selected,
+                        target_ura = target_ura,
+                        ability = ability_ura,
+                        route_ura = selected_route.route_ura.as_str(),
+                        execution_host_ura = selected_route.execution_host_ura.as_str(),
+                    );
+                    return Ok(CanonicalRouteSelection::hub_session(
+                        call_mode,
+                        selected_route,
+                    ));
+                }
+                Some(ResolveAnswerKind::Delegation) => {
+                    let delegated_route = DelegatedInvokeRoute::from_hub_delegation_answer_json(
+                        &answer,
+                        target_ura,
+                        ability_ura,
+                    )?;
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = upstream_hub_peer_delegation_selected,
+                        target_ura = target_ura,
+                        ability = ability_ura,
+                        peer_realm = delegated_route.realm.as_str(),
+                        peer_hub_ura = delegated_route.hub_ura.as_str(),
+                    );
+                    return Ok(CanonicalRouteSelection::upstream_hub(
+                        call_mode,
+                        delegated_route,
+                    ));
+                }
+                Some(ResolveAnswerKind::Negative) => {
+                    if hub_negative_route_is_dynamic_convergence_candidate(&answer)
+                        && attempt < HUB_SESSION_ROUTE_CONVERGENCE_RETRY_ATTEMPTS
+                    {
+                        attempt += 1;
+                        crate::op_event!(
+                            component = daemon_invocation,
+                            kind = hub_session_route_convergence_retry,
+                            target_ura = target_ura,
+                            ability = ability_ura,
+                            attempt = attempt,
+                            max_attempts = HUB_SESSION_ROUTE_CONVERGENCE_RETRY_ATTEMPTS,
+                            message = "Hub namespace.resolve has the owner online but not the newly published ability; retrying within the bounded dynamic publication convergence window",
+                        );
+                        tokio::time::sleep(HUB_SESSION_ROUTE_CONVERGENCE_RETRY_DELAY).await;
+                        continue;
+                    }
+                    return Err(hub_negative_route_failure(&answer, ability_ura));
+                }
+                _ => {
+                    return Err(ResolveRouteFailure::new(
+                        ability_ura,
+                        NegativeReason::Noroute,
+                        "Hub route provider returned a missing or unsupported answer_kind",
+                    ))
+                }
+            }
         }
     }
 
@@ -333,7 +361,11 @@ impl TargetGate {
     }
 }
 
-fn namespace_route_query(target_ura: &str, ability_ura: &str) -> serde_json::Value {
+fn namespace_route_query(
+    target_ura: &str,
+    ability_ura: &str,
+    call_mode: CallMode,
+) -> serde_json::Value {
     let ability = ability_ura.trim();
     if crate::core::ura::parse_ura(ability)
         .is_ok_and(|parsed| parsed.kind == crate::core::ura::URAKind::Ability)
@@ -341,6 +373,7 @@ fn namespace_route_query(target_ura: &str, ability_ura: &str) -> serde_json::Val
         json!({
             "query_name": ability,
             "ability_name": "",
+            "call_mode": call_mode.as_str(),
             "qtype": "RESOLVE_TYPE_ROUTE",
             "include_abilities": true,
         })
@@ -348,10 +381,70 @@ fn namespace_route_query(target_ura: &str, ability_ura: &str) -> serde_json::Val
         json!({
             "query_name": target_ura,
             "ability_name": ability,
+            "call_mode": call_mode.as_str(),
             "qtype": "RESOLVE_TYPE_ROUTE",
             "include_abilities": true,
         })
     }
+}
+
+fn hub_negative_route_failure(
+    answer: &serde_json::Value,
+    fallback_query: &str,
+) -> ResolveRouteFailure {
+    let negative = answer
+        .get("negative")
+        .and_then(serde_json::Value::as_object);
+    let query_name = negative
+        .and_then(|object| object.get("query_name"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_query);
+    let reason = negative
+        .and_then(|object| object.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(NegativeReason::from_str_name)
+        .unwrap_or(NegativeReason::Noroute);
+    let detail = negative
+        .and_then(|object| object.get("detail"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Hub route provider returned a negative namespace.resolve answer");
+    if detail == "owner is not online"
+        && matches!(reason, NegativeReason::Nxdomain | NegativeReason::Noroute)
+    {
+        ResolveRouteFailure::owner_offline(query_name, reason)
+    } else {
+        ResolveRouteFailure::new(query_name, reason, detail)
+    }
+}
+
+fn hub_negative_route_is_dynamic_convergence_candidate(answer: &serde_json::Value) -> bool {
+    let Some(ResolveAnswerKind::Negative) = answer
+        .get("answer_kind")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ResolveAnswerKind::from_str_name)
+    else {
+        return false;
+    };
+    let Some(negative) = answer
+        .get("negative")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    let reason = negative
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .and_then(NegativeReason::from_str_name);
+    let detail = negative
+        .get("detail")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    reason == Some(NegativeReason::Nodata)
+        && detail == Some(HUB_ROUTE_CONVERGENCE_DETAIL_OWNER_MISSING_ABILITY)
 }
 
 fn session_request_error_route_failure(
@@ -873,9 +966,14 @@ fn status_from_child_invocation_failure(failure: ChildInvocationBuildFailure) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{local_runtime_authority_ura, route_negative_status, ROUTE_NEGATIVE_CODE};
-    use crate::daemon::federation::resolver_contract::NegativeReason;
+    use super::{
+        hub_negative_route_failure, hub_negative_route_is_dynamic_convergence_candidate,
+        local_runtime_authority_ura, namespace_route_query, route_negative_status,
+        HUB_ROUTE_CONVERGENCE_DETAIL_OWNER_MISSING_ABILITY, ROUTE_NEGATIVE_CODE,
+    };
+    use crate::daemon::federation::resolver_contract::{NegativeReason, ResolveAnswerKind};
     use crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure;
+    use axon_sdk::invocation::CallMode;
 
     fn negative_status(reason: NegativeReason) -> tonic::Status {
         negative_status_with_detail(reason, "test negative")
@@ -973,6 +1071,96 @@ mod tests {
     #[test]
     fn local_runtime_authority_rejects_session_realm_without_daemon_identity() {
         assert_eq!(local_runtime_authority_ura(None, Some("test-realm")), None);
+    }
+
+    #[test]
+    fn hub_session_route_query_preserves_bidi_call_mode() {
+        let query = namespace_route_query(
+            "easynet:///r/acme/device/node-a",
+            "fs.transfer",
+            CallMode::Bidi,
+        );
+
+        assert_eq!(query["query_name"], "easynet:///r/acme/device/node-a");
+        assert_eq!(query["ability_name"], "fs.transfer");
+        assert_eq!(query["call_mode"], "bidi");
+        assert_eq!(query["qtype"], "RESOLVE_TYPE_ROUTE");
+    }
+
+    #[test]
+    fn hub_session_route_query_preserves_canonical_ability_call_mode() {
+        let ability = "easynet:///r/acme/ability/system-agent.node-a.locomotion.fs.transfer";
+        let query =
+            namespace_route_query("easynet:///r/acme/device/node-a", ability, CallMode::Bidi);
+
+        assert_eq!(query["query_name"], ability);
+        assert_eq!(query["ability_name"], "");
+        assert_eq!(query["call_mode"], "bidi");
+        assert_eq!(query["qtype"], "RESOLVE_TYPE_ROUTE");
+    }
+
+    #[test]
+    fn hub_negative_route_answer_preserves_reason_and_detail() {
+        let failure = hub_negative_route_failure(
+            &serde_json::json!({
+                "answer_kind": ResolveAnswerKind::Negative.as_str_name(),
+                "negative": {
+                    "reason": NegativeReason::Nodata.as_str_name(),
+                    "query_name": "easynet:///r/acme/device/node-a#fs.transfer",
+                    "detail": "ability projection has no bidi descriptor geometry",
+                }
+            }),
+            "fs.transfer",
+        );
+
+        assert_eq!(
+            failure.query_name,
+            "easynet:///r/acme/device/node-a#fs.transfer"
+        );
+        assert_eq!(failure.reason, NegativeReason::Nodata);
+        assert_eq!(
+            failure.detail,
+            "ability projection has no bidi descriptor geometry"
+        );
+    }
+
+    #[test]
+    fn hub_negative_dynamic_convergence_retry_is_exactly_scoped() {
+        let candidate = serde_json::json!({
+            "answer_kind": ResolveAnswerKind::Negative.as_str_name(),
+            "negative": {
+                "reason": NegativeReason::Nodata.as_str_name(),
+                "query_name": "easynet:///r/acme/device/node-a#user_plugin.echo",
+                "detail": HUB_ROUTE_CONVERGENCE_DETAIL_OWNER_MISSING_ABILITY,
+            }
+        });
+        assert!(hub_negative_route_is_dynamic_convergence_candidate(
+            &candidate
+        ));
+
+        let owner_offline = serde_json::json!({
+            "answer_kind": ResolveAnswerKind::Negative.as_str_name(),
+            "negative": {
+                "reason": NegativeReason::Nxdomain.as_str_name(),
+                "query_name": "easynet:///r/acme/device/node-a#user_plugin.echo",
+                "detail": "owner is not online",
+            }
+        });
+        assert!(!hub_negative_route_is_dynamic_convergence_candidate(
+            &owner_offline
+        ));
+
+        let policy_denied = serde_json::json!({
+            "answer_kind": ResolveAnswerKind::Negative.as_str_name(),
+            "negative": {
+                "reason": NegativeReason::Refused.as_str_name(),
+                "query_name": "easynet:///r/acme/device/node-a#user_plugin.echo",
+                "detail": HUB_ROUTE_CONVERGENCE_DETAIL_OWNER_MISSING_ABILITY,
+            }
+        });
+        assert!(!hub_negative_route_is_dynamic_convergence_candidate(
+            &policy_denied
+        ));
     }
 
     #[test]

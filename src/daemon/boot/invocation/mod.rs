@@ -94,6 +94,7 @@ use crate::daemon::invocation::admission::principal_lifecycle::{
 const BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT: Duration = Duration::from_secs(5);
 const DYNAMIC_PUBLICATION_RETRY_INITIAL: Duration = Duration::from_millis(500);
 const DYNAMIC_PUBLICATION_RETRY_MAX: Duration = Duration::from_secs(30);
+const DYNAMIC_PUBLICATION_IMMEDIATE_RETRY_BUDGET: usize = 8;
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::invocation::bidi::session_initiator::{
@@ -856,6 +857,8 @@ pub fn start_daemon_invocation_transport(
                 Arc::clone(&local_ability_catalog),
                 Arc::clone(&handle),
                 identity.caller_ura.clone(),
+                Arc::clone(&identity.signer),
+                crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner::runtime_caller(),
                 Arc::clone(&connection_state_sink),
             )?;
         }
@@ -1054,6 +1057,8 @@ fn register_local_runtime_federation_republisher(
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     host_device_ura: String,
+    device_signer: Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>,
+    paired_user_signer: crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
@@ -1062,6 +1067,8 @@ fn register_local_runtime_federation_republisher(
         Arc::clone(&catalog),
         escalation,
         host_device_ura,
+        device_signer,
+        paired_user_signer,
         connection_state_sink,
     ));
     let prepare = Arc::new({
@@ -1087,6 +1094,8 @@ struct LocalRuntimeFederationRepublisher {
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     host_device_ura: String,
+    device_signer: Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>,
+    paired_user_signer: crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner,
     connection_state_sink:
         Arc<dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink>,
     state: std::sync::Mutex<LocalRuntimeFederationRepublisherState>,
@@ -1096,6 +1105,28 @@ struct LocalRuntimeFederationRepublisher {
 struct LocalRuntimeFederationRepublisherState {
     running: bool,
     dirty: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DynamicPublicationOutcome {
+    Converged,
+    RetryNow,
+    RetryLater,
+}
+
+impl DynamicPublicationOutcome {
+    fn merge(&mut self, next: Self) {
+        *self = match (*self, next) {
+            (Self::RetryLater, _) | (_, Self::RetryLater) => Self::RetryLater,
+            (Self::RetryNow, _) | (_, Self::RetryNow) => Self::RetryNow,
+            (Self::Converged, Self::Converged) => Self::Converged,
+        };
+    }
+
+    #[must_use]
+    fn is_converged(self) -> bool {
+        matches!(self, Self::Converged)
+    }
 }
 
 impl LocalRuntimeFederationRepublisherState {
@@ -1120,6 +1151,8 @@ impl LocalRuntimeFederationRepublisher {
             crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle,
         >,
         host_device_ura: String,
+        device_signer: Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>,
+        paired_user_signer: crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner,
         connection_state_sink: Arc<
             dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
         >,
@@ -1128,6 +1161,8 @@ impl LocalRuntimeFederationRepublisher {
             catalog,
             escalation,
             host_device_ura,
+            device_signer,
+            paired_user_signer,
             connection_state_sink,
             state: std::sync::Mutex::new(LocalRuntimeFederationRepublisherState::default()),
         }
@@ -1191,6 +1226,7 @@ impl LocalRuntimeFederationRepublisher {
 
     async fn run(self: Arc<Self>) {
         let mut retry_delay = DYNAMIC_PUBLICATION_RETRY_INITIAL;
+        let mut immediate_retry_budget = DYNAMIC_PUBLICATION_IMMEDIATE_RETRY_BUDGET;
         loop {
             {
                 let mut state = self
@@ -1202,15 +1238,18 @@ impl LocalRuntimeFederationRepublisher {
                 }
             }
 
-            let converged = publish_local_runtime_federation(
+            let outcome = publish_local_runtime_federation(
                 Arc::clone(&self.catalog),
                 Arc::clone(&self.escalation),
                 self.host_device_ura.clone(),
+                Arc::clone(&self.device_signer),
+                self.paired_user_signer.clone(),
                 Arc::clone(&self.connection_state_sink),
             )
             .await;
-            if converged {
+            if outcome.is_converged() {
                 retry_delay = DYNAMIC_PUBLICATION_RETRY_INITIAL;
+                immediate_retry_budget = DYNAMIC_PUBLICATION_IMMEDIATE_RETRY_BUDGET;
                 continue;
             }
 
@@ -1222,6 +1261,20 @@ impl LocalRuntimeFederationRepublisher {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .retain_failed_pass();
 
+            if matches!(outcome, DynamicPublicationOutcome::RetryNow) && immediate_retry_budget > 0
+            {
+                immediate_retry_budget -= 1;
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = local_runtime_federation_publish_immediate_retry_scheduled,
+                    level = "warn",
+                    host_device_ura = self.host_device_ura.as_str(),
+                    remaining_budget = immediate_retry_budget,
+                    message = "committed local federation state was invalidated by a newer catalog epoch and will retry from a fresh snapshot immediately",
+                );
+                continue;
+            }
+
             crate::op_event!(
                 component = daemon_invocation,
                 kind = local_runtime_federation_publish_retry_scheduled,
@@ -1232,6 +1285,7 @@ impl LocalRuntimeFederationRepublisher {
             );
             tokio::time::sleep(retry_delay).await;
             retry_delay = next_dynamic_publication_retry_delay(retry_delay);
+            immediate_retry_budget = DYNAMIC_PUBLICATION_IMMEDIATE_RETRY_BUDGET;
         }
     }
 }
@@ -1244,10 +1298,12 @@ async fn publish_local_runtime_federation(
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     host_device_ura: String,
+    device_signer: Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>,
+    paired_user_signer: crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
-) -> bool {
+) -> DynamicPublicationOutcome {
     let snapshot =
         crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog.as_ref());
     let mut hosted_agent_uras = snapshot
@@ -1268,7 +1324,7 @@ async fn publish_local_runtime_federation(
                     host_device_ura = host_device_ura.as_str(),
                     error = error.as_str(),
                 );
-                return false;
+                return DynamicPublicationOutcome::RetryLater;
             }
         };
     hosted_agent_uras.extend(durable_hosted_intents);
@@ -1298,17 +1354,24 @@ async fn publish_local_runtime_federation(
                 host_device_ura = host_device_ura.as_str(),
                 error = error.as_str(),
             );
-            return false;
+            return DynamicPublicationOutcome::RetryLater;
         }
     };
-    let mut converged = publish_owner_projection_from_snapshot(
+    let mut outcome = if publish_owner_projection_from_snapshot(
         &snapshot,
         Arc::clone(&escalation),
         &host_device_ura,
         &host_device_ura,
+        device_signer.as_ref(),
+        &paired_user_signer,
         Arc::clone(&connection_state_sink),
     )
-    .await;
+    .await
+    {
+        DynamicPublicationOutcome::Converged
+    } else {
+        DynamicPublicationOutcome::RetryLater
+    };
 
     for system_agent_ura in snapshot.system_agent_owner_uras() {
         if !publish_owner_projection_from_snapshot(
@@ -1316,11 +1379,13 @@ async fn publish_local_runtime_federation(
             Arc::clone(&escalation),
             &system_agent_ura,
             &host_device_ura,
+            device_signer.as_ref(),
+            &paired_user_signer,
             Arc::clone(&connection_state_sink),
         )
         .await
         {
-            converged = false;
+            outcome.merge(DynamicPublicationOutcome::RetryLater);
         }
     }
 
@@ -1334,33 +1399,36 @@ async fn publish_local_runtime_federation(
             Arc::clone(&escalation),
             &service_ura,
             &host_device_ura,
+            device_signer.as_ref(),
+            &paired_user_signer,
             Arc::clone(&connection_state_sink),
         )
         .await
         {
-            converged = false;
+            outcome.merge(DynamicPublicationOutcome::RetryLater);
         }
     }
 
     for agent_ura in hosted_agent_uras {
         let Some(catalog_epoch) = hosted_catalog_epochs.get(&agent_ura).copied() else {
-            converged = false;
+            outcome.merge(DynamicPublicationOutcome::RetryLater);
             continue;
         };
-        if !publish_hosted_agent_from_snapshot(
-            &snapshot,
-            Arc::clone(&escalation),
-            &agent_ura,
-            &host_device_ura,
-            catalog_epoch,
-            Arc::clone(&connection_state_sink),
-        )
-        .await
-        {
-            converged = false;
-        }
+        outcome.merge(
+            publish_hosted_agent_from_snapshot(
+                &snapshot,
+                Arc::clone(&escalation),
+                &agent_ura,
+                &host_device_ura,
+                catalog_epoch,
+                device_signer.as_ref(),
+                &paired_user_signer,
+                Arc::clone(&connection_state_sink),
+            )
+            .await,
+        );
     }
-    converged
+    outcome
 }
 
 struct PreparedOwnerProjectionAdvertisement {
@@ -1396,6 +1464,8 @@ async fn publish_owner_projection_from_snapshot(
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     owner_ura: &str,
     host_device_ura: &str,
+    device_signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+    paired_user_signer: &crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
@@ -1414,10 +1484,54 @@ async fn publish_owner_projection_from_snapshot(
                 return false;
             }
         };
+    let metadata = match service_owner_user_ura(&prepared.owner_ura) {
+        Some(user_ura) => {
+            let user_signer = match paired_user_signer.load(&user_ura).await {
+                Ok(signer) => signer,
+                Err(error) => {
+                    let error = error.to_string();
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = local_runtime_owner_projection_authority_prepare_failed,
+                        owner_ura = prepared.owner_ura.as_str(),
+                        host_device_ura = host_device_ura,
+                        error = error.as_str(),
+                    );
+                    return false;
+                }
+            };
+            let delegation = match crate::daemon::invocation::bidi::session_initiator::owner_projection_delegation_metadata(
+                &prepared.owner_ura,
+                device_signer,
+                user_signer.as_ref(),
+            )
+            .await
+            {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    let error = error.to_string();
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = local_runtime_owner_projection_authority_prepare_failed,
+                        owner_ura = prepared.owner_ura.as_str(),
+                        host_device_ura = host_device_ura,
+                        error = error.as_str(),
+                    );
+                    return false;
+                }
+            };
+            std::collections::HashMap::from([(
+                crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
+                delegation,
+            )])
+        }
+        None => std::collections::HashMap::new(),
+    };
     match escalation
-        .escalate_with_timeout(
+        .escalate_with_timeout_and_metadata(
             "federation.advertise_abilities".to_string(),
             prepared.abilities_args,
+            metadata,
             BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
         )
         .await
@@ -1468,10 +1582,12 @@ async fn publish_hosted_agent_from_snapshot(
     agent_ura: &str,
     host_device_ura: &str,
     catalog_epoch: u64,
+    device_signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+    paired_user_signer: &crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
-) -> bool {
+) -> DynamicPublicationOutcome {
     let host_node_id = host_node_id_from_device_ura(host_device_ura);
     let descriptors = snapshot.owner_descriptors(agent_ura);
     let plan =
@@ -1491,7 +1607,7 @@ async fn publish_hosted_agent_from_snapshot(
                     host_device_ura = host_device_ura,
                     error = error.as_str(),
                 );
-                return false;
+                return DynamicPublicationOutcome::RetryLater;
             }
         };
     let advertise_agent_args = match plan.identity_payload_bytes() {
@@ -1503,7 +1619,7 @@ async fn publish_hosted_agent_from_snapshot(
                 agent_ura = agent_ura,
                 error = error.as_str(),
             );
-            return false;
+            return DynamicPublicationOutcome::RetryLater;
         }
     };
 
@@ -1527,7 +1643,7 @@ async fn publish_hosted_agent_from_snapshot(
                         kind = local_runtime_hosted_agent_identity_publish_rejected,
                         agent_ura = agent_ura,
                     );
-                    return false;
+                    return DynamicPublicationOutcome::RetryLater;
                 }
                 Err(error) => {
                     let error = error.to_string();
@@ -1537,7 +1653,7 @@ async fn publish_hosted_agent_from_snapshot(
                         agent_ura = agent_ura,
                         error = error.as_str(),
                     );
-                    return false;
+                    return DynamicPublicationOutcome::RetryLater;
                 }
             }
         }
@@ -1549,30 +1665,87 @@ async fn publish_hosted_agent_from_snapshot(
                 agent_ura = agent_ura,
                 error = error.as_str(),
             );
-            return false;
+            return DynamicPublicationOutcome::RetryLater;
         }
     };
     let active = match plan.activate(assignment) {
         Ok(active) => active,
         Err(error) => {
+            let outcome = if hosted_agent_projection_error_is_stale_catalog_epoch(&error) {
+                DynamicPublicationOutcome::RetryNow
+            } else {
+                DynamicPublicationOutcome::RetryLater
+            };
             crate::op_event!(
                 component = daemon_invocation,
                 kind = local_runtime_hosted_agent_assignment_bind_failed,
                 agent_ura = agent_ura,
                 error = error.as_str(),
             );
-            return false;
+            return outcome;
         }
     };
     let published_agent_ura = active.assignment.agent_ura.clone();
     let published_generation = active.assignment.generation;
     let published_ability_count = active.ability_count;
     let abilities_payload = active.abilities_payload.clone();
+    let owner_user_ura = match hosted_agent_owner_user_ura(&published_agent_ura) {
+        Some(user_ura) => user_ura,
+        None => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_hosted_agent_projection_authority_prepare_failed,
+                agent_ura = published_agent_ura.as_str(),
+                generation = published_generation,
+                error = "hosted Agent projection owner is not a user-owned Agent URA",
+            );
+            return DynamicPublicationOutcome::RetryLater;
+        }
+    };
+    let user_signer = match paired_user_signer.load(&owner_user_ura).await {
+        Ok(signer) => signer,
+        Err(error) => {
+            let error = error.to_string();
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_hosted_agent_projection_authority_prepare_failed,
+                agent_ura = published_agent_ura.as_str(),
+                generation = published_generation,
+                error = error.as_str(),
+            );
+            return DynamicPublicationOutcome::RetryLater;
+        }
+    };
+    let delegation = match crate::daemon::invocation::bidi::session_initiator::owner_projection_delegation_metadata(
+        &published_agent_ura,
+        device_signer,
+        user_signer.as_ref(),
+    )
+    .await
+    {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            let error = error.to_string();
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_hosted_agent_projection_authority_prepare_failed,
+                agent_ura = published_agent_ura.as_str(),
+                generation = published_generation,
+                error = error.as_str(),
+            );
+            return DynamicPublicationOutcome::RetryLater;
+        }
+    };
+    let metadata = std::collections::HashMap::from([(
+        crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
+        delegation,
+    )]);
 
     match escalation
-        .escalate_with_timeout(
+        .escalate_with_timeout_and_metadata(
             "federation.advertise_abilities".to_string(),
             abilities_payload,
+            metadata,
             BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
         )
         .await
@@ -1588,7 +1761,7 @@ async fn publish_hosted_agent_from_snapshot(
                             generation = published_generation,
                             error = error.as_str(),
                         );
-                        return false;
+                        return DynamicPublicationOutcome::RetryLater;
                     }
                     crate::op_event!(
                         component = daemon_invocation,
@@ -1600,7 +1773,7 @@ async fn publish_hosted_agent_from_snapshot(
                     project_local_runtime_federation_published_connection_state(
                         connection_state_sink.as_ref(),
                     );
-                    true
+                    DynamicPublicationOutcome::Converged
                 }
                 Err(error) => {
                     crate::op_event!(
@@ -1611,7 +1784,7 @@ async fn publish_hosted_agent_from_snapshot(
                         ability_count = published_ability_count,
                         error = error.as_str(),
                     );
-                    false
+                    DynamicPublicationOutcome::RetryLater
                 }
             }
         }
@@ -1625,9 +1798,13 @@ async fn publish_hosted_agent_from_snapshot(
                 ability_count = published_ability_count,
                 error = error.as_str(),
             );
-            false
+            DynamicPublicationOutcome::RetryLater
         }
     }
+}
+
+fn hosted_agent_projection_error_is_stale_catalog_epoch(error: &str) -> bool {
+    error.contains("stale catalog epoch")
 }
 
 fn hosted_publication_now_unix_ms() -> u64 {
@@ -1642,6 +1819,24 @@ fn host_node_id_from_device_ura(host_device_ura: &str) -> Option<String> {
         .ok()
         .filter(|parsed| parsed.kind == crate::core::ura::URAKind::Device)
         .and_then(|parsed| parsed.device_id().map(str::to_string))
+}
+
+fn service_owner_user_ura(owner_ura: &str) -> Option<String> {
+    let owner = crate::core::ura::parse_ura(owner_ura).ok()?;
+    if owner.kind != crate::core::ura::URAKind::Service {
+        return None;
+    }
+    let (principal_id, _) = owner.service_ids()?;
+    Some(crate::core::ura::user_ura(&owner.realm, principal_id))
+}
+
+fn hosted_agent_owner_user_ura(agent_ura: &str) -> Option<String> {
+    let owner = crate::core::ura::parse_ura(agent_ura).ok()?;
+    if owner.kind != crate::core::ura::URAKind::Agent || owner.device_agent_ids().is_some() {
+        return None;
+    }
+    let (principal_id, _) = owner.agent_ids()?;
+    Some(crate::core::ura::user_ura(&owner.realm, principal_id))
 }
 
 fn project_local_runtime_federation_published_connection_state(
@@ -2617,6 +2812,46 @@ mod tests {
         assert_eq!(
             next_dynamic_publication_retry_delay(delay),
             DYNAMIC_PUBLICATION_RETRY_MAX
+        );
+    }
+
+    #[test]
+    fn dynamic_publication_outcome_preserves_retry_priority() {
+        let mut outcome = DynamicPublicationOutcome::Converged;
+        outcome.merge(DynamicPublicationOutcome::RetryNow);
+        assert_eq!(outcome, DynamicPublicationOutcome::RetryNow);
+
+        outcome.merge(DynamicPublicationOutcome::Converged);
+        assert_eq!(outcome, DynamicPublicationOutcome::RetryNow);
+
+        outcome.merge(DynamicPublicationOutcome::RetryLater);
+        assert_eq!(outcome, DynamicPublicationOutcome::RetryLater);
+    }
+
+    #[test]
+    fn hosted_agent_stale_catalog_epoch_is_immediate_retry_only() {
+        assert!(hosted_agent_projection_error_is_stale_catalog_epoch(
+            "stage hosted Agent ability projection: hosted Agent projection was captured from a stale catalog epoch"
+        ));
+        assert!(!hosted_agent_projection_error_is_stale_catalog_epoch(
+            "stage hosted Agent ability projection: hosted Agent projection requires an assigned live incarnation"
+        ));
+        assert_eq!(DYNAMIC_PUBLICATION_IMMEDIATE_RETRY_BUDGET, 8);
+    }
+
+    #[test]
+    fn hosted_agent_projection_delegation_resolves_user_owner() {
+        assert_eq!(
+            hosted_agent_owner_user_ura("easynet:///r/realm/agent/alice.worker").as_deref(),
+            Some("easynet:///r/realm/user/alice")
+        );
+        assert_eq!(
+            hosted_agent_owner_user_ura("easynet:///r/realm/agent/device.dev.worker"),
+            None
+        );
+        assert_eq!(
+            hosted_agent_owner_user_ura("easynet:///r/realm/service/alice.pages"),
+            None
         );
     }
 

@@ -1031,9 +1031,10 @@ fn invoke_remote_target_on_ready_socket_typed(
     })
 }
 
-/// Public User actions use either a descriptor-bound invocation resource or an
-/// existing session resource. Both require an exact User-signed
-/// SessionAuthority because the subject differs from the User caller.
+/// Public User actions use either a descriptor-bound invocation resource, an
+/// existing session resource, or an exact resource subject. These
+/// require exact User-signed SessionAuthority because the subject differs from
+/// the User caller and the remote runtime needs an explicit authority bridge.
 /// Descriptor-bound calls use invocation freshness as their authority session;
 /// lifecycle calls use the existing session id encoded by the canonical
 /// subject. The distinction is made once at the authority boundary and is
@@ -1059,9 +1060,87 @@ async fn issue_user_resource_authority_if_required(
     }
 
     let subject_kind = authority_subject_kind(subject_ura);
+    if subject_kind == AuthoritySubjectKind::Agent {
+        let caller = crate::core::ura::parse_ura(caller_ura).map_err(|error| {
+            RemoteInvocationFailure::RequestBuild(format!(
+                "parse remote User caller for Agent delegation: {error}"
+            ))
+        })?;
+        if caller.kind != URAKind::User {
+            return Err(RemoteInvocationFailure::RequestBuild(format!(
+                "Agent subject `{subject_ura}` requires explicit delegation for non-User caller `{caller_ura}`"
+            )));
+        }
+        let caller_user_id = caller.user_id().ok_or_else(|| {
+            RemoteInvocationFailure::RequestBuild(
+                "remote User caller has no canonical User id".to_string(),
+            )
+        })?;
+        let subject = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
+            RemoteInvocationFailure::RequestBuild(format!(
+                "parse remote Agent subject for delegation: {error}"
+            ))
+        })?;
+        let Some((subject_owner_user_id, _)) = subject.agent_ids() else {
+            return Err(RemoteInvocationFailure::RequestBuild(format!(
+                "Agent subject `{subject_ura}` is not a canonical user-owned Agent"
+            )));
+        };
+        if subject_owner_user_id != caller_user_id {
+            return Err(RemoteInvocationFailure::RequestBuild(format!(
+                "remote User caller `{caller_ura}` cannot delegate Agent subject owned by User `{subject_owner_user_id}`"
+            )));
+        }
+        let issued_at_ms: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| {
+                RemoteInvocationFailure::RequestBuild(format!(
+                    "read clock for remote User Agent delegation: {error}"
+                ))
+            })?
+            .as_millis()
+            .try_into()
+            .map_err(|_| {
+                RemoteInvocationFailure::RequestBuild(
+                    "remote User Agent delegation timestamp exceeds i64".to_string(),
+                )
+            })?;
+        let expires_at_ms = issued_at_ms.checked_add(5 * 60 * 1_000).ok_or_else(|| {
+            RemoteInvocationFailure::RequestBuild(
+                "remote User Agent delegation expiry overflow".to_string(),
+            )
+        })?;
+        let claims = crate::daemon::ability::DelegationAuthorityClaims::new(
+            caller_ura,
+            subject_ura,
+            caller_ura,
+            target.callee_ura(),
+            [target.public_ability()],
+            issued_at_ms,
+            expires_at_ms,
+        )
+        .map_err(|error| {
+            RemoteInvocationFailure::RequestBuild(format!(
+                "prepare remote User Agent delegation: {error}"
+            ))
+        })?;
+        let delegation = claims
+            .signed_metadata_value(signer)
+            .await
+            .map_err(|error| {
+                RemoteInvocationFailure::RequestBuild(format!(
+                    "sign remote User Agent delegation: {error}"
+                ))
+            })?;
+        let mut metadata = request_metadata;
+        metadata.insert(DELEGATION_METADATA_KEY.to_string(), delegation);
+        return Ok(metadata);
+    }
     if !matches!(
         subject_kind,
-        AuthoritySubjectKind::DescriptorBound | AuthoritySubjectKind::Session
+        AuthoritySubjectKind::DescriptorBound
+            | AuthoritySubjectKind::Resource
+            | AuthoritySubjectKind::Session
     ) {
         return Ok(request_metadata);
     }
@@ -1106,6 +1185,10 @@ async fn issue_user_resource_authority_if_required(
                         .to_string(),
                 )
             })?,
+        AuthoritySubjectKind::Resource => (
+            caller_user_id.to_string(),
+            format!("invoke-{}", hex::encode(invocation_nonce)),
+        ),
         _ => unreachable!("non-User resource subjects returned before authority issuance"),
     };
     if subject_owner_user_id != caller_user_id {
@@ -2131,7 +2214,8 @@ mod tests {
     use super::*;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::invocation::admission::authority_metadata::{
-        decode_session_authority_wire, DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
+        decode_delegation_authority_wire, decode_session_authority_wire, DELEGATION_METADATA_KEY,
+        SESSION_AUTHORITY_METADATA_KEY,
     };
 
     fn device_system_agent_owner_ura(
@@ -2234,6 +2318,149 @@ mod tests {
                 format!("invoke-{}", hex::encode(nonce))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn authority_binder_issues_user_delegation_for_agent_subject() {
+        let descriptor = descriptor_ref_for_device_system_agent(
+            "realm",
+            "node-a",
+            crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+            crate::daemon::ability::names::automation::MISSION_RUN,
+        );
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/realm/device/node-a",
+            &descriptor,
+        )
+        .expect("mission.run target");
+        let caller = "easynet:///r/realm/user/alice";
+        let subject = "easynet:///r/realm/agent/alice.worker";
+        let signer = TestCanonicalSigner::new(caller, [0x62; 32]);
+
+        let bound = RemoteInvocationAuthorityBinder::bind(
+            remote_request(&target, caller, subject, [0x62; 16], HashMap::new()),
+            &signer,
+        )
+        .await
+        .expect("bind Agent subject delegation");
+        let request = bound.into_request();
+
+        assert!(
+            !request
+                .request_metadata
+                .contains_key(SESSION_AUTHORITY_METADATA_KEY),
+            "Agent subjects must not use session authority"
+        );
+        let wire = decode_delegation_authority_wire(
+            request
+                .request_metadata
+                .get(DELEGATION_METADATA_KEY)
+                .expect("delegation metadata"),
+        )
+        .expect("decode delegation authority");
+        assert_eq!(wire.payload.issuer_ura(), caller);
+        assert_eq!(wire.payload.caller_ura(), caller);
+        assert_eq!(wire.payload.subject_ura(), subject);
+        assert_eq!(wire.payload.audience(), target.callee_ura());
+        assert_eq!(wire.payload.scopes(), ["mission.run"]);
+    }
+
+    #[tokio::test]
+    async fn authority_binder_issues_session_authority_for_device_resource_subject() {
+        let descriptor = descriptor_ref_for_device_system_agent(
+            "realm",
+            "node-a",
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+            crate::daemon::ability::names::device_control::FS_TRANSFER,
+        )
+        .rsplit_once('!')
+        .map(|(prefix, _)| format!("{prefix}!stream"))
+        .expect("fs.transfer descriptor action");
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/realm/device/node-a",
+            &descriptor,
+        )
+        .expect("fs.transfer target");
+        let caller = "easynet:///r/realm/user/alice";
+        let subject =
+            "easynet:///r/realm/resource/device.node-a/fs/tmp/easynet-ability-deploy/bundle.tar.gz";
+        let nonce = [0x63; 16];
+        let signer = TestCanonicalSigner::new(caller, [0x63; 32]);
+
+        let bound = RemoteInvocationAuthorityBinder::bind(
+            remote_request(&target, caller, subject, nonce, HashMap::new()),
+            &signer,
+        )
+        .await
+        .expect("bind Device Resource authority");
+        let request = bound.into_request();
+        let wire = decode_session_authority_wire(
+            request
+                .request_metadata
+                .get(SESSION_AUTHORITY_METADATA_KEY)
+                .expect("session authority metadata"),
+        )
+        .expect("decode session authority");
+
+        assert_eq!(wire.payload.issuer_ura, caller);
+        assert_eq!(wire.payload.creator_principal_id, caller);
+        assert_eq!(wire.payload.session_owner_user_id, "alice");
+        assert_eq!(wire.payload.callee_ura, target.callee_ura());
+        assert_eq!(wire.payload.audience, target.callee_ura());
+        assert_eq!(wire.payload.subject_ura, subject);
+        assert_eq!(wire.payload.scopes, ["fs.transfer"]);
+        assert_eq!(wire.payload.allowed_followup_abilities, ["fs.transfer"]);
+        assert_eq!(wire.payload.allowed_actions, ["stream"]);
+        assert_eq!(
+            wire.payload.session_id,
+            format!("invoke-{}", hex::encode(nonce))
+        );
+    }
+
+    #[tokio::test]
+    async fn authority_binder_issues_session_authority_for_generic_resource_subject() {
+        let descriptor = descriptor_ref_for_device_system_agent(
+            "realm",
+            "node-a",
+            crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
+            "user_plugin.echo",
+        );
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/realm/device/node-a",
+            &descriptor,
+        )
+        .expect("user_plugin.echo target");
+        let caller = "easynet:///r/realm/user/alice";
+        let subject = "easynet:///r/realm/resource/e2e/user-plugin/echo";
+        let signer = TestCanonicalSigner::new(caller, [0x64; 32]);
+
+        let bound = RemoteInvocationAuthorityBinder::bind(
+            remote_request(&target, caller, subject, [0x64; 16], HashMap::new()),
+            &signer,
+        )
+        .await
+        .expect("generic Resource gets exact User session authority");
+        let request = bound.into_request();
+        let wire = decode_session_authority_wire(
+            request
+                .request_metadata
+                .get(SESSION_AUTHORITY_METADATA_KEY)
+                .expect("session authority metadata"),
+        )
+        .expect("decode session authority");
+
+        assert_eq!(wire.payload.issuer_ura, caller);
+        assert_eq!(wire.payload.creator_principal_id, caller);
+        assert_eq!(wire.payload.session_owner_user_id, "alice");
+        assert_eq!(wire.payload.callee_ura, target.callee_ura());
+        assert_eq!(wire.payload.audience, target.callee_ura());
+        assert_eq!(wire.payload.subject_ura, subject);
+        assert_eq!(wire.payload.scopes, ["user_plugin.echo"]);
+        assert_eq!(
+            wire.payload.allowed_followup_abilities,
+            ["user_plugin.echo"]
+        );
+        assert_eq!(wire.payload.allowed_actions, ["invoke"]);
     }
 
     #[tokio::test]
