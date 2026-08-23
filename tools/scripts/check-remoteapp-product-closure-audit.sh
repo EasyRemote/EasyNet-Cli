@@ -809,6 +809,14 @@ require 'selected_resource_ura' "$SESSION_RECOVERY" \
   'session recovery snapshot must bind the selected Resource URA'
 require 'terminal_receipt' "$SESSION_RECOVERY" \
   'session recovery snapshot must preserve terminal receipt projection'
+require 'input_runtime_block_reason' "$SESSION_RECOVERY" \
+  'session recovery snapshot must preserve runtime input permission blockers'
+require '#\[serde\(default\)\]' "$SESSION_RECOVERY" \
+  'session recovery snapshot optional runtime input blocker field must keep legacy rows loadable'
+require 'recovery_snapshot_round_trips_runtime_input_block_reason' "$SESSION_RECOVERY" \
+  'session recovery tests must prove runtime input blockers round-trip durably'
+require 'recovery_snapshot_keeps_legacy_rows_without_runtime_input_block_reason_loadable' "$SESSION_RECOVERY" \
+  'session recovery tests must prove old snapshots without runtime input blocker still load'
 require 'persist_recovery_snapshot' "$RUNTIME" \
   'RemoteApp runtime must expose a plugin-owned recovery snapshot write boundary'
 require 'rehydrate_recovery_snapshots' "$RUNTIME" \
@@ -823,6 +831,8 @@ require 'session\.expire\(recovery_now_ms\)' "$RUNTIME" \
   'RemoteApp runtime startup must project expired recovery rows through the session aggregate terminal path'
 require 'plugin_startup_rehydrates_recovery_snapshot_for_public_show_session' "$RUNTIME" \
   'RemoteApp runtime must have regression coverage for startup rehydrate show/watch/end behavior'
+require 'shown\["input_readiness"\]\["blocked_reason"\]' "$RUNTIME" \
+  'RemoteApp startup recovery regression must prove public show_session preserves runtime input blockers'
 require 'plugin_startup_expires_recovery_snapshot_that_lapsed_while_daemon_was_down' "$RUNTIME" \
   'RemoteApp runtime must have regression coverage for startup recovery expiry settlement'
 require 'target_monitor_desired_sessions_for_test' "$RUNTIME" \
@@ -839,6 +849,8 @@ require 'fn rehydrate\(' "$SESSION" \
   'RemoteApp session aggregate must own snapshot-to-session rehydration'
 require 'rehydrated_non_terminal_session_can_start_new_media_epoch_without_new_session' "$SESSION" \
   'RemoteApp session aggregate must prove rehydrated sessions can restart media without minting a new session'
+require 'rehydrated_non_terminal_session_preserves_runtime_input_block_reason' "$SESSION" \
+  'RemoteApp session aggregate must prove non-terminal rehydrate restores runtime input blockers'
 require 'recoverable_suspended_session_can_start_a_new_media_generation' "$SESSION_STATE" \
   'RemoteApp lifecycle state machine must allow rehydrated suspended sessions to restart media'
 require 'recoverable_rebinding_session_can_restart_media_negotiation' "$SESSION_STATE" \

@@ -62,6 +62,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnaps
     updated_at_ms: u64,
     lease_expires_at_ms: u64,
     lifecycle_state: String,
+    #[serde(default)]
+    input_runtime_block_reason: Option<String>,
     terminal_receipt: Option<Value>,
     events: Vec<Value>,
 }
@@ -86,6 +88,13 @@ impl RemoteDesktopRecoverySnapshot {
             session.updated_at_ms(),
             session.lease_expires_at_ms(),
             session.state().json_name().to_string(),
+            if session.is_terminal() {
+                None
+            } else {
+                session
+                    .input_runtime_block_reason()
+                    .map(ToString::to_string)
+            },
             session.terminal_receipt(),
             session.events(),
         )
@@ -108,6 +117,7 @@ impl RemoteDesktopRecoverySnapshot {
         updated_at_ms: u64,
         lease_expires_at_ms: u64,
         lifecycle_state: String,
+        input_runtime_block_reason: Option<String>,
         terminal_receipt: Option<Value>,
         events: Vec<Value>,
     ) -> anyhow::Result<Self> {
@@ -128,6 +138,7 @@ impl RemoteDesktopRecoverySnapshot {
             updated_at_ms,
             lease_expires_at_ms,
             lifecycle_state,
+            input_runtime_block_reason,
             terminal_receipt,
             events,
         };
@@ -162,6 +173,9 @@ impl RemoteDesktopRecoverySnapshot {
         }
         if let Some(terminal_receipt) = &self.terminal_receipt {
             require_object("terminal_receipt", terminal_receipt)?;
+        }
+        if let Some(reason) = &self.input_runtime_block_reason {
+            require_non_empty("input_runtime_block_reason", reason)?;
         }
         Ok(())
     }
@@ -224,6 +238,12 @@ impl RemoteDesktopRecoverySnapshot {
 
     pub(in crate::daemon::plugins::remote_desktop) fn lifecycle_state(&self) -> &str {
         &self.lifecycle_state
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn input_runtime_block_reason(
+        &self,
+    ) -> Option<&str> {
+        self.input_runtime_block_reason.as_deref()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn terminal_receipt(&self) -> Option<Value> {
@@ -485,6 +505,7 @@ mod tests {
             60_000,
             "active".to_string(),
             None,
+            None,
             vec![json!({"event_type": "SESSION_CREATED", "sequence": 1})],
         )
         .expect("valid snapshot")
@@ -504,6 +525,49 @@ mod tests {
             .expect("load snapshot")
             .expect("snapshot exists");
         assert_eq!(loaded, snapshot);
+    }
+
+    #[test]
+    fn recovery_snapshot_round_trips_runtime_input_block_reason() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let mut snapshot = snapshot();
+        snapshot.input_runtime_block_reason = Some("accessibility_permission_denied".to_string());
+
+        store.save(&snapshot).expect("save snapshot");
+
+        let loaded = store
+            .load(snapshot.session_id())
+            .expect("load snapshot")
+            .expect("snapshot exists");
+        assert_eq!(
+            loaded.input_runtime_block_reason(),
+            Some("accessibility_permission_denied")
+        );
+        assert_eq!(loaded, snapshot);
+    }
+
+    #[test]
+    fn recovery_snapshot_keeps_legacy_rows_without_runtime_input_block_reason_loadable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("rd-recovery-test.json");
+        let mut body = serde_json::to_value(snapshot()).expect("snapshot serializes");
+        body.as_object_mut()
+            .expect("snapshot body object")
+            .remove("input_runtime_block_reason");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&body).expect("serialize legacy snapshot"),
+        )
+        .expect("write legacy snapshot");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+
+        let loaded = store
+            .load("rd-recovery-test")
+            .expect("legacy snapshot loads")
+            .expect("snapshot exists");
+
+        assert_eq!(loaded.input_runtime_block_reason(), None);
     }
 
     #[test]
@@ -605,6 +669,7 @@ mod tests {
             100,
             101,
             "active".to_string(),
+            None,
             None,
             vec![],
         )

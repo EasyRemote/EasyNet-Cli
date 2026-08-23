@@ -198,6 +198,7 @@
         "rehydrated non-terminal sessions re-enter target monitoring after plugin startup",
         "target monitor desired tracking state is owned outside the worker thread so worker replacement can re-seed tracked sessions",
         "recovery startup synchronously settles snapshots whose lease elapsed while the daemon was down as durable session_expired terminal rows",
+        "recovery snapshots persist session-local runtime input permission blockers and public show_session projects them after plugin restart",
         "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row"
       ],
       "required_evidence_before_product_complete": [

@@ -58,6 +58,7 @@ CONTRACT="$REMOTE_ROOT/contract.rs"
 SESSION_STATE="$REMOTE_ROOT/session_state.rs"
 SESSION_TRANSPORT_STATE="$REMOTE_ROOT/session_transport_state.rs"
 SESSION_EVENTS="$REMOTE_ROOT/session_events.rs"
+SESSION_RECOVERY="$REMOTE_ROOT/session_recovery.rs"
 EVENT_LOG="$REMOTE_ROOT/event_log.rs"
 VIEW_TRANSPORT="$REMOTE_ROOT/view_transport.rs"
 VIEW="$REMOTE_ROOT/view.rs"
@@ -1073,6 +1074,16 @@ require 'mark_input_permission_blocked' "$INPUT" \
   'WebRTC input execution must project runtime input permission denial to the session aggregate'
 require 'input_runtime_block_reason' "$SESSION" \
   'session aggregate must retain runtime input permission block reason for later show_session projection'
+require 'input_runtime_block_reason' "$SESSION_RECOVERY" \
+  'session recovery snapshot must persist runtime input permission block reason'
+require '#\[serde\(default\)\]' "$SESSION_RECOVERY" \
+  'session recovery snapshot must keep legacy rows loadable when optional runtime input block state is absent'
+require 'recovery_snapshot_round_trips_runtime_input_block_reason' "$SESSION_RECOVERY" \
+  'session recovery tests must prove runtime input blockers are durable'
+require 'recovery_snapshot_keeps_legacy_rows_without_runtime_input_block_reason_loadable' "$SESSION_RECOVERY" \
+  'session recovery tests must prove legacy rows remain loadable without runtime input block state'
+require 'rehydrated_non_terminal_session_preserves_runtime_input_block_reason' "$SESSION" \
+  'session rehydrate tests must prove runtime input blockers survive daemon restart'
 require 'INPUT_PERMISSION_BLOCKED' "$SESSION_EVENTS" \
   'session events must expose a stable runtime input permission blocked event'
 require 'input_permission_block_projects_request_permission_recovery' "$SESSION_EVENTS" \

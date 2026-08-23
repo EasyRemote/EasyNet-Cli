@@ -179,7 +179,13 @@ impl RemoteDesktopSession {
             signaling: RemoteDesktopSignalingState::new(),
             transport: RemoteDesktopTransportState::new(),
             event_log: RemoteDesktopEventLog::rehydrate(snapshot.events(), terminal)?,
-            input_runtime_block_reason: None,
+            input_runtime_block_reason: if terminal {
+                None
+            } else {
+                snapshot
+                    .input_runtime_block_reason()
+                    .map(ToString::to_string)
+            },
             terminal_receipt,
         };
         if !terminal {
@@ -1379,6 +1385,50 @@ mod tests {
             event["event_type"] == json!("SESSION_REHYDRATED")
                 && event["payload"]["recoverability"] == json!("retry_session")
         }));
+    }
+
+    #[test]
+    fn rehydrated_non_terminal_session_preserves_runtime_input_block_reason() {
+        let source = RemoteDesktopSession::new(test_session_init(
+            "rd-rehydrate-input-block",
+            "easynet:///r/acme/resource/display.rehydrate-input-block",
+            vec!["webrtc".into()],
+        ));
+        let snapshot =
+            RemoteDesktopRecoverySnapshot::from_session(&source).expect("snapshot derives");
+        let snapshot = RemoteDesktopRecoverySnapshot::new(
+            snapshot.session_id().to_string(),
+            snapshot.session_token().to_string(),
+            snapshot.creator_caller_ura().to_string(),
+            snapshot.selected_resource_ura().to_string(),
+            snapshot.subject_display_name().to_string(),
+            snapshot.target_binding().clone(),
+            snapshot.consent().clone(),
+            snapshot.mode().to_string(),
+            snapshot.transport_preferences().to_vec(),
+            snapshot.video().clone(),
+            snapshot.input_policy().clone(),
+            snapshot.created_at_ms(),
+            snapshot.updated_at_ms(),
+            snapshot.lease_expires_at_ms(),
+            snapshot.lifecycle_state().to_string(),
+            Some("accessibility_permission_denied".to_string()),
+            snapshot.terminal_receipt(),
+            snapshot.events(),
+        )
+        .expect("snapshot with runtime input block reason stays valid");
+
+        let session = RemoteDesktopSession::rehydrate(&snapshot).expect("session rehydrates");
+
+        assert_eq!(
+            session.input_runtime_block_reason(),
+            Some("accessibility_permission_denied")
+        );
+        assert_eq!(session.state(), RemoteDesktopState::Degraded);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
     }
 
     #[test]

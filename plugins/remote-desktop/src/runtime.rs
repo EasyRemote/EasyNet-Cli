@@ -299,12 +299,12 @@ mod tests {
     use crate::daemon::persistence::resources::{self, ResourcesFile};
     use crate::daemon::plugins::remote_desktop::constants::REASON_SESSION_EXPIRED;
     use crate::daemon::plugins::remote_desktop::handlers::{
-        end_session, show_session, watch_events,
+        create_session, end_session, show_session, watch_events,
     };
     use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
     use crate::daemon::plugins::remote_desktop::test_support::{
         create_test_session, env_for, reset_store, seed_display, test_lock, test_runtime_limits,
-        TestRemoteAppTargetBindingVerifier,
+        with_input_control_consent_ticket, TestRemoteAppTargetBindingVerifier,
     };
 
     #[test]
@@ -323,10 +323,21 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-startup-rehydrate-display");
         resources::save(&file).unwrap();
         let env = env_for(&ura);
-        let created = create_test_session(
+        let created = create_session::handle(
             Arc::clone(&source),
             env.clone(),
-            json!({"session_id": "rd-startup-rehydrate", "mode": "view_only"}),
+            with_input_control_consent_ticket(
+                &source,
+                &env,
+                json!({
+                    "session_id": "rd-startup-rehydrate",
+                    "mode": "interactive",
+                    "input_policy": {
+                        "keyboard_enabled": true,
+                        "pointer_enabled": true
+                    }
+                }),
+            ),
         )
         .expect("source session creates");
         let token = created["session_token"]
@@ -343,6 +354,27 @@ mod tests {
                 )
             })
             .expect("snapshot derives from source session");
+        let snapshot = RemoteDesktopRecoverySnapshot::new(
+            snapshot.session_id().to_string(),
+            snapshot.session_token().to_string(),
+            snapshot.creator_caller_ura().to_string(),
+            snapshot.selected_resource_ura().to_string(),
+            snapshot.subject_display_name().to_string(),
+            snapshot.target_binding().clone(),
+            snapshot.consent().clone(),
+            snapshot.mode().to_string(),
+            snapshot.transport_preferences().to_vec(),
+            snapshot.video().clone(),
+            snapshot.input_policy().clone(),
+            snapshot.created_at_ms(),
+            snapshot.updated_at_ms(),
+            snapshot.lease_expires_at_ms(),
+            snapshot.lifecycle_state().to_string(),
+            Some("accessibility_permission_denied".to_string()),
+            snapshot.terminal_receipt(),
+            snapshot.events(),
+        )
+        .expect("snapshot with runtime input block reason stays valid");
         recovery.save(&snapshot).expect("snapshot saves");
         std::fs::write(temp.path().join("rd-corrupt.json"), b"{not json")
             .expect("write corrupt snapshot fixture");
@@ -366,6 +398,11 @@ mod tests {
         assert_eq!(shown["session_id"], json!("rd-startup-rehydrate"));
         assert_eq!(shown["state"], json!("degraded"));
         assert_eq!(shown["media_transport_ready"], json!(false));
+        assert_eq!(
+            shown["input_readiness"]["blocked_reason"],
+            json!("accessibility_permission_denied")
+        );
+        assert_eq!(shown["input_readiness"], shown["input_plane"]["readiness"]);
         assert_eq!(
             recovered.target_monitor_desired_sessions_for_test(),
             vec!["rd-startup-rehydrate".to_string()],
@@ -460,6 +497,9 @@ mod tests {
             1,
             1,
             snapshot.lifecycle_state().to_string(),
+            snapshot
+                .input_runtime_block_reason()
+                .map(ToString::to_string),
             snapshot.terminal_receipt(),
             snapshot.events(),
         )
