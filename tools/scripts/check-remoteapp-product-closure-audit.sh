@@ -533,6 +533,8 @@ require 'product-flow step result_json path does not exist' "$PRODUCT_COMPLETION
   'product-completion gate must fail when a product-flow step result artifact is missing'
 require 'product-flow subreport evidence_json path does not exist' "$PRODUCT_COMPLETION" \
   'product-completion gate must fail when a product-flow subreport evidence artifact is missing'
+require 'evidence_json status is' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject evidence artifacts whose own status is not passed'
 require 'self-test accepted wrong product-flow host subreport script identity' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject wrong product-flow host subreport script identities'
 require 'self-test accepted wrong product-flow host subreport target_kind' "$PRODUCT_COMPLETION" \
@@ -553,6 +555,10 @@ require 'self-test accepted missing product-flow step result artifact' "$PRODUCT
   'product-completion gate self-test must reject missing product-flow step result artifacts'
 require 'self-test accepted missing product-flow subreport evidence artifact' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject missing product-flow subreport evidence artifacts'
+require 'self-test accepted failed product-flow subreport evidence status' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject failed product-flow subreport evidence status'
+require 'self-test accepted failed evidence_json status' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject failed report evidence status'
 require 'self-test accepted missing observed cross-device pairs' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject missing observed cross-device pairs'
 require 'expected_script' "$PRODUCT_COMPLETION" \

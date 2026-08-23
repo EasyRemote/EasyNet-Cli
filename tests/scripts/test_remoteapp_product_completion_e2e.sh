@@ -71,6 +71,8 @@ grep -q "product-flow subreport evidence_json path does not exist" "$SCRIPT" || 
   fail "completion gate must reject missing product-flow subreport evidence artifacts"
 grep -q "evidence_json path does not exist" "$SCRIPT" || \
   fail "completion gate must reject missing evidence_json artifacts"
+grep -q "evidence_json status is" "$SCRIPT" || \
+  fail "completion gate must reject failed evidence_json artifacts"
 grep -q "required product-flow step" "$SCRIPT" || \
   fail "completion gate must reject incomplete frontend product-flow reports"
 grep -q "topology.observed_device_pairs must not be empty" "$SCRIPT" || \
@@ -85,6 +87,10 @@ grep -q "self-test accepted missing product-flow step result artifact" "$SCRIPT"
   fail "completion gate self-test must cover missing product-flow step result artifacts"
 grep -q "self-test accepted missing product-flow subreport evidence artifact" "$SCRIPT" || \
   fail "completion gate self-test must cover missing product-flow subreport evidence artifacts"
+grep -q "self-test accepted failed product-flow subreport evidence status" "$SCRIPT" || \
+  fail "completion gate self-test must cover failed product-flow subreport evidence status"
+grep -q "self-test accepted failed evidence_json status" "$SCRIPT" || \
+  fail "completion gate self-test must cover failed evidence_json status"
 grep -q "self-test accepted wrong product-flow host subreport script identity" "$SCRIPT" || \
   fail "completion gate self-test must cover wrong product-flow host subreport script identities"
 grep -q "self-test accepted wrong product-flow host subreport target_kind" "$SCRIPT" || \

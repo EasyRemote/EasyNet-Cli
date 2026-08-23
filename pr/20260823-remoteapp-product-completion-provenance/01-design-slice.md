@@ -42,6 +42,10 @@ trusting only the summarized `steps` array.
   `target_kind` required by the frontend step. The completion gate must reject
   evidence where a window step is backed by application evidence, or an
   application step is backed by window evidence.
+- Each required live `evidence_json` artifact must parse as JSON and carry
+  `status=passed`. The aggregate gate does not duplicate domain-specific
+  capture/input/media/network/lifecycle contracts, but it must reject a passed
+  summary report that points at empty, failed, or invalid evidence.
 - The cross-device smoke report must include at least one observed
   caller/provider device pair where both URAs are present and distinct.
 - Host lifecycle E2E reports must include the same `script` identity field as

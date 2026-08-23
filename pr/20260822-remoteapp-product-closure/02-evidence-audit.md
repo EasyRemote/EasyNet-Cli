@@ -75,10 +75,14 @@ Current frontend lifecycle evidence:
   target-picker, decoded-frame, and view-only-input evidence; decoded-frame and
   view-only-input subreports must also match the exact `target_kind` required
   by their frontend step, so window evidence and application evidence cannot be
-  swapped. It also requires non-empty observed caller/provider device pairs with
-  distinct device URAs in the cross-device report. This gate is an aggregate
-  completion guard, not a substitute for any live domain artifact, and it
-  rejects target-narrowed, target-swapped, or empty-shell frontend product-flow
+  swapped. For every required report or product-flow subreport that names a
+  live `evidence_json` artifact, the aggregate gate now parses that artifact
+  and requires its own `status=passed`; this prevents a passed summary report
+  from pointing at empty, failed, or invalid evidence. It also requires
+  non-empty observed caller/provider device pairs with distinct device URAs in
+  the cross-device report. This gate is an aggregate completion guard, not a
+  substitute for any live domain artifact, and it rejects target-narrowed,
+  target-swapped, failed-evidence, or empty-shell frontend product-flow
   evidence.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp

@@ -262,6 +262,25 @@ errors = []
 def add_error(item_id, message):
     errors.append(f"{item_id}: {message}")
 
+def read_required_evidence_json(item_id, check, evidence_path, label):
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        message = f"{label} invalid evidence_json: {exc}"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return None
+    if not isinstance(evidence, dict):
+        message = f"{label} evidence_json must contain a JSON object"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return None
+    if evidence.get("status") != "passed":
+        message = f"{label} evidence_json status is {evidence.get('status')!r}, expected 'passed'"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    return evidence
+
 for item in required:
     item_id = item["id"]
     env_name = item["env"]
@@ -465,6 +484,16 @@ for item in required:
                                     artifact_check["errors"].append(message)
                                     check["errors"].append(message)
                                     add_error(item_id, message)
+                                else:
+                                    before_count = len(check["errors"])
+                                    read_required_evidence_json(
+                                        item_id,
+                                        check,
+                                        step_evidence_path,
+                                        f"product-flow subreport {step_name!r}",
+                                    )
+                                    if len(check["errors"]) > before_count:
+                                        artifact_check["errors"].extend(check["errors"][before_count:])
                         if step_spec.get("cross_device"):
                             topology = subreport.get("topology") if isinstance(subreport.get("topology"), dict) else {}
                             step_coverage = subreport.get("coverage") if isinstance(subreport.get("coverage"), dict) else {}
@@ -511,6 +540,13 @@ for item in required:
                 message = f"evidence_json path does not exist: {evidence_path}"
                 check["errors"].append(message)
                 add_error(item_id, message)
+            else:
+                read_required_evidence_json(
+                    item_id,
+                    check,
+                    evidence_path,
+                    f"report {item_id!r}",
+                )
     if item.get("cross_device"):
         topology = report.get("topology") if isinstance(report.get("topology"), dict) else {}
         check["topology"] = topology
@@ -720,7 +756,7 @@ if item_id == "frontend_product_flow":
         if step_name == "frontend-browser-lifecycle":
             evidence_path = step_dir / "evidence.json"
             evidence_path.write_text(
-                json.dumps({"synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
+                json.dumps({"status": "passed", "synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             (step_dir / "report.json").write_text(
@@ -763,7 +799,7 @@ if item_id == "frontend_product_flow":
         elif step_name.startswith("host-"):
             evidence_path = step_dir / "evidence.json"
             evidence_path.write_text(
-                json.dumps({"synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
+                json.dumps({"status": "passed", "synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             script_by_step = {
@@ -795,7 +831,7 @@ if item_id == "frontend_product_flow":
 if item_id in evidence_json_ids:
     evidence_path = path.with_suffix(".evidence.json")
     evidence_path.write_text(
-        json.dumps({"synthetic": True, "report_id": item_id}, indent=2, sort_keys=True) + "\n",
+        json.dumps({"status": "passed", "synthetic": True, "report_id": item_id}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     report["evidence_json"] = str(evidence_path)
@@ -977,6 +1013,42 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 report = json.loads(path.read_text(encoding="utf-8"))
+subreport_path = path.parent / "host-target-picker-freshness" / "report.json"
+subreport = json.loads(subreport_path.read_text(encoding="utf-8"))
+evidence_path = pathlib.Path(subreport["evidence_json"])
+evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+evidence["status"] = "failed"
+evidence_path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+subreport_path.write_text(json.dumps(subreport) + "\n", encoding="utf-8")
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/failed-product-flow-subreport-evidence-status" >/dev/null 2>&1; then
+    echo "self-test accepted failed product-flow subreport evidence status" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
+
+  python3 - "$tmp/frontend_product_flow.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
 subreport_path = path.parent / "host-permission-subject" / "report.json"
 subreport = json.loads(subreport_path.read_text(encoding="utf-8"))
 subreport["script"] = "tools/scripts/wrong-host-permission-subject-e2e.sh"
@@ -1062,6 +1134,39 @@ PY
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
     "$0" --check --out-dir "$tmp/missing-evidence-json-artifact" >/dev/null 2>&1; then
     echo "self-test accepted missing evidence_json artifact" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/browser_lifecycle.json" browser_lifecycle
+
+  python3 - "$tmp/browser_lifecycle.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+evidence_path = pathlib.Path(report["evidence_json"])
+evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+evidence["status"] = "failed"
+evidence_path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/failed-evidence-json-status" >/dev/null 2>&1; then
+    echo "self-test accepted failed evidence_json status" >&2
     exit 1
   fi
   write_synthetic_report "$tmp/browser_lifecycle.json" browser_lifecycle
@@ -1257,6 +1362,7 @@ case "$MODE" in
     grep -q 'product-flow step result_json path does not exist' "$0"
     grep -q 'product-flow subreport evidence_json path does not exist' "$0"
     grep -q 'evidence_json path does not exist' "$0"
+    grep -q "evidence_json status is" "$0"
     grep -q 'required product-flow step' "$0"
     grep -q 'topology.observed_device_pairs must not be empty' "$0"
     grep -q 'report script is' "$0"
@@ -1266,6 +1372,8 @@ case "$MODE" in
     grep -q 'self-test accepted product-flow target_kind other than both' "$0"
     grep -q 'self-test accepted missing product-flow step result artifact' "$0"
     grep -q 'self-test accepted missing product-flow subreport evidence artifact' "$0"
+    grep -q 'self-test accepted failed product-flow subreport evidence status' "$0"
+    grep -q 'self-test accepted failed evidence_json status' "$0"
     grep -q 'self-test accepted wrong product-flow host subreport script identity' "$0"
     grep -q 'self-test accepted wrong product-flow host subreport target_kind' "$0"
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"

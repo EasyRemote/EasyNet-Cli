@@ -125,6 +125,12 @@ application decoded-frame and view-only-input steps must be backed by
 `target_kind=application` host evidence. This prevents a real but differently
 scoped host run from satisfying the wrong window/application product-flow
 requirement.
+For every report or product-flow subreport that references a live
+`evidence_json` artifact, the aggregate gate also parses that artifact and
+requires its own `status=passed`. Domain verifiers still own their detailed
+capture/input/media/network/lifecycle contracts, but an empty, failed, invalid,
+or stale-looking evidence file cannot be accepted merely because a sibling
+summary report says `status=passed`.
 The network fallback verifier,
 `tools/scripts/remoteapp-network-fallback-e2e.sh`, defines the live artifact
 contract for real direct, STUN srflx, TURN relay, and EasyNet relay paths. It
