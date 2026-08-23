@@ -31,7 +31,11 @@ from easynet_sdk import (
     is_code,
 )
 
-from test_signing import PREPARED_FIXTURE, signer_with_signature
+from test_signing import (
+    PREPARED_FIXTURE,
+    TEST_PUBLIC_KEY_BASE64,
+    signer_with_signature,
+)
 
 
 class MemoryRuntimeTransport:
@@ -1711,7 +1715,8 @@ class RuntimeTests(unittest.TestCase):
         )
         assert transport.seen_draft is not None
         signature = transport.seen_draft["caller_signature"]
-        self.assertEqual(signature["key_id_hint"], "signer-alice-key-1")
+        self.assertEqual(signature["key_id_hint"], TEST_PUBLIC_KEY_BASE64)
+        self.assertEqual(signature["signer_public_key_base64"], TEST_PUBLIC_KEY_BASE64)
 
     def test_prepare_and_open_stream_rejects_signer_policy_override(self) -> None:
         client = RuntimeClient(MemoryRuntimeTransport())
