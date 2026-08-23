@@ -37,6 +37,14 @@ impl RemoteDesktopEventProjection {
         self.payload
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn with_target_binding_context(
+        mut self,
+        binding: &RemoteAppTargetBinding,
+    ) -> Self {
+        self.payload = with_target_binding_context(binding, self.payload);
+        self
+    }
+
     #[cfg(test)]
     fn into_parts(self) -> (&'static str, Value) {
         (self.event_type, self.payload)

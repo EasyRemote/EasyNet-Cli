@@ -1181,12 +1181,22 @@ require 'project_terminal_receipt' "$SESSION" \
   'session aggregate must build terminal receipts at the lifecycle boundary'
 require 'remoteapp\.session\.terminal\.v1' "$SESSION" \
   'session terminal receipt must carry a stable product receipt type'
+require 'with_target_binding_context\(self\.target\.binding\(\)\)' "$SESSION" \
+  'session aggregate projected-event boundary must attach selected target context'
+require 'fn with_target_binding_context' "$SESSION_EVENTS" \
+  'RemoteApp event projections must expose a typed target-context enrichment boundary'
 require 'self\.terminal_receipt = Some\(self\.project_terminal_receipt' "$SESSION" \
   'session close and timeout paths must populate terminal receipt from terminal events'
 require 'session_close_events_project_terminal_reason_code' "$SESSION" \
   'session tests must cover explicit-close terminal receipt projection'
+require 'closing\["payload"\]\["target_binding"\]\["subject_ura"\]' "$SESSION" \
+  'session close tests must prove terminal lifecycle events carry selected Resource evidence'
+require 'closed\["payload"\]\["target_binding"\]\["binding_id"\]' "$SESSION" \
+  'session close tests must prove closed event payload carries selected target binding'
 require 'session_expiry_events_project_terminal_reason_code' "$SESSION" \
   'session tests must cover timeout terminal receipt projection'
+require 'event\["payload"\]\["target_binding"\]\["subject_ura"\]' "$SESSION" \
+  'session timeout tests must prove expiry terminal event carries selected Resource evidence'
 require 'pub\(in crate::daemon::plugins::remote_desktop\) fn push\(' "$EVENT_LOG" \
   'event log must keep event push centralized for terminal receipt binding'
 require 'event_log_push_returns_the_stored_event_record' "$EVENT_LOG" \

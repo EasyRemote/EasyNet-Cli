@@ -492,6 +492,7 @@ impl RemoteDesktopSession {
         &mut self,
         event: session_events::RemoteDesktopEventProjection,
     ) -> Value {
+        let event = event.with_target_binding_context(self.target.binding());
         self.push_event(event.event_type(), event.into_payload())
     }
 
@@ -1527,15 +1528,43 @@ mod tests {
         let closing = &events[closing_index];
         assert_eq!(closing["reason_code"], json!("caller_ended"));
         assert_eq!(closing["recoverability"], json!("closing"));
+        assert_eq!(
+            closing["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            closing["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            closing["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
         assert_eq!(closing["payload"]["reason_code"], json!("caller_ended"));
         assert_eq!(closing["payload"]["recoverability"], json!("closing"));
+        assert_eq!(
+            closing["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
         assert_eq!(closing["terminal"], json!(false));
 
         let closed = &events[closed_index];
         assert_eq!(closed["reason_code"], json!("caller_ended"));
         assert_eq!(closed["recoverability"], json!("closed"));
+        assert_eq!(
+            closed["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            closed["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
         assert_eq!(closed["payload"]["reason_code"], json!("caller_ended"));
         assert_eq!(closed["payload"]["recoverability"], json!("closed"));
+        assert_eq!(
+            closed["payload"]["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
         assert_eq!(closed["terminal"], json!(true));
 
         let terminal_receipt = session
@@ -1587,6 +1616,14 @@ mod tests {
         let created = &events[created_index];
         assert_eq!(created["reason_code"], json!("session_created"));
         assert_eq!(created["recoverability"], json!("continue"));
+        assert_eq!(
+            created["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            created["payload"]["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
         assert_eq!(created["payload"]["reason_code"], json!("session_created"));
         assert_eq!(created["payload"]["recoverability"], json!("continue"));
 
@@ -1655,10 +1692,22 @@ mod tests {
         assert_eq!(event["reason_code"], json!(REASON_SESSION_EXPIRED));
         assert_eq!(event["recoverability"], json!("closed"));
         assert_eq!(
+            event["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            event["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
             event["payload"]["reason_code"],
             json!(REASON_SESSION_EXPIRED)
         );
         assert_eq!(event["payload"]["recoverability"], json!("closed"));
+        assert_eq!(
+            event["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
         assert_eq!(event["terminal"], json!(true));
 
         let terminal_receipt = session
