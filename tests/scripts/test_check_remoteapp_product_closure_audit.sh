@@ -46,6 +46,8 @@ cp "$REPO_ROOT/plugins/remote-desktop/src/runtime.rs" "$SB/plugins/remote-deskto
 cp "$REPO_ROOT/plugins/remote-desktop/src/view.rs" "$SB/plugins/remote-desktop/src/view.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/event_log.rs" "$SB/plugins/remote-desktop/src/event_log.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/session_events.rs" "$SB/plugins/remote-desktop/src/session_events.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/target.rs" "$SB/plugins/remote-desktop/src/target.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/target_tracking.rs" "$SB/plugins/remote-desktop/src/target_tracking.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/target_monitor.rs" "$SB/plugins/remote-desktop/src/target_monitor.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SB/plugins/remote-desktop/src/input.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/media/native.rs" "$SB/plugins/remote-desktop/src/media/native.rs"
@@ -60,7 +62,7 @@ perl -0pi -e 's/full RemoteApp product closure incomplete as of 2026-08-22/imple
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-status.out 2>&1; then
   fail "checker accepted targeted-session SPEC that claims full product acceptance"
 fi
-grep -q "must not claim full product acceptance" /tmp/check-remoteapp-product-closure-status.out || \
+grep -Eq "must not claim full product acceptance|must state that full RemoteApp product closure is incomplete" /tmp/check-remoteapp-product-closure-status.out || \
   fail "expected status misclaim failure"
 
 cp "$REPO_ROOT/docs/design/remoteapp-targeted-session-spec.md" "$SB/docs/design/remoteapp-targeted-session-spec.md"
@@ -692,6 +694,33 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "frontend Browser/Tauri lifecycle verifier must inspect terminal receipt visibility" /tmp/check-remoteapp-product-closure-browser-lifecycle-terminal.out || \
   fail "expected Browser/Tauri terminal receipt visibility failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+perl -0pi -e 's#input_applied target_focus_epoch must be positive#input_applied target_focus_epoch may be absent#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-focus-positive.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without positive focus epoch requirement"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must require applied input focus epoch" /tmp/check-remoteapp-product-closure-browser-lifecycle-focus-positive.out || \
+  fail "expected Browser/Tauri applied input focus epoch failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+perl -0pi -e 's#submitted_frame target_focus_epoch must match input_applied target_focus_epoch#submitted_frame target_focus_epoch may differ#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-submitted-focus.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without submitted frame focus-epoch binding"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must bind submitted input frame to target focus epoch" /tmp/check-remoteapp-product-closure-browser-lifecycle-submitted-focus.out || \
+  fail "expected Browser/Tauri submitted frame focus-epoch binding failure"
+cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+perl -0pi -e 's#applied_event target_focus_epoch must match input_applied target_focus_epoch#applied_event target_focus_epoch may differ#g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-browser-lifecycle-applied-focus.out 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without daemon applied-event focus-epoch binding"
+fi
+grep -q "frontend Browser/Tauri lifecycle verifier must bind daemon applied event to target focus epoch" /tmp/check-remoteapp-product-closure-browser-lifecycle-applied-focus.out || \
+  fail "expected Browser/Tauri daemon applied-event focus-epoch binding failure"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
 
 perl -0pi -e 's#remote_desktop\.show_session#remote_desktop.status#g' \

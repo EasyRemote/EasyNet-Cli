@@ -55,7 +55,9 @@ Evidence contract:
   connected peer path, the media step must show a visible rendered media element
   with positive frame count, every step must carry real browser/Tauri automation
   evidence with monotonic observation timestamps, and the input step must show
-  either applied input telemetry or an explicit policy block.
+  either applied input telemetry or an explicit policy block. If the input step
+  claims input_applied, it must include the submitted data-channel frame and the
+  daemon applied event with matching client_sequence and target_focus_epoch.
 
 Non-claims:
   A skipped report or self-test does not prove frontend product readiness.
@@ -150,6 +152,14 @@ def get(path, default=None):
             return default
         value = value[part]
     return value
+
+def int_field(obj, key, default=0):
+    if not isinstance(obj, dict):
+        return default
+    try:
+        return int(obj.get(key, default))
+    except (TypeError, ValueError):
+        return default
 
 required_steps = [
     "app_loaded",
@@ -317,18 +327,50 @@ if input_step.get("result") == "policy_blocked":
         "input_control_consent_missing",
     }, "policy_blocked input must expose a known blocked_reason")
 if input_step.get("result") == "input_applied":
-    try:
-        client_sequence = int(input_step.get("client_sequence", 0))
-    except (TypeError, ValueError):
-        client_sequence = 0
+    client_sequence = int_field(input_step, "client_sequence")
+    target_focus_epoch = int_field(input_step, "target_focus_epoch")
+    submitted_frame = input_step.get("submitted_frame")
+    applied_event = input_step.get("applied_event")
+    latency_ms = -1
     try:
         latency_ms = float(input_step.get("latency_ms", -1))
     except (TypeError, ValueError):
-        latency_ms = -1
+        pass
     require(client_sequence > 0,
             "input_applied must include positive client_sequence")
+    require(target_focus_epoch > 0,
+            "input_applied target_focus_epoch must be positive")
     require(0 <= latency_ms <= 250,
             "input_applied latency_ms must be within frontend lifecycle bound")
+    require(isinstance(submitted_frame, dict),
+            "input_applied must include submitted_frame")
+    if isinstance(submitted_frame, dict):
+        require(submitted_frame.get("type") in {"pointer", "wheel", "key", "keyboard"},
+                "submitted_frame must be a RemoteApp pointer/wheel/key frame")
+        require(int_field(submitted_frame, "client_sequence") == client_sequence,
+                "submitted_frame client_sequence must match input_applied client_sequence")
+        require(int_field(submitted_frame, "sent_at_ms") > 0,
+                "submitted_frame sent_at_ms must be positive")
+        require(int_field(submitted_frame, "target_focus_epoch") == target_focus_epoch,
+                "submitted_frame target_focus_epoch must match input_applied target_focus_epoch")
+        target_geometry_revision = input_step.get("target_geometry_revision")
+        if target_geometry_revision is not None:
+            require(int_field(submitted_frame, "target_geometry_revision") == int_field(input_step, "target_geometry_revision"),
+                    "submitted_frame target_geometry_revision must match input_applied target_geometry_revision")
+    require(isinstance(applied_event, dict),
+            "input_applied must include daemon applied_event")
+    if isinstance(applied_event, dict):
+        require(applied_event.get("event_type") in {"INPUT_FRAME_APPLIED", "input_frame_applied"},
+                "applied_event.event_type must prove INPUT_FRAME_APPLIED")
+        require(applied_event.get("session_id") == session_id,
+                "applied_event session_id must bind the created session id")
+        require(int_field(applied_event, "client_sequence") == client_sequence,
+                "applied_event client_sequence must match input_applied client_sequence")
+        require(int_field(applied_event, "target_focus_epoch") == target_focus_epoch,
+                "applied_event target_focus_epoch must match input_applied target_focus_epoch")
+        if input_step.get("target_geometry_revision") is not None:
+            require(int_field(applied_event, "target_geometry_revision") == int_field(input_step, "target_geometry_revision"),
+                    "applied_event target_geometry_revision must match input_applied target_geometry_revision")
 require(terminal.get("reason_code") in {"user_cancelled", "caller_ended", "resume_e2e_cleanup"},
         "terminal_receipt_visible must expose a known end reason")
 require(terminal.get("terminal") is True,

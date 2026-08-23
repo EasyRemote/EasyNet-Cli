@@ -238,6 +238,8 @@ require 'Frontend UI can discover, authorize, start, display, control, and end s
   'audit must cover frontend full lifecycle'
 require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$AUDIT" \
   'audit must record the Browser/Tauri lifecycle evidence verifier'
+require 'submitted data-channel frame and daemon applied event target_focus_epoch' "$AUDIT" \
+  'audit must record frontend input focus-epoch product evidence semantics'
 require 'Cross-device E2E smoke/regression exists beyond local provider boundary' "$AUDIT" \
   'audit must cover cross-device proof'
 require 'remoteapp-cross-device-product-smoke.sh' "$AUDIT" \
@@ -377,6 +379,8 @@ require 'Frontend full lifecycle E2E' "$PLAN" \
   'plan evidence audit must list frontend full lifecycle E2E as missing'
 require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the Browser/Tauri lifecycle verifier'
+require 'submitted data-channel frame and daemon applied event target_focus_epoch' "$MATRIX" \
+  'product readiness matrix must record frontend input focus-epoch evidence requirement'
 require 'remoteapp-cross-device-product-smoke.sh' "$PLAN" \
   'plan evidence audit must record the cross-device smoke gate'
 require 'Historical local cross-device `--run` evidence' "$PLAN" \
@@ -942,6 +946,12 @@ require 'remote_desktop\.end_session' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect end_session evidence'
 require 'terminal_receipt_visible' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must inspect terminal receipt visibility'
+require 'input_applied target_focus_epoch must be positive' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must require applied input focus epoch'
+require 'submitted_frame target_focus_epoch must match input_applied target_focus_epoch' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must bind submitted input frame to target focus epoch'
+require 'applied_event target_focus_epoch must match input_applied target_focus_epoch' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'frontend Browser/Tauri lifecycle verifier must bind daemon applied event to target focus epoch'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$FRONTEND_BROWSER_LIFECYCLE" \
   'frontend Browser/Tauri lifecycle verifier must reject product completion claims'
 require 'remote_desktop\.show_session' "$SESSION_TIMEOUT" \

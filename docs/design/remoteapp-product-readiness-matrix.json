@@ -302,9 +302,10 @@
         "frontend action row executes daemon-guided retry_session recovery by ending then creating a session",
         "frontend share picker exposes host-local remote_desktop.permission_status preflight before create_session",
         "frontend denied permission_status stays in the share picker with Request permission recovery instead of becoming a session-level error",
+        "frontend protocol/store/UI now project target_focus_epoch, reject stale/missing focus epochs before RTC input send, and send target_focus_epoch on pointer/key frames",
         "product-flow harness entrypoint",
         "2026-08-23 local product-flow both report passed Hub API readiness, daemon readiness, frontend typecheck, DeviceMediaAccess UI flow, host target picker freshness, decoded-frame WebRTC, and view-only input safety for window and application targets",
-        "frontend-remoteapp-browser-lifecycle-e2e.sh verifier requires real Browser/Tauri lifecycle artifacts to carry UI automation evidence source, monotonic observed timestamps, connected WebRTC state, attached media stream, visible media element, positive rendered frame count, visible input status, and terminal receipt"
+        "frontend-remoteapp-browser-lifecycle-e2e.sh verifier requires real Browser/Tauri lifecycle artifacts to carry UI automation evidence source, monotonic observed timestamps, connected WebRTC state, attached media stream, visible media element, positive rendered frame count, visible input status, terminal receipt, and submitted data-channel frame and daemon applied event target_focus_epoch evidence for input_applied flows"
       ],
       "required_evidence_before_product_complete": [
         "Live Browser/Tauri E2E artifact with real backend/runtime",
@@ -315,6 +316,7 @@
         "media presentation",
         "visible media_pipeline_support with video-only/H.264/drop-policy/product-blocker state",
         "input/control or policy-block and end_session",
+        "if input is applied, submitted data-channel frame and daemon applied event target_focus_epoch must match the runtime session target focus epoch",
         "visible terminal receipt"
       ],
       "non_claims": [
