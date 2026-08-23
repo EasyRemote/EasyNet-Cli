@@ -463,10 +463,28 @@ require 'remote_desktop\.end_session' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must inspect end_session evidence'
 require 'frames_rendered' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must inspect rendered frame evidence'
+require 'target_identity' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require selected target identity evidence'
+require 'target_identity\.frame_source_id must be recorded' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require target frame source evidence'
+require 'target_identity\.geometry_revision must be positive' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require target geometry revision evidence'
+require 'rendered_frame_probe' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require decoded-frame probe evidence'
+require 'rendered_frame_probe.probe_source must be decoded_frame' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require decoded-frame probe source'
+require 'rendered_frame_probe frame_source_id must match target_identity' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must bind rendered frame source to target identity'
+require 'rendered_frame_probe geometry_revision must match target_identity' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must bind rendered frame geometry to target identity'
 require 'selected_sentinel_rendered' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must require selected sentinel render evidence'
+require 'selected_sentinel_hash' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require selected sentinel hash evidence'
 require 'unrelated_sentinel_rendered' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must reject unrelated sentinel leakage'
+require 'rendered_frame_probe unrelated_sentinel_rendered must be false' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must reject unrelated sentinel leakage in decoded-frame probe'
 require 'terminal_receipt' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$CAPTURE_MATRIX" \

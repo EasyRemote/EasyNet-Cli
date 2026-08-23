@@ -154,6 +154,33 @@ grep -q "cross-platform capture verifier must require selected sentinel render e
   fail "expected selected sentinel render evidence failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 
+perl -0pi -e 's#target_identity#target_descriptor#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-target-identity.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without selected target identity evidence"
+fi
+grep -q "cross-platform capture verifier must require selected target identity evidence" /tmp/check-remoteapp-product-closure-capture-target-identity.out || \
+  fail "expected capture target identity failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
+perl -0pi -e 's#rendered_frame_probe frame_source_id must match target_identity#rendered_frame_probe frame_source_id may differ#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-frame-source.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without frame-source binding"
+fi
+grep -q "cross-platform capture verifier must bind rendered frame source to target identity" /tmp/check-remoteapp-product-closure-capture-frame-source.out || \
+  fail "expected capture frame-source binding failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
+perl -0pi -e 's#selected_sentinel_hash#selected_sentinel_checksum#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-sentinel-hash.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without sentinel hash evidence"
+fi
+grep -q "cross-platform capture verifier must require selected sentinel hash evidence" /tmp/check-remoteapp-product-closure-capture-sentinel-hash.out || \
+  fail "expected capture sentinel hash failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
 perl -0pi -e 's#unrelated_sentinel_rendered#unrelated_sentinel_visible#g' \
   "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-unrelated-sentinel.out 2>&1; then

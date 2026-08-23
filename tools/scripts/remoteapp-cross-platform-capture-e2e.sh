@@ -46,8 +46,9 @@ Evidence contract:
   source-only target binding checks. macOS must pass display/window/application
   capture. Windows and Linux must either pass those targets or report explicit
   product unsupported state without starting display fallback. Passing
-  scenarios must prove selected sentinel content rendered; window/application
-  scenarios must also prove unrelated sentinel content did not render.
+  scenarios must prove selected sentinel content rendered from a decoded-frame
+  probe bound to the selected Resource/session/target/frame source; window/
+  application scenarios must also prove unrelated sentinel content did not render.
 
 Non-claims:
   A skipped report or self-test does not prove cross-platform capture
@@ -216,12 +217,59 @@ for platform_name in sorted(required_platforms):
                     f"{prefix}: target_binding_exact must be true")
             require(scenario.get("source_only_proof") is False,
                     f"{prefix}: source_only_proof must be false")
+            target_identity = scenario.get("target_identity")
+            require(isinstance(target_identity, dict),
+                    f"{prefix}: target_identity must be present")
+            if not isinstance(target_identity, dict):
+                target_identity = {}
+            require(target_identity.get("selected_resource_ura") == subject_ura,
+                    f"{prefix}: target_identity selected_resource_ura must bind selected Resource URA")
+            require(target_identity.get("target_kind") == target_kind,
+                    f"{prefix}: target_identity target_kind must match scenario")
+            require(target_identity.get("capture_scope") == expected_scope[target_kind],
+                    f"{prefix}: target_identity capture_scope must match scenario")
+            require(isinstance(target_identity.get("frame_source_id"), str)
+                    and target_identity.get("frame_source_id"),
+                    f"{prefix}: target_identity.frame_source_id must be recorded")
+            require(isinstance(target_identity.get("geometry_revision"), int)
+                    and target_identity.get("geometry_revision") > 0,
+                    f"{prefix}: target_identity.geometry_revision must be positive")
             require(int(scenario.get("frames_rendered", 0)) > 0,
                     f"{prefix}: frames_rendered must be positive")
             require(int(scenario.get("duration_ms", 0)) > 0,
                     f"{prefix}: duration_ms must be positive")
             require(scenario.get("selected_sentinel_rendered") is True,
                     f"{prefix}: selected_sentinel_rendered must be true")
+            rendered_probe = scenario.get("rendered_frame_probe")
+            require(isinstance(rendered_probe, dict),
+                    f"{prefix}: rendered_frame_probe must be present")
+            if not isinstance(rendered_probe, dict):
+                rendered_probe = {}
+            require(rendered_probe.get("probe_source") == "decoded_frame",
+                    f"{prefix}: rendered_frame_probe.probe_source must be decoded_frame")
+            require(rendered_probe.get("selected_resource_ura") == subject_ura,
+                    f"{prefix}: rendered_frame_probe selected_resource_ura must bind selected Resource URA")
+            require(rendered_probe.get("session_id") == session_id,
+                    f"{prefix}: rendered_frame_probe session_id must bind session_id")
+            require(rendered_probe.get("target_kind") == target_kind,
+                    f"{prefix}: rendered_frame_probe target_kind must match scenario")
+            require(rendered_probe.get("capture_scope") == expected_scope[target_kind],
+                    f"{prefix}: rendered_frame_probe capture_scope must match scenario")
+            require(rendered_probe.get("frame_source_id") == target_identity.get("frame_source_id"),
+                    f"{prefix}: rendered_frame_probe frame_source_id must match target_identity")
+            require(rendered_probe.get("geometry_revision") == target_identity.get("geometry_revision"),
+                    f"{prefix}: rendered_frame_probe geometry_revision must match target_identity")
+            require(isinstance(rendered_probe.get("observed_at_ms"), int)
+                    and rendered_probe.get("observed_at_ms") > 0,
+                    f"{prefix}: rendered_frame_probe observed_at_ms must be recorded")
+            require(rendered_probe.get("selected_sentinel_rendered") is True,
+                    f"{prefix}: rendered_frame_probe selected_sentinel_rendered must be true")
+            require(isinstance(rendered_probe.get("selected_sentinel_id"), str)
+                    and rendered_probe.get("selected_sentinel_id"),
+                    f"{prefix}: rendered_frame_probe selected_sentinel_id must be recorded")
+            require(isinstance(rendered_probe.get("selected_sentinel_hash"), str)
+                    and rendered_probe.get("selected_sentinel_hash"),
+                    f"{prefix}: rendered_frame_probe selected_sentinel_hash must be recorded")
             if target_kind in {"window", "application"}:
                 require(scenario.get("first_display_capture_started") is False,
                         f"{prefix}: window/application capture must not start first-display fallback")
@@ -229,6 +277,11 @@ for platform_name in sorted(required_platforms):
                         f"{prefix}: display_fallback_used must be false")
                 require(scenario.get("unrelated_sentinel_rendered") is False,
                         f"{prefix}: unrelated_sentinel_rendered must be false")
+                require(rendered_probe.get("unrelated_sentinel_rendered") is False,
+                        f"{prefix}: rendered_frame_probe unrelated_sentinel_rendered must be false")
+                require(isinstance(rendered_probe.get("unrelated_sentinel_id"), str)
+                        and rendered_probe.get("unrelated_sentinel_id"),
+                        f"{prefix}: rendered_frame_probe unrelated_sentinel_id must be recorded")
 
             abilities = scenario.get("abilities")
             require(isinstance(abilities, list) and abilities,
@@ -342,6 +395,8 @@ targets = {
 def passed(platform, target_kind):
     subject = f"easynet:///r/localhost/resource/device.{platform}/streams/{target_kind}.primary"
     session_id = f"rd-capture-{platform}-{target_kind}-self-test"
+    frame_source_id = f"{platform}-{target_kind}-frame-source"
+    geometry_revision = 9 if target_kind == "display" else 17
     return {
         "target_kind": target_kind,
         "status": "passed",
@@ -351,10 +406,32 @@ def passed(platform, target_kind):
         "capture_scope": targets[target_kind],
         "target_binding_exact": True,
         "source_only_proof": False,
+        "target_identity": {
+            "selected_resource_ura": subject,
+            "target_kind": target_kind,
+            "capture_scope": targets[target_kind],
+            "frame_source_id": frame_source_id,
+            "geometry_revision": geometry_revision,
+        },
         "frames_rendered": 3,
         "duration_ms": 1000,
         "selected_sentinel_rendered": True,
         "unrelated_sentinel_rendered": False,
+        "rendered_frame_probe": {
+            "probe_source": "decoded_frame",
+            "selected_resource_ura": subject,
+            "session_id": session_id,
+            "target_kind": target_kind,
+            "capture_scope": targets[target_kind],
+            "frame_source_id": frame_source_id,
+            "geometry_revision": geometry_revision,
+            "observed_at_ms": 1787334001000,
+            "selected_sentinel_rendered": True,
+            "selected_sentinel_id": f"selected-{target_kind}",
+            "selected_sentinel_hash": f"sha256:selected-{target_kind}",
+            "unrelated_sentinel_rendered": False,
+            "unrelated_sentinel_id": f"unrelated-{target_kind}",
+        },
         "first_display_capture_started": False,
         "display_fallback_used": False,
         "abilities": [
