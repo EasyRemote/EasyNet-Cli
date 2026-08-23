@@ -1309,6 +1309,38 @@ mod tests {
 
     #[cfg(feature = "native-media")]
     #[test]
+    fn application_compositor_cross_display_gap_is_black_not_host_display_content() {
+        let pixel =
+            |rgba| xcap::image::RgbaImage::from_raw(1, 1, rgba).expect("one-pixel window image");
+        let frame = compose_application_windows(
+            vec![
+                CapturedApplicationWindow {
+                    window_id: 10,
+                    z: 0,
+                    x: -2,
+                    y: -1,
+                    rgba: pixel(vec![255, 0, 0, 255]),
+                },
+                CapturedApplicationWindow {
+                    window_id: 11,
+                    z: 0,
+                    x: 2,
+                    y: -1,
+                    rgba: pixel(vec![0, 255, 0, 255]),
+                },
+            ],
+            &ScreenCaptureOptions::default(),
+        )
+        .expect("cross-display application windows compose in virtual-desktop coordinates");
+
+        assert_eq!((frame.width, frame.height), (5, 1));
+        assert_eq!(&frame.rgb_bytes[0..3], &[255, 0, 0]);
+        assert_eq!(&frame.rgb_bytes[3..12], &[0; 9]);
+        assert_eq!(&frame.rgb_bytes[12..15], &[0, 255, 0]);
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
     fn application_compositor_preserves_host_window_z_order() {
         let pixel =
             |rgba| xcap::image::RgbaImage::from_raw(1, 1, rgba).expect("one-pixel window image");

@@ -1245,6 +1245,12 @@ require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
   'device capabilities must expose the macOS display-scoped application target model'
 require '"process_scoped_application_window_set"' "$VIEW_DEVICE" \
   'device capabilities must expose the Windows/Linux process-scoped application target model'
+require '"application_surface"' "$VIEW_DEVICE" \
+  'device capabilities must expose application multi-window and multi-display constraints'
+require 'Some\("target_multi_display_unsupported"\)' "$VIEW_DEVICE" \
+  'device capabilities must expose the macOS multi-display application blocker'
+require_multiline 'm/"process_scoped",\s*true,\s*None/s' "$VIEW_DEVICE" \
+  'device capabilities must expose process-scoped Windows/Linux multi-display application support'
 require 'display/window/application target capture' "$VIEW_DEVICE" \
   'device capabilities must describe native ScreenCaptureKit as targeted display/window/application capture'
 reject 'available for display capture' "$VIEW_DEVICE" \

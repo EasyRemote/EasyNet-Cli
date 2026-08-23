@@ -1172,7 +1172,24 @@ fn input_control_support_view(input_available: bool) {
 }
 
 fn platform_support_view(production_ready: bool, production_backend: &Backend) {
+    let macos_application = application_target_support(
+        "production_ready",
+        json!("macos.screencapturekit.videotoolbox.webrtc.v1"),
+        "macos_screencapturekit_videotoolbox_ready",
+        "display_scoped",
+        false,
+        Some("target_multi_display_unsupported"),
+    );
+    let process_application = application_target_support(
+        "baseline_ready",
+        json!("builtin.xcap.openh264.webrtc.v1"),
+        "xcap_target_baseline_ready",
+        "process_scoped",
+        true,
+        None,
+    );
     json!({
+        "application_surface": [macos_application, process_application],
         "platforms": {
             "linux": {
                 "display": {"status": "baseline_ready", "reason": "linux_xcap_target_baseline_ready"},
@@ -3096,6 +3113,21 @@ write_fixture
 perl -0pi -e 's/"process_scoped_application_window_set"/"application"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must expose the Windows/Linux process-scoped application target model'
+
+write_fixture
+perl -0pi -e 's/"application_surface"/"application_scope"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose application multi-window and multi-display constraints'
+
+write_fixture
+perl -0pi -e 's/Some\("target_multi_display_unsupported"\)/None/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose the macOS multi-display application blocker'
+
+write_fixture
+perl -0pi -e 's/"process_scoped",\s*true,\s*None/"process_scoped", false, None/s' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose process-scoped Windows/Linux multi-display application support'
 
 write_fixture
 perl -0pi -e 's#display/window/application target capture#display capture#' \

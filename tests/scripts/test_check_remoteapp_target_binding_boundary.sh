@@ -59,18 +59,22 @@ impl RemoteDesktopTargetKind {
             _ => "surface",
         }
     }
+
+    fn target_model_for_platform(self, _platform: &str) -> &'static str {
+        self.target_model()
+    }
 }
 
 impl RemoteAppTargetBinding {
     fn to_value(&self) {
         json!({
-            "target_model": self.target_kind.target_model(),
+            "target_model": self.target_kind.target_model_for_platform(&self.platform),
         });
     }
 
     fn target_bound_event_payload(&self) {
         json!({
-            "target_model": self.target_kind.target_model(),
+            "target_model": self.target_kind.target_model_for_platform(&self.platform),
         });
     }
 }
@@ -88,7 +92,7 @@ impl AppWindowSetProof {
 impl ScopeAudit {
     fn to_value(&self) {
         json!({
-            "target_model": self.effective_target_kind.target_model(),
+            "target_model": self.effective_target_kind.target_model_for_platform(platform),
         });
     }
 }
@@ -152,7 +156,7 @@ impl ResourceEntryTargetResolver {
         let _ = "app_name/title are diagnostic hints, not production routing identity";
         let _ = "app_name alone is not production routing identity";
         json!({
-            "target_model": target_kind.target_model(),
+            "target_model": target_kind.target_model_for_platform(&platform),
         });
     }
 }
@@ -503,9 +507,21 @@ RS
 cat >"$SANDBOX/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" <<'RS'
 const MAX_APPLICATION_COMPOSITE_PIXELS: u64 = 33_177_600;
 fn capture_application_rgb_with_xcap() {}
+fn application_compositor_cross_display_gap_is_black_not_host_display_content() {}
 RS
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/application_compositor_cross_display_gap_is_black_not_host_display_content/application_compositor_cross_display_gap_uses_host_display_content/' \
+  "$SANDBOX/src/daemon/ability/builtins/resources/media/screen_snapshot.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted application compositor without cross-display leakage regression" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/application_compositor_cross_display_gap_uses_host_display_content/application_compositor_cross_display_gap_is_black_not_host_display_content/' \
+  "$SANDBOX/src/daemon/ability/builtins/resources/media/screen_snapshot.rs"
 
 perl -0pi -e 's/input_control_granted/input_control_implicit/g' \
   "$SANDBOX/plugins/remote-desktop/src/session_creation.rs"

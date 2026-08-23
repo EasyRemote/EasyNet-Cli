@@ -851,6 +851,15 @@ Unsupported("application spans multiple displays without multi-stream support")
 The implementation must not advertise single-stream application capture as
 "the whole app" if it only captures one display's subset without saying so.
 
+Capability projection must make that distinction machine-readable. The
+application platform row carries `application_surface.scope`, `multi_window`,
+`multi_display`, and `blocked_reason`. macOS reports `display_scoped`,
+`multi_display=false`, and `target_multi_display_unsupported` until a real
+multi-stream `MultiAppSurface` is implemented. Windows/Linux xcap may report
+`process_scoped` and `multi_display=true` because its bounded compositor works
+in virtual-desktop coordinates, but remains `baseline_ready` until live decoded
+frame/leakage/rebind certification passes.
+
 ## 9. Target lifecycle events
 
 `remote_desktop.watch_events` must include target lifecycle events, not only session/signaling/media events.
@@ -1306,6 +1315,8 @@ window:
 application:
   bind a process-stable identity and exact resolved_window_ids
   capture and alpha-composite only that committed set into a bounded union
+  preserve negative/cross-display virtual-desktop coordinates and fill gaps
+  with deterministic black pixels rather than host display content
   reject missing/minimized members and oversized unions
   observe live process window-set drift and require an explicit rebind
 

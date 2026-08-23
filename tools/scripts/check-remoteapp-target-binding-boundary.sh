@@ -245,7 +245,10 @@ require 'capture_application_rgb_with_xcap' \
 require 'MAX_APPLICATION_COMPOSITE_PIXELS' \
   "$ROOT/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" \
   'xcap application compositor must have an explicit memory bound'
-require_count_at_least '"target_model": self\.target_kind\.target_model\(\)' \
+require 'application_compositor_cross_display_gap_is_black_not_host_display_content' \
+  "$ROOT/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" \
+  'xcap application compositor must prove cross-display gaps cannot leak host display pixels'
+require_count_at_least '"target_model": self\.target_kind\.target_model_for_platform\(&self\.platform\)' \
   "$REMOTE_ROOT/target.rs" \
   2 \
   'target binding projection and target-bound event must expose the concrete capture target model'
@@ -267,10 +270,10 @@ require 'target_binding_rejects_non_agent_owner_projection' \
 require 'metadata_freshness_u64\(' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver must consume inventory freshness when present'
-require '"target_model": self\.effective_target_kind\.target_model\(\)' \
+require '"target_model": self\.effective_target_kind\.target_model_for_platform\(platform\)' \
   "$REMOTE_ROOT/target.rs" \
   'scope audit projection must expose the effective capture target model'
-require '"target_model": target_kind\.target_model\(\)' \
+require '"target_model": target_kind\.target_model_for_platform\(&platform\)' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver diagnostic must expose the resolved capture target model'
 require 'display_scoped_application_window_set' \

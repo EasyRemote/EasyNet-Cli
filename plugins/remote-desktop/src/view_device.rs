@@ -378,7 +378,26 @@ fn target_support(status: &str, backend: Value, reason: &str) -> Value {
         "status": status,
         "backend": backend,
         "reason": reason,
+        "certification": "live_e2e_required",
     })
+}
+
+fn application_target_support(
+    status: &str,
+    backend: Value,
+    reason: &str,
+    scope: &str,
+    multi_display: bool,
+    blocked_reason: Option<&str>,
+) -> Value {
+    let mut support = target_support(status, backend, reason);
+    support["application_surface"] = json!({
+        "scope": scope,
+        "multi_window": true,
+        "multi_display": multi_display,
+        "blocked_reason": blocked_reason,
+    });
+    support
 }
 
 fn platform_support_view(
@@ -404,13 +423,20 @@ fn platform_support_view(
     };
 
     json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "current_host_os": std::env::consts::OS,
         "platforms": {
             "macos": {
                 "display": target_support(macos_status, macos_backend.clone(), macos_reason),
                 "window": target_support(macos_status, macos_backend.clone(), macos_reason),
-                "application": target_support(macos_status, macos_backend, macos_reason),
+                "application": application_target_support(
+                    macos_status,
+                    macos_backend,
+                    macos_reason,
+                    "display_scoped",
+                    false,
+                    Some("target_multi_display_unsupported"),
+                ),
             },
             "linux": {
                 "display": target_support(
@@ -423,10 +449,13 @@ fn platform_support_view(
                     json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
                     PLATFORM_REASON_LINUX_XCAP_BASELINE_READY
                 ),
-                "application": target_support(
+                "application": application_target_support(
                     "baseline_ready",
                     json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
-                    PLATFORM_REASON_LINUX_XCAP_BASELINE_READY
+                    PLATFORM_REASON_LINUX_XCAP_BASELINE_READY,
+                    "process_scoped",
+                    true,
+                    None,
                 ),
             },
             "windows": {
@@ -440,10 +469,13 @@ fn platform_support_view(
                     json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
                     PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY
                 ),
-                "application": target_support(
+                "application": application_target_support(
                     "baseline_ready",
                     json!(XCAP_OPENH264_WEBRTC_BACKEND.backend_id()),
-                    PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY
+                    PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY,
+                    "process_scoped",
+                    true,
+                    None,
                 ),
             },
         },
@@ -652,7 +684,7 @@ mod tests {
         let capabilities = device_capabilities_view();
         let platform_support = &capabilities["metadata"]["platform_support"];
 
-        assert_eq!(platform_support["schema_version"], json!(1));
+        assert_eq!(platform_support["schema_version"], json!(2));
         assert_eq!(
             platform_support["platforms"]["linux"]["display"]["status"],
             json!("baseline_ready")
@@ -670,6 +702,15 @@ mod tests {
             json!("linux_xcap_target_baseline_ready")
         );
         assert_eq!(
+            platform_support["platforms"]["linux"]["application"]["application_surface"],
+            json!({
+                "scope": "process_scoped",
+                "multi_window": true,
+                "multi_display": true,
+                "blocked_reason": null,
+            })
+        );
+        assert_eq!(
             platform_support["platforms"]["windows"]["display"]["status"],
             json!("baseline_ready")
         );
@@ -680,6 +721,24 @@ mod tests {
         assert_eq!(
             platform_support["platforms"]["windows"]["application"]["status"],
             json!("baseline_ready")
+        );
+        assert_eq!(
+            platform_support["platforms"]["windows"]["application"]["application_surface"]
+                ["multi_display"],
+            json!(true)
+        );
+        assert_eq!(
+            platform_support["platforms"]["macos"]["application"]["application_surface"],
+            json!({
+                "scope": "display_scoped",
+                "multi_window": true,
+                "multi_display": false,
+                "blocked_reason": "target_multi_display_unsupported",
+            })
+        );
+        assert_eq!(
+            platform_support["platforms"]["macos"]["application"]["certification"],
+            json!("live_e2e_required")
         );
         assert!(platform_support["non_claim"]
             .as_str()
