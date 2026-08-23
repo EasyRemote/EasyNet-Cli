@@ -157,6 +157,10 @@ require 'collectRemoteDesktopClientEvidence' "$STORE" \
   'frontend must collect browser-observed RemoteApp WebRTC/client media evidence from RTCPeerConnection stats'
 require 'client_transport: clientTransport' "$STORE" \
   'frontend client media report must include bounded browser-observed transport evidence'
+require 'remoteDesktopRouteKind\(currentView\)' "$STORE" \
+  'frontend client transport report must derive route_kind from daemon session route_state, not raw browser candidate type'
+require 'route_kind: boundedString\(routeKind\)' "$STORE" \
+  'frontend client transport report must keep product route_kind separate from selected_route_class'
 require 'selected_candidate_pair' "$STORE" \
   'frontend client media report must include selected WebRTC candidate-pair evidence'
 require 'candidate_pair_id' "$STORE" \

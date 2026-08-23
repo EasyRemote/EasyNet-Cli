@@ -310,7 +310,7 @@ function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | '
   const currentView = entries[key].session
   const epoch = currentView.transportEpoch
   const desired = state
-  const clientEvidence = collectRemoteDesktopClientEvidence(refsFor(key).pc, refsFor(key))
+  const clientEvidence = collectRemoteDesktopClientEvidence(refsFor(key).pc, refsFor(key), remoteDesktopRouteKind(currentView))
   return invokeMediaUnary('remote_desktop.report_client_state', {
     deviceUra: entries[key].deviceUra,
     subjectURA: currentView.subjectUra,
@@ -325,21 +325,29 @@ function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | '
   })
 }
 
-function collectRemoteDesktopClientEvidence(pc: RTCPeerConnection, refs: Refs) {
-  const clientTransport = remoteDesktopClientTransportReport(pc)
+function collectRemoteDesktopClientEvidence(pc: RTCPeerConnection, refs: Refs, routeKind: string | undefined) {
+  const clientTransport = remoteDesktopClientTransportReport(pc, routeKind)
   const browserStatsReport = remoteDesktopBrowserStatsReportArgs(refs.browserStats)
   return { reportArgs: { client_transport: clientTransport, browser_stats: browserStatsReport } }
 }
 
-function remoteDesktopClientTransportReport(pc: RTCPeerConnection) {
+function remoteDesktopClientTransportReport(pc: RTCPeerConnection, routeKind: string | undefined) {
   const selectedPair = remoteDesktopSelectedCandidatePairReport()
   return {
     ice_connection_state: pc.iceConnectionState,
     peer_connection_state: pc.connectionState,
-    route_kind: selectedPair.selected_route_class,
+    route_kind: boundedString(routeKind),
     client_transport: undefined,
     selected_candidate_pair: selectedPair,
   }
+}
+
+function remoteDesktopRouteKind(view: RemoteDesktopView) {
+  return view.transportRouteState?.routeClass ?? 'turn_relay'
+}
+
+function boundedString(value: string | undefined) {
+  return value && value.length <= 256 ? value : undefined
 }
 
 function remoteDesktopSelectedCandidatePairReport() {
