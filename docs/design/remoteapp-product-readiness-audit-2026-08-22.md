@@ -37,6 +37,7 @@ The following gates prove useful boundaries and regression constraints:
 - `tools/scripts/check-remoteapp-session-subject-boundary.sh`
 - `tools/scripts/frontend-remoteapp-product-flow-e2e.sh`
 - `tools/scripts/remoteapp-cross-device-product-smoke.sh`
+- `tools/scripts/remoteapp-product-completion-e2e.sh`
 - `tools/scripts/check-remoteapp-main-crate-implementation-tests.sh`
 
 They prove that current source contracts preserve target binding, subject
@@ -333,6 +334,18 @@ distinct device URAs were not observed, so same-device/local-provider reports
 cannot be mistaken for cross-device product evidence.
 They do not prove every operating system, network topology, input mode, codec
 path, and frontend lifecycle is product-ready.
+
+The product-completion gate,
+`tools/scripts/remoteapp-product-completion-e2e.sh`, is the only aggregate gate
+that may turn the individual RemoteApp evidence reports into a product-complete
+claim. It requires report JSONs for frontend product-flow, Browser/Tauri
+lifecycle, cross-device smoke, cross-platform capture, input injection, media
+adaptation, multi-window tracking, network fallback, session timeout, session
+cancel, permission revoke, session resume, and crash/restart recovery. Missing
+reports fail closed, child verifiers must not claim product completion, and
+cross-device evidence must not be local-provider-only. This gate is not itself
+new product evidence; it prevents partial evidence from being reported as full
+interactive desktop completion.
 
 ## Product closure matrix
 

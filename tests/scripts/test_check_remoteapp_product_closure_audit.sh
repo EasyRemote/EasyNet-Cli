@@ -21,6 +21,7 @@ mkdir -p \
   "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-product-closure-audit.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh" "$SB/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
@@ -119,6 +120,24 @@ fi
 grep -q "cross-device smoke must reject product completion claims" /tmp/check-remoteapp-product-closure-cross-device-complete-claim.out || \
   fail "expected cross-device product completion claim failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+
+perl -0pi -e 's#EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON#EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CAPTURE_OPTIONAL_JSON#g' \
+  "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-capture-env.out 2>&1; then
+  fail "checker accepted product-completion gate without cross-platform capture report requirement"
+fi
+grep -q "product-completion gate must require cross-platform capture evidence" /tmp/check-remoteapp-product-closure-completion-capture-env.out || \
+  fail "expected product-completion cross-platform capture env failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+
+perl -0pi -e 's#topology.local_provider_boundary_only is not false#topology.local_provider_boundary_only is optional#g' \
+  "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-local-only.out 2>&1; then
+  fail "checker accepted product-completion gate without local-provider-only rejection"
+fi
+grep -q "product-completion gate must reject local-provider-only cross-device reports" /tmp/check-remoteapp-product-closure-completion-local-only.out || \
+  fail "expected product-completion local-provider-only rejection failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 
 perl -0pi -e 's#real_cross_platform_capture_matrix#source_only_capture_matrix#g' \
   "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"

@@ -24,6 +24,7 @@ Current verified boundary gates:
 - `check-remoteapp-session-subject-boundary.sh`
 - `check-remoteapp-frontend-product-flow-e2e.sh`
 - `check-remoteapp-main-crate-implementation-tests.sh`
+- `remoteapp-product-completion-e2e.sh`
 
 Current frontend lifecycle evidence:
 
@@ -54,6 +55,15 @@ Current frontend lifecycle evidence:
   URA subject binding for session abilities, visible `media_pipeline_support`,
   and no product-complete claim. Self-test validates only the contract; a live
   Browser/Tauri artifact remains required.
+- `tools/scripts/remoteapp-product-completion-e2e.sh` now provides the single
+  aggregate product-completion evidence gate. It requires passed report JSONs
+  from frontend product-flow, Browser/Tauri lifecycle, cross-device smoke,
+  cross-platform capture, input injection, media adaptation, multi-window
+  tracking, network fallback, session timeout, session cancel, permission
+  revoke, session resume, and crash/restart recovery. It rejects missing
+  reports, child verifier `product_complete_claim=true`, and cross-device
+  reports where `local_provider_boundary_only=true`. This gate is an aggregate
+  completion guard, not a substitute for any live domain artifact.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:

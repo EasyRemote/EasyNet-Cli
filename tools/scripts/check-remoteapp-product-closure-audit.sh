@@ -7,6 +7,7 @@ AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 MATRIX="$ROOT/docs/design/remoteapp-product-readiness-matrix.json"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+PRODUCT_COMPLETION="$ROOT/tools/scripts/remoteapp-product-completion-e2e.sh"
 MAIN_CRATE_IMPL_TESTS="$ROOT/tools/scripts/check-remoteapp-main-crate-implementation-tests.sh"
 CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
@@ -63,6 +64,8 @@ reject() {
 [[ -f "$MATRIX" ]] || fail "missing RemoteApp product readiness matrix"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 [[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -f "$PRODUCT_COMPLETION" ]] || fail "missing RemoteApp product-completion evidence gate"
+[[ -x "$PRODUCT_COMPLETION" ]] || fail "RemoteApp product-completion evidence gate must be executable"
 [[ -f "$MAIN_CRATE_IMPL_TESTS" ]] || fail "missing RemoteApp main-crate implementation test gate"
 [[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
 [[ -f "$INPUT_INJECTION" ]] || fail "missing RemoteApp input injection verifier"
@@ -119,6 +122,8 @@ require 'ability invoke "\$REFRESH_LEASE_ABILITY_URA"' "$SESSION_RESUME" \
   'RemoteApp resume harness must invoke refresh_lease by full Ability URA'
 reject 'ability invoke remote_desktop\.refresh_lease' "$SESSION_RESUME" \
   'RemoteApp resume harness must not invoke refresh_lease through short ability name'
+
+bash "$PRODUCT_COMPLETION" --self-test >/dev/null
 
 require 'remoteapp_resolve_rpc_ability_ura' "$LIFECYCLE_HARNESS_LIB" \
   'RemoteApp lifecycle helper must implement catalog Ability URA resolution'
@@ -244,6 +249,10 @@ require 'Cross-device E2E smoke/regression exists beyond local provider boundary
   'audit must cover cross-device proof'
 require 'remoteapp-cross-device-product-smoke.sh' "$AUDIT" \
   'audit must name the cross-device product smoke gate'
+require 'remoteapp-product-completion-e2e.sh' "$AUDIT" \
+  'audit must name the product-completion evidence gate'
+require 'frontend product-flow, Browser/Tauri' "$AUDIT" \
+  'audit must summarize product-completion required reports'
 require 'check-remoteapp-main-crate-implementation-tests.sh' "$AUDIT" \
   'audit must name the main-crate implementation test gate'
 require 'production_target_subjects' "$AUDIT" \
@@ -383,6 +392,10 @@ require 'submitted data-channel frame and daemon applied event target_focus_epoc
   'product readiness matrix must record frontend input focus-epoch evidence requirement'
 require 'remoteapp-cross-device-product-smoke.sh' "$PLAN" \
   'plan evidence audit must record the cross-device smoke gate'
+require 'remoteapp-product-completion-e2e.sh' "$PLAN" \
+  'plan evidence audit must record the product-completion evidence gate'
+require 'frontend product-flow, Browser/Tauri' "$PLAN" \
+  'plan evidence audit must summarize product-completion required reports'
 require 'Historical local cross-device `--run` evidence' "$PLAN" \
   'plan evidence audit must classify the Service projection failure as historical evidence'
 require 'accepted_count=0, expected_count=5' "$PLAN" \
@@ -444,6 +457,38 @@ require 'local_provider_boundary_only=true' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must fail local-provider-only passed runs'
 require 'does not prove real OS window/application capture' "$CROSS_DEVICE_SMOKE" \
   'cross-device smoke must preserve product non-claims'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require frontend product-flow evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require Browser/Tauri lifecycle evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require cross-device smoke evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require cross-platform capture evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require input injection evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require media adaptation evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require multi-window tracking evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require network fallback evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require session timeout evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require session cancel evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require permission revoke evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require session resume evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require crash/restart recovery evidence'
+require 'topology\.local_provider_boundary_only is not false' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject local-provider-only cross-device reports'
+require 'child verifier must not claim product completion' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject child product-complete claims'
+require 'product_complete_claim.*effective_status == "passed"' "$PRODUCT_COMPLETION" \
+  'product-completion gate must be the single aggregate product-complete claim'
 require 'real_cross_platform_capture_matrix' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must require real capture matrix proof mode'
 require 'component_mock.*False|component_mock.*false' "$CAPTURE_MATRIX" \
