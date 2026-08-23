@@ -512,6 +512,18 @@ require 'target_geometry_revision' "$INPUT_INJECTION" \
   'input injection verifier must inspect target geometry revision'
 require 'target_focus_epoch must be positive' "$INPUT_INJECTION" \
   'input injection verifier must require focused target epoch evidence'
+require 'target_focus_epoch: u64' "$ROOT/plugins/remote-desktop/src/target_tracking.rs" \
+  'RemoteApp target tracker snapshot must own a daemon-side target focus epoch'
+require 'target_focus_epoch_from_snapshot' "$INPUT" \
+  'RemoteApp input policy must project target focus epoch from the current target snapshot'
+require 'target_focus_epoch_reject_reason' "$INPUT" \
+  'RemoteApp input execution must reject stale target focus epochs before OS injection'
+require '"stale_target_focus_epoch"' "$INPUT" \
+  'RemoteApp input execution must expose a stable stale focus epoch rejection reason'
+require 'input_rejects_stale_target_focus_epoch_before_os_injection' "$INPUT" \
+  'RemoteApp input tests must prove stale target focus epoch rejection happens before OS injection'
+require 'target_focus_epoch"\.to_string\(\)' "$INPUT" \
+  'RemoteApp applied input event payloads must preserve accepted target focus epoch evidence'
 require 'INPUT_FRAME_APPLIED' "$INPUT_INJECTION" \
   'input injection verifier must inspect input-applied events'
 require 'client_sequence' "$INPUT_INJECTION" \

@@ -106,6 +106,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerSnapshot {
     binding_epoch: u64,
     target_identity_epoch: u64,
     target_geometry_revision: u64,
+    target_focus_epoch: u64,
     media_source_epoch: u64,
     status: TargetBindingPhase,
     visibility_state: TargetVisibilityState,
@@ -126,6 +127,7 @@ impl TargetTrackerSnapshot {
             binding_epoch: binding.binding_epoch(),
             target_identity_epoch: binding.target_identity_epoch(),
             target_geometry_revision: binding.target_geometry_revision(),
+            target_focus_epoch: 1,
             media_source_epoch: binding.media_source_epoch(),
             status: TargetBindingPhase::Resolved,
             visibility_state: TargetVisibilityState::Visible,
@@ -144,6 +146,7 @@ impl TargetTrackerSnapshot {
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
             "target_geometry_revision": self.target_geometry_revision,
+            "target_focus_epoch": self.target_focus_epoch,
             "media_source_epoch": self.media_source_epoch,
             "status": self.status.as_str(),
             "visibility_state": self.visibility_state.as_str(),
@@ -171,6 +174,7 @@ impl TargetTrackerSnapshot {
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
             "target_geometry_revision": self.target_geometry_revision,
+            "target_focus_epoch": self.target_focus_epoch,
             "origin_x": origin_x,
             "origin_y": origin_y,
             "width": self.geometry.width,
@@ -234,6 +238,10 @@ impl TargetTrackerSnapshot {
 
     pub(in crate::daemon::plugins::remote_desktop) fn focused(&self) -> Option<bool> {
         self.focused
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_focus_epoch(&self) -> u64 {
+        self.target_focus_epoch
     }
 }
 
@@ -690,7 +698,7 @@ impl RemoteAppTargetBindingStateMachine {
         {
             return None;
         }
-        self.snapshot.focused = Some(focused);
+        self.set_focused(focused);
         let reason = if focused {
             "target_focused"
         } else {
@@ -982,7 +990,7 @@ impl RemoteAppTargetBindingStateMachine {
             rebind_started_at_ms.map(|started| started.saturating_add(AUTOMATIC_REBIND_WINDOW_MS));
         self.snapshot.status = TargetBindingPhase::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
-        self.snapshot.focused = Some(false);
+        self.set_focused(false);
         let frontend_action = reason.frontend_action().as_str();
         let reason_code = reason.as_str();
         self.snapshot.diagnostic = target_failure_payload(
@@ -1081,7 +1089,7 @@ impl RemoteAppTargetBindingStateMachine {
         self.clear_pending_lost();
         self.snapshot.status = TargetBindingPhase::Invalidated;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
-        self.snapshot.focused = Some(false);
+        self.set_focused(false);
         self.snapshot.diagnostic = json!({
             "status": self.snapshot.status.as_str(),
             "reason": TargetResolutionError::TargetPermissionMissing.as_str(),
@@ -1488,6 +1496,7 @@ impl RemoteAppTargetBindingStateMachine {
             "target_identity_epoch": self.snapshot.target_identity_epoch,
             "previous_target_geometry_revision": previous_target_geometry_revision,
             "target_geometry_revision": self.snapshot.target_geometry_revision,
+            "target_focus_epoch": self.snapshot.target_focus_epoch,
             "media_source_epoch": self.snapshot.media_source_epoch,
             "visibility_state": self.snapshot.visibility_state.as_str(),
             "target_status": self.snapshot.status.as_str(),
@@ -1520,6 +1529,10 @@ impl RemoteAppTargetBindingStateMachine {
             json!(self.snapshot.target_geometry_revision),
         );
         fields.insert(
+            "target_focus_epoch".to_string(),
+            json!(self.snapshot.target_focus_epoch),
+        );
+        fields.insert(
             "media_source_epoch".to_string(),
             json!(self.snapshot.media_source_epoch),
         );
@@ -1542,6 +1555,13 @@ impl RemoteAppTargetBindingStateMachine {
             self.snapshot.diagnostic.clone(),
         );
         payload
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        if self.snapshot.focused != Some(focused) {
+            self.snapshot.target_focus_epoch = self.snapshot.target_focus_epoch.saturating_add(1);
+        }
+        self.snapshot.focused = Some(focused);
     }
 }
 
@@ -1651,6 +1671,7 @@ mod tests {
         assert_eq!(snapshot["binding_id"], json!(binding_id));
         assert_eq!(snapshot["target_identity_epoch"], json!(7));
         assert_eq!(snapshot["target_geometry_revision"], json!(3));
+        assert_eq!(snapshot["target_focus_epoch"], json!(1));
         assert_eq!(snapshot["status"], json!("resolved"));
         assert_eq!(snapshot["visibility_state"], json!("visible"));
     }
@@ -2151,6 +2172,10 @@ mod tests {
 
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(true));
         assert_eq!(
+            tracker.snapshot().to_value()["target_focus_epoch"],
+            json!(1)
+        );
+        assert_eq!(
             tracker.snapshot().to_value()["input_blocked_reason"],
             Value::Null
         );
@@ -2564,6 +2589,10 @@ mod tests {
             json!("target_blurred")
         );
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(false));
+        assert_eq!(
+            tracker.snapshot().to_value()["target_focus_epoch"],
+            json!(2)
+        );
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
         assert_eq!(
             tracker.snapshot().to_value()["input_blocked_reason"],
@@ -2587,9 +2616,14 @@ mod tests {
             .expect("focus recovery commits");
 
         assert_eq!(focused.event_type(), "TARGET_FOCUSED");
+        assert_eq!(focused.payload()["target_focus_epoch"], json!(3));
         assert_eq!(focused.payload()["frontend_action"], Value::Null);
         assert_eq!(focused.payload()["input_blocked_reason"], Value::Null);
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(true));
+        assert_eq!(
+            tracker.snapshot().to_value()["target_focus_epoch"],
+            json!(3)
+        );
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(true));
         assert_eq!(
             tracker.snapshot().to_value()["input_blocked_reason"],

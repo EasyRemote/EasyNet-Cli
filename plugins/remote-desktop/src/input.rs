@@ -104,6 +104,15 @@ impl RemoteDesktopInputFrame {
             Self::Clipboard(_) | Self::FileDrop(_) => None,
         }
     }
+
+    #[cfg(test)]
+    pub fn target_focus_epoch(&self) -> Option<u64> {
+        match self {
+            Self::Pointer(frame) => frame.target_focus_epoch,
+            Self::Key(frame) => frame.target_focus_epoch,
+            Self::Clipboard(_) | Self::FileDrop(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -127,6 +136,8 @@ pub struct PointerInputFrame {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub target_geometry_revision: Option<u64>,
+    #[serde(default)]
+    pub target_focus_epoch: Option<u64>,
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub button: Option<u8>,
@@ -153,6 +164,8 @@ pub struct KeyInputFrame {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub repeat: bool,
+    #[serde(default)]
+    pub target_focus_epoch: Option<u64>,
     #[serde(default)]
     pub sent_at_ms: Option<u64>,
     #[serde(default)]
@@ -257,6 +270,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct EffectiveRemoteDesktopInpu
     file_drop_enabled: bool,
     input_scope: InputScope,
     pointer_target: Option<PointerTargetGeometry>,
+    target_focus_epoch: Option<u64>,
 }
 
 impl EffectiveRemoteDesktopInputPolicy {
@@ -280,6 +294,7 @@ impl EffectiveRemoteDesktopInputPolicy {
             file_drop_enabled: false,
             input_scope,
             pointer_target: pointer_target_from_snapshot(snapshot),
+            target_focus_epoch: target_focus_epoch_from_snapshot(snapshot),
         };
         policy.apply_scope(input_scope);
         policy
@@ -292,6 +307,7 @@ impl EffectiveRemoteDesktopInputPolicy {
     ) -> Self {
         let mut policy = self.clone();
         policy.pointer_target = pointer_target_from_snapshot(snapshot);
+        policy.target_focus_epoch = target_focus_epoch_from_snapshot(snapshot);
         policy.apply_scope(input_scope);
         policy
     }
@@ -313,6 +329,7 @@ impl EffectiveRemoteDesktopInputPolicy {
             pointer_target: map
                 .get("pointer_target")
                 .and_then(pointer_target_geometry_from_value),
+            target_focus_epoch: map.get("target_focus_epoch").and_then(Value::as_u64),
         };
         policy.apply_scope(input_scope);
         policy
@@ -358,6 +375,15 @@ impl EffectiveRemoteDesktopInputPolicy {
         self.pointer_target
     }
 
+    fn accepted_input_context(&self) -> InputFrameTargetContext {
+        InputFrameTargetContext {
+            target_geometry_revision: self
+                .pointer_target
+                .and_then(|target| target.target_geometry_revision),
+            target_focus_epoch: self.target_focus_epoch,
+        }
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) const fn keyboard_enabled(&self) -> bool {
         self.keyboard_enabled
     }
@@ -396,6 +422,9 @@ impl EffectiveRemoteDesktopInputPolicy {
         if let Some(pointer_target) = self.pointer_target {
             map.insert("pointer_target".to_string(), pointer_target.to_value());
         }
+        if let Some(target_focus_epoch) = self.target_focus_epoch {
+            map.insert("target_focus_epoch".to_string(), json!(target_focus_epoch));
+        }
         Value::Object(map)
     }
 }
@@ -431,9 +460,23 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effecti
             if let Some(reason) = pointer_target_revision_reject_reason(frame, pointer_target) {
                 return InputApplyOutcome::rejected(reason);
             }
+            if let Some(reason) = target_focus_epoch_reject_reason(
+                frame.target_focus_epoch,
+                input_policy.target_focus_epoch,
+            ) {
+                return InputApplyOutcome::rejected(reason);
+            }
             apply_pointer_frame(frame, pointer_target)
         }
-        RemoteDesktopInputFrame::Key(frame) => apply_key_frame(frame),
+        RemoteDesktopInputFrame::Key(frame) => {
+            if let Some(reason) = target_focus_epoch_reject_reason(
+                frame.target_focus_epoch,
+                input_policy.target_focus_epoch,
+            ) {
+                return InputApplyOutcome::rejected(reason);
+            }
+            apply_key_frame(frame)
+        }
         RemoteDesktopInputFrame::Clipboard(_) => {
             InputApplyOutcome::rejected("clipboard_input_unsupported")
         }
@@ -461,6 +504,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapsh
 ) -> Value {
     let mut policy = EffectiveRemoteDesktopInputPolicy::from_test_value(input_policy);
     policy.pointer_target = pointer_target_from_snapshot(snapshot);
+    policy.target_focus_epoch = target_focus_epoch_from_snapshot(snapshot);
     policy.to_value()
 }
 
@@ -665,6 +709,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                                 timing,
                                 now_ms(),
                                 client_sequence,
+                                effective_input_policy.accepted_input_context(),
                             ),
                         );
                     }
@@ -1024,6 +1069,7 @@ fn input_frame_applied_payload(
     timing: InputFrameTiming,
     host_applied_at_ms: u64,
     client_sequence: Option<u64>,
+    input_context: InputFrameTargetContext,
 ) -> Value {
     let mut payload = Map::new();
     payload.insert("kind".to_string(), json!(kind));
@@ -1035,6 +1081,7 @@ fn input_frame_applied_payload(
     payload.insert("host_applied_at_ms".to_string(), json!(host_applied_at_ms));
     insert_latency_ms(&mut payload, timing.latency_ms_at(host_applied_at_ms));
     insert_client_sequence(&mut payload, client_sequence);
+    input_context.insert_into(&mut payload);
     Value::Object(payload)
 }
 
@@ -1165,6 +1212,24 @@ fn pointer_target_from_snapshot(snapshot: &TargetTrackerSnapshot) -> Option<Poin
         .and_then(pointer_target_geometry_from_value)
 }
 
+fn target_focus_epoch_from_snapshot(snapshot: &TargetTrackerSnapshot) -> Option<u64> {
+    snapshot
+        .input_enabled()
+        .then_some(snapshot.target_focus_epoch())
+}
+
+fn target_focus_epoch_reject_reason(
+    frame_target_focus_epoch: Option<u64>,
+    expected_target_focus_epoch: Option<u64>,
+) -> Option<&'static str> {
+    let expected = expected_target_focus_epoch?;
+    if frame_target_focus_epoch == Some(expected) {
+        None
+    } else {
+        Some("stale_target_focus_epoch")
+    }
+}
+
 fn pointer_target_revision_reject_reason(
     frame: &PointerInputFrame,
     target: Option<PointerTargetGeometry>,
@@ -1184,6 +1249,7 @@ struct PointerTargetGeometry {
     width: Option<f64>,
     height: Option<f64>,
     target_geometry_revision: Option<u64>,
+    target_focus_epoch: Option<u64>,
 }
 
 impl PointerTargetGeometry {
@@ -1200,7 +1266,27 @@ impl PointerTargetGeometry {
         if let Some(revision) = self.target_geometry_revision {
             target.insert("target_geometry_revision".to_string(), json!(revision));
         }
+        if let Some(epoch) = self.target_focus_epoch {
+            target.insert("target_focus_epoch".to_string(), json!(epoch));
+        }
         Value::Object(target)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct InputFrameTargetContext {
+    target_geometry_revision: Option<u64>,
+    target_focus_epoch: Option<u64>,
+}
+
+impl InputFrameTargetContext {
+    fn insert_into(self, payload: &mut Map<String, Value>) {
+        if let Some(revision) = self.target_geometry_revision {
+            payload.insert("target_geometry_revision".to_string(), json!(revision));
+        }
+        if let Some(epoch) = self.target_focus_epoch {
+            payload.insert("target_focus_epoch".to_string(), json!(epoch));
+        }
     }
 }
 
@@ -1226,6 +1312,7 @@ fn pointer_target_geometry_from_value(target: &Value) -> Option<PointerTargetGeo
         target_geometry_revision: target
             .get("target_geometry_revision")
             .and_then(Value::as_u64),
+        target_focus_epoch: target.get("target_focus_epoch").and_then(Value::as_u64),
     })
 }
 
@@ -1309,6 +1396,7 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
             }
             validate_client_sent_at_ms(pointer.sent_at_ms)?;
             validate_client_sequence(pointer.client_sequence)?;
+            validate_target_focus_epoch(pointer.target_focus_epoch)?;
         }
         RemoteDesktopInputFrame::Key(key) => {
             match key.action.as_str() {
@@ -1320,6 +1408,7 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
             }
             validate_client_sent_at_ms(key.sent_at_ms)?;
             validate_client_sequence(key.client_sequence)?;
+            validate_target_focus_epoch(key.target_focus_epoch)?;
         }
         RemoteDesktopInputFrame::Clipboard(_) | RemoteDesktopInputFrame::FileDrop(_) => {}
     }
@@ -1329,6 +1418,13 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
 fn validate_client_sequence(client_sequence: Option<u64>) -> anyhow::Result<()> {
     if client_sequence.is_some_and(|value| value == 0 || value > MAX_CLIENT_SEQUENCE) {
         anyhow::bail!("client_sequence must be a non-zero JavaScript-safe integer")
+    }
+    Ok(())
+}
+
+fn validate_target_focus_epoch(target_focus_epoch: Option<u64>) -> anyhow::Result<()> {
+    if target_focus_epoch.is_some_and(|value| value == 0 || value > MAX_CLIENT_SEQUENCE) {
+        anyhow::bail!("target_focus_epoch must be a non-zero JavaScript-safe integer")
     }
     Ok(())
 }
@@ -1786,6 +1882,10 @@ mod tests {
             InputFrameTiming::for_test(Some(1_787_331_000_123), 1_787_331_000_130),
             1_787_331_000_142,
             Some(7),
+            InputFrameTargetContext {
+                target_geometry_revision: Some(3),
+                target_focus_epoch: Some(5),
+            },
         );
 
         assert_eq!(payload["kind"], json!("pointer"));
@@ -1797,6 +1897,8 @@ mod tests {
         assert_eq!(payload["host_applied_at_ms"], json!(1_787_331_000_142_u64));
         assert_eq!(payload["latency_ms"], json!(19));
         assert_eq!(payload["client_sequence"], json!(7));
+        assert_eq!(payload["target_geometry_revision"], json!(3));
+        assert_eq!(payload["target_focus_epoch"], json!(5));
     }
 
     #[test]
@@ -1809,12 +1911,17 @@ mod tests {
             InputFrameTiming::for_test(Some(1_787_331_000_500), 1_787_331_000_130),
             1_787_331_000_142,
             Some(8),
+            InputFrameTargetContext {
+                target_geometry_revision: None,
+                target_focus_epoch: Some(9),
+            },
         );
 
         assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_500_u64));
         assert_eq!(payload["host_received_at_ms"], json!(1_787_331_000_130_u64));
         assert_eq!(payload["host_applied_at_ms"], json!(1_787_331_000_142_u64));
         assert!(payload.get("latency_ms").is_none());
+        assert_eq!(payload["target_focus_epoch"], json!(9));
     }
 
     #[test]
@@ -2345,11 +2452,11 @@ mod tests {
         let missing_revision =
             parse_input_frame(r#"{"type":"pointer","action":"move","x":10,"y":20}"#).unwrap();
         let stale_revision = parse_input_frame(
-            r#"{"type":"pointer","action":"move","x":10,"y":20,"target_geometry_revision":6}"#,
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"target_geometry_revision":6,"target_focus_epoch":3}"#,
         )
         .unwrap();
         let matching_revision = match parse_input_frame(
-            r#"{"type":"pointer","action":"move","x":10,"y":20,"target_geometry_revision":7}"#,
+            r#"{"type":"pointer","action":"move","x":10,"y":20,"target_geometry_revision":7,"target_focus_epoch":3}"#,
         )
         .unwrap()
         {
@@ -2360,6 +2467,7 @@ mod tests {
             "input_scope": "target_local",
             "pointer_enabled": true,
             "keyboard_enabled": false,
+            "target_focus_epoch": 3,
             "pointer_target": {
                 "origin_x": 100.0,
                 "origin_y": 200.0,
@@ -2387,6 +2495,40 @@ mod tests {
             ),
             None,
             "matching target_geometry_revision must pass the stale-frame gate before platform dispatch"
+        );
+    }
+
+    #[test]
+    fn input_rejects_stale_target_focus_epoch_before_os_injection() {
+        let missing_focus =
+            parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
+        let stale_focus = parse_input_frame(
+            r#"{"type":"key","action":"down","code":"KeyA","target_focus_epoch":4}"#,
+        )
+        .unwrap();
+        let current_focus = parse_input_frame(
+            r#"{"type":"key","action":"down","code":"KeyA","target_focus_epoch":5}"#,
+        )
+        .unwrap();
+        let policy = EffectiveRemoteDesktopInputPolicy::from_test_value(json!({
+            "input_scope": "display_global",
+            "keyboard_enabled": true,
+            "pointer_enabled": false,
+            "target_focus_epoch": 5,
+        }));
+
+        let missing_outcome = apply_input_frame_with_effective_policy(&policy, &missing_focus);
+        assert!(!missing_outcome.applied);
+        assert_eq!(missing_outcome.reason, Some("stale_target_focus_epoch"));
+
+        let stale_outcome = apply_input_frame_with_effective_policy(&policy, &stale_focus);
+        assert!(!stale_outcome.applied);
+        assert_eq!(stale_outcome.reason, Some("stale_target_focus_epoch"));
+
+        assert_eq!(
+            target_focus_epoch_reject_reason(current_focus.target_focus_epoch(), Some(5)),
+            None,
+            "matching target_focus_epoch must pass the stale-frame gate before platform dispatch"
         );
     }
 
@@ -2564,6 +2706,12 @@ mod tests {
                 observed_at_ms: 1,
             })
             .expect("tracker commits updated geometry");
+        tracker
+            .commit_observation(TargetObservation::FocusChanged {
+                focused: true,
+                observed_at_ms: 2,
+            })
+            .expect("tracker commits focus epoch");
 
         let policy =
             input_policy_for_target_snapshot(json!({"pointer_enabled": true}), tracker.snapshot());
@@ -2583,6 +2731,8 @@ mod tests {
             policy["pointer_target"]["target_geometry_revision"],
             json!(2)
         );
+        assert_eq!(policy["target_focus_epoch"], json!(2));
+        assert_eq!(policy["pointer_target"]["target_focus_epoch"], json!(2));
     }
 
     #[test]
