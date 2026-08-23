@@ -677,6 +677,16 @@ require 'easynet_relay' "$NETWORK_FALLBACK" \
   'network fallback verifier must require EasyNet relay route evidence'
 require 'selected_candidate_pair' "$NETWORK_FALLBACK" \
   'network fallback verifier must inspect selected candidate-pair evidence'
+require 'selected_candidate_pair\.selected must be true' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require selected ICE pair evidence'
+require 'selected_candidate_pair\.nominated must be true' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require nominated ICE pair evidence'
+require 'selected_candidate_pair\.state must be succeeded' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require succeeded ICE pair evidence'
+require 'selected_candidate_pair\.local_candidate_id must be recorded' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require selected local candidate id evidence'
+require 'selected_candidate_pair\.remote_candidate_id must be recorded' "$NETWORK_FALLBACK" \
+  'network fallback verifier must require selected remote candidate id evidence'
 require 'selected_route_class' "$NETWORK_FALLBACK" \
   'network fallback verifier must inspect selected route-class evidence'
 require 'local_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs" \

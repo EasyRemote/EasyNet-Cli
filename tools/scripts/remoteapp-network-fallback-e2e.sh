@@ -46,9 +46,10 @@ Evidence contract:
   The evidence JSON must prove a real network fallback matrix, not route-model
   source checks:
   direct, stun_srflx, turn_relay, and easynet_relay scenarios, each with
-  connected WebRTC candidate-pair evidence, selected route-class evidence,
-  rendered media, public RemoteApp session abilities, selected Resource URA
-  subject binding, session end, and a visible terminal receipt.
+  connected WebRTC candidate-pair evidence, nominated/selected/succeeded ICE
+  pair state, selected route-class evidence, rendered media, public RemoteApp
+  session abilities, selected Resource URA subject binding, session end, and a
+  visible terminal receipt.
 
 Non-claims:
   A skipped report or self-test does not prove network product readiness.
@@ -249,6 +250,16 @@ if isinstance(scenarios, list):
         selected_route_class = lower(pair.get("selected_route_class"))
         expected_route_class = expected_selected_route_class(route_kind)
         candidate_types = {local_type, remote_type}
+        require(pair.get("selected") is True,
+                f"{prefix}: selected_candidate_pair.selected must be true")
+        require(pair.get("nominated") is True,
+                f"{prefix}: selected_candidate_pair.nominated must be true")
+        require(lower(pair.get("state")) == "succeeded",
+                f"{prefix}: selected_candidate_pair.state must be succeeded")
+        require(isinstance(pair.get("local_candidate_id"), str) and pair.get("local_candidate_id"),
+                f"{prefix}: selected_candidate_pair.local_candidate_id must be recorded")
+        require(isinstance(pair.get("remote_candidate_id"), str) and pair.get("remote_candidate_id"),
+                f"{prefix}: selected_candidate_pair.remote_candidate_id must be recorded")
         require(selected_route_class in {"direct", "stun_srflx", "relay"},
                 f"{prefix}: selected_route_class must be direct, stun_srflx, or relay")
         require(expected_route_class is None or selected_route_class == expected_route_class,
@@ -386,6 +397,11 @@ for route_kind, local_type, remote_type, selected_route_class, extra in routes:
                 "local_candidate_type": local_type,
                 "remote_candidate_type": remote_type,
                 "selected_route_class": selected_route_class,
+                "selected": True,
+                "nominated": True,
+                "state": "succeeded",
+                "local_candidate_id": f"local-{route_kind}",
+                "remote_candidate_id": f"remote-{route_kind}",
                 "protocol": "udp",
                 "current_round_trip_time_ms": 12.5,
             },

@@ -289,6 +289,24 @@ grep -q "network fallback verifier must inspect selected route-class evidence" /
   fail "expected network fallback selected route-class failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 
+perl -0pi -e 's#selected_candidate_pair.nominated must be true#selected_candidate_pair.nominated may be false#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-nominated-pair.out 2>&1; then
+  fail "checker accepted network fallback verifier without nominated ICE pair evidence"
+fi
+grep -q "network fallback verifier must require nominated ICE pair evidence" /tmp/check-remoteapp-product-closure-network-nominated-pair.out || \
+  fail "expected network fallback nominated ICE pair failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
+perl -0pi -e 's#selected_candidate_pair.state must be succeeded#selected_candidate_pair.state may be in-progress#g' \
+  "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-succeeded-pair.out 2>&1; then
+  fail "checker accepted network fallback verifier without succeeded ICE pair evidence"
+fi
+grep -q "network fallback verifier must require succeeded ICE pair evidence" /tmp/check-remoteapp-product-closure-network-succeeded-pair.out || \
+  fail "expected network fallback succeeded ICE pair failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
+
 perl -0pi -e 's#turn_relay#turn_model_only#g' \
   "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-network-turn.out 2>&1; then
