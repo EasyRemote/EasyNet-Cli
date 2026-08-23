@@ -118,6 +118,8 @@ fn input_readiness_view(
         json!("target_input_not_ready")
     } else if input_policy.input_scope().as_str() == "view_only" {
         json!(session.target_binding().input_scope_reason())
+    } else if let Some(reason) = session.input_runtime_block_reason() {
+        json!(reason)
     } else if !input_injection_available() {
         json!("input_injection_unavailable")
     } else if !any_input_enabled {
@@ -194,8 +196,10 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
     use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
         ResourceEntryTargetResolver, TargetGeometry, TargetResolutionError,
     };
@@ -397,6 +401,73 @@ mod tests {
         assert_eq!(
             view["input_readiness"]["blocked_reason"],
             json!("target_input_not_ready")
+        );
+        assert_eq!(
+            view["input_readiness"]["effective_mode"],
+            json!("view_only")
+        );
+        assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
+        assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);
+    }
+
+    #[test]
+    fn session_view_projects_session_local_runtime_input_blocker() {
+        let subject = "easynet:///r/acme/resource/display.runtime-input-block";
+        let entry = ResourceEntry {
+            resource_ura: subject.into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Display,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "display:macos:2".into(),
+            display_name: "Studio Display".into(),
+            metadata: live_remote_target_metadata(json!({
+                "display_id": 2,
+                "primary_display": false,
+                "platform": "macos",
+                "backend": "macos_core_graphics",
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-view-runtime-input-block",
+            subject,
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.input_policy = RemoteDesktopInputPolicy::new(true, true);
+        init.target_binding = ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                "remote_desktop.create_session",
+                &entry,
+                "interactive",
+                1,
+                true,
+            )
+            .expect("display binding resolves with input-control consent");
+        let mut session = RemoteDesktopSession::new(init);
+        let epoch = TransportEpoch::new(31);
+
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-view-runtime-input-block"),
+        );
+        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert!(
+            session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied")
+        );
+
+        let view = serialize_session(&session);
+
+        assert_eq!(view["target_tracking"]["input_enabled"], json!(true));
+        assert_eq!(view["media_transport_ready"], json!(true));
+        assert_eq!(view["client_media_ready"], json!(true));
+        assert_eq!(view["lifecycle_phase"], json!("media_active"));
+        assert_eq!(
+            view["input_readiness"]["blocked_reason"],
+            json!("accessibility_permission_denied")
         );
         assert_eq!(
             view["input_readiness"]["effective_mode"],

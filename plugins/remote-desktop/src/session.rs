@@ -87,6 +87,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSession {
     transport: RemoteDesktopTransportState,
     target: RemoteAppTargetBindingStateMachine,
     event_log: RemoteDesktopEventLog,
+    input_runtime_block_reason: Option<String>,
     terminal_receipt: Option<Value>,
 }
 
@@ -107,6 +108,7 @@ impl RemoteDesktopSession {
             signaling: RemoteDesktopSignalingState::new(),
             transport: RemoteDesktopTransportState::new(),
             event_log: RemoteDesktopEventLog::new(),
+            input_runtime_block_reason: None,
             terminal_receipt: None,
         };
         session.push_projected_event(session_events::session_created());
@@ -177,6 +179,7 @@ impl RemoteDesktopSession {
             signaling: RemoteDesktopSignalingState::new(),
             transport: RemoteDesktopTransportState::new(),
             event_log: RemoteDesktopEventLog::rehydrate(snapshot.events(), terminal)?,
+            input_runtime_block_reason: None,
             terminal_receipt,
         };
         if !terminal {
@@ -286,6 +289,12 @@ impl RemoteDesktopSession {
 
     pub(in crate::daemon::plugins::remote_desktop) fn latest_target_diagnostic(&self) -> Value {
         self.target.snapshot().latest_diagnostic()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn input_runtime_block_reason(
+        &self,
+    ) -> Option<&str> {
+        self.input_runtime_block_reason.as_deref()
     }
 
     /// Requested session mode.
@@ -739,6 +748,7 @@ impl RemoteDesktopSession {
         }
         let changed = self.lifecycle.activate_input(InputActivationGate::Ready);
         if changed {
+            self.input_runtime_block_reason = None;
             self.touch();
         }
         changed
@@ -756,6 +766,7 @@ impl RemoteDesktopSession {
         if !changed {
             return false;
         }
+        self.input_runtime_block_reason = Some(reason.to_string());
         self.touch();
         self.push_projected_event(session_events::input_permission_blocked(
             epoch.value(),
@@ -1941,9 +1952,19 @@ mod tests {
         assert_eq!(session.state(), RemoteDesktopState::Connected);
         assert!(session.media_transport_ready());
         assert!(session.client_media_ready());
+        assert_eq!(
+            session.input_runtime_block_reason(),
+            Some("accessibility_permission_denied")
+        );
         assert!(
             !session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied"),
             "permission block projection must be edge-triggered"
+        );
+        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert_eq!(
+            session.input_runtime_block_reason(),
+            None,
+            "runtime input block reason must clear only after input is proven active again"
         );
 
         let blocked_events: Vec<_> = session

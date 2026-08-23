@@ -495,6 +495,12 @@ require 'input_runtime_permission_denied\(reason\)' "$INPUT" \
   'RemoteApp daemon input execution path must detect runtime permission denial'
 require 'mark_input_permission_blocked' "$INPUT" \
   'RemoteApp daemon input execution path must project runtime permission denial to the session aggregate'
+require 'input_runtime_block_reason' "$SESSION" \
+  'RemoteApp session aggregate must retain runtime input permission block reason'
+require 'session\.input_runtime_block_reason\(\)' "$SESSION_VIEW" \
+  'RemoteApp show_session projection must expose session-local runtime input blockers through input_readiness'
+require 'session_view_projects_session_local_runtime_input_blocker' "$SESSION_VIEW" \
+  'RemoteApp session view tests must prove runtime input blockers survive show_session projection'
 require 'INPUT_PERMISSION_BLOCKED' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
   'RemoteApp session events must expose runtime input permission blocks'
 require 'input_permission_block_projects_request_permission_recovery' "$ROOT/plugins/remote-desktop/src/session_events.rs" \

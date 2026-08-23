@@ -989,12 +989,16 @@ require '"blocked_reason": blocked_reason' "$VIEW" \
   'input readiness must expose a stable blocked reason when requested interactive is downgraded'
 require 'session\.target_binding\(\)\.input_scope_reason\(\)' "$VIEW" \
   'input readiness must reuse the committed target binding input scope reason'
+require 'session\.input_runtime_block_reason\(\)' "$VIEW" \
+  'input readiness must project session-local runtime input blockers after watch_events'
 require 'view\["input_readiness"\]\["requested_mode"\]' "$VIEW" \
   'session view tests must assert requested input mode in input_readiness'
 require 'view\["input_readiness"\]\["effective_mode"\]' "$VIEW" \
   'session view tests must assert effective input mode in input_readiness'
 require 'view\["input_readiness"\]\["blocked_reason"\]' "$VIEW" \
   'session view tests must assert input downgrade blocked reason in input_readiness'
+require 'session_view_projects_session_local_runtime_input_blocker' "$VIEW" \
+  'session view tests must prove runtime input permission blocks survive show_session projection'
 require 'display_interactive_without_input_consent_remains_view_only' "$INPUT" \
   'input policy tests must prove display interactive cannot enable key/pointer without input consent'
 require 'struct EffectiveRemoteDesktopInputPolicy' "$INPUT" \
@@ -1067,6 +1071,8 @@ require 'input_runtime_permission_denied\(reason\)' "$INPUT" \
   'WebRTC input execution must detect OS/runtime input permission denial from apply outcome'
 require 'mark_input_permission_blocked' "$INPUT" \
   'WebRTC input execution must project runtime input permission denial to the session aggregate'
+require 'input_runtime_block_reason' "$SESSION" \
+  'session aggregate must retain runtime input permission block reason for later show_session projection'
 require 'INPUT_PERMISSION_BLOCKED' "$SESSION_EVENTS" \
   'session events must expose a stable runtime input permission blocked event'
 require 'input_permission_block_projects_request_permission_recovery' "$SESSION_EVENTS" \
