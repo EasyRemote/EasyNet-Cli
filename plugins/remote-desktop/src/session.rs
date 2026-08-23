@@ -1052,12 +1052,13 @@ impl RemoteDesktopSession {
         if self.lifecycle.is_terminal() || !self.transport.merge_media_stats(epoch, stats.clone()) {
             return false;
         }
+        let merged_stats = self.transport.media_stats().unwrap_or(stats);
         self.touch();
         self.push_projected_event(session_events::media_pipeline_stats(
             self.target.binding(),
             epoch.value(),
             self.transport.media_transport_ready(),
-            stats,
+            merged_stats,
         ));
         true
     }
@@ -2114,6 +2115,18 @@ mod tests {
                     "frames_decoded": 12,
                     "frame_width": 1280,
                     "frame_height": 720
+                },
+                "render_probe": {
+                    "probe_source": "browser_webrtc_receiver",
+                    "selected_resource_ura": session.target_binding().subject_ura(),
+                    "session_id": "rd-client-transport-evidence",
+                    "media_pipeline_id": "macos-sck-videotoolbox-webrtc",
+                    "video_codec": "h264",
+                    "video_transport": "webrtc",
+                    "observed_at_ms": 1787470677805u64,
+                    "decoded_video_frames": 12,
+                    "frame_width": 1280,
+                    "frame_height": 720
                 }
             }))
         ));
@@ -2142,6 +2155,18 @@ mod tests {
         assert_eq!(stats["browser_stats"]["frames_decoded"], json!(24));
         assert_eq!(stats["browser_stats"]["frame_width"], json!(1280));
         assert_eq!(stats["browser_stats"]["decode_avg_ms"], json!(5.0));
+        assert_eq!(
+            stats["render_probe"]["probe_source"],
+            json!("browser_webrtc_receiver")
+        );
+        assert_eq!(
+            stats["render_probe"]["selected_resource_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            stats["render_probe"]["media_pipeline_id"],
+            json!("macos-sck-videotoolbox-webrtc")
+        );
 
         let media_events: Vec<_> = session
             .events()
@@ -2170,6 +2195,10 @@ mod tests {
         assert_eq!(
             latest["payload"]["stats"]["browser_stats"]["decode_avg_ms"],
             json!(5.0)
+        );
+        assert_eq!(
+            latest["payload"]["stats"]["render_probe"]["decoded_video_frames"],
+            json!(12)
         );
     }
 

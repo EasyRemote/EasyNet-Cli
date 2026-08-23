@@ -178,7 +178,8 @@ pub fn report_client_state_input_schema() -> Value {
             "transport_epoch": { "type": "integer", "minimum": 1 },
             "state": { "type": "string", "enum": ["presenting", "stalled", "detached"] },
             "client_transport": remote_desktop_client_transport_schema(),
-            "browser_stats": remote_desktop_browser_stats_schema()
+            "browser_stats": remote_desktop_browser_stats_schema(),
+            "render_probe": remote_desktop_render_probe_schema()
         }
     })
 }
@@ -235,6 +236,30 @@ fn remote_desktop_browser_stats_schema() -> Value {
             "processing_avg_ms": { "type": "number" },
             "freeze_count": { "type": "number" },
             "pause_count": { "type": "number" }
+        }
+    })
+}
+
+fn remote_desktop_render_probe_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "probe_source": bounded_string_schema(),
+            "selected_resource_ura": bounded_string_schema(),
+            "session_id": bounded_string_schema(),
+            "media_pipeline_id": bounded_string_schema(),
+            "video_codec": bounded_string_schema(),
+            "video_transport": bounded_string_schema(),
+            "audio_codec": bounded_string_schema(),
+            "observed_at_ms": { "type": "number" },
+            "decoded_video_frames": { "type": "number" },
+            "decoded_audio_packets": { "type": "number" },
+            "decoded_audio_samples": { "type": "number" },
+            "video_payload_hash": bounded_string_schema(),
+            "audio_payload_hash": bounded_string_schema(),
+            "frame_width": { "type": "number" },
+            "frame_height": { "type": "number" }
         }
     })
 }

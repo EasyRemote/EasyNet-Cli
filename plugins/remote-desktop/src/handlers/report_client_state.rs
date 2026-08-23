@@ -124,6 +124,27 @@ fn client_media_stats_from_args(args: &Value, state: &str) -> anyhow::Result<Opt
             stats.insert("browser_stats".to_string(), Value::Object(browser));
         }
     }
+    if let Some(render_probe) = optional_object(args, "render_probe")? {
+        let mut probe = Map::new();
+        copy_string(render_probe, &mut probe, "probe_source")?;
+        copy_string(render_probe, &mut probe, "selected_resource_ura")?;
+        copy_string(render_probe, &mut probe, "session_id")?;
+        copy_string(render_probe, &mut probe, "media_pipeline_id")?;
+        copy_string(render_probe, &mut probe, "video_codec")?;
+        copy_string(render_probe, &mut probe, "video_transport")?;
+        copy_string(render_probe, &mut probe, "audio_codec")?;
+        copy_number(render_probe, &mut probe, "observed_at_ms")?;
+        copy_number(render_probe, &mut probe, "decoded_video_frames")?;
+        copy_number(render_probe, &mut probe, "decoded_audio_packets")?;
+        copy_number(render_probe, &mut probe, "decoded_audio_samples")?;
+        copy_string(render_probe, &mut probe, "video_payload_hash")?;
+        copy_string(render_probe, &mut probe, "audio_payload_hash")?;
+        copy_number(render_probe, &mut probe, "frame_width")?;
+        copy_number(render_probe, &mut probe, "frame_height")?;
+        if !probe.is_empty() {
+            stats.insert("render_probe".to_string(), Value::Object(probe));
+        }
+    }
     if stats.is_empty() {
         return Ok(None);
     }
@@ -259,6 +280,18 @@ mod tests {
                     "frame_width": 1280,
                     "frame_height": 720,
                     "decode_avg_ms": 4.5
+                },
+                "render_probe": {
+                    "probe_source": "browser_webrtc_receiver",
+                    "selected_resource_ura": "easynet:///r/acme/resource/window.client",
+                    "session_id": "rd-client",
+                    "media_pipeline_id": "plugin.macos.screencapturekit.videotoolbox.webrtc.v1",
+                    "video_codec": "h264",
+                    "video_transport": "webrtc",
+                    "observed_at_ms": 1787470677805u64,
+                    "decoded_video_frames": 144,
+                    "frame_width": 1280,
+                    "frame_height": 720
                 }
             }),
             "presenting",
@@ -281,6 +314,15 @@ mod tests {
         );
         assert_eq!(stats["browser_stats"]["frames_decoded"], json!(144));
         assert_eq!(stats["browser_stats"]["decode_avg_ms"], json!(4.5));
+        assert_eq!(
+            stats["render_probe"]["probe_source"],
+            json!("browser_webrtc_receiver")
+        );
+        assert_eq!(
+            stats["render_probe"]["media_pipeline_id"],
+            json!("plugin.macos.screencapturekit.videotoolbox.webrtc.v1")
+        );
+        assert_eq!(stats["render_probe"]["decoded_video_frames"], json!(144));
     }
 
     #[test]

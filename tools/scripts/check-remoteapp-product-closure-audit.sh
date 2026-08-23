@@ -37,10 +37,12 @@ SESSION_LIFECYCLE="$ROOT/plugins/remote-desktop/src/session_lifecycle.rs"
 RUNTIME="$ROOT/plugins/remote-desktop/src/runtime.rs"
 SESSION_VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SESSION_HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
+REPORT_CLIENT_STATE_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/report_client_state.rs"
 CREATE_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/create_session.rs"
 REFRESH_LEASE_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/refresh_lease.rs"
 SHOW_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/show_session.rs"
 END_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/end_session.rs"
+REMOTE_DESKTOP_SCHEMA="$ROOT/plugins/remote-desktop/src/schema.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
 INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
@@ -105,10 +107,12 @@ reject() {
 [[ -f "$RUNTIME" ]] || fail "missing RemoteApp runtime module"
 [[ -f "$SESSION_VIEW" ]] || fail "missing RemoteApp session view projection"
 [[ -f "$SESSION_HANDLERS" ]] || fail "missing RemoteApp session handler tests"
+[[ -f "$REPORT_CLIENT_STATE_HANDLER" ]] || fail "missing RemoteApp report_client_state handler"
 [[ -f "$CREATE_SESSION_HANDLER" ]] || fail "missing RemoteApp create_session handler"
 [[ -f "$REFRESH_LEASE_HANDLER" ]] || fail "missing RemoteApp refresh_lease handler"
 [[ -f "$SHOW_SESSION_HANDLER" ]] || fail "missing RemoteApp show_session handler"
 [[ -f "$END_SESSION_HANDLER" ]] || fail "missing RemoteApp end_session handler"
+[[ -f "$REMOTE_DESKTOP_SCHEMA" ]] || fail "missing RemoteApp ability schemas"
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
 [[ -f "$TARGET_MONITOR" ]] || fail "missing RemoteApp target monitor"
 [[ -f "$INPUT" ]] || fail "missing RemoteApp input execution plane"
@@ -915,6 +919,16 @@ require 'media_pipeline_stats_projects_target_binding_context' "$SESSION_EVENTS"
   'RemoteApp media pipeline stats projection must carry selected target binding evidence'
 require 'latest\["payload"\]\["target_binding"\]\["subject_ura"\]' "$SESSION" \
   'RemoteApp media pipeline stats event-log rows must preserve selected Resource evidence'
+require 'render_probe' "$REMOTE_DESKTOP_SCHEMA" \
+  'RemoteApp report_client_state schema must accept render probe evidence'
+require 'render_probe' "$REPORT_CLIENT_STATE_HANDLER" \
+  'RemoteApp report_client_state handler must normalize render probe evidence'
+require 'decoded_video_frames' "$REPORT_CLIENT_STATE_HANDLER" \
+  'RemoteApp report_client_state handler must preserve decoded video frame evidence'
+require 'video_payload_hash' "$REPORT_CLIENT_STATE_HANDLER" \
+  'RemoteApp report_client_state handler must preserve render-probe payload fingerprints when provided'
+require 'latest\["payload"\]\["stats"\]\["render_probe"\]' "$SESSION" \
+  'RemoteApp media pipeline stats replay must preserve render probe evidence'
 require 'remoteapp_media_pipeline_stats_v1' "$NATIVE_WEBRTC_MEDIA" \
   'native WebRTC media loop must emit product-shaped media pipeline stats'
 require 'selected_resource_ura' "$NATIVE_WEBRTC_MEDIA" \
