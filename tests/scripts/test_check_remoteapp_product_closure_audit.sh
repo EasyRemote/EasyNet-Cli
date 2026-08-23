@@ -109,6 +109,24 @@ grep -q "cross-platform capture verifier must inspect first-display fallback evi
   fail "expected first-display fallback evidence failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 
+perl -0pi -e 's#selected_sentinel_rendered#selected_sentinel_visible#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-selected-sentinel.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without selected sentinel evidence"
+fi
+grep -q "cross-platform capture verifier must require selected sentinel render evidence" /tmp/check-remoteapp-product-closure-capture-selected-sentinel.out || \
+  fail "expected selected sentinel render evidence failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
+perl -0pi -e 's#unrelated_sentinel_rendered#unrelated_sentinel_visible#g' \
+  "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-capture-unrelated-sentinel.out 2>&1; then
+  fail "checker accepted cross-platform capture verifier without unrelated sentinel leakage rejection"
+fi
+grep -q "cross-platform capture verifier must reject unrelated sentinel leakage" /tmp/check-remoteapp-product-closure-capture-unrelated-sentinel.out || \
+  fail "expected unrelated sentinel leakage rejection failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
+
 perl -0pi -e 's#real_input_injection_matrix#policy_only_input_matrix#g' \
   "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-proof-mode.out 2>&1; then

@@ -28,7 +28,7 @@
         "device capability projection advertises production_target_subjects only when the production gate is ready and keeps diagnostic_target_subjects display-only",
         "device capability projection exposes platform_support for macOS/Linux/Windows with Linux app/window and Windows capture explicitly unsupported",
         "2026-08-23 local product-flow both report passed decoded-frame WebRTC for macOS window and application targets with selected Resource URA subjects and no display fallback",
-        "remoteapp-cross-platform-capture-e2e.sh verifier for real macOS/Windows/Linux capture or explicit unsupported artifacts"
+        "remoteapp-cross-platform-capture-e2e.sh verifier for real macOS/Windows/Linux capture or explicit unsupported artifacts with selected sentinel rendering and no unrelated sentinel leakage for window/application captures"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-cross-platform-capture-e2e.sh artifact",
@@ -37,6 +37,8 @@
         "real Linux host E2E or explicit product unsupported state",
         "no display fallback for window/application targets",
         "rendered frames for every passing capture scenario",
+        "selected sentinel content rendered for every passing capture scenario",
+        "unrelated sentinel content absent for every passing window/application capture scenario",
         "visible terminal receipt for every passing capture scenario"
       ],
       "non_claims": [

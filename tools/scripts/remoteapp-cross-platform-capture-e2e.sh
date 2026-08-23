@@ -45,7 +45,9 @@ Evidence contract:
   The evidence JSON must prove a real cross-platform capture matrix, not
   source-only target binding checks. macOS must pass display/window/application
   capture. Windows and Linux must either pass those targets or report explicit
-  product unsupported state without starting display fallback.
+  product unsupported state without starting display fallback. Passing
+  scenarios must prove selected sentinel content rendered; window/application
+  scenarios must also prove unrelated sentinel content did not render.
 
 Non-claims:
   A skipped report or self-test does not prove cross-platform capture
@@ -218,11 +220,15 @@ for platform_name in sorted(required_platforms):
                     f"{prefix}: frames_rendered must be positive")
             require(int(scenario.get("duration_ms", 0)) > 0,
                     f"{prefix}: duration_ms must be positive")
+            require(scenario.get("selected_sentinel_rendered") is True,
+                    f"{prefix}: selected_sentinel_rendered must be true")
             if target_kind in {"window", "application"}:
                 require(scenario.get("first_display_capture_started") is False,
                         f"{prefix}: window/application capture must not start first-display fallback")
                 require(scenario.get("display_fallback_used") is False,
                         f"{prefix}: display_fallback_used must be false")
+                require(scenario.get("unrelated_sentinel_rendered") is False,
+                        f"{prefix}: unrelated_sentinel_rendered must be false")
 
             abilities = scenario.get("abilities")
             require(isinstance(abilities, list) and abilities,
@@ -347,6 +353,8 @@ def passed(platform, target_kind):
         "source_only_proof": False,
         "frames_rendered": 3,
         "duration_ms": 1000,
+        "selected_sentinel_rendered": True,
+        "unrelated_sentinel_rendered": False,
         "first_display_capture_started": False,
         "display_fallback_used": False,
         "abilities": [

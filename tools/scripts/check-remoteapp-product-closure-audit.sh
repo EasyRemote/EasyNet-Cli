@@ -449,6 +449,10 @@ require 'remote_desktop\.end_session' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must inspect end_session evidence'
 require 'frames_rendered' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must inspect rendered frame evidence'
+require 'selected_sentinel_rendered' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must require selected sentinel render evidence'
+require 'unrelated_sentinel_rendered' "$CAPTURE_MATRIX" \
+  'cross-platform capture verifier must reject unrelated sentinel leakage'
 require 'terminal_receipt' "$CAPTURE_MATRIX" \
   'cross-platform capture verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$CAPTURE_MATRIX" \
