@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest as _, Sha256};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
 use crate::daemon::plugins::remote_desktop::session::now_ms;
@@ -702,6 +703,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                             epoch,
                             "INPUT_FRAME_APPLIED",
                             input_frame_applied_payload(
+                                &session_id,
+                                epoch,
                                 kind,
                                 frame.action(),
                                 accepted_count,
@@ -1062,6 +1065,8 @@ fn flush_input_rejections(
 }
 
 fn input_frame_applied_payload(
+    session_id: &str,
+    epoch: TransportEpoch,
     kind: &str,
     action: &str,
     accepted_count: u64,
@@ -1072,6 +1077,18 @@ fn input_frame_applied_payload(
     input_context: InputFrameTargetContext,
 ) -> Value {
     let mut payload = Map::new();
+    payload.insert(
+        "input_event_id".to_string(),
+        json!(input_event_id(
+            session_id,
+            epoch,
+            kind,
+            action,
+            accepted_count,
+            client_sequence,
+            timing,
+        )),
+    );
     payload.insert("kind".to_string(), json!(kind));
     payload.insert("action".to_string(), json!(action));
     payload.insert("accepted_count".to_string(), json!(accepted_count));
@@ -1083,6 +1100,45 @@ fn input_frame_applied_payload(
     insert_client_sequence(&mut payload, client_sequence);
     input_context.insert_into(&mut payload);
     Value::Object(payload)
+}
+
+fn input_event_id(
+    session_id: &str,
+    epoch: TransportEpoch,
+    kind: &str,
+    action: &str,
+    accepted_count: u64,
+    client_sequence: Option<u64>,
+    timing: InputFrameTiming,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"easynet.remote_desktop.input_event.v1\0");
+    update_hash_field(&mut hasher, "session_id", session_id);
+    update_hash_field(&mut hasher, "transport_epoch", &epoch.value().to_string());
+    update_hash_field(&mut hasher, "kind", kind);
+    update_hash_field(&mut hasher, "action", action);
+    update_hash_field(&mut hasher, "accepted_count", &accepted_count.to_string());
+    update_hash_field(
+        &mut hasher,
+        "client_sequence",
+        &client_sequence
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    update_hash_field(
+        &mut hasher,
+        "host_received_at_ms",
+        &timing.host_received_at_ms.to_string(),
+    );
+    let digest = hex::encode(hasher.finalize());
+    format!("rdinp1_{}", &digest[..32])
+}
+
+fn update_hash_field(hasher: &mut Sha256, key: &str, value: &str) {
+    hasher.update(key.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(value.as_bytes());
+    hasher.update(b"\0");
 }
 
 fn insert_client_sent_at_ms(payload: &mut Map<String, Value>, client_sent_at_ms: Option<u64>) {
@@ -1875,6 +1931,8 @@ mod tests {
     #[test]
     fn input_frame_applied_payload_preserves_client_timestamp() {
         let payload = input_frame_applied_payload(
+            "rd-input-event-a",
+            TransportEpoch::new(3),
             "pointer",
             "move",
             1,
@@ -1888,6 +1946,9 @@ mod tests {
             },
         );
 
+        assert!(payload["input_event_id"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("rdinp1_") && value.len() == 39));
         assert_eq!(payload["kind"], json!("pointer"));
         assert_eq!(payload["action"], json!("move"));
         assert_eq!(payload["accepted_count"], json!(1));
@@ -1904,6 +1965,8 @@ mod tests {
     #[test]
     fn input_frame_applied_payload_omits_latency_for_future_client_clock() {
         let payload = input_frame_applied_payload(
+            "rd-input-event-b",
+            TransportEpoch::new(4),
             "key",
             "down",
             1,
@@ -1922,6 +1985,76 @@ mod tests {
         assert_eq!(payload["host_applied_at_ms"], json!(1_787_331_000_142_u64));
         assert!(payload.get("latency_ms").is_none());
         assert_eq!(payload["target_focus_epoch"], json!(9));
+    }
+
+    #[test]
+    fn input_frame_applied_payload_binds_stable_event_id_to_session_and_epoch() {
+        let timing = InputFrameTiming::for_test(Some(1_787_331_000_123), 1_787_331_000_130);
+        let input_context = InputFrameTargetContext {
+            target_geometry_revision: Some(3),
+            target_focus_epoch: Some(5),
+        };
+        let left = input_frame_applied_payload(
+            "rd-input-event-stable",
+            TransportEpoch::new(7),
+            "pointer",
+            "move",
+            2,
+            0,
+            timing,
+            1_787_331_000_142,
+            Some(9),
+            input_context,
+        );
+        let same = input_frame_applied_payload(
+            "rd-input-event-stable",
+            TransportEpoch::new(7),
+            "pointer",
+            "move",
+            2,
+            0,
+            timing,
+            1_787_331_000_155,
+            Some(9),
+            input_context,
+        );
+        let different_session = input_frame_applied_payload(
+            "rd-input-event-other",
+            TransportEpoch::new(7),
+            "pointer",
+            "move",
+            2,
+            0,
+            timing,
+            1_787_331_000_142,
+            Some(9),
+            input_context,
+        );
+        let different_epoch = input_frame_applied_payload(
+            "rd-input-event-stable",
+            TransportEpoch::new(8),
+            "pointer",
+            "move",
+            2,
+            0,
+            timing,
+            1_787_331_000_142,
+            Some(9),
+            input_context,
+        );
+
+        assert_eq!(
+            left["input_event_id"], same["input_event_id"],
+            "event id must be stable for the same accepted input frame identity"
+        );
+        assert_ne!(
+            left["input_event_id"], different_session["input_event_id"],
+            "event id must bind to the public RemoteApp session"
+        );
+        assert_ne!(
+            left["input_event_id"], different_epoch["input_event_id"],
+            "event id must bind to the active transport epoch"
+        );
     }
 
     #[test]
