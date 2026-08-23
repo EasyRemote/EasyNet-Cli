@@ -1401,6 +1401,7 @@ fn validate_quarantined_agent_root(
             quarantine.display()
         );
     }
+    #[cfg(unix)]
     if let Some(handle) = open_root {
         let handle_metadata = handle.metadata()?;
         if !expected_identity.matches_metadata(&handle_metadata) {
@@ -1409,6 +1410,8 @@ fn validate_quarantined_agent_root(
             );
         }
     }
+    #[cfg(not(unix))]
+    let _ = open_root;
     if matches!(validation, QuarantineValidation::FullIdentity) {
         let directory = AgentDirectory::open(quarantine).map_err(|error| {
             anyhow::anyhow!(

@@ -31,27 +31,42 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use serde_json::{json, Value};
+#[cfg(unix)]
+use serde_json::json;
+use serde_json::Value;
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(unix)]
 use tokio::sync::broadcast;
 
+#[cfg(unix)]
 mod binary;
+#[cfg(unix)]
 mod contract;
 
+#[cfg(unix)]
 use self::binary::{BinaryHashState, BinaryHostFrame};
+#[cfg(unix)]
 use self::contract::{
     decode_host_frame, verify_terminal, HostFrame, HostStreamFailure, HostStreamFailureKind,
     HostStreamHashState,
 };
-use crate::daemon::ability::dispatch::{StreamOutputFrame, StreamSource};
-use crate::daemon::ability::manifest::{HostStreamExec, HostStreamProtocol};
+#[cfg(unix)]
+use crate::daemon::ability::dispatch::StreamOutputFrame;
+use crate::daemon::ability::dispatch::StreamSource;
+use crate::daemon::ability::manifest::HostStreamExec;
+#[cfg(unix)]
+use crate::daemon::ability::manifest::HostStreamProtocol;
 
 /// Broadcast depth. Frames are small JSON values; a generous buffer
 /// absorbs a slow consumer without forcing the reader task to block on
 /// the socket. Lag (overflow) is surfaced by the runtime forwarder, not
 /// silently dropped.
+#[cfg(unix)]
 const FRAME_CHANNEL_DEPTH: usize = 256;
+#[cfg(unix)]
 const TYPED_FRAME_CHANNEL_DEPTH: usize = 8;
 
 /// Open a `host_stream` ability against its external warm host and
@@ -59,6 +74,7 @@ const TYPED_FRAME_CHANNEL_DEPTH: usize = 8;
 ///
 /// `call_id` is the runtime invocation id used purely to correlate the
 /// request line on the wire; it is not protocol identity.
+#[cfg(unix)]
 pub fn run_host_stream(
     spec: &HostStreamExec,
     args: &Value,
@@ -93,11 +109,25 @@ pub fn run_host_stream(
     Ok(StreamSource::Live(rx))
 }
 
+#[cfg(not(unix))]
+pub fn run_host_stream(
+    _spec: &HostStreamExec,
+    _args: &Value,
+    _call_id: &str,
+    _caller: &str,
+) -> anyhow::Result<StreamSource> {
+    anyhow::bail!(
+        "host_stream is unavailable on target `{}`: the manifest transport requires a Unix domain socket",
+        std::env::consts::OS
+    )
+}
+
 /// Invoke the same external host transport as a unary RPC. The host wire is
 /// still framed because that is the transport contract, but RPC geometry
 /// requires exactly one successful item and a verified terminal. Stream
 /// items are collected only for this bounded unary adapter; generators never
 /// select this path.
+#[cfg(unix)]
 pub fn run_host_stream_unary(
     spec: &HostStreamExec,
     args: &Value,
@@ -146,6 +176,20 @@ pub fn run_host_stream_unary(
     })
 }
 
+#[cfg(not(unix))]
+pub fn run_host_stream_unary(
+    _spec: &HostStreamExec,
+    _args: &Value,
+    _call_id: &str,
+    _caller: &str,
+) -> anyhow::Result<Value> {
+    anyhow::bail!(
+        "host_stream unary is unavailable on target `{}`: the manifest transport requires a Unix domain socket",
+        std::env::consts::OS
+    )
+}
+
+#[cfg(unix)]
 fn run_binary_host_stream(
     spec: &HostStreamExec,
     args: &Value,
@@ -172,6 +216,7 @@ fn run_binary_host_stream(
     Ok(StreamSource::TypedFinite(rx))
 }
 
+#[cfg(unix)]
 fn host_stream_request(spec: &HostStreamExec, args: &Value, call_id: &str, caller: &str) -> Value {
     json!({
         "request": {
@@ -183,16 +228,19 @@ fn host_stream_request(spec: &HostStreamExec, args: &Value, call_id: &str, calle
     })
 }
 
+#[cfg(unix)]
 enum HostStreamSink<'a> {
     Broadcast(&'a broadcast::Sender<Value>),
     Unary(&'a mut Vec<Value>),
 }
 
+#[cfg(unix)]
 enum BinaryHostStreamSink<'a> {
     Stream(&'a tokio::sync::mpsc::Sender<anyhow::Result<StreamOutputFrame>>),
     Unary(&'a mut Vec<Value>),
 }
 
+#[cfg(unix)]
 async fn pump_binary_host_stream(
     socket_path: &str,
     request: &Value,
@@ -268,6 +316,7 @@ async fn pump_binary_host_stream(
 
 /// Drive one host-stream session to a clean terminal, or return the
 /// structured failure that becomes the terminal error frame.
+#[cfg(unix)]
 async fn pump_host_stream(
     socket_path: &str,
     request: &Value,
