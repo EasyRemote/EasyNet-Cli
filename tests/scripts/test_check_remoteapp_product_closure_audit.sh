@@ -57,12 +57,31 @@ cp "$REPO_ROOT/plugins/remote-desktop/src/target.rs" "$SB/plugins/remote-desktop
 cp "$REPO_ROOT/plugins/remote-desktop/src/target_tracking.rs" "$SB/plugins/remote-desktop/src/target_tracking.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/target_monitor.rs" "$SB/plugins/remote-desktop/src/target_monitor.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SB/plugins/remote-desktop/src/input.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/plugin.toml" "$SB/plugins/remote-desktop/plugin.toml"
 cp "$REPO_ROOT/plugins/remote-desktop/src/media/native.rs" "$SB/plugins/remote-desktop/src/media/native.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/mod.rs" "$SB/plugins/remote-desktop/src/handlers/mod.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/create_session.rs" "$SB/plugins/remote-desktop/src/handlers/create_session.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/refresh_lease.rs" "$SB/plugins/remote-desktop/src/handlers/refresh_lease.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/show_session.rs" "$SB/plugins/remote-desktop/src/handlers/show_session.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/handlers/end_session.rs" "$SB/plugins/remote-desktop/src/handlers/end_session.rs"
+
+perl -0pi -e 's#bidi_wire_kind = "metadata_json_plus_binary"#bidi_wire_kind = "json_frames"#' \
+  "$SB/plugins/remote-desktop/plugin.toml"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-attach-wire-manifest.out 2>&1; then
+  fail "checker accepted RemoteApp attach manifest with JSON-only bidi framing"
+fi
+grep -q "RemoteApp attach manifest must declare metadata_json_plus_binary bidi media framing" /tmp/check-remoteapp-product-closure-attach-wire-manifest.out || \
+  fail "expected RemoteApp attach manifest wire-kind failure"
+cp "$REPO_ROOT/plugins/remote-desktop/plugin.toml" "$SB/plugins/remote-desktop/plugin.toml"
+
+perl -0pi -e 's#PluginBidiWireKind::MetadataJsonPlusBinary#PluginBidiWireKind::JsonFrames#' \
+  "$SB/plugins/remote-desktop/src/registration.rs"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-attach-wire-registration.out 2>&1; then
+  fail "checker accepted RemoteApp compiled attach spec with JSON-only bidi framing"
+fi
+grep -q "RemoteApp compiled attach spec must declare metadata/binary bidi framing" /tmp/check-remoteapp-product-closure-attach-wire-registration.out || \
+  fail "expected RemoteApp attach registration wire-kind failure"
+cp "$REPO_ROOT/plugins/remote-desktop/src/registration.rs" "$SB/plugins/remote-desktop/src/registration.rs"
 
 perl -0pi -e 's/full RemoteApp product closure incomplete as of 2026-08-22/implemented; full acceptance verified 2026-08-16/' \
   "$SB/docs/design/remoteapp-targeted-session-spec.md"

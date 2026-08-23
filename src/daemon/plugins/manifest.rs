@@ -20,6 +20,8 @@ use crate::daemon::plugins::errors::{PluginHostError, Result};
 pub enum PluginBidiWireKind {
     /// Ability input/output frames are JSON control frames.
     JsonFrames,
+    /// Ability uses JSON metadata/control frames plus raw binary payload chunks.
+    MetadataJsonPlusBinary,
 }
 
 /// Realtime device resource family declared by a plugin package.
@@ -1068,6 +1070,32 @@ quick_add = true
         assert_eq!(
             capability.activation_abilities(),
             &["test.camera".to_string()]
+        );
+    }
+
+    #[test]
+    fn manifest_accepts_metadata_json_plus_binary_bidi_wire_kind() {
+        let manifest = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.remote_desktop.attach"
+layer = "operational"
+call_mode = "bidi"
+bidi_wire_kind = "metadata_json_plus_binary"
+"#,
+            ),
+        )
+        .expect("valid metadata/binary bidi manifest");
+
+        let ability = manifest
+            .abilities()
+            .first()
+            .expect("ability metadata parsed");
+        assert_eq!(
+            ability.bidi_wire_kind(),
+            Some(PluginBidiWireKind::MetadataJsonPlusBinary)
         );
     }
 

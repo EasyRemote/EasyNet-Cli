@@ -97,7 +97,7 @@ call_mode = "rpc"
 name = "remote_desktop.attach"
 layer = "operational"
 call_mode = "bidi"
-bidi_wire_kind = "json_frames"
+bidi_wire_kind = "metadata_json_plus_binary"
 
 [[ability_metadata]]
 name = "remote_desktop.permission_status"

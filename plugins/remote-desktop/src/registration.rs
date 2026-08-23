@@ -364,7 +364,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 layer: PluginAbilityLayer::Operational,
                 call_mode: CallMode::Bidi,
                 admission_action: AdmissionAction::Stream,
-                bidi_wire_kind: Some(PluginBidiWireKind::JsonFrames),
+                bidi_wire_kind: Some(PluginBidiWireKind::MetadataJsonPlusBinary),
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
                 frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,

@@ -43,6 +43,8 @@ END_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/end_session.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
 INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
+REMOTE_DESKTOP_PLUGIN_MANIFEST="$ROOT/plugins/remote-desktop/plugin.toml"
+REMOTE_DESKTOP_REGISTRATION="$ROOT/plugins/remote-desktop/src/registration.rs"
 
 fail() {
   printf 'check-remoteapp-product-closure-audit: %s\n' "$1" >&2
@@ -106,6 +108,8 @@ reject() {
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
 [[ -f "$TARGET_MONITOR" ]] || fail "missing RemoteApp target monitor"
 [[ -f "$INPUT" ]] || fail "missing RemoteApp input execution plane"
+[[ -f "$REMOTE_DESKTOP_PLUGIN_MANIFEST" ]] || fail "missing RemoteApp plugin manifest"
+[[ -f "$REMOTE_DESKTOP_REGISTRATION" ]] || fail "missing RemoteApp compiled registration"
 
 for lifecycle_harness in "$SESSION_TIMEOUT" "$SESSION_CANCEL" "$SESSION_RESUME"; do
   require 'remoteapp-lifecycle-harness-lib\.sh' "$lifecycle_harness" \
@@ -141,6 +145,14 @@ require 'remoteapp_resolve_rpc_ability_ura' "$LIFECYCLE_HARNESS_LIB" \
   'RemoteApp lifecycle helper must implement catalog Ability URA resolution'
 require 'remoteapp_session_approval_causal_context_json' "$LIFECYCLE_HARNESS_LIB" \
   'RemoteApp lifecycle helper must implement approval receipt causal context projection'
+require 'bidi_wire_kind = "metadata_json_plus_binary"' "$REMOTE_DESKTOP_PLUGIN_MANIFEST" \
+  'RemoteApp attach manifest must declare metadata_json_plus_binary bidi media framing'
+reject 'bidi_wire_kind = "json_frames"' "$REMOTE_DESKTOP_PLUGIN_MANIFEST" \
+  'RemoteApp attach manifest must not regress to JSON-only bidi framing'
+require 'PluginBidiWireKind::MetadataJsonPlusBinary' "$REMOTE_DESKTOP_REGISTRATION" \
+  'RemoteApp compiled attach spec must declare metadata/binary bidi framing'
+reject 'PluginBidiWireKind::JsonFrames' "$REMOTE_DESKTOP_REGISTRATION" \
+  'RemoteApp compiled attach spec must not regress to JSON-only bidi framing'
 
 python3 - "$MATRIX" <<'PY' || fail "RemoteApp product readiness matrix is invalid"
 import json
