@@ -229,6 +229,7 @@ required = [
         "coverage_keys": ["macos", "windows", "linux"],
         "requires_evidence_json": True,
         "requires_platforms_passed": ["macos", "windows", "linux"],
+        "requires_input_injection_scenarios": True,
     },
     {
         "id": "media_adaptation",
@@ -1017,6 +1018,200 @@ def validate_cross_platform_capture_scenarios(item_id, check, report):
                     add_error(item_id, message)
     check["observed_cross_platform_capture_targets"] = observed
 
+def validate_input_injection_scenarios(item_id, check, report):
+    required_platforms = {"macos", "windows", "linux"}
+    required_inputs = {"pointer", "keyboard"}
+    platforms = report.get("platforms")
+    check["required_input_injection_platforms"] = sorted(required_platforms)
+    if not isinstance(platforms, list) or not platforms:
+        message = "input injection platforms summary must be a non-empty list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+
+    platform_by_name = {
+        platform.get("platform"): platform
+        for platform in platforms
+        if isinstance(platform, dict) and isinstance(platform.get("platform"), str)
+    }
+    missing_platforms = sorted(required_platforms - set(platform_by_name))
+    if missing_platforms:
+        message = "input injection platforms missing: " + ", ".join(missing_platforms)
+        check["errors"].append(message)
+        add_error(item_id, message)
+
+    observed = {}
+    for platform_name in sorted(required_platforms):
+        platform = platform_by_name.get(platform_name)
+        if not isinstance(platform, dict):
+            continue
+        prefix = f"input injection {platform_name}"
+        if platform.get("status") != "passed":
+            message = f"{prefix}: status is {platform.get('status')!r}, expected 'passed'"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        summary = platform.get("input_summary")
+        if not isinstance(summary, dict):
+            message = f"{prefix}: input_summary must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if not isinstance(summary.get("selected_resource_ura"), str) or not summary.get("selected_resource_ura").startswith("easynet:///"):
+            message = f"{prefix}: selected_resource_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(summary.get("session_id"), str) or not summary.get("session_id"):
+            message = f"{prefix}: session_id must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("permission_granted") is not True:
+            message = f"{prefix}: permission_granted must be true"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("consent_scope") != "input_control":
+            message = f"{prefix}: consent_scope must be input_control"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("input_scope") != "display_global":
+            message = f"{prefix}: input_scope must be display_global"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        for field in ("focus_validated", "coordinate_mapping_validated"):
+            if summary.get(field) is not True:
+                message = f"{prefix}: {field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+        if not positive_int(summary.get("target_geometry_revision")):
+            message = f"{prefix}: target_geometry_revision must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(summary.get("target_focus_epoch")):
+            message = f"{prefix}: target_focus_epoch must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("source_only_proof") is not False:
+            message = f"{prefix}: source_only_proof must be false"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("policy_only") is not False:
+            message = f"{prefix}: policy_only must be false"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        threshold = number_value(summary.get("latency_threshold_ms"))
+        if threshold <= 0 or threshold > 250:
+            message = f"{prefix}: latency_threshold_ms must be in (0, 250]"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if number_value(summary.get("latency_p95_ms")) > threshold:
+            message = f"{prefix}: latency_p95_ms must be within threshold"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if number_value(summary.get("latency_max_ms")) > threshold:
+            message = f"{prefix}: latency_max_ms must be within threshold"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        applied_inputs = summary.get("applied_inputs")
+        if not isinstance(applied_inputs, list) or not applied_inputs:
+            message = f"{prefix}: applied_inputs summary must be a non-empty list"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        input_by_kind = {}
+        last_sequence = 0
+        for index, entry in enumerate(applied_inputs):
+            if not isinstance(entry, dict):
+                message = f"{prefix}: applied_inputs[{index}] must be an object"
+                check["errors"].append(message)
+                add_error(item_id, message)
+                continue
+            kind = entry.get("kind")
+            if kind not in required_inputs:
+                message = f"{prefix}: applied_inputs[{index}].kind is {kind!r}"
+                check["errors"].append(message)
+                add_error(item_id, message)
+                continue
+            sequence = int_value(entry.get("client_sequence"))
+            if sequence <= last_sequence:
+                message = f"{prefix}: applied_inputs client_sequence must be strictly increasing"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            last_sequence = max(last_sequence, sequence)
+            if kind in input_by_kind:
+                message = f"{prefix}: duplicate applied input kind {kind}"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            input_by_kind[kind] = entry
+        observed[platform_name] = sorted(input_by_kind)
+        missing_inputs = sorted(required_inputs - set(input_by_kind))
+        if missing_inputs:
+            message = f"{prefix}: applied_inputs missing: " + ", ".join(missing_inputs)
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        for kind in sorted(required_inputs):
+            entry = input_by_kind.get(kind)
+            if not isinstance(entry, dict):
+                continue
+            input_prefix = f"{prefix}/{kind}"
+            if entry.get("result") != "input_applied":
+                message = f"{input_prefix}: result must be input_applied"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if entry.get("event_type") != "INPUT_FRAME_APPLIED":
+                message = f"{input_prefix}: event_type must be INPUT_FRAME_APPLIED"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not isinstance(entry.get("input_event_id"), str) or not entry.get("input_event_id"):
+                message = f"{input_prefix}: input_event_id must be set"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if number_value(entry.get("latency_ms")) > threshold:
+                message = f"{input_prefix}: latency_ms must be within threshold"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            for field in (
+                "os_effect_observed",
+                "observer_independent_from_injector",
+                "os_effect_bound",
+                "target_geometry_revision_bound",
+                "target_focus_epoch_bound",
+            ):
+                if entry.get(field) is not True:
+                    message = f"{input_prefix}: {field} must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if kind == "pointer":
+                if entry.get("coordinate_mapping") != "target_geometry_revision_matched":
+                    message = f"{input_prefix}: coordinate_mapping must bind target geometry"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                if entry.get("within_tolerance_px") is not True:
+                    message = f"{input_prefix}: within_tolerance_px must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if kind == "keyboard":
+                if entry.get("focused_resource_bound") is not True:
+                    message = f"{input_prefix}: focused_resource_bound must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                if entry.get("key_code_matched") is not True:
+                    message = f"{input_prefix}: key_code_matched must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+        if summary.get("stale_client_sequence_rejected") is not True:
+            message = f"{prefix}: stale_client_sequence_rejected must be true"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        for field in ("terminal_receipt_visible", "terminal_receipt_session_bound"):
+            if summary.get(field) is not True:
+                message = f"{prefix}: {field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+    check["observed_input_injection_inputs"] = observed
+
 def validate_crash_restart_recovery_scenarios(item_id, check, report):
     required_scenarios = {
         "daemon_restart_active_session",
@@ -1396,6 +1591,8 @@ for item in required:
         validate_cross_device_remoteapp_scenarios(item_id, check, report)
     if item.get("requires_cross_platform_capture_scenarios"):
         validate_cross_platform_capture_scenarios(item_id, check, report)
+    if item.get("requires_input_injection_scenarios"):
+        validate_input_injection_scenarios(item_id, check, report)
     if item.get("requires_crash_restart_recovery_scenarios"):
         validate_crash_restart_recovery_scenarios(item_id, check, report)
     if item.get("requires_lifecycle_summary"):
@@ -1944,8 +2141,68 @@ if item_id == "cross_platform_capture":
         for platform in ("linux", "macos", "windows")
     ]
 if item_id == "input_injection":
+    def input_summary(platform):
+        return {
+            "selected_resource_ura": f"easynet:///r/localhost/resource/device.{platform}/display.primary",
+            "session_id": f"rd-product-input-{platform}",
+            "permission_granted": True,
+            "consent_scope": "input_control",
+            "input_scope": "display_global",
+            "focus_validated": True,
+            "coordinate_mapping_validated": True,
+            "target_geometry_revision": 7,
+            "target_focus_epoch": 11,
+            "source_only_proof": False,
+            "policy_only": False,
+            "latency_threshold_ms": 100,
+            "latency_p95_ms": 35,
+            "latency_max_ms": 35,
+            "stale_client_sequence_rejected": True,
+            "terminal_receipt_visible": True,
+            "terminal_receipt_session_bound": True,
+            "applied_inputs": [
+                {
+                    "kind": "pointer",
+                    "result": "input_applied",
+                    "event_type": "INPUT_FRAME_APPLIED",
+                    "client_sequence": 1,
+                    "input_event_id": f"{platform}-pointer-input",
+                    "latency_ms": 19,
+                    "os_effect_observed": True,
+                    "observer_independent_from_injector": True,
+                    "os_effect_bound": True,
+                    "target_geometry_revision_bound": True,
+                    "target_focus_epoch_bound": True,
+                    "coordinate_mapping": "target_geometry_revision_matched",
+                    "within_tolerance_px": True,
+                    "focused_resource_bound": False,
+                    "key_code_matched": True,
+                },
+                {
+                    "kind": "keyboard",
+                    "result": "input_applied",
+                    "event_type": "INPUT_FRAME_APPLIED",
+                    "client_sequence": 2,
+                    "input_event_id": f"{platform}-keyboard-input",
+                    "latency_ms": 35,
+                    "os_effect_observed": True,
+                    "observer_independent_from_injector": True,
+                    "os_effect_bound": True,
+                    "target_geometry_revision_bound": True,
+                    "target_focus_epoch_bound": True,
+                    "coordinate_mapping": None,
+                    "within_tolerance_px": None,
+                    "focused_resource_bound": True,
+                    "key_code_matched": True,
+                },
+            ],
+        }
     report["platforms"] = [
-        {"platform": platform, "status": "passed"}
+        {
+            "platform": platform,
+            "status": "passed",
+            "input_summary": input_summary(platform),
+        }
         for platform in ("linux", "macos", "windows")
     ]
 if item_id == "media_adaptation":
@@ -2837,6 +3094,33 @@ PY
   fi
   write_synthetic_report "$tmp/input_injection.json" input_injection
 
+  python3 - "$tmp/input_injection.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+for platform in report["platforms"]:
+    del platform["input_summary"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-input-injection-summaries" >/dev/null 2>&1; then
+    echo "self-test accepted input injection report without summaries" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/input_injection.json" input_injection
+
   python3 - "$tmp/media_adaptation.json" <<'PY'
 import json
 import pathlib
@@ -3102,6 +3386,7 @@ case "$MODE" in
     grep -q 'requires_evidence_json' "$0"
     grep -q 'requires_platforms_passed' "$0"
     grep -q 'requires_cross_platform_capture_scenarios' "$0"
+    grep -q 'requires_input_injection_scenarios' "$0"
     grep -q 'requires_media_scenarios' "$0"
     grep -q 'requires_multi_window_scenarios' "$0"
     grep -q 'requires_network_route_scenarios' "$0"
@@ -3112,6 +3397,7 @@ case "$MODE" in
     grep -q 'media adaptation scenarios summary must be a non-empty list' "$0"
     grep -q 'multi-window tracking scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-platform capture .* scenarios summary must be a non-empty list' "$0"
+    grep -q 'input injection .* input_summary must be an object' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-device RemoteApp scenarios summary must be a non-empty list' "$0"
     grep -q 'crash/restart recovery scenarios summary must be a non-empty list' "$0"
@@ -3150,6 +3436,7 @@ case "$MODE" in
     grep -q 'self-test accepted unsupported cross-platform capture as product completion' "$0"
     grep -q 'self-test accepted cross-platform capture report without scenarios' "$0"
     grep -q 'self-test accepted unsupported input injection as product completion' "$0"
+    grep -q 'self-test accepted input injection report without summaries' "$0"
     grep -q 'self-test accepted media adaptation report without scenarios' "$0"
     grep -q 'self-test accepted multi-window tracking report without scenarios' "$0"
     grep -q 'self-test accepted unsupported multi-display application as product completion' "$0"

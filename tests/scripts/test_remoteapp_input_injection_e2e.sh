@@ -22,6 +22,44 @@ grep -q "skipped" /tmp/remoteapp-input-injection-skip.out || \
 
 EASYNET_REMOTEAPP_INPUT_INJECTION_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
 
+python3 - "$OUT_DIR/good/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+platforms = {platform["platform"]: platform for platform in report["platforms"]}
+summary = platforms["macos"]["input_summary"]
+assert summary["selected_resource_ura"].startswith("easynet:///")
+assert summary["session_id"]
+assert summary["permission_granted"] is True
+assert summary["consent_scope"] == "input_control"
+assert summary["input_scope"] == "display_global"
+assert summary["focus_validated"] is True
+assert summary["coordinate_mapping_validated"] is True
+assert summary["target_geometry_revision"] > 0
+assert summary["target_focus_epoch"] > 0
+assert summary["source_only_proof"] is False
+assert summary["policy_only"] is False
+assert summary["stale_client_sequence_rejected"] is True
+assert summary["terminal_receipt_visible"] is True
+assert summary["terminal_receipt_session_bound"] is True
+applied = {entry["kind"]: entry for entry in summary["applied_inputs"]}
+assert set(applied) == {"pointer", "keyboard"}
+for entry in applied.values():
+    assert entry["result"] == "input_applied"
+    assert entry["event_type"] == "INPUT_FRAME_APPLIED"
+    assert entry["latency_ms"] <= summary["latency_threshold_ms"]
+    assert entry["os_effect_observed"] is True
+    assert entry["observer_independent_from_injector"] is True
+    assert entry["os_effect_bound"] is True
+    assert entry["target_geometry_revision_bound"] is True
+    assert entry["target_focus_epoch_bound"] is True
+assert applied["pointer"]["coordinate_mapping"] == "target_geometry_revision_matched"
+assert applied["pointer"]["within_tolerance_px"] is True
+assert applied["keyboard"]["focused_resource_bound"] is True
+assert applied["keyboard"]["key_code_matched"] is True
+PY
+
 python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/missing-keyboard.json" <<'PY'
 import json
 import sys

@@ -531,6 +531,12 @@ require 'self-test accepted cross-platform capture report without scenarios' "$P
   'product-completion gate self-test must reject missing cross-platform capture scenarios'
 require 'unsupported_targets must be empty' "$PRODUCT_COMPLETION" \
   'product-completion gate must reject unsupported cross-platform capture targets'
+require 'requires_input_injection_scenarios' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require input injection summaries'
+require 'input injection .* input_summary must be an object' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject input reports without per-platform summaries'
+require 'self-test accepted input injection report without summaries' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing input injection summaries'
 require "expected 'passed'" "$PRODUCT_COMPLETION" \
   'product-completion gate must reject unsupported input platforms'
 require 'expected_target_kind' "$PRODUCT_COMPLETION" \

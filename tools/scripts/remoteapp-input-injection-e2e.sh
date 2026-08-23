@@ -403,12 +403,79 @@ for platform_name in sorted(required_platforms):
         require(terminal.get("reason_code") in terminal_reasons,
                 f"{prefix}: terminal_receipt.reason_code must be a known cleanup/end reason")
 
+        input_summaries = []
+        for result in input_results:
+            if not isinstance(result, dict):
+                continue
+            kind = result.get("kind")
+            if kind not in required_inputs:
+                continue
+            os_effect = result.get("os_effect")
+            if not isinstance(os_effect, dict):
+                os_effect = {}
+            input_summaries.append({
+                "kind": kind,
+                "result": result.get("result"),
+                "event_type": result.get("event_type"),
+                "client_sequence": result.get("client_sequence"),
+                "input_event_id": result.get("input_event_id"),
+                "latency_ms": result.get("latency_ms"),
+                "os_effect_observed": os_effect.get("observed") is True,
+                "os_effect_probe_source": os_effect.get("os_effect_probe_source"),
+                "observer_independent_from_injector": os_effect.get("observer_independent_from_injector"),
+                "os_effect_bound": (
+                    os_effect.get("input_event_id") == result.get("input_event_id")
+                    and os_effect.get("subject_ura") == subject_ura
+                    and os_effect.get("session_id") == session_id
+                    and normalize(os_effect.get("platform")) == platform_name
+                ),
+                "target_geometry_revision_bound": (
+                    os_effect.get("target_geometry_revision") == platform.get("target_geometry_revision")
+                ),
+                "target_focus_epoch_bound": (
+                    os_effect.get("target_focus_epoch") == platform.get("target_focus_epoch")
+                ),
+                "coordinate_mapping": result.get("coordinate_mapping"),
+                "within_tolerance_px": os_effect.get("within_tolerance_px"),
+                "focused_resource_bound": os_effect.get("focused_resource_ura") == subject_ura,
+                "key_code_matched": (
+                    kind != "keyboard"
+                    or (
+                        os_effect.get("expected_key_code") == result.get("key_code")
+                        and os_effect.get("observed_key_code") == result.get("key_code")
+                    )
+                ),
+            })
+
         platform_reports.append({
             "platform": platform_name,
             "status": "passed",
             "input_results": sorted(result_by_kind),
             "stale_client_sequence_rejected": bool(stale_rejections),
             "max_latency_ms": max(latencies) if latencies else None,
+            "input_summary": {
+                "selected_resource_ura": subject_ura,
+                "session_id": session_id,
+                "permission_granted": (
+                    platform.get("permission", {}).get("input_injection_granted") is True
+                    or platform.get("permission", {}).get("accessibility_granted") is True
+                ),
+                "consent_scope": platform.get("consent_scope"),
+                "input_scope": platform.get("input_scope"),
+                "focus_validated": platform.get("focus_validated"),
+                "coordinate_mapping_validated": platform.get("coordinate_mapping_validated"),
+                "target_geometry_revision": platform.get("target_geometry_revision"),
+                "target_focus_epoch": platform.get("target_focus_epoch"),
+                "source_only_proof": platform.get("source_only_proof"),
+                "policy_only": platform.get("policy_only"),
+                "applied_inputs": input_summaries,
+                "stale_client_sequence_rejected": bool(stale_rejections),
+                "latency_threshold_ms": latency_threshold,
+                "latency_p95_ms": latency_summary.get("p95_ms"),
+                "latency_max_ms": latency_summary.get("max_ms"),
+                "terminal_receipt_visible": terminal.get("terminal") is True,
+                "terminal_receipt_session_bound": terminal.get("session_id") == session_id,
+            },
         })
     elif status == "unsupported":
         require(platform_name in {"windows", "linux"},

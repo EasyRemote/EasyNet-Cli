@@ -91,6 +91,12 @@ grep -q "cross-platform capture .* scenarios summary must be a non-empty list" "
   fail "completion gate must reject capture reports without per-target scenarios"
 grep -q "self-test accepted cross-platform capture report without scenarios" "$SCRIPT" || \
   fail "completion gate self-test must cover missing cross-platform capture scenarios"
+grep -q "requires_input_injection_scenarios" "$SCRIPT" || \
+  fail "completion gate must require input injection summaries"
+grep -q "input injection .* input_summary must be an object" "$SCRIPT" || \
+  fail "completion gate must reject input reports without per-platform summaries"
+grep -q "self-test accepted input injection report without summaries" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing input injection summaries"
 grep -q "unsupported_targets must be empty" "$SCRIPT" || \
   fail "completion gate must reject unsupported cross-platform capture targets"
 grep -q "expected 'passed'" "$SCRIPT" || \
