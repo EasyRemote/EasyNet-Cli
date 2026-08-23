@@ -1115,8 +1115,16 @@ require 'desired_sessions_for_test' "$TARGET_MONITOR" \
   'RemoteApp target monitor must expose test evidence for desired tracking state'
 require 'SESSION_REHYDRATED' "$SESSION" \
   'RemoteApp session aggregate must emit SESSION_REHYDRATED for non-terminal startup recovery'
+require 'session_events::session_rehydrated' "$SESSION" \
+  'RemoteApp session aggregate must emit typed SESSION_REHYDRATED projection with target binding evidence'
 require 'fn rehydrate\(' "$SESSION" \
   'RemoteApp session aggregate must own snapshot-to-session rehydration'
+require 'fn session_rehydrated' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+  'RemoteApp session event projections must define typed rehydration event payloads'
+require '"target_binding": binding\.to_value\(\)' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+  'RemoteApp rehydration event payload must include selected target binding evidence'
+require '"subject_ura": binding\.subject_ura\(\)' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+  'RemoteApp rehydration event payload must bind selected Resource URA'
 require 'rehydrated_non_terminal_session_can_start_new_media_epoch_without_new_session' "$SESSION" \
   'RemoteApp session aggregate must prove rehydrated sessions can restart media without minting a new session'
 require 'rehydrated_non_terminal_session_preserves_runtime_input_block_reason' "$SESSION" \

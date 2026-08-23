@@ -118,6 +118,42 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_bound(
     RemoteDesktopEventProjection::new("TARGET_BOUND", binding.target_bound_event_payload())
 }
 
+/// Build the daemon-restart recovery event emitted when a durable non-terminal
+/// session snapshot is restored into the runtime aggregate.
+///
+/// The selected target fields intentionally mirror target-bound event
+/// projection so crash/restart evidence can be tied to the selected Resource,
+/// geometry revision, media source epoch, and consent epoch without requiring
+/// a separate show_session snapshot.
+pub(in crate::daemon::plugins::remote_desktop) fn session_rehydrated(
+    binding: &RemoteAppTargetBinding,
+    previous_lifecycle_state: &str,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "SESSION_REHYDRATED",
+        json!({
+            "subject_ura": binding.subject_ura(),
+            "binding_id": binding.binding_id(),
+            "binding_epoch": binding.binding_epoch(),
+            "previous_target_identity_epoch": Value::Null,
+            "target_identity_epoch": binding.target_identity_epoch(),
+            "target_geometry_revision": binding.target_geometry_revision(),
+            "media_source_epoch": binding.media_source_epoch(),
+            "consent_epoch": binding.consent_epoch(),
+            "reason_code": "daemon_restart_rehydrated",
+            "recoverability": "retry_session",
+            "failure_domain": "daemon_restart",
+            "frontend_action": "retry_session",
+            "media_transport_ready": false,
+            "client_media_ready": false,
+            "previous_lifecycle_state": previous_lifecycle_state,
+            "target_binding": binding.to_value(),
+            "scope_audit": binding.scope_audit_value(),
+            "latest_target_diagnostic": binding.latest_target_diagnostic_value(),
+        }),
+    )
+}
+
 /// Build a generic SDP description-set payload.
 pub(in crate::daemon::plugins::remote_desktop) fn description_set(
     side: &str,

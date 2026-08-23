@@ -189,18 +189,10 @@ impl RemoteDesktopSession {
             terminal_receipt,
         };
         if !terminal {
-            session.push_event(
-                "SESSION_REHYDRATED",
-                json!({
-                    "reason_code": "daemon_restart_rehydrated",
-                    "recoverability": "retry_session",
-                    "failure_domain": "daemon_restart",
-                    "frontend_action": "retry_session",
-                    "media_transport_ready": false,
-                    "client_media_ready": false,
-                    "previous_lifecycle_state": snapshot.lifecycle_state(),
-                }),
-            );
+            session.push_projected_event(session_events::session_rehydrated(
+                session.target.binding(),
+                snapshot.lifecycle_state(),
+            ));
         }
         Ok(session)
     }
@@ -1425,10 +1417,35 @@ mod tests {
         assert!(session.media_transport_ready());
         assert!(session.client_media_ready());
         assert!(session.production_media_ready());
-        assert!(session.events().iter().any(|event| {
-            event["event_type"] == json!("SESSION_REHYDRATED")
-                && event["payload"]["recoverability"] == json!("retry_session")
-        }));
+        let rehydrated_event = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("SESSION_REHYDRATED"))
+            .expect("rehydration event is recorded");
+        assert_eq!(rehydrated_event["recoverability"], json!("retry_session"));
+        assert_eq!(
+            rehydrated_event["subject_ura"],
+            json!("easynet:///r/acme/resource/display.rehydrate-media")
+        );
+        assert_eq!(
+            rehydrated_event["payload"]["target_binding"]["subject_ura"],
+            json!("easynet:///r/acme/resource/display.rehydrate-media")
+        );
+        assert!(rehydrated_event["binding_epoch"].as_u64().unwrap_or(0) > 0);
+        assert!(
+            rehydrated_event["target_identity_epoch"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+        assert!(
+            rehydrated_event["target_geometry_revision"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+        assert!(rehydrated_event["media_source_epoch"].as_u64().unwrap_or(0) > 0);
+        assert!(rehydrated_event["consent_epoch"].as_u64().unwrap_or(0) > 0);
     }
 
     #[test]

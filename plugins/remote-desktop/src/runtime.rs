@@ -408,10 +408,24 @@ mod tests {
             vec!["rd-startup-rehydrate".to_string()],
             "rehydrated non-terminal sessions must re-enter target monitoring"
         );
-        assert!(shown["events"].as_array().unwrap().iter().any(|event| {
-            event["event_type"] == json!("SESSION_REHYDRATED")
-                && event["recoverability"] == json!("retry_session")
-        }));
+        let shown_rehydrated_event = shown["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["event_type"] == json!("SESSION_REHYDRATED"))
+            .expect("show_session projects the rehydrated event");
+        assert_eq!(
+            shown_rehydrated_event["recoverability"],
+            json!("retry_session")
+        );
+        assert_eq!(shown_rehydrated_event["subject_ura"], json!(ura));
+        assert!(
+            shown_rehydrated_event["target_identity_epoch"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+        assert!(shown_rehydrated_event["payload"]["target_binding"]["subject_ura"] == json!(ura));
 
         let events = watch_events::handle(
             Arc::clone(&recovered),
@@ -427,9 +441,17 @@ mod tests {
             StreamSource::SnapshotThenLive(events, _) => events,
             _ => panic!("rehydrated non-terminal session must replay then remain live"),
         };
-        assert!(replayed
+        let replayed_rehydrated_event = replayed
             .iter()
-            .any(|event| event["event_type"] == json!("SESSION_REHYDRATED")));
+            .find(|event| event["event_type"] == json!("SESSION_REHYDRATED"))
+            .expect("watch_events replays the rehydrated event");
+        assert_eq!(replayed_rehydrated_event["subject_ura"], json!(ura));
+        assert!(
+            replayed_rehydrated_event["target_geometry_revision"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
 
         let ended = end_session::handle(
             Arc::clone(&recovered),
