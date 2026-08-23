@@ -85,6 +85,12 @@ grep -q "requires_evidence_json" "$SCRIPT" || \
   fail "completion gate must require live evidence_json artifacts"
 grep -q "requires_platforms_passed" "$SCRIPT" || \
   fail "completion gate must require product platforms to pass, not just be covered"
+grep -q "requires_cross_platform_capture_scenarios" "$SCRIPT" || \
+  fail "completion gate must require cross-platform capture scenario summaries"
+grep -q "cross-platform capture .* scenarios summary must be a non-empty list" "$SCRIPT" || \
+  fail "completion gate must reject capture reports without per-target scenarios"
+grep -q "self-test accepted cross-platform capture report without scenarios" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing cross-platform capture scenarios"
 grep -q "unsupported_targets must be empty" "$SCRIPT" || \
   fail "completion gate must reject unsupported cross-platform capture targets"
 grep -q "expected 'passed'" "$SCRIPT" || \

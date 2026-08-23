@@ -523,6 +523,12 @@ require 'requires_evidence_json' "$PRODUCT_COMPLETION" \
   'product-completion gate must require live evidence_json artifacts from domain verifiers'
 require 'requires_platforms_passed' "$PRODUCT_COMPLETION" \
   'product-completion gate must require cross-platform product evidence to pass rather than report unsupported'
+require 'requires_cross_platform_capture_scenarios' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require cross-platform capture scenario summaries'
+require 'cross-platform capture .* scenarios summary must be a non-empty list' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject cross-platform capture reports without per-target summaries'
+require 'self-test accepted cross-platform capture report without scenarios' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject missing cross-platform capture scenarios'
 require 'unsupported_targets must be empty' "$PRODUCT_COMPLETION" \
   'product-completion gate must reject unsupported cross-platform capture targets'
 require "expected 'passed'" "$PRODUCT_COMPLETION" \

@@ -21,6 +21,37 @@ grep -q "skipped" /tmp/remoteapp-cross-platform-capture-skip.out || \
   fail "default output must be explicit skipped evidence"
 
 EASYNET_REMOTEAPP_CROSS_PLATFORM_CAPTURE_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
+python3 - "$OUT_DIR/good/report.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+platforms = {platform["platform"]: platform for platform in report["platforms"]}
+macos_scenarios = {
+    scenario["target_kind"]: scenario
+    for scenario in platforms["macos"]["scenarios"]
+}
+for target in ("display", "window", "application"):
+    scenario = macos_scenarios[target]
+    assert scenario["status"] == "passed"
+    assert scenario["selected_resource_ura"].startswith("easynet:///")
+    assert scenario["session_id"]
+    assert scenario["capture_scope"]
+    assert scenario["target_binding_exact"] is True
+    assert scenario["source_only_proof"] is False
+    assert scenario["frame_source_id"]
+    assert scenario["geometry_revision"] > 0
+    assert scenario["frames_rendered"] > 0
+    assert scenario["selected_sentinel_rendered"] is True
+    assert scenario["rendered_frame_probe_bound"] is True
+    assert scenario["selected_sentinel_hash_present"] is True
+    assert scenario["terminal_receipt_visible"] is True
+    assert scenario["terminal_receipt_session_bound"] is True
+for target in ("window", "application"):
+    assert macos_scenarios[target]["first_display_capture_started"] is False
+    assert macos_scenarios[target]["display_fallback_used"] is False
+    assert macos_scenarios[target]["unrelated_sentinel_rendered"] is False
+PY
 
 python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/missing-linux.json" <<'PY'
 import json

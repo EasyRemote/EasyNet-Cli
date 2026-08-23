@@ -220,6 +220,7 @@ required = [
         "requires_evidence_json": True,
         "requires_platforms_passed": ["macos", "windows", "linux"],
         "requires_passed_targets": ["display", "window", "application"],
+        "requires_cross_platform_capture_scenarios": True,
     },
     {
         "id": "input_injection",
@@ -879,6 +880,143 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
         check["errors"].append(message)
         add_error(item_id, message)
 
+def validate_cross_platform_capture_scenarios(item_id, check, report):
+    required_platforms = {"macos", "windows", "linux"}
+    required_targets = {"display", "window", "application"}
+    expected_scope = {
+        "display": "DisplaySurface",
+        "window": "WindowSurface",
+        "application": "AppSurface",
+    }
+    platforms = report.get("platforms")
+    check["required_cross_platform_capture_targets"] = {
+        platform: sorted(required_targets) for platform in sorted(required_platforms)
+    }
+    if not isinstance(platforms, list) or not platforms:
+        message = "cross-platform capture platforms summary must be a non-empty list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+
+    platform_by_name = {
+        platform.get("platform"): platform
+        for platform in platforms
+        if isinstance(platform, dict) and isinstance(platform.get("platform"), str)
+    }
+    missing_platforms = sorted(required_platforms - set(platform_by_name))
+    if missing_platforms:
+        message = "cross-platform capture platforms missing: " + ", ".join(missing_platforms)
+        check["errors"].append(message)
+        add_error(item_id, message)
+
+    observed = {}
+    for platform_name in sorted(required_platforms):
+        platform = platform_by_name.get(platform_name)
+        if not isinstance(platform, dict):
+            continue
+        scenarios = platform.get("scenarios")
+        if not isinstance(scenarios, list) or not scenarios:
+            message = f"cross-platform capture {platform_name}: scenarios summary must be a non-empty list"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        scenario_by_target = {}
+        for index, scenario in enumerate(scenarios):
+            if not isinstance(scenario, dict):
+                message = f"cross-platform capture {platform_name}: scenarios[{index}] must be an object"
+                check["errors"].append(message)
+                add_error(item_id, message)
+                continue
+            target_kind = scenario.get("target_kind")
+            if target_kind not in required_targets:
+                message = f"cross-platform capture {platform_name}: scenarios[{index}].target_kind is {target_kind!r}"
+                check["errors"].append(message)
+                add_error(item_id, message)
+                continue
+            if target_kind in scenario_by_target:
+                message = f"cross-platform capture {platform_name}/{target_kind}: duplicate target scenario"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            scenario_by_target[target_kind] = scenario
+        observed[platform_name] = sorted(scenario_by_target)
+        missing_targets = sorted(required_targets - set(scenario_by_target))
+        if missing_targets:
+            message = f"cross-platform capture {platform_name}: scenarios missing targets: " + ", ".join(missing_targets)
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        for target_kind in sorted(required_targets):
+            scenario = scenario_by_target.get(target_kind)
+            if not isinstance(scenario, dict):
+                continue
+            prefix = f"cross-platform capture {platform_name}/{target_kind}"
+            if scenario.get("status") != "passed":
+                message = f"{prefix}: status is {scenario.get('status')!r}, expected 'passed'"
+                check["errors"].append(message)
+                add_error(item_id, message)
+                continue
+            if not isinstance(scenario.get("selected_resource_ura"), str) or not scenario.get("selected_resource_ura").startswith("easynet:///"):
+                message = f"{prefix}: selected_resource_ura must be canonical"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not isinstance(scenario.get("session_id"), str) or not scenario.get("session_id"):
+                message = f"{prefix}: session_id must be set"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not isinstance(scenario.get("capture_backend"), str) or not scenario.get("capture_backend"):
+                message = f"{prefix}: capture_backend must be set"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("capture_scope") != expected_scope[target_kind]:
+                message = f"{prefix}: capture_scope must be {expected_scope[target_kind]}"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("target_binding_exact") is not True:
+                message = f"{prefix}: target_binding_exact must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("source_only_proof") is not False:
+                message = f"{prefix}: source_only_proof must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not isinstance(scenario.get("frame_source_id"), str) or not scenario.get("frame_source_id"):
+                message = f"{prefix}: frame_source_id must be set"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not positive_int(scenario.get("geometry_revision")):
+                message = f"{prefix}: geometry_revision must be positive"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not positive_int(scenario.get("frames_rendered")):
+                message = f"{prefix}: frames_rendered must be positive"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            for field in (
+                "selected_sentinel_rendered",
+                "rendered_frame_probe_bound",
+                "selected_sentinel_hash_present",
+                "terminal_receipt_visible",
+                "terminal_receipt_session_bound",
+            ):
+                if scenario.get(field) is not True:
+                    message = f"{prefix}: {field} must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if target_kind in {"window", "application"}:
+                if scenario.get("first_display_capture_started") is not False:
+                    message = f"{prefix}: first_display_capture_started must be false"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                if scenario.get("display_fallback_used") is not False:
+                    message = f"{prefix}: display_fallback_used must be false"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+                if scenario.get("unrelated_sentinel_rendered") is not False:
+                    message = f"{prefix}: unrelated_sentinel_rendered must be false"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+    check["observed_cross_platform_capture_targets"] = observed
+
 def validate_crash_restart_recovery_scenarios(item_id, check, report):
     required_scenarios = {
         "daemon_restart_active_session",
@@ -1256,6 +1394,8 @@ for item in required:
         validate_multi_window_scenarios(item_id, check, report)
     if item.get("requires_cross_device_remoteapp_scenarios"):
         validate_cross_device_remoteapp_scenarios(item_id, check, report)
+    if item.get("requires_cross_platform_capture_scenarios"):
+        validate_cross_platform_capture_scenarios(item_id, check, report)
     if item.get("requires_crash_restart_recovery_scenarios"):
         validate_crash_restart_recovery_scenarios(item_id, check, report)
     if item.get("requires_lifecycle_summary"):
@@ -1764,11 +1904,42 @@ if item_id in lifecycle_target_by_id:
             "selected_from_live_refresh": True,
         }
 if item_id == "cross_platform_capture":
+    capture_scope_by_target = {
+        "display": "DisplaySurface",
+        "window": "WindowSurface",
+        "application": "AppSurface",
+    }
+    def capture_scenario(platform, target_kind):
+        return {
+            "target_kind": target_kind,
+            "status": "passed",
+            "selected_resource_ura": f"easynet:///r/localhost/resource/device.{platform}/{target_kind}.selected",
+            "session_id": f"rd-product-capture-{platform}-{target_kind}",
+            "capture_backend": f"{platform}.native_capture",
+            "capture_scope": capture_scope_by_target[target_kind],
+            "target_binding_exact": True,
+            "source_only_proof": False,
+            "frame_source_id": f"{platform}-{target_kind}-frame-source",
+            "geometry_revision": 11,
+            "frames_rendered": 8,
+            "selected_sentinel_rendered": True,
+            "rendered_frame_probe_bound": True,
+            "selected_sentinel_hash_present": True,
+            "first_display_capture_started": False,
+            "display_fallback_used": False,
+            "unrelated_sentinel_rendered": False,
+            "terminal_receipt_visible": True,
+            "terminal_receipt_session_bound": True,
+        }
     report["platforms"] = [
         {
             "platform": platform,
             "passed_targets": ["application", "display", "window"],
             "unsupported_targets": [],
+            "scenarios": [
+                capture_scenario(platform, target_kind)
+                for target_kind in ("application", "display", "window")
+            ],
         }
         for platform in ("linux", "macos", "windows")
     ]
@@ -2611,6 +2782,33 @@ PY
   fi
   write_synthetic_report "$tmp/cross_platform_capture.json" cross_platform_capture
 
+  python3 - "$tmp/cross_platform_capture.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+for platform in report["platforms"]:
+    del platform["scenarios"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-cross-platform-capture-scenarios" >/dev/null 2>&1; then
+    echo "self-test accepted cross-platform capture report without scenarios" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/cross_platform_capture.json" cross_platform_capture
+
   python3 - "$tmp/input_injection.json" <<'PY'
 import json
 import pathlib
@@ -2903,6 +3101,7 @@ case "$MODE" in
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
     grep -q 'requires_evidence_json' "$0"
     grep -q 'requires_platforms_passed' "$0"
+    grep -q 'requires_cross_platform_capture_scenarios' "$0"
     grep -q 'requires_media_scenarios' "$0"
     grep -q 'requires_multi_window_scenarios' "$0"
     grep -q 'requires_network_route_scenarios' "$0"
@@ -2912,6 +3111,7 @@ case "$MODE" in
     grep -q 'lifecycle_summary must be an object' "$0"
     grep -q 'media adaptation scenarios summary must be a non-empty list' "$0"
     grep -q 'multi-window tracking scenarios summary must be a non-empty list' "$0"
+    grep -q 'cross-platform capture .* scenarios summary must be a non-empty list' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-device RemoteApp scenarios summary must be a non-empty list' "$0"
     grep -q 'crash/restart recovery scenarios summary must be a non-empty list' "$0"
@@ -2948,6 +3148,7 @@ case "$MODE" in
     grep -q 'self-test accepted wrong product-flow host subreport target_kind' "$0"
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'self-test accepted unsupported cross-platform capture as product completion' "$0"
+    grep -q 'self-test accepted cross-platform capture report without scenarios' "$0"
     grep -q 'self-test accepted unsupported input injection as product completion' "$0"
     grep -q 'self-test accepted media adaptation report without scenarios' "$0"
     grep -q 'self-test accepted multi-window tracking report without scenarios' "$0"

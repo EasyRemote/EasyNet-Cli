@@ -195,6 +195,7 @@ for platform_name in sorted(required_platforms):
 
     passed_targets = []
     unsupported_targets = []
+    target_summaries = []
     for target_kind in sorted(required_targets):
         scenario = scenario_by_target.get(target_kind)
         if not isinstance(scenario, dict):
@@ -316,6 +317,37 @@ for platform_name in sorted(required_platforms):
                     f"{prefix}: terminal_receipt must bind session_id")
             require(terminal.get("reason_code") in terminal_reasons,
                     f"{prefix}: terminal_receipt.reason_code must be a known cleanup/end reason")
+            target_summaries.append({
+                "target_kind": target_kind,
+                "status": "passed",
+                "selected_resource_ura": subject_ura,
+                "session_id": session_id,
+                "capture_backend": scenario.get("capture_backend"),
+                "capture_scope": scenario.get("capture_scope"),
+                "target_binding_exact": scenario.get("target_binding_exact"),
+                "source_only_proof": scenario.get("source_only_proof"),
+                "frame_source_id": target_identity.get("frame_source_id"),
+                "geometry_revision": target_identity.get("geometry_revision"),
+                "frames_rendered": scenario.get("frames_rendered"),
+                "selected_sentinel_rendered": scenario.get("selected_sentinel_rendered"),
+                "rendered_frame_probe_bound": (
+                    rendered_probe.get("selected_resource_ura") == subject_ura
+                    and rendered_probe.get("session_id") == session_id
+                    and rendered_probe.get("target_kind") == target_kind
+                    and rendered_probe.get("capture_scope") == expected_scope[target_kind]
+                    and rendered_probe.get("frame_source_id") == target_identity.get("frame_source_id")
+                    and rendered_probe.get("geometry_revision") == target_identity.get("geometry_revision")
+                ),
+                "selected_sentinel_hash_present": (
+                    isinstance(rendered_probe.get("selected_sentinel_hash"), str)
+                    and bool(rendered_probe.get("selected_sentinel_hash"))
+                ),
+                "first_display_capture_started": scenario.get("first_display_capture_started"),
+                "display_fallback_used": scenario.get("display_fallback_used"),
+                "unrelated_sentinel_rendered": scenario.get("unrelated_sentinel_rendered"),
+                "terminal_receipt_visible": terminal.get("terminal") is True,
+                "terminal_receipt_session_bound": terminal.get("session_id") == session_id,
+            })
         elif status == "unsupported":
             unsupported_targets.append(target_kind)
             require(platform_name in {"windows", "linux"},
@@ -331,6 +363,15 @@ for platform_name in sorted(required_platforms):
             if target_kind in {"window", "application"}:
                 require(scenario.get("first_display_capture_started") is False,
                         f"{prefix}: unsupported window/application must not start display fallback")
+            target_summaries.append({
+                "target_kind": target_kind,
+                "status": "unsupported",
+                "unsupported_state": scenario.get("unsupported_state"),
+                "show_unsupported": scenario.get("show_unsupported"),
+                "session_id": scenario.get("session_id"),
+                "frames_rendered": scenario.get("frames_rendered"),
+                "first_display_capture_started": scenario.get("first_display_capture_started"),
+            })
         else:
             errors.append(f"{prefix}: status must be passed or unsupported")
 
@@ -341,6 +382,7 @@ for platform_name in sorted(required_platforms):
         "platform": platform_name,
         "passed_targets": sorted(passed_targets),
         "unsupported_targets": sorted(unsupported_targets),
+        "scenarios": sorted(target_summaries, key=lambda item: item.get("target_kind") or ""),
     })
 
 coverage = {

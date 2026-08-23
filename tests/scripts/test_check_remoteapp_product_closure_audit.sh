@@ -134,6 +134,15 @@ grep -q "product-completion gate must require cross-platform capture evidence" /
   fail "expected product-completion cross-platform capture env failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 
+perl -0pi -e 's#requires_cross_platform_capture_scenarios#requires_capture_platforms_only#g' \
+  "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-capture-scenarios.out 2>&1; then
+  fail "checker accepted product-completion gate without cross-platform capture scenarios"
+fi
+grep -q "product-completion gate must require cross-platform capture scenario summaries" /tmp/check-remoteapp-product-closure-completion-capture-scenarios.out || \
+  fail "expected product-completion cross-platform capture scenarios failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-product-completion-e2e.sh" "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
+
 perl -0pi -e 's#topology.local_provider_boundary_only is not false#topology.local_provider_boundary_only is optional#g' \
   "$SB/tools/scripts/remoteapp-product-completion-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-completion-local-only.out 2>&1; then
