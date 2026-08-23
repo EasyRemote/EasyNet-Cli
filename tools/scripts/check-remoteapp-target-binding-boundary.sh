@@ -5,11 +5,13 @@ ROOT="${CHECK_REMOTEAPP_TARGET_BINDING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}"
 REMOTE_ROOT="$ROOT/plugins/remote-desktop/src"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 SCK_CAPTURE="$REMOTE_ROOT/screencapturekit_capture.rs"
+SCK_MULTIAPP="$REMOTE_ROOT/screencapturekit_multiapp.rs"
 MEDIA="$REMOTE_ROOT/media/mod.rs"
 TARGET_DOMAIN="$REMOTE_ROOT/target.rs"
 SESSION="$REMOTE_ROOT/session.rs"
 SESSION_IDENTITY="$REMOTE_ROOT/session_identity.rs"
 MEDIA_SOURCE_FACTORY="$REMOTE_ROOT/transport/media_source.rs"
+WEBRTC_NATIVE="$REMOTE_ROOT/transport/webrtc_native_media.rs"
 
 fail() {
   printf 'check-remoteapp-target-binding-boundary: %s\n' "$1" >&2
@@ -174,21 +176,10 @@ require 'binding\.committed_app_window_set\(\)' \
 require 'committed_window_set\.contains_window_id\(window_id\)' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit application capture must not include uncommitted same-app windows'
-require 'uncommitted_same_display_windows' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit application capture must collect same-display app windows outside the committed set'
-require 'uncommitted_same_display_windows\.push\(window\)' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit application capture must pass uncommitted same-app windows to exceptingWindows'
-require 'NSArray::from_slice\(&excepting_window_refs\)' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit application capture must build a native exceptingWindows array from uncommitted windows'
-require '&app_window_set\.excepting_windows' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit application capture must use committed-window-set exclusions in the content filter'
-reject 'let excepting_windows: Retained<NSArray<SCWindow>> = NSArray::new\(\)' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit application capture must not pass empty exceptingWindows for application sessions'
+require 'selected_windows\.push\(window\)' "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must build its native streams only from committed windows'
+reject 'excepting_windows' "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must not retain the obsolete display-filter exclusion path'
 require 'committed_window_set\.missing_window_ids\(&window_ids\)' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit application capture must fail closed when committed windows disappear'
@@ -201,6 +192,15 @@ require 'fn contains_window_id\(' \
 require 'fn missing_window_ids\(' \
   "$TARGET_DOMAIN" \
   'AppWindowSetProof must expose committed-window disappearance evidence'
+require 'struct AppSurfaceLayoutProof\b' \
+  "$TARGET_DOMAIN" \
+  'application composition must commit an ordered surface-layout proof distinct from window identity'
+require 'fn committed_app_surface_layout\(' \
+  "$TARGET_DOMAIN" \
+  'target binding must expose the committed application surface layout to capture and observation paths'
+require 'fn application_surface_rebind_candidate\(' \
+  "$TARGET_DOMAIN" \
+  'target binding must construct geometry and z-order media rebind candidates through the target domain'
 require 'trait RemoteAppMediaSourceFactory' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC media source selection must use the RemoteAppMediaSourceFactory boundary'
@@ -276,15 +276,15 @@ require '"target_model": self\.effective_target_kind\.target_model_for_platform\
 require '"target_model": target_kind\.target_model_for_platform\(&platform\)' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver diagnostic must expose the resolved capture target model'
-require 'display_scoped_application_window_set' \
+require 'multi_surface_application_window_set' \
   "$REMOTE_ROOT/target.rs" \
-  'application projection must identify the display-scoped application window-set model'
+  'macOS application projection must identify the multi-surface application window-set model'
 require 'window_requires_stable_owner_identity_not_app_name_only' \
   "$REMOTE_ROOT/target.rs" \
   'E2E-10 must prove window app_name/title hints are not accepted as stable routing identity'
-require 'application_requires_display_scoped_stable_identity' \
+require 'application_requires_stable_identity_and_exact_window_set' \
   "$REMOTE_ROOT/target.rs" \
-  'E2E-10 must prove application app_name-only identity is ambiguous'
+  'E2E-10 must prove application identity and committed window-set requirements'
 require 'TargetResolutionError::TargetIdentityAmbiguous' \
   "$REMOTE_ROOT/target.rs" \
   'E2E-10 target resolver must use the canonical target_identity_ambiguous reason'
@@ -410,18 +410,46 @@ reject 'expected_bundle_id' \
 reject 'expected_app_identity' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit selectors must not redeclare app identity matching outside the target-domain identity matcher'
-require 'off_display_window_ids' \
-  "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application binding must detect app windows outside the selected display'
-require 'TargetResolutionError::TargetMultiDisplayUnsupported' \
-  "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application binding must use the typed multi-display unsupported reason when single-stream AppSurface would hide other app windows'
-require 'MultiAppSurface support' \
-  "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application binding must explain that multi-display applications require MultiAppSurface support'
-require 'application_window_set_selector_excludes_uncommitted_same_display_windows' \
-  "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application filter must have regression coverage for excluding uncommitted same-app windows'
+require 'select_application_windows_for_binding' "$SCK_CAPTURE" \
+  'ScreenCaptureKit application binding must resolve the exact committed window set'
+require 'ScreenCaptureKitCapturePlan::MultiApp' "$SCK_CAPTURE" \
+  'ScreenCaptureKit application binding must construct a multi-surface capture plan'
+require 'fn prepare_content_filter_update\(' "$SCK_CAPTURE" \
+  'ScreenCaptureKit rebind must prestart a muted replacement plan before Runtime binding commit'
+require 'fn commit_prepared_content_filter_update\(' "$SCK_CAPTURE" \
+  'ScreenCaptureKit rebind must select one output generation around the Runtime binding commit'
+require 'self\.output_router\.select_generation\(None\)' "$SCK_CAPTURE" \
+  'ScreenCaptureKit rebind must pause old and prepared outputs before Runtime state commit'
+require 'output_router_isolates_prepared_and_stale_capture_generations' "$SCK_CAPTURE" \
+  'ScreenCaptureKit output routing must regress prepared, paused, stale, and active generations'
+reject 'fn update_content_filter\(' "$SCK_CAPTURE" \
+  'ScreenCaptureKit must not expose the obsolete pre-commit output-switching rebind path'
+require 'prepare_content_filter_update\(ABILITY_SET_DESCRIPTION, next_target\)' "$WEBRTC_NATIVE" \
+  'native WebRTC rebind must prepare the muted capture generation before Runtime binding commit'
+require 'commit_prepared_content_filter_update\(prepared, \|capture_proof\|' "$WEBRTC_NATIVE" \
+  'native WebRTC rebind must make output generation selection conditional on Runtime binding commit'
+require 'commit_pending_media_rebind_for_session' "$WEBRTC_NATIVE" \
+  'native WebRTC prepared-plan activation must commit through the session aggregate'
+require 'binding\.committed_app_surface_layout\(\)' "$SCK_CAPTURE" \
+  'ScreenCaptureKit application selection must consume the committed surface ordering and geometry'
+require 'surface_layout_proof\(\)' "$SCK_CAPTURE" \
+  'ScreenCaptureKit capture proof must carry the exact layout used by the compositor'
+require 'initWithDesktopIndependentWindow' "$SCK_MULTIAPP" \
+  'each committed macOS application window must use a desktop-independent ScreenCaptureKit filter'
+require 'MAX_MULTI_APP_WINDOWS' "$SCK_MULTIAPP" \
+  'macOS multi-surface capture must bound native window fan-out'
+require 'MAX_MULTI_APP_PIXELS' "$SCK_MULTIAPP" \
+  'macOS multi-surface capture must bound output pixel memory'
+require 'bgra_compositor_preserves_black_gaps_and_front_window_order' "$SCK_MULTIAPP" \
+  'macOS multi-surface compositor must prove black gaps and deterministic z-order'
+require 'compositor_uses_greatest_surface_pts_for_monotonic_output' "$SCK_MULTIAPP" \
+  'macOS multi-surface compositor must emit monotonic output without freezing on static surfaces'
+require 'native_canvas_dimension_applies_retina_point_pixel_scale' "$SCK_MULTIAPP" \
+  'macOS multi-surface native resolution must account for ScreenCaptureKit point-to-pixel scale'
+require 'application_selector_excludes_uncommitted_windows_without_display_fallback' "$SCK_CAPTURE" \
+  'ScreenCaptureKit application selector must regress exact-window capture without display fallback'
+reject 'initWithDisplay_includingApplications_exceptingWindows' "$SCK_CAPTURE" \
+  'macOS AppSurface must not retain the obsolete display-scoped application filter'
 
 while IFS=: read -r file line _match; do
   case "${file#"$ROOT/"}" in

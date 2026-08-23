@@ -24,8 +24,9 @@ use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsen
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::daemon::plugins::remote_desktop::target::{
-    AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
-    ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
+    AppSurfaceLayoutProof, AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError,
+    RemoteDesktopTargetKind, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
+    TargetGeometry,
 };
 use crate::daemon::plugins::PluginRuntimeLimits;
 
@@ -268,7 +269,30 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_application_target_bindin
         Some("com.example.Editor".to_string()),
     )
     .with_native_dimensions(Some((200, 100)))
-    .with_app_window_set(app_window_set);
+    .with_app_window_set(app_window_set)
+    .with_app_surface_layout(
+        AppSurfaceLayoutProof::from_front_to_back_geometries([
+            (
+                10,
+                &TargetGeometry {
+                    x: Some(10.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+            (
+                11,
+                &TargetGeometry {
+                    x: Some(110.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+        ])
+        .expect("test application surface layout"),
+    );
     binding
         .commit_capture_proof("test.ability", proof)
         .expect("application proof commits");

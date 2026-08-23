@@ -528,16 +528,20 @@ require 'tracker_routes_post_loss_title_focus_through_explicit_rebind' "$TARGET_
   'target tracker must test title/focus reappearance through explicit rebind semantics'
 require 'fn window_set_epoch\(' "$TARGET" \
   'application window-set proof must expose the recomputed identity epoch'
-require 'ApplicationWindowSetChanged' "$TARGET_TRACKING" \
-  'target tracking must model same-app application window-set changes explicitly'
-require 'application_window_set_rebind_candidate' "$TARGET" \
-  'session-owned target binding must build application window-set rebind candidates through a domain method'
+require 'ApplicationSurfaceChanged' "$TARGET_TRACKING" \
+  'target tracking must model application window-set, geometry, and z-order changes explicitly'
+require 'application_surface_rebind_candidate' "$TARGET" \
+  'session-owned target binding must build application surface rebind candidates through a domain method'
+require 'fn commit_application_surface\(' "$TARGET_TRACKING" \
+  'target tracking must commit application identity and surface layout through one domain transition'
+require 'fn stage_application_surface_media_rebind\(' "$TARGET_TRACKING" \
+  'active application surface drift must stage a complete media-plan rebuild before committing the binding'
 require 'commit_pending_media_rebind' "$TARGET_TRACKING" \
   'target tracking must commit application window-set state only after pending media rebind proof'
 require 'commit_pending_media_rebind_failed' "$TARGET_TRACKING" \
   'target tracking must terminate failed pending media rebinds as typed target lifecycle events'
-require 'Same-display application window-set rebind is implemented' "$SPEC" \
-  'SPEC status must acknowledge implemented same-display application rebind instead of preserving stale gap text'
+require 'Cross-display application window-set rebind is implemented' "$SPEC" \
+  'SPEC status must acknowledge the multi-surface application rebind path'
 require 'TARGET_REBOUND' "$SPEC" \
   'SPEC status must keep successful rebind tied to the TARGET_REBOUND lifecycle event'
 reject 'Full rebind and multi-display application sessions are not complete' "$SPEC" \
@@ -579,15 +583,19 @@ require 'pending_media_rebind_failure_rejects_session_rebinding' "$SESSION" \
 require 'native_media_rebind_failure_projects_typed_target_lifecycle' "$WEBRTC_NATIVE" \
   'native WebRTC media path must test target-lifecycle projection for pending media rebind failures'
 require 'AppWindowSetProof::new' "$TARGET_OBSERVER" \
-  'application observer must rederive the current display-scoped app window-set proof'
-require 'TargetObservation::ApplicationWindowSetChanged' "$TARGET_OBSERVER" \
-  'application observer must report same-app window-set drift as a rebind observation'
+  'application observer must rederive the current global app window-set proof'
+require 'AppSurfaceLayoutProof::from_front_to_back_geometries' "$TARGET_OBSERVER" \
+  'application observer must rederive ordered surface geometry instead of treating identity as layout'
+require 'TargetObservation::ApplicationSurfaceChanged' "$TARGET_OBSERVER" \
+  'application observer must report window-set, geometry, and z-order drift as one media rebind observation'
 require 'application_observer_reports_committed_window_set_drift_as_rebind' "$TARGET_OBSERVER" \
   'target observer must test committed application window-set expansion/contraction rebind evidence'
 require 'application_observation_rebinds_same_display_window_set_expansion' "$TARGET_OBSERVER" \
   'application observer must test same-display app window-set expansion rebind evidence'
 require 'application_observation_rebinds_same_app_window_set_subset' "$TARGET_OBSERVER" \
   'application observer must test same-display app window-set contraction rebind evidence'
+require 'application_observer_rebinds_media_when_only_z_order_changes' "$TARGET_OBSERVER" \
+  'application observer must rebuild application composition when only z-order changes'
 require 'snapshot_observer_reappearance_requires_explicit_rebind_policy' "$TARGET_OBSERVER" \
   'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \
@@ -915,7 +923,7 @@ require 'target_identity_ambiguous' "$TARGET" \
   'target ambiguity reason must be externally visible'
 require 'window_requires_stable_owner_identity_not_app_name_only' "$TARGET" \
   'weak window identity must have resolver regression coverage'
-require 'application_requires_display_scoped_stable_identity' "$TARGET" \
+require 'application_requires_stable_identity_and_exact_window_set' "$TARGET" \
   'weak application identity must have resolver regression coverage'
 require 'create_session_rejects_weak_window_identity_before_session_insert' "$CREATE_SESSION" \
   'weak target identity must fail before session insertion'
@@ -975,8 +983,18 @@ require 'target_scoped_input_guarded' "$TARGET" \
   'target binding must publish the stable guarded target-local scope reason'
 require 'validate_live_target_input' "$TARGET_OBSERVER" \
   'target observer must expose fresh host validation for input execution'
+require 'validate_live_target_pointer_input' "$TARGET_OBSERVER" \
+  'target observer must expose fresh host surface and occlusion validation for pointer execution'
 require 'target_input_guard_validation' "$INPUT" \
   'input execution must invoke the target-local host guard'
+require 'validate_live_target_pointer_input\(binding, snapshot, point\.x, point\.y\)' "$INPUT" \
+  'target-local pointer execution must validate the mapped host point before OS injection'
+require 'PointerOutsideTargetSurface' "$TARGET_OBSERVER" \
+  'application canvas gaps must fail closed instead of targeting host desktop content'
+require 'PointerOccluded' "$TARGET_OBSERVER" \
+  'pointer execution must fail closed when a foreign window is above the selected target surface'
+require 'application_pointer_guard_rejects_black_gaps_and_occluding_windows' "$TARGET_OBSERVER" \
+  'pointer guard must regress both black-gap and foreign-window occlusion failures'
 require 'target_local_input_without_bound_host_proof_fails_closed_before_os_injection' "$INPUT" \
   'target-local input must fail closed without a bound host proof'
 require 'policy\.target_binding = Some\(binding\.clone\(\)\)' "$INPUT" \
@@ -1167,8 +1185,8 @@ require 'client_sequence' "$INVOKE_BIDI" \
   'diagnostic bidi tests must assert client sequence projection'
 require 'maps_window_relative_pointer_to_global_screen_point' "$INPUT" \
   'E2E-11 must test window pointer mapping remains view-only'
-require 'maps_application_pointer_through_primary_window_bounds' "$INPUT" \
-  'E2E-11 must test application pointer mapping remains view-only'
+require 'maps_application_pointer_through_committed_union_surface_bounds' "$INPUT" \
+  'E2E-11 must test application pointer mapping uses the committed union surface while view-only remains enforced'
 require '!input_policy_allows\(&policy, "pointer"\)' "$INPUT" \
   'E2E-11 tests must assert app/window pointer input is disabled'
 require 'fn input_policy_object\(' "$INPUT" \
@@ -1241,14 +1259,14 @@ require '"runtime_blocked_reason": runtime_blocked_reason' "$VIEW_DEVICE" \
   'device capabilities must expose current-host input backend failure reason'
 require '"certification": "live_e2e_required"' "$VIEW_DEVICE" \
   'device capabilities must not promote executable input backends without live OS-effect evidence'
-require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
-  'device capabilities must expose the macOS display-scoped application target model'
+require '"multi_surface_application_window_set"' "$VIEW_DEVICE" \
+  'device capabilities must expose the macOS multi-surface application target model'
 require '"process_scoped_application_window_set"' "$VIEW_DEVICE" \
   'device capabilities must expose the Windows/Linux process-scoped application target model'
 require '"application_surface"' "$VIEW_DEVICE" \
   'device capabilities must expose application multi-window and multi-display constraints'
-require 'Some\("target_multi_display_unsupported"\)' "$VIEW_DEVICE" \
-  'device capabilities must expose the macOS multi-display application blocker'
+require_multiline 'm/"multi_surface",\s*true,\s*None/s' "$VIEW_DEVICE" \
+  'device capabilities must expose macOS multi-surface multi-display application support'
 require_multiline 'm/"process_scoped",\s*true,\s*None/s' "$VIEW_DEVICE" \
   'device capabilities must expose process-scoped Windows/Linux multi-display application support'
 require 'display/window/application target capture' "$VIEW_DEVICE" \

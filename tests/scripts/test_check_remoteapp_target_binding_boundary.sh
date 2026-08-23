@@ -55,7 +55,7 @@ pub struct ResourceEntryTargetResolver;
 impl RemoteDesktopTargetKind {
     fn target_model(self) -> &'static str {
         match self {
-            Self::Application => "display_scoped_application_window_set",
+            Self::Application => "multi_surface_application_window_set",
             _ => "surface",
         }
     }
@@ -87,6 +87,16 @@ impl AppWindowSetProof {
     fn missing_window_ids(&self, observed_window_ids: &[u64]) -> Vec<u64> {
         Vec::new()
     }
+}
+
+struct AppSurfaceLayoutProof;
+
+impl RemoteAppTargetBinding {
+    fn committed_app_surface_layout(&self) -> Option<&AppSurfaceLayoutProof> {
+        None
+    }
+
+    fn application_surface_rebind_candidate(&self) {}
 }
 
 impl ScopeAudit {
@@ -203,7 +213,7 @@ mod tests {
     fn window_requires_stable_owner_identity_not_app_name_only() {}
 
     #[test]
-    fn application_requires_display_scoped_stable_identity() {}
+    fn application_requires_stable_identity_and_exact_window_set() {}
 
     #[test]
     fn target_binding_rejects_non_agent_owner_projection() {}
@@ -296,6 +306,13 @@ cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs" <<'R
 fn media(binding: Binding) {
     target_for_binding();
 }
+
+fn rebind(capture: &mut ScreenCaptureKitStream) {
+    let prepared = capture.prepare_content_filter_update(ABILITY_SET_DESCRIPTION, next_target);
+    capture.commit_prepared_content_filter_update(prepared, |capture_proof| {
+        sessions.commit_pending_media_rebind_for_session(capture_proof.clone())
+    });
+}
 RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
@@ -333,7 +350,19 @@ struct ScreenCaptureKitTarget;
 
 struct ApplicationWindowSetTarget {
     proof: AppWindowSetProof,
-    excepting_windows: Retained<NSArray<SCWindow>>,
+    windows: Vec<Retained<SCWindow>>,
+}
+
+enum ScreenCaptureKitCapturePlan {
+    MultiApp(MultiAppSurfaceTarget),
+}
+
+impl ScreenCaptureKitStream {
+    fn prepare_content_filter_update() {}
+
+    fn commit_prepared_content_filter_update() {
+        self.output_router.select_generation(None);
+    }
 }
 
 impl ScreenCaptureKitTarget {
@@ -360,34 +389,24 @@ fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
 }
 
 fn resolve_target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
-    let app_window_set = select_application_window_set_for_binding(ability, windows, binding, display).unwrap();
-    let filter = SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
-        SCContentFilter::alloc(),
-        &display,
-        &included_applications,
-        &app_window_set.excepting_windows,
+    let committed_layout = binding.committed_app_surface_layout();
+    let app_window_set = select_application_windows_for_binding(ability, windows, binding).unwrap();
+    let plan = ScreenCaptureKitCapturePlan::MultiApp(
+        MultiAppSurfaceTarget::from_windows(ability, app_window_set.windows).unwrap(),
     );
+    let _ = plan.surface_layout_proof();
 }
 
-fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
+fn select_application_windows_for_binding() -> Result<(), RemoteAppTargetError> {
     let committed_window_set = binding.committed_app_window_set()?;
-    let mut uncommitted_same_display_windows = Vec::new();
-    let off_display_window_ids = vec![10];
+    let mut window_ids = Vec::new();
+    let mut selected_windows = Vec::new();
     for window_id in [10] {
-        let overlaps_selected_display = sck_window_overlaps_display(&window, display);
         if !committed_window_set.contains_window_id(window_id) {
-            if overlaps_selected_display {
-                uncommitted_same_display_windows.push(window);
-            }
             continue;
         }
-    }
-    if !off_display_window_ids.is_empty() {
-        return Err(RemoteAppTargetError::new(
-            "remote_desktop.create_session",
-            TargetResolutionError::TargetMultiDisplayUnsupported,
-            "application target requires MultiAppSurface support",
-        ));
+        window_ids.push(window_id);
+        selected_windows.push(window);
     }
     let missing_window_ids = committed_window_set.missing_window_ids(&window_ids);
     if !missing_window_ids.is_empty() {
@@ -398,18 +417,39 @@ fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetErro
         ));
     }
     let proof = committed_window_set.clone();
-    let excepting_window_refs = uncommitted_same_display_windows
-        .iter()
-        .map(|window| window.as_ref())
-        .collect::<Vec<_>>();
-    let excepting_windows = NSArray::from_slice(&excepting_window_refs);
-    Ok(ApplicationWindowSetTarget { proof, excepting_windows })
+    Ok(ApplicationWindowSetTarget { proof, windows: selected_windows })
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn application_window_set_selector_excludes_uncommitted_same_display_windows() {}
+    fn application_selector_excludes_uncommitted_windows_without_display_fallback() {}
+
+    #[test]
+    fn output_router_isolates_prepared_and_stale_capture_generations() {}
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_multiapp.rs" <<'RS'
+const MAX_MULTI_APP_WINDOWS: usize = 32;
+const MAX_MULTI_APP_PIXELS: u64 = 33_177_600;
+
+fn scaled_native_dimension() {}
+
+fn build_filter(window: &SCWindow) {
+    SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bgra_compositor_preserves_black_gaps_and_front_window_order() {}
+
+    #[test]
+    fn compositor_uses_greatest_surface_pts_for_monotonic_output() {}
+
+    #[test]
+    fn native_canvas_dimension_applies_retina_point_pixel_scale() {}
 }
 RS
 
@@ -534,37 +574,26 @@ fi
 perl -0pi -e 's/input_control_implicit/input_control_granted/g' \
   "$SANDBOX/plugins/remote-desktop/src/session_creation.rs"
 
-perl -0pi -e 's/&app_window_set\.excepting_windows/&excepting_windows/' \
+perl -0pi -e 's/selected_windows\.push\(window\);/let _ = window;/' \
   "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
-  echo "remoteapp target binding checker accepted application SCK filter without committed exceptingWindows" >&2
+  echo "remoteapp target binding checker accepted application selector that did not build committed native streams" >&2
   exit 1
 fi
 
-perl -0pi -e 's/&excepting_windows/&app_window_set.excepting_windows/' \
+perl -0pi -e 's/let _ = window;/selected_windows.push(window);/' \
   "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
-perl -0pi -e 's/uncommitted_same_display_windows\.push\(window\);/let _ = window;/' \
+perl -0pi -e 's/application_selector_excludes_uncommitted_windows_without_display_fallback/application_selector_allows_uncommitted_windows_with_display_fallback/' \
   "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
-  echo "remoteapp target binding checker accepted application selector without uncommitted same-app window exclusions" >&2
+  echo "remoteapp target binding checker accepted missing committed-only multi-surface regression test" >&2
   exit 1
 fi
 
-perl -0pi -e 's/let _ = window;/uncommitted_same_display_windows.push(window);/' \
-  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
-
-perl -0pi -e 's/application_window_set_selector_excludes_uncommitted_same_display_windows/application_window_set_selector_allows_uncommitted_same_display_windows/' \
-  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
-
-if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
-  echo "remoteapp target binding checker accepted missing uncommitted same-app exclusion regression test" >&2
-  exit 1
-fi
-
-perl -0pi -e 's/application_window_set_selector_allows_uncommitted_same_display_windows/application_window_set_selector_excludes_uncommitted_same_display_windows/' \
+perl -0pi -e 's/application_selector_allows_uncommitted_windows_with_display_fallback/application_selector_excludes_uncommitted_windows_without_display_fallback/' \
   "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
 perl -0pi -e 's/create_session_rejects_stale_window_inventory_before_session_insert/create_session_accepts_stale_window_inventory/' \
@@ -909,141 +938,18 @@ perl -0pi -e 's/(\n        validate_resource_inventory_state\(\);)/\n        val
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
-cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
-struct ScreenCaptureKitTarget;
-
-struct ApplicationWindowSetTarget {
-    proof: AppWindowSetProof,
-    excepting_windows: Retained<NSArray<SCWindow>>,
-}
-
-impl ScreenCaptureKitTarget {
-    fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
-        todo!()
-    }
-}
-
-fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
-    let target = resolve_target_for_binding(ability, binding).unwrap();
-    binding.validate_reverified_capture_proof(ability, target.capture_proof());
-}
-
-fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
-
-fn sck_app_identity_match(expected: NativeAppIdentityExpectation, app: SCRunningApplication) {
-    NativeAppIdentityCandidate;
-    expected.evaluate(app);
-}
-
-fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
-    let expected = binding.native_locator().app_identity_expectation();
-    sck_app_identity_match(expected, app);
-}
-
-fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
-    Ok(())
-}
-RS
+perl -0pi -e 's/initWithDesktopIndependentWindow/initWithDisplay_excludingWindows/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_multiapp.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
-  echo "remoteapp target binding checker accepted missing off-display application guard" >&2
+  echo "remoteapp target binding checker accepted non-independent application window capture" >&2
   exit 1
 fi
 
-cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
-struct ScreenCaptureKitTarget;
+perl -0pi -e 's/initWithDisplay_excludingWindows/initWithDesktopIndependentWindow/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_multiapp.rs"
 
-impl ScreenCaptureKitTarget {
-    fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
-        todo!()
-    }
-}
-
-fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
-    let target = resolve_target_for_binding(ability, binding).unwrap();
-    binding.validate_reverified_capture_proof(ability, target.capture_proof());
-}
-
-fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
-
-fn sck_app_identity_match(expected: NativeAppIdentityExpectation, app: SCRunningApplication) {
-    NativeAppIdentityCandidate;
-    expected.evaluate(app);
-}
-
-fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
-    let expected = binding.native_locator().app_identity_expectation();
-    sck_app_identity_match(expected, app);
-}
-
-fn resolve_target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
-    let app_window_set = select_application_window_set_for_binding(ability, windows, binding, display).unwrap();
-    let filter = SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
-        SCContentFilter::alloc(),
-        &display,
-        &included_applications,
-        &app_window_set.excepting_windows,
-    );
-}
-
-fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
-    let committed_window_set = binding.committed_app_window_set()?;
-    let mut uncommitted_same_display_windows = Vec::new();
-    let off_display_window_ids = vec![10];
-    for window_id in [10] {
-        let overlaps_selected_display = sck_window_overlaps_display(&window, display);
-        if !committed_window_set.contains_window_id(window_id) {
-            if overlaps_selected_display {
-                uncommitted_same_display_windows.push(window);
-            }
-            continue;
-        }
-    }
-    if !off_display_window_ids.is_empty() {
-        return Err(RemoteAppTargetError::new(
-            "remote_desktop.create_session",
-            TargetResolutionError::TargetMultiDisplayUnsupported,
-            "application target requires MultiAppSurface support",
-        ));
-    }
-    let missing_window_ids = committed_window_set.missing_window_ids(&window_ids);
-    if !missing_window_ids.is_empty() {
-        return Err(RemoteAppTargetError::new(
-            "remote_desktop.create_session",
-            TargetResolutionError::TargetIdentityChanged,
-            "committed application window set changed",
-        ));
-    }
-    let proof = committed_window_set.clone();
-    let excepting_window_refs = uncommitted_same_display_windows
-        .iter()
-        .map(|window| window.as_ref())
-        .collect::<Vec<_>>();
-    let excepting_windows = NSArray::from_slice(&excepting_window_refs);
-    Ok(ApplicationWindowSetTarget { proof, excepting_windows })
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn application_window_set_selector_excludes_uncommitted_same_display_windows() {}
-}
-RS
-
-CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
-
-perl -0pi -e 's/TargetResolutionError::TargetMultiDisplayUnsupported/TargetResolutionError::UnsupportedCaptureScope/' \
-  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
-
-if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
-  echo "remoteapp target binding checker accepted generic unsupported_capture_scope for multi-display app binding" >&2
-  exit 1
-fi
-
-perl -0pi -e 's/TargetResolutionError::UnsupportedCaptureScope/TargetResolutionError::TargetMultiDisplayUnsupported/' \
-  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
-
-perl -0pi -e 's/display_scoped_application_window_set/application/g' \
+perl -0pi -e 's/multi_surface_application_window_set/application/g' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
@@ -1051,11 +957,90 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
   exit 1
 fi
 
-perl -0pi -e 's/\\.with_context\\("frontend_action", self\\.reason\\.frontend_action\\(\\)\\.as_str\\(\\)\\)//' \
+perl -0pi -e 's/Self::Application => "application"/Self::Application => "multi_surface_application_window_set"/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/\n            \.with_context\("frontend_action", self\.reason\.frontend_action\(\)\.as_str\(\)\)//' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp target binding checker accepted missing frontend_action Axon context" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/(\.with_context\("target_reason", self\.reason\.as_str\(\)\))/$1\n            .with_context("frontend_action", self.reason.frontend_action().as_str())/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/struct AppSurfaceLayoutProof/struct AppSurfaceLayoutProofRemoved/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing ordered application surface proof" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/struct AppSurfaceLayoutProofRemoved/struct AppSurfaceLayoutProof/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+perl -0pi -e 's/let committed_layout = binding\.committed_app_surface_layout\(\);/let committed_layout = None;/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted SCK selection without committed surface layout" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/let committed_layout = None;/let committed_layout = binding.committed_app_surface_layout();/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+perl -0pi -e 's/compositor_uses_greatest_surface_pts_for_monotonic_output/compositor_allows_retrograde_output/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_multiapp.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing monotonic multi-surface output test" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/compositor_allows_retrograde_output/compositor_uses_greatest_surface_pts_for_monotonic_output/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_multiapp.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/fn prepare_content_filter_update/fn switch_content_filter_before_commit/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted rebind without a muted prepared capture plan" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/fn switch_content_filter_before_commit/fn prepare_content_filter_update/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/native_canvas_dimension_applies_retina_point_pixel_scale/native_canvas_ignores_retina_scale/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_multiapp.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted native multi-surface resolution without Retina scale evidence" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/native_canvas_ignores_retina_scale/native_canvas_dimension_applies_retina_point_pixel_scale/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_multiapp.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/commit_prepared_content_filter_update\(prepared, \|capture_proof\|/activate_prepared_before_runtime_commit(prepared, |capture_proof|/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted native rebind that activates outside Runtime commit" >&2
   exit 1
 fi
 

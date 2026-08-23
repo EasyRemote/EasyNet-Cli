@@ -23,7 +23,7 @@ write_fixture() {
 | E2E-11 view-only input safety | app/window sessions remain view-only without a focus-safe input validator |
 | E2E-14 guarded target-local input | target-local input is allowed only after a fresh identity/focus/geometry guard proof |
 relay_ready
-Same-display application window-set rebind is implemented through the explicit pending-media-rebind state machine and emits TARGET_REBOUND only after a renewed capture proof commits.
+Cross-display application window-set rebind is implemented through the explicit pending-media-rebind state machine and emits TARGET_REBOUND only after a renewed capture proof commits.
 Direct WebRTC route discovery is provider-backed. Host candidates, configured STUN server-reflexive routes, standard TURN relay routes, and EasyNet relay routes are represented as typed route evidence.
 MD
 
@@ -50,7 +50,7 @@ struct TargetLifecycleEventCoalescer;
 
 fn commit_geometry() {
     geometry_event_types();
-    ApplicationWindowSetChanged;
+    ApplicationSurfaceChanged;
     "TARGET_PERMISSION_REVOKED";
     "target_title_after_loss";
     "target_focus_after_loss";
@@ -99,6 +99,10 @@ fn commit_pending_media_rebind_failed() {
     "TARGET_REBIND_FAILED";
 }
 
+fn commit_application_surface() {}
+
+fn stage_application_surface_media_rebind() {}
+
 fn expire_rebind_deadline() {
     "rebind_window_expired";
 }
@@ -136,6 +140,9 @@ mod tests {
 
     #[test]
     fn active_application_window_set_rebind_failure_is_typed() {}
+
+    #[test]
+    fn active_application_z_order_change_rebuilds_media_without_changing_identity() {}
 
     #[test]
     fn pending_media_rebind_expires_at_rebind_deadline() {}
@@ -1134,7 +1141,7 @@ fn device_capabilities_view() {
             "capture_target_models": [
                 "display_surface",
                 "window_surface",
-                "display_scoped_application_window_set",
+                "multi_surface_application_window_set",
                 "process_scoped_application_window_set"
             ],
             "reason": "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
@@ -1176,9 +1183,9 @@ fn platform_support_view(production_ready: bool, production_backend: &Backend) {
         "production_ready",
         json!("macos.screencapturekit.videotoolbox.webrtc.v1"),
         "macos_screencapturekit_videotoolbox_ready",
-        "display_scoped",
-        false,
-        Some("target_multi_display_unsupported"),
+        "multi_surface",
+        true,
+        None,
     );
     let process_application = application_target_support(
         "baseline_ready",
@@ -1301,6 +1308,7 @@ fn current_session_effective_input_policy() {
 
 fn target_input_guard_validation() {
     validate_live_target_input();
+    validate_live_target_pointer_input(binding, snapshot, point.x, point.y);
 }
 
 fn display_interactive_without_input_consent_remains_view_only() {}
@@ -1478,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_application_pointer_through_primary_window_bounds() {
+    fn maps_application_pointer_through_committed_union_surface_bounds() {
         assert!(!input_policy_allows(&policy, "pointer"));
     }
 
@@ -1538,13 +1546,15 @@ struct InputScopeDecision;
 
 struct AppWindowSetProof;
 
+struct AppSurfaceLayoutProof;
+
 impl AppWindowSetProof {
     fn window_set_epoch(&self) -> u64 {
         2
     }
 }
 
-fn application_window_set_rebind_candidate() {}
+fn application_surface_rebind_candidate() {}
 
 fn input_scope_for_request() -> InputScopeDecision {
     match kind {
@@ -1574,7 +1584,7 @@ mod tests {
     fn window_requires_stable_owner_identity_not_app_name_only() {}
 
     #[test]
-    fn application_requires_display_scoped_stable_identity() {}
+    fn application_requires_stable_identity_and_exact_window_set() {}
 
     #[test]
     fn application_interactive_downgrade_projects_input_scope_reason() {
@@ -1744,6 +1754,13 @@ fn observe_bound_session_target_once() {
 
 fn validate_live_target_input() {}
 
+enum TargetInputGuardFailure {
+    PointerOutsideTargetSurface,
+    PointerOccluded,
+}
+
+fn validate_live_target_pointer_input() {}
+
 fn unsupported_platform_target_observation(binding: &RemoteAppTargetBinding) -> Option<TargetObservation> {
     match binding.target_kind() {
         RemoteDesktopTargetKind::Display => None,
@@ -1777,8 +1794,9 @@ fn observe_application() {
     let selected_display_windows = windows;
     let selected_display_window_ids = ids;
     let current_window_set = AppWindowSetProof::new(selected_display_window_ids);
+    let current_surface_layout = AppSurfaceLayoutProof::from_front_to_back_geometries(windows);
     if &current_window_set != committed_window_set {
-        return Some(TargetObservation::ApplicationWindowSetChanged {});
+        return Some(TargetObservation::ApplicationSurfaceChanged {});
     }
 }
 
@@ -1807,6 +1825,12 @@ mod tests {
 
     #[test]
     fn application_observation_rebinds_same_app_window_set_subset() {}
+
+    #[test]
+    fn application_observer_rebinds_media_when_only_z_order_changes() {}
+
+    #[test]
+    fn application_pointer_guard_rejects_black_gaps_and_occluding_windows() {}
 
     #[test]
     fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {}
@@ -1974,9 +1998,9 @@ write_fixture
 run_ok
 
 write_fixture
-perl -0pi -e 's/Same-display application window-set rebind is implemented/Same-display application rebind remains incomplete/' \
+perl -0pi -e 's/Cross-display application window-set rebind is implemented/Cross-display application rebind remains incomplete/' \
   "$SANDBOX/docs/design/remoteapp-targeted-session-spec.md"
-run_fail 'SPEC status must acknowledge implemented same-display application rebind instead of preserving stale gap text'
+run_fail 'SPEC status must acknowledge the multi-surface application rebind path'
 
 write_fixture
 perl -0pi -e 's/Direct WebRTC route discovery is provider-backed/Direct WebRTC route discovery is host-only/' \
@@ -2310,14 +2334,19 @@ perl -0pi -e 's/fn window_set_epoch/fn window_set_epoch_removed/' \
 run_fail 'application window-set proof must expose the recomputed identity epoch'
 
 write_fixture
-perl -0pi -e 's/ApplicationWindowSetChanged/ApplicationWindowSetUnchecked/g' \
+perl -0pi -e 's/ApplicationSurfaceChanged/ApplicationSurfaceUnchecked/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'application observer must report same-app window-set drift as a rebind observation'
+run_fail 'application observer must report window-set, geometry, and z-order drift as one media rebind observation'
 
 write_fixture
 perl -0pi -e 's/AppWindowSetProof::new/AppWindowSetProof::unchecked/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'application observer must rederive the current display-scoped app window-set proof'
+run_fail 'application observer must rederive the current global app window-set proof'
+
+write_fixture
+perl -0pi -e 's/AppSurfaceLayoutProof::from_front_to_back_geometries/AppSurfaceLayoutProof::unchecked/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'application observer must rederive ordered surface geometry instead of treating identity as layout'
 
 write_fixture
 perl -0pi -e 's/application_observer_reports_committed_window_set_drift_as_rebind/application_observer_allows_window_set_drift/' \
@@ -2333,6 +2362,11 @@ write_fixture
 perl -0pi -e 's/application_observation_rebinds_same_app_window_set_subset/application_observation_allows_observer_subset_of_committed_capture_set/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
 run_fail 'application observer must test same-display app window-set contraction rebind evidence'
+
+write_fixture
+perl -0pi -e 's/application_observer_rebinds_media_when_only_z_order_changes/application_observer_ignores_z_order_changes/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'application observer must rebuild application composition when only z-order changes'
 
 write_fixture
 perl -0pi -e 's/snapshot_observer_reappearance_requires_explicit_rebind_policy/snapshot_observer_reappearance_revives_stale_media/' \
@@ -3105,9 +3139,9 @@ perl -0pi -e 's/windows_sendinput_target_guard_ready/windows_input_unknown/g' \
 run_fail 'device capabilities must expose the guarded Windows SendInput baseline'
 
 write_fixture
-perl -0pi -e 's/"display_scoped_application_window_set"/"application"/' \
+perl -0pi -e 's/"multi_surface_application_window_set"/"application"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must expose the macOS display-scoped application target model'
+run_fail 'device capabilities must expose the macOS multi-surface application target model'
 
 write_fixture
 perl -0pi -e 's/"process_scoped_application_window_set"/"application"/' \
@@ -3120,9 +3154,9 @@ perl -0pi -e 's/"application_surface"/"application_scope"/' \
 run_fail 'device capabilities must expose application multi-window and multi-display constraints'
 
 write_fixture
-perl -0pi -e 's/Some\("target_multi_display_unsupported"\)/None/' \
+perl -0pi -e 's/"multi_surface",\s*true,\s*None/"multi_surface", false, None/s' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must expose the macOS multi-display application blocker'
+run_fail 'device capabilities must expose macOS multi-surface multi-display application support'
 
 write_fixture
 perl -0pi -e 's/"process_scoped",\s*true,\s*None/"process_scoped", false, None/s' \
@@ -3153,5 +3187,25 @@ write_fixture
 perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value\(\),/"unsupported_input_types": json!(["clipboard"]),/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'request input policy projection must reuse the input-domain unsupported type set'
+
+write_fixture
+perl -0pi -e 's/validate_live_target_pointer_input\(binding, snapshot, point\.x, point\.y\)/validate_pointer_without_host_surface_guard(binding)/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'target-local pointer execution must validate the mapped host point before OS injection'
+
+write_fixture
+perl -0pi -e 's/PointerOutsideTargetSurface/PointerOutsideUncheckedSurface/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'application canvas gaps must fail closed instead of targeting host desktop content'
+
+write_fixture
+perl -0pi -e 's/application_pointer_guard_rejects_black_gaps_and_occluding_windows/application_pointer_guard_allows_gaps_and_occlusion/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'pointer guard must regress both black-gap and foreign-window occlusion failures'
+
+write_fixture
+perl -0pi -e 's/fn commit_application_surface\(/fn commit_application_surface_unchecked(/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target tracking must commit application identity and surface layout through one domain transition'
 
 printf 'test_check_remoteapp_lifecycle_input_boundary.sh: all cases passed\n'

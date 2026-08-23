@@ -335,10 +335,10 @@ require 'media_pipeline_support' "$PLAN" \
   'plan evidence audit must record media pipeline support projection evidence'
 require 'Linux display is diagnostic-only' "$AUDIT" \
   'audit must record Linux display diagnostic-only support state'
-require 'Windows display/window/application are unsupported' "$AUDIT" \
-  'audit must record Windows unsupported capture state'
-require 'Linux/Windows input injection is unsupported' "$AUDIT" \
-  'audit must record Linux/Windows unsupported input state'
+require 'Linux and Windows rows expose an executable xcap/OpenH264 `baseline_ready`' "$AUDIT" \
+  'audit must record executable but uncertified Windows/Linux capture state'
+require 'Linux/Windows input injection has guarded executable baselines' "$AUDIT" \
+  'audit must record guarded but uncertified Linux/Windows input state'
 require 'governed Hub routing, cross-device ability visibility/invocation' "$AUDIT" \
   'audit must scope cross-device smoke to routing and synthetic media evidence'
 require 'does not prove real' "$AUDIT" \
@@ -428,8 +428,8 @@ require 'platform_support' "$MATRIX" \
   'product readiness matrix must record platform support projection evidence'
 require 'input_control_support' "$MATRIX" \
   'product readiness matrix must record input control support projection evidence'
-require 'Linux app/window and Windows capture explicitly unsupported' "$MATRIX" \
-  'product readiness matrix must record explicit Linux/Windows unsupported capture state'
+require 'labels Windows/Linux exact-target capture baseline_ready rather than production_ready' "$MATRIX" \
+  'product readiness matrix must record executable but uncertified Windows/Linux capture state'
 require 'Windows/Linux capture or explicit product unsupported state' "$PLAN" \
   'plan evidence audit must preserve Windows/Linux capture or unsupported requirement'
 require 'Real input injection E2E for pointer/keyboard using' "$PLAN" \

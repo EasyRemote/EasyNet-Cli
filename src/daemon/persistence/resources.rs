@@ -63,6 +63,90 @@ use super::file_lock::ExclusiveFileLock;
 
 pub(crate) const FILE_NAME: &str = "resources.json";
 
+const RESOURCE_EPOCH_FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const RESOURCE_EPOCH_FNV_PRIME: u64 = 0x100000001b3;
+
+fn write_resource_epoch(state: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *state ^= u64::from(*byte);
+        *state = state.wrapping_mul(RESOURCE_EPOCH_FNV_PRIME);
+    }
+}
+
+fn write_optional_resource_epoch_u64(state: &mut u64, value: Option<u64>) {
+    write_resource_epoch(state, &[u8::from(value.is_some())]);
+    if let Some(value) = value {
+        write_resource_epoch(state, &value.to_le_bytes());
+    }
+}
+
+/// Deterministic identity epoch for one committed application window set.
+///
+/// Resource discovery and RemoteApp session tracking must use the same
+/// versioned byte representation. `DefaultHasher` is deliberately avoided:
+/// its output is not a persisted cross-version contract and integer-width
+/// differences between platform inventory and session types can create false
+/// target rebinds.
+pub(crate) fn application_window_set_epoch(
+    display_id: Option<u64>,
+    bundle_id: Option<&str>,
+    primary_pid: Option<i64>,
+    resolved_window_ids: &[u64],
+) -> u64 {
+    let mut resolved_window_ids = resolved_window_ids.to_vec();
+    resolved_window_ids.sort_unstable();
+    resolved_window_ids.dedup();
+
+    let mut state = RESOURCE_EPOCH_FNV_OFFSET_BASIS;
+    write_resource_epoch(&mut state, b"easynet.application-window-set.v1\0");
+    write_optional_resource_epoch_u64(&mut state, display_id);
+    match bundle_id.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(bundle_id) => {
+            write_resource_epoch(&mut state, &[1]);
+            write_resource_epoch(&mut state, &(bundle_id.len() as u64).to_le_bytes());
+            write_resource_epoch(&mut state, bundle_id.as_bytes());
+        }
+        None => write_resource_epoch(&mut state, &[0]),
+    }
+    write_resource_epoch(&mut state, &[u8::from(primary_pid.is_some())]);
+    if let Some(primary_pid) = primary_pid {
+        write_resource_epoch(&mut state, &primary_pid.to_le_bytes());
+    }
+    write_resource_epoch(
+        &mut state,
+        &(resolved_window_ids.len() as u64).to_le_bytes(),
+    );
+    for window_id in &resolved_window_ids {
+        write_resource_epoch(&mut state, &window_id.to_le_bytes());
+    }
+    state
+}
+
+/// Deterministic epoch for the concrete application surface composition.
+///
+/// Unlike `application_window_set_epoch`, input order is significant and is
+/// the committed front-to-back z-order. Geometry is represented as integral
+/// host pixels so CoreGraphics inventory, ScreenCaptureKit capture, recovery,
+/// and target observation compare one stable contract.
+pub(crate) fn application_surface_layout_epoch(
+    front_to_back_surfaces: &[(u64, i64, i64, u64, u64)],
+) -> u64 {
+    let mut state = RESOURCE_EPOCH_FNV_OFFSET_BASIS;
+    write_resource_epoch(&mut state, b"easynet.application-surface-layout.v1\0");
+    write_resource_epoch(
+        &mut state,
+        &(front_to_back_surfaces.len() as u64).to_le_bytes(),
+    );
+    for (window_id, x, y, width, height) in front_to_back_surfaces {
+        write_resource_epoch(&mut state, &window_id.to_le_bytes());
+        write_resource_epoch(&mut state, &x.to_le_bytes());
+        write_resource_epoch(&mut state, &y.to_le_bytes());
+        write_resource_epoch(&mut state, &width.to_le_bytes());
+        write_resource_epoch(&mut state, &height.to_le_bytes());
+    }
+    state
+}
+
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
 /// lowercase string, and every accepted v1 type is enumerated here so callers
 /// cannot typo `"camera"` as `"cammera"` and silently misclassify.
@@ -514,6 +598,40 @@ mod tests {
 
     fn empty() -> ResourcesFile {
         ResourcesFile::default()
+    }
+
+    #[test]
+    fn application_window_set_epoch_is_canonical_across_callers() {
+        let canonical =
+            application_window_set_epoch(None, Some("com.example.Editor"), Some(9001), &[10, 11]);
+        assert_eq!(
+            canonical,
+            application_window_set_epoch(
+                None,
+                Some(" com.example.Editor "),
+                Some(9001),
+                &[11, 10, 10],
+            )
+        );
+        assert_ne!(
+            canonical,
+            application_window_set_epoch(None, Some("com.example.Editor"), Some(9001), &[10, 12],)
+        );
+    }
+
+    #[test]
+    fn application_surface_layout_epoch_tracks_geometry_and_z_order() {
+        let front_to_back = [(10, -100, 20, 800, 600), (11, 40, 60, 400, 300)];
+        let canonical = application_surface_layout_epoch(&front_to_back);
+        assert_eq!(canonical, application_surface_layout_epoch(&front_to_back));
+        assert_ne!(
+            canonical,
+            application_surface_layout_epoch(&[(11, 40, 60, 400, 300), (10, -100, 20, 800, 600)])
+        );
+        assert_ne!(
+            canonical,
+            application_surface_layout_epoch(&[(10, -99, 20, 800, 600), (11, 40, 60, 400, 300)])
+        );
     }
 
     /// One-line spec builder for tests so each call site fits on

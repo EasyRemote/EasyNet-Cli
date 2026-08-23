@@ -168,7 +168,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     let capture_target_models = json!([
         "display_surface",
         "window_surface",
-        "display_scoped_application_window_set",
+        "multi_surface_application_window_set",
         "process_scoped_application_window_set"
     ]);
     let reason = if production_ready {
@@ -433,9 +433,9 @@ fn platform_support_view(
                     macos_status,
                     macos_backend,
                     macos_reason,
-                    "display_scoped",
-                    false,
-                    Some("target_multi_display_unsupported"),
+                    "multi_surface",
+                    true,
+                    None,
                 ),
             },
             "linux": {
@@ -670,7 +670,7 @@ mod tests {
             json!([
                 "display_surface",
                 "window_surface",
-                "display_scoped_application_window_set",
+                "multi_surface_application_window_set",
                 "process_scoped_application_window_set"
             ])
         );
@@ -730,10 +730,10 @@ mod tests {
         assert_eq!(
             platform_support["platforms"]["macos"]["application"]["application_surface"],
             json!({
-                "scope": "display_scoped",
+                "scope": "multi_surface",
                 "multi_window": true,
-                "multi_display": false,
-                "blocked_reason": "target_multi_display_unsupported",
+                "multi_display": true,
+                "blocked_reason": null,
             })
         );
         assert_eq!(

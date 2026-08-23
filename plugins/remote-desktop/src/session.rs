@@ -3050,13 +3050,14 @@ mod tests {
 
         assert!(
             session
-                .record_target_observation(TargetObservation::ApplicationWindowSetChanged {
+                .record_target_observation(TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: AppWindowSetProof::new(
                         42,
                         Some("com.example.Editor".to_string()),
                         Some(9001),
                         vec![10, 11, 12],
                     ),
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),

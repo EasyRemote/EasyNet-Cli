@@ -269,8 +269,10 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetObservation {
         focused: bool,
         observed_at_ms: u64,
     },
-    ApplicationWindowSetChanged {
+    ApplicationSurfaceChanged {
         app_window_set: AppWindowSetProof,
+        app_surface_layout:
+            Option<crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof>,
         geometry: TargetGeometry,
         target_identity_epoch: u64,
         target_geometry_revision: u64,
@@ -488,24 +490,27 @@ impl RemoteAppTargetBindingStateMachine {
                 focused,
                 observed_at_ms,
             } => self.commit_focus(focused, observed_at_ms),
-            TargetObservation::ApplicationWindowSetChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 app_window_set,
+                app_surface_layout,
                 geometry,
                 target_identity_epoch,
                 target_geometry_revision,
                 observed_at_ms,
             } => {
                 if media_source_active {
-                    self.stage_application_window_set_media_rebind(
+                    self.stage_application_surface_media_rebind(
                         app_window_set,
+                        app_surface_layout,
                         geometry,
                         target_identity_epoch,
                         target_geometry_revision,
                         observed_at_ms,
                     )
                 } else {
-                    self.commit_application_window_set(
+                    self.commit_application_surface(
                         app_window_set,
+                        app_surface_layout,
                         geometry,
                         target_identity_epoch,
                         target_geometry_revision,
@@ -733,9 +738,12 @@ impl RemoteAppTargetBindingStateMachine {
         ))
     }
 
-    fn commit_application_window_set(
+    fn commit_application_surface(
         &mut self,
         app_window_set: AppWindowSetProof,
+        app_surface_layout: Option<
+            crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof,
+        >,
         geometry: TargetGeometry,
         target_identity_epoch: u64,
         target_geometry_revision: u64,
@@ -750,12 +758,16 @@ impl RemoteAppTargetBindingStateMachine {
         self.clear_pending_lost();
         let previous_identity_epoch = self.snapshot.target_identity_epoch;
         let previous_geometry_revision = self.snapshot.target_geometry_revision;
-        if previous_identity_epoch == target_identity_epoch && self.snapshot.geometry == geometry {
+        if previous_identity_epoch == target_identity_epoch
+            && self.snapshot.geometry == geometry
+            && self.binding.committed_app_surface_layout() == app_surface_layout.as_ref()
+        {
             return None;
         }
         let next_geometry_revision = target_geometry_revision.max(previous_geometry_revision + 1);
-        let Some(next_binding) = self.binding.application_window_set_rebind_candidate(
+        let Some(next_binding) = self.binding.application_surface_rebind_candidate(
             app_window_set.clone(),
+            app_surface_layout.clone(),
             geometry.clone(),
             next_geometry_revision,
             false,
@@ -788,12 +800,22 @@ impl RemoteAppTargetBindingStateMachine {
         payload["previous_target_identity_epoch"] = json!(previous_identity_epoch);
         payload["target_identity_epoch"] = json!(target_identity_epoch);
         payload["app_window_set"] = app_window_set.to_value();
+        payload["app_surface_layout"] = app_surface_layout.as_ref().map_or(
+            Value::Null,
+            crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof::to_value,
+        );
+        payload["surface_layout_epoch"] = app_surface_layout
+            .as_ref()
+            .map_or(Value::Null, |layout| json!(layout.layout_epoch()));
         self.coalesced_lifecycle_event("TARGET_REBOUND", payload, observed_at_ms)
     }
 
-    fn stage_application_window_set_media_rebind(
+    fn stage_application_surface_media_rebind(
         &mut self,
         app_window_set: AppWindowSetProof,
+        app_surface_layout: Option<
+            crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof,
+        >,
         geometry: TargetGeometry,
         target_identity_epoch: u64,
         target_geometry_revision: u64,
@@ -806,6 +828,7 @@ impl RemoteAppTargetBindingStateMachine {
             && self.pending_media_rebind.as_ref().is_some_and(|pending| {
                 pending.binding.target_identity_epoch() == target_identity_epoch
                     && pending.binding.geometry() == &geometry
+                    && pending.binding.committed_app_surface_layout() == app_surface_layout.as_ref()
             })
         {
             return None;
@@ -817,13 +840,15 @@ impl RemoteAppTargetBindingStateMachine {
         let previous_media_source_epoch = self.snapshot.media_source_epoch;
         if previous_target_identity_epoch == target_identity_epoch
             && self.snapshot.geometry == geometry
+            && self.binding.committed_app_surface_layout() == app_surface_layout.as_ref()
         {
             return None;
         }
         let next_geometry_revision =
             target_geometry_revision.max(previous_target_geometry_revision + 1);
-        let Some(candidate) = self.binding.application_window_set_rebind_candidate(
+        let Some(candidate) = self.binding.application_surface_rebind_candidate(
             app_window_set.clone(),
+            app_surface_layout.clone(),
             geometry.clone(),
             next_geometry_revision,
             true,
@@ -835,7 +860,7 @@ impl RemoteAppTargetBindingStateMachine {
                 observed_at_ms,
             );
         };
-        let detail = "application_window_set_requires_media_source_rebuild";
+        let detail = "application_surface_change_requires_media_source_rebuild";
         self.pending_media_rebind = Some(PendingMediaRebind {
             binding: candidate.clone(),
             previous_binding_epoch,
@@ -863,6 +888,8 @@ impl RemoteAppTargetBindingStateMachine {
                 "pending_target_geometry_revision": candidate.target_geometry_revision(),
                 "pending_media_source_epoch": candidate.media_source_epoch(),
                 "pending_app_window_set": app_window_set.to_value(),
+                "pending_app_surface_layout": app_surface_layout.as_ref().map(crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof::to_value),
+                "pending_surface_layout_epoch": app_surface_layout.as_ref().map(crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof::layout_epoch),
                 "visibility_state": self.snapshot.visibility_state.as_str(),
                 "recoverability": TargetBindingPhase::Rebinding.recoverability(),
                 "rebind_deadline_ms": observed_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS),
@@ -896,6 +923,8 @@ impl RemoteAppTargetBindingStateMachine {
                 "geometry": self.snapshot.geometry.to_value(),
                 "pending_geometry": geometry.to_value(),
                 "app_window_set": app_window_set.to_value(),
+                "app_surface_layout": app_surface_layout.as_ref().map(crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof::to_value),
+                "pending_surface_layout_epoch": app_surface_layout.as_ref().map(crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof::layout_epoch),
             }),
             FrontendAction::RetrySession.as_str(),
         ));
@@ -1596,7 +1625,8 @@ mod tests {
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
-        AppWindowSetProof, ResourceEntryTargetResolver, TargetGeometry, TargetResolutionError,
+        AppSurfaceLayoutProof, AppWindowSetProof, ResourceEntryTargetResolver, TargetGeometry,
+        TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         RemoteAppTargetBindingStateMachine, TargetObservation, TargetVisibilityState,
@@ -1699,8 +1729,9 @@ mod tests {
 
         let attempted = tracker
             .commit_observation_with_media_source_activity(
-                TargetObservation::ApplicationWindowSetChanged {
+                TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: next_window_set,
+                    app_surface_layout: None,
                     geometry: next_geometry,
                     target_identity_epoch: 100,
                     target_geometry_revision: original_geometry_revision + 1,
@@ -1771,6 +1802,73 @@ mod tests {
     }
 
     #[test]
+    fn active_application_z_order_change_rebuilds_media_without_changing_identity() {
+        let binding = application_binding();
+        let original_identity_epoch = binding.target_identity_epoch();
+        let original_media_source_epoch = binding.media_source_epoch();
+        let original_layout_epoch = binding
+            .committed_app_surface_layout()
+            .expect("test application layout")
+            .layout_epoch();
+        let app_window_set = binding
+            .committed_app_window_set()
+            .cloned()
+            .expect("test application window set");
+        let geometry = binding.geometry().clone();
+        let reordered_layout = AppSurfaceLayoutProof::from_front_to_back_geometries([
+            (
+                11,
+                &TargetGeometry {
+                    x: Some(110.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+            (
+                10,
+                &TargetGeometry {
+                    x: Some(10.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+        ])
+        .expect("reordered application layout");
+        assert_ne!(reordered_layout.layout_epoch(), original_layout_epoch);
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+
+        tracker
+            .commit_observation_with_media_source_activity(
+                TargetObservation::ApplicationSurfaceChanged {
+                    target_identity_epoch: app_window_set.window_set_epoch(),
+                    app_window_set,
+                    app_surface_layout: Some(reordered_layout.clone()),
+                    geometry,
+                    target_geometry_revision: 2,
+                    observed_at_ms: 10,
+                },
+                true,
+            )
+            .expect("z-order drift stages media rebind");
+
+        let pending = tracker
+            .pending_media_rebind_binding()
+            .expect("pending z-order media rebind");
+        assert_eq!(pending.target_identity_epoch(), original_identity_epoch);
+        assert_eq!(
+            pending.media_source_epoch(),
+            original_media_source_epoch + 1
+        );
+        assert_eq!(
+            pending.committed_app_surface_layout(),
+            Some(&reordered_layout)
+        );
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("rebinding"));
+    }
+
+    #[test]
     fn active_application_window_set_rebind_failure_is_typed() {
         let binding = application_binding();
         let original_binding_epoch = binding.binding_epoch();
@@ -1786,8 +1884,9 @@ mod tests {
 
         tracker
             .commit_observation_with_media_source_activity(
-                TargetObservation::ApplicationWindowSetChanged {
+                TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: next_window_set,
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),
@@ -1871,8 +1970,9 @@ mod tests {
 
         let attempted = tracker
             .commit_observation_with_media_source_activity(
-                TargetObservation::ApplicationWindowSetChanged {
+                TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: next_window_set,
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),

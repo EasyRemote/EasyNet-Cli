@@ -215,8 +215,8 @@ mod tests {
                 )
                 .with_native_dimensions(Some((1280, 720)));
         let proof = if binding.target_kind() == RemoteDesktopTargetKind::Application {
-            proof.with_app_window_set(AppWindowSetProof::new(
-                locator.display_id().expect("application display id"),
+            proof.with_app_window_set(AppWindowSetProof::new_platform_scoped(
+                locator.display_id(),
                 locator.bundle_id().map(ToOwned::to_owned),
                 locator.pid(),
                 vec![7],
@@ -245,6 +245,7 @@ mod tests {
         let mut binding = binding_for(
             ResourceType::Display,
             json!({
+                "platform": "windows",
                 "backend": "xcap",
                 "display_id": 1,
             }),
@@ -264,6 +265,7 @@ mod tests {
         let binding = binding_for(
             ResourceType::Display,
             json!({
+                "platform": "windows",
                 "backend": "xcap",
                 "display_id": 1,
             }),
@@ -333,6 +335,7 @@ mod tests {
             (
                 ResourceType::Window,
                 json!({
+                    "platform": "windows",
                     "backend": "xcap",
                     "window_id": 7,
                     "pid": 9001,
@@ -342,8 +345,8 @@ mod tests {
             (
                 ResourceType::Application,
                 json!({
+                    "platform": "windows",
                     "backend": "xcap",
-                    "display_id": 1,
                     "bundle_id": "com.example.Editor",
                     "app_identity": "com.example.Editor",
                     "primary_pid": 9001,

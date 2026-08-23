@@ -556,7 +556,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         _ => anyhow::bail!("direct WebRTC audio track/payload negotiation is inconsistent"),
     };
 
-    let capture = ScreenCaptureKitStream::start(
+    let mut capture = ScreenCaptureKitStream::start(
         ABILITY_SET_DESCRIPTION,
         capture_target,
         req_width,
@@ -590,7 +590,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         }
         active_media_source_epoch = apply_pending_media_rebind(
             execution.sessions(),
-            &capture,
+            &mut capture,
             execution.session_id(),
             execution.epoch(),
             active_media_source_epoch,
@@ -856,7 +856,7 @@ fn native_media_adaptation_event(
 
 fn apply_pending_media_rebind(
     sessions: &RemoteDesktopSessionStore,
-    capture: &ScreenCaptureKitStream,
+    capture: &mut ScreenCaptureKitStream,
     session_id: &str,
     epoch: TransportEpoch,
     active_media_source_epoch: u64,
@@ -870,16 +870,18 @@ fn apply_pending_media_rebind(
     };
     let next_target = target_for_binding(ABILITY_SET_DESCRIPTION, &next_binding)
         .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
-    let capture_proof = capture
-        .update_content_filter(ABILITY_SET_DESCRIPTION, next_target)
+    let prepared = capture
+        .prepare_content_filter_update(ABILITY_SET_DESCRIPTION, next_target)
         .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
-    if sessions.commit_pending_media_rebind_for_session(
-        session_id,
-        epoch,
-        next_binding.binding_epoch(),
-        next_binding.media_source_epoch(),
-        capture_proof,
-    ) {
+    if capture.commit_prepared_content_filter_update(prepared, |capture_proof| {
+        sessions.commit_pending_media_rebind_for_session(
+            session_id,
+            epoch,
+            next_binding.binding_epoch(),
+            next_binding.media_source_epoch(),
+            capture_proof.clone(),
+        )
+    }) {
         Ok(next_binding.media_source_epoch())
     } else {
         Ok(active_media_source_epoch)
@@ -940,13 +942,14 @@ mod tests {
         session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura(session_id));
         assert!(
             session
-                .record_target_observation(TargetObservation::ApplicationWindowSetChanged {
+                .record_target_observation(TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: AppWindowSetProof::new(
                         42,
                         Some("com.example.Editor".to_string()),
                         Some(9001),
                         vec![10, 11, 12],
                     ),
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),

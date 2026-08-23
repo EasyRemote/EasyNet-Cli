@@ -18,8 +18,8 @@ use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
-    AppWindowSetProof, NativeAppIdentityCandidate, RemoteAppTargetBinding, RemoteDesktopTargetKind,
-    TargetGeometry, TargetResolutionError,
+    AppSurfaceLayoutProof, AppWindowSetProof, NativeAppIdentityCandidate, RemoteAppTargetBinding,
+    RemoteDesktopTargetKind, TargetGeometry, TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
@@ -113,6 +113,8 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetInputGuardFailure {
     NotFocused,
     GeometryStale,
     WindowSetStale,
+    PointerOutsideTargetSurface,
+    PointerOccluded,
 }
 
 impl TargetInputGuardFailure {
@@ -128,6 +130,10 @@ impl TargetInputGuardFailure {
             Self::NotFocused => "target_input_guard_not_focused",
             Self::GeometryStale => "target_input_guard_geometry_stale",
             Self::WindowSetStale => "target_input_guard_window_set_stale",
+            Self::PointerOutsideTargetSurface => {
+                "target_input_guard_pointer_outside_target_surface"
+            }
+            Self::PointerOccluded => "target_input_guard_pointer_occluded",
         }
     }
 }
@@ -140,6 +146,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetInputGuardProof {
     validated_at_ms: u64,
     target_geometry_revision: u64,
     target_focus_epoch: u64,
+    pointer_target_window_id: Option<u64>,
 }
 
 impl TargetInputGuardProof {
@@ -148,6 +155,7 @@ impl TargetInputGuardProof {
         snapshot: &TargetTrackerSnapshot,
         snapshot_started_at_ms: u64,
         validated_at_ms: u64,
+        pointer_target_window_id: Option<u64>,
     ) -> Self {
         Self {
             subject_ura: binding.subject_ura().to_string(),
@@ -156,6 +164,7 @@ impl TargetInputGuardProof {
             validated_at_ms,
             target_geometry_revision: snapshot.target_geometry_revision(),
             target_focus_epoch: snapshot.target_focus_epoch(),
+            pointer_target_window_id,
         }
     }
 
@@ -177,6 +186,10 @@ impl TargetInputGuardProof {
             RemoteDesktopTargetKind::Window => proof["window_id_exact"] = json!(true),
             RemoteDesktopTargetKind::Application => proof["window_set_exact"] = json!(true),
             RemoteDesktopTargetKind::Display => {}
+        }
+        if let Some(window_id) = self.pointer_target_window_id {
+            proof["pointer_target_window_id"] = json!(window_id);
+            proof["pointer_occlusion_checked"] = json!(true);
         }
         proof
     }
@@ -294,6 +307,31 @@ pub(in crate::daemon::plugins::remote_desktop) fn validate_live_target_input(
         snapshot,
         snapshot_started_at_ms,
         now_ms(),
+        None,
+    ))
+}
+
+/// Validate a mapped host point against a fresh front-to-back native window
+/// snapshot. Target-local pointer input may only land on an unobscured window
+/// that belongs to the committed target surface; black compositor gaps and
+/// windows belonging to other applications fail closed.
+pub(in crate::daemon::plugins::remote_desktop) fn validate_live_target_pointer_input(
+    binding: &RemoteAppTargetBinding,
+    snapshot: &TargetTrackerSnapshot,
+    host_x: f64,
+    host_y: f64,
+) -> Result<TargetInputGuardProof, TargetInputGuardFailure> {
+    let snapshot_started_at_ms = now_ms();
+    let host_snapshot = platform::live_host_target_snapshot()?;
+    validate_target_input_against_host_snapshot(binding, snapshot, &host_snapshot)?;
+    let window_id =
+        validate_pointer_target_against_host_snapshot(binding, &host_snapshot, host_x, host_y)?;
+    Ok(TargetInputGuardProof::from_validated_target(
+        binding,
+        snapshot,
+        snapshot_started_at_ms,
+        now_ms(),
+        Some(window_id),
     ))
 }
 
@@ -319,6 +357,53 @@ fn validate_target_input_against_host_snapshot(
             validate_application_input(binding, snapshot, &host_snapshot.windows)
         }
     }
+}
+
+fn validate_pointer_target_against_host_snapshot(
+    binding: &RemoteAppTargetBinding,
+    host_snapshot: &HostTargetSnapshot,
+    host_x: f64,
+    host_y: f64,
+) -> Result<u64, TargetInputGuardFailure> {
+    if !host_x.is_finite() || !host_y.is_finite() {
+        return Err(TargetInputGuardFailure::PointerOutsideTargetSurface);
+    }
+    let topmost = host_snapshot
+        .windows
+        .iter()
+        .find(|window| {
+            window.visibility_state == TargetVisibilityState::Visible
+                && geometry_contains_point(&window.geometry, host_x, host_y)
+        })
+        .ok_or(TargetInputGuardFailure::PointerOutsideTargetSurface)?;
+    let belongs_to_target = match binding.target_kind() {
+        RemoteDesktopTargetKind::Display => false,
+        RemoteDesktopTargetKind::Window => {
+            binding.native_locator().window_id() == Some(topmost.window_id)
+                && owner_matches(binding, topmost)
+        }
+        RemoteDesktopTargetKind::Application => {
+            binding
+                .committed_app_window_set()
+                .is_some_and(|window_set| window_set.contains_window_id(topmost.window_id))
+                && app_owner_matches(binding, topmost)
+        }
+    };
+    belongs_to_target
+        .then_some(topmost.window_id)
+        .ok_or(TargetInputGuardFailure::PointerOccluded)
+}
+
+fn geometry_contains_point(geometry: &TargetGeometry, x: f64, y: f64) -> bool {
+    let (Some(origin_x), Some(origin_y), Some(width), Some(height)) = (
+        finite_dimension(geometry.x),
+        finite_dimension(geometry.y),
+        positive_dimension(geometry.width),
+        positive_dimension(geometry.height),
+    ) else {
+        return false;
+    };
+    x >= origin_x && y >= origin_y && x < origin_x + width && y < origin_y + height
 }
 
 fn validate_window_input(
@@ -379,21 +464,29 @@ fn validate_application_input(
     if matching.is_empty() {
         return Err(TargetInputGuardFailure::TargetNotFound);
     }
-    let current_window_set = AppWindowSetProof::new_platform_scoped(
-        display_id,
-        locator.bundle_id().map(str::to_string),
-        locator.pid(),
-        matching.iter().map(|window| window.window_id).collect(),
-    );
-    if &current_window_set != committed_window_set {
-        return Err(TargetInputGuardFailure::WindowSetStale);
-    }
     let visible = matching
         .into_iter()
         .filter(|window| window.visibility_state == TargetVisibilityState::Visible)
         .collect::<Vec<_>>();
     if visible.is_empty() {
         return Err(TargetInputGuardFailure::NotVisible);
+    }
+    let current_window_set = AppWindowSetProof::new_platform_scoped(
+        display_id,
+        locator.bundle_id().map(str::to_string),
+        locator.pid(),
+        visible.iter().map(|window| window.window_id).collect(),
+    );
+    if &current_window_set != committed_window_set {
+        return Err(TargetInputGuardFailure::WindowSetStale);
+    }
+    let current_layout =
+        application_surface_layout(&visible).ok_or(TargetInputGuardFailure::GeometryStale)?;
+    if binding
+        .committed_app_surface_layout()
+        .is_some_and(|committed| committed != &current_layout)
+    {
+        return Err(TargetInputGuardFailure::GeometryStale);
     }
     if !visible.iter().any(|window| window.focused) {
         return Err(TargetInputGuardFailure::NotFocused);
@@ -576,11 +669,10 @@ fn observe_application(
     windows: &[ObservedWindow],
 ) -> Option<TargetObservation> {
     let locator = binding.native_locator();
-    let expected_display = locator.display_id();
     let Some(committed_window_set) = binding.committed_app_window_set() else {
         return Some(lost(
             TargetResolutionError::TargetMetadataIncomplete,
-            "application target binding has no committed platform-scoped window set",
+            "application target binding has no committed application window set",
         ));
     };
     let matching: Vec<&ObservedWindow> = windows
@@ -593,39 +685,13 @@ fn observe_application(
             "bound application has no visible windows in host target snapshot",
         ));
     }
-    let displays: BTreeSet<u64> = matching
-        .iter()
-        .filter_map(|window| window.display_id)
-        .collect();
-    if expected_display.is_some() && displays.len() > 1 {
-        return Some(lost(
-            TargetResolutionError::TargetMultiDisplayUnsupported,
-            "bound application spans multiple displays but session is display-scoped",
-        ));
-    }
-    let selected_display_windows: Vec<&ObservedWindow> = matching
-        .into_iter()
-        .filter(|window| {
-            expected_display.is_none_or(|expected| window.display_id == Some(expected))
-        })
-        .collect();
-    if selected_display_windows.is_empty() {
-        return Some(lost(
-            TargetResolutionError::TargetDisplayUnavailable,
-            "bound application has no windows in the selected platform scope",
-        ));
-    }
-    let selected_display_window_ids: BTreeSet<u64> = selected_display_windows
-        .iter()
-        .map(|window| window.window_id)
-        .collect();
-    let visible_selected_display_windows: Vec<&ObservedWindow> = selected_display_windows
+    let visible_application_windows: Vec<&ObservedWindow> = matching
         .iter()
         .copied()
         .filter(|window| window.visibility_state == TargetVisibilityState::Visible)
         .collect();
-    if visible_selected_display_windows.is_empty() {
-        let visibility_state = if selected_display_windows
+    if visible_application_windows.is_empty() {
+        let visibility_state = if matching
             .iter()
             .any(|window| window.visibility_state == TargetVisibilityState::Minimized)
         {
@@ -639,31 +705,44 @@ fn observe_application(
             observed_at_ms: now_ms(),
         });
     }
-    let Some(geometry) = union_geometry(&visible_selected_display_windows) else {
+    let Some(geometry) = union_geometry(&visible_application_windows) else {
         return Some(lost(
             TargetResolutionError::TargetMetadataIncomplete,
             "bound application window set has incomplete geometry in host target snapshot",
         ));
     };
+    let Some(app_surface_layout) = application_surface_layout(&visible_application_windows) else {
+        return Some(lost(
+            TargetResolutionError::TargetMetadataIncomplete,
+            "bound application surface has incomplete native geometry or duplicate windows",
+        ));
+    };
+    let application_window_ids: BTreeSet<u64> = visible_application_windows
+        .iter()
+        .map(|window| window.window_id)
+        .collect();
     let current_window_set = AppWindowSetProof::new_platform_scoped(
-        expected_display,
+        None,
         locator.bundle_id().map(str::to_string),
         locator.pid(),
-        selected_display_window_ids.into_iter().collect(),
+        application_window_ids.into_iter().collect(),
     );
-    if &current_window_set != committed_window_set {
-        return Some(TargetObservation::ApplicationWindowSetChanged {
+    if &current_window_set != committed_window_set
+        || binding
+            .committed_app_surface_layout()
+            .is_some_and(|committed| committed != &app_surface_layout)
+        || snapshot.geometry() != &geometry
+    {
+        return Some(TargetObservation::ApplicationSurfaceChanged {
             target_identity_epoch: current_window_set.window_set_epoch(),
             app_window_set: current_window_set,
+            app_surface_layout: Some(app_surface_layout),
             geometry,
             target_geometry_revision: snapshot.target_geometry_revision() + 1,
             observed_at_ms: now_ms(),
         });
     }
-    if snapshot.geometry() != &geometry {
-        return geometry_observation(snapshot, geometry);
-    }
-    let focused = visible_selected_display_windows
+    let focused = visible_application_windows
         .iter()
         .any(|window| window.focused);
     if snapshot.focused() != Some(focused) {
@@ -741,6 +820,14 @@ fn union_geometry(windows: &[&ObservedWindow]) -> Option<TargetGeometry> {
         width: Some((max_x - min_x).max(0.0)),
         height: Some((max_y - min_y).max(0.0)),
     })
+}
+
+fn application_surface_layout(windows: &[&ObservedWindow]) -> Option<AppSurfaceLayoutProof> {
+    AppSurfaceLayoutProof::from_front_to_back_geometries(
+        windows
+            .iter()
+            .map(|window| (window.window_id, &window.geometry)),
+    )
 }
 
 fn finite_dimension(value: Option<f64>) -> Option<f64> {
@@ -1160,9 +1247,9 @@ mod tests {
 
     use super::{
         observe_binding_against_host_snapshot, unsupported_platform_target_observation,
-        validate_target_input_against_host_snapshot, HostTargetSnapshot,
-        HostTargetSnapshotProvider, ObservedWindow, SnapshotBackedTargetObservationProvider,
-        TargetInputGuardFailure, TargetInputGuardProof,
+        validate_pointer_target_against_host_snapshot, validate_target_input_against_host_snapshot,
+        HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
+        SnapshotBackedTargetObservationProvider, TargetInputGuardFailure, TargetInputGuardProof,
     };
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
@@ -1172,7 +1259,8 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
-        AppWindowSetProof, RemoteAppTargetBinding, ResourceEntryTargetResolver, TargetGeometry,
+        AppSurfaceLayoutProof, AppWindowSetProof, RemoteAppTargetBinding, RemoteDesktopTargetKind,
+        ResolvedCaptureTargetProof, ResourceEntryTargetResolver, TargetGeometry,
         TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
@@ -1344,8 +1432,8 @@ mod tests {
     }
 
     fn application_binding() -> RemoteAppTargetBinding {
-        let window_set_epoch = AppWindowSetProof::new(
-            42,
+        let window_set_epoch = AppWindowSetProof::new_platform_scoped(
+            None,
             Some("com.example.Editor".to_string()),
             Some(9001),
             vec![10, 11],
@@ -1359,22 +1447,21 @@ mod tests {
                     owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
                     kind: ResourceType::Application,
                     binding: ResourceBinding::LocalDevice,
-                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
-                        .to_string(),
-                    display_name: "Editor on display 42".to_string(),
+                    hardware_id: "application:macos:cgwindow:bundle:com.example.Editor".to_string(),
+                    display_name: "Editor".to_string(),
                     metadata: live_remote_target_metadata(json!({
                         "platform": "macos",
                         "backend": "macos_core_graphics",
-                        "display_id": 42,
+                        "display_ids": [42],
                         "bundle_id": "com.example.Editor",
                         "app_identity": "com.example.Editor",
                         "primary_pid": 9001,
                         "resolved_window_ids": [10, 11],
                         "window_set_epoch": window_set_epoch,
-                        "primary_x": 10,
-                        "primary_y": 20,
-                        "primary_width": 100,
-                        "primary_height": 80,
+                        "union_x": 10,
+                        "union_y": 20,
+                        "union_width": 190,
+                        "union_height": 80,
                     })),
                     first_seen_at: "2026-06-01T00:00:00Z".to_string(),
                 },
@@ -1458,6 +1545,41 @@ mod tests {
         }
     }
 
+    fn commit_application_surface_layout(
+        binding: &mut RemoteAppTargetBinding,
+        windows: &[ObservedWindow],
+    ) -> AppSurfaceLayoutProof {
+        let layout = AppSurfaceLayoutProof::from_front_to_back_geometries(
+            windows
+                .iter()
+                .map(|window| (window.window_id, &window.geometry)),
+        )
+        .expect("valid test application surface layout");
+        let window_set = binding
+            .committed_app_window_set()
+            .cloned()
+            .expect("application binding window set");
+        binding
+            .commit_capture_proof(
+                "remote_desktop.create_session",
+                ResolvedCaptureTargetProof::new(
+                    "screencapturekit",
+                    RemoteDesktopTargetKind::Application,
+                )
+                .with_native_identity(
+                    None,
+                    None,
+                    Some(9001),
+                    Some("com.example.Editor".to_string()),
+                    Some("com.example.Editor".to_string()),
+                )
+                .with_app_window_set(window_set)
+                .with_app_surface_layout(layout.clone()),
+            )
+            .expect("test capture proof commits");
+        layout
+    }
+
     fn no_window_snapshot() -> HostTargetSnapshot {
         HostTargetSnapshot {
             windows: Vec::new(),
@@ -1517,10 +1639,10 @@ mod tests {
     fn target_input_guard_binds_application_to_exact_focused_window_set() {
         let binding = application_binding();
         let snapshot = focused_snapshot(&binding);
-        let mut first = app_window(10, 10.0, 50.0);
+        let mut first = app_window(10, 10.0, 100.0);
         first.focused = true;
         let host = HostTargetSnapshot {
-            windows: vec![first, app_window(11, 60.0, 50.0)],
+            windows: vec![first, app_window(11, 110.0, 90.0)],
             display_ids: BTreeSet::from([42]),
         };
 
@@ -1530,14 +1652,14 @@ mod tests {
         );
 
         let mut drifted = host.clone();
-        drifted.windows.push(app_window(12, 110.0, 40.0));
+        drifted.windows.push(app_window(12, 210.0, 40.0));
         assert_eq!(
             validate_target_input_against_host_snapshot(&binding, &snapshot, &drifted),
             Err(TargetInputGuardFailure::WindowSetStale)
         );
 
         let mut multi_display = host;
-        let mut other_display = app_window(12, 110.0, 40.0);
+        let mut other_display = app_window(12, 210.0, 40.0);
         other_display.display_id = Some(43);
         multi_display.windows.push(other_display);
         multi_display.display_ids.insert(43);
@@ -1549,10 +1671,57 @@ mod tests {
     }
 
     #[test]
+    fn application_pointer_guard_rejects_black_gaps_and_occluding_windows() {
+        let binding = application_binding();
+        let first = app_window(10, 10.0, 100.0);
+        let second = app_window(11, 210.0, 90.0);
+        let mut unrelated = app_window(90, 0.0, 400.0);
+        unrelated.pid = Some(7000);
+        unrelated.bundle_id = Some("com.example.Other".to_string());
+
+        let gap_with_underlying_window = HostTargetSnapshot {
+            windows: vec![first.clone(), second.clone(), unrelated.clone()],
+            display_ids: BTreeSet::from([42]),
+        };
+        assert_eq!(
+            validate_pointer_target_against_host_snapshot(
+                &binding,
+                &gap_with_underlying_window,
+                150.0,
+                40.0,
+            ),
+            Err(TargetInputGuardFailure::PointerOccluded),
+            "a black compositor gap must never click the desktop/other app underneath"
+        );
+
+        let empty_gap = HostTargetSnapshot {
+            windows: vec![first.clone(), second.clone()],
+            display_ids: BTreeSet::from([42]),
+        };
+        assert_eq!(
+            validate_pointer_target_against_host_snapshot(&binding, &empty_gap, 150.0, 40.0),
+            Err(TargetInputGuardFailure::PointerOutsideTargetSurface)
+        );
+        assert_eq!(
+            validate_pointer_target_against_host_snapshot(&binding, &empty_gap, 50.0, 40.0),
+            Ok(10)
+        );
+
+        let occluded_target = HostTargetSnapshot {
+            windows: vec![unrelated, first, second],
+            display_ids: BTreeSet::from([42]),
+        };
+        assert_eq!(
+            validate_pointer_target_against_host_snapshot(&binding, &occluded_target, 50.0, 40.0),
+            Err(TargetInputGuardFailure::PointerOccluded)
+        );
+    }
+
+    #[test]
     fn target_input_guard_proof_projects_public_execution_evidence() {
         let binding = application_binding();
         let snapshot = focused_snapshot(&binding);
-        let proof = TargetInputGuardProof::from_validated_target(&binding, &snapshot, 10, 11)
+        let proof = TargetInputGuardProof::from_validated_target(&binding, &snapshot, 10, 11, None)
             .to_value("rd-target-input-proof");
 
         assert_eq!(proof["status"], json!("passed"));
@@ -1592,7 +1761,7 @@ mod tests {
             observe_binding_against_host_snapshot(&binding, &snapshot, &extra_window)
                 .expect("window-set drift must be reported");
         match extra_observation {
-            TargetObservation::ApplicationWindowSetChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 app_window_set,
                 geometry,
                 target_identity_epoch,
@@ -1613,7 +1782,7 @@ mod tests {
             observe_binding_against_host_snapshot(&binding, &snapshot, &missing_window)
                 .expect("missing committed app window must be reported");
         match missing_observation {
-            TargetObservation::ApplicationWindowSetChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 app_window_set,
                 geometry,
                 target_identity_epoch,
@@ -1624,6 +1793,37 @@ mod tests {
                 assert_eq!(geometry.width, Some(100.0));
             }
             other => panic!("window-set contraction must project as app rebind: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn application_observer_rebinds_media_when_only_z_order_changes() {
+        let mut binding = application_binding();
+        let initial_windows = vec![app_window(10, 10.0, 100.0), app_window(11, 110.0, 90.0)];
+        let initial_layout = commit_application_surface_layout(&mut binding, &initial_windows);
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let reordered = HostTargetSnapshot {
+            windows: vec![initial_windows[1].clone(), initial_windows[0].clone()],
+            display_ids: BTreeSet::from([42]),
+        };
+
+        let observation = observe_binding_against_host_snapshot(&binding, &snapshot, &reordered)
+            .expect("z-order drift must rebuild the application media surface");
+        match observation {
+            TargetObservation::ApplicationSurfaceChanged {
+                app_window_set,
+                app_surface_layout: Some(app_surface_layout),
+                target_identity_epoch,
+                ..
+            } => {
+                assert_eq!(target_identity_epoch, app_window_set.window_set_epoch());
+                assert_eq!(target_identity_epoch, binding.target_identity_epoch());
+                assert_ne!(
+                    app_surface_layout.layout_epoch(),
+                    initial_layout.layout_epoch()
+                );
+            }
+            other => panic!("z-order drift must stage an application surface rebind: {other:?}"),
         }
     }
 
@@ -1657,7 +1857,7 @@ mod tests {
         let observation = observe_binding_against_host_snapshot(&binding, &snapshot, &host)
             .expect("process window-set expansion must be observed");
         match observation {
-            TargetObservation::ApplicationWindowSetChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 app_window_set,
                 geometry,
                 ..
@@ -2087,13 +2287,14 @@ mod tests {
                 session_id,
                 &inputs.binding_id,
                 inputs.binding_epoch,
-                TargetObservation::ApplicationWindowSetChanged {
+                TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: AppWindowSetProof::new(
                         42,
                         Some("com.example.Editor".to_string()),
                         Some(9001),
                         vec![10, 11, 12],
                     ),
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),
@@ -2278,7 +2479,7 @@ mod tests {
                         bundle_id: Some("com.example.Editor".to_string()),
                         display_id: Some(42),
                         geometry: TargetGeometry {
-                            x: Some(130.0),
+                            x: Some(140.0),
                             y: Some(60.0),
                             width: Some(70.0),
                             height: Some(40.0),
@@ -2294,19 +2495,20 @@ mod tests {
         .expect("application observation");
 
         match observation {
-            TargetObservation::GeometryChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 geometry,
                 target_geometry_revision,
+                app_surface_layout: Some(_),
                 ..
             } => {
                 assert_eq!(target_geometry_revision, 2);
                 assert_eq!(geometry.x, Some(10.0));
                 assert_eq!(geometry.y, Some(20.0));
-                assert_eq!(geometry.width, Some(190.0));
+                assert_eq!(geometry.width, Some(200.0));
                 assert_eq!(geometry.height, Some(80.0));
             }
             other => {
-                panic!("expected exact app window set to update union geometry, got {other:?}")
+                panic!("expected exact app surface geometry to stage a media rebind, got {other:?}")
             }
         }
     }
@@ -2372,7 +2574,7 @@ mod tests {
         .expect("application window-set expansion observation");
 
         match observation {
-            TargetObservation::ApplicationWindowSetChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 app_window_set,
                 geometry,
                 target_identity_epoch,
@@ -2399,22 +2601,21 @@ mod tests {
                     owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
                     kind: ResourceType::Application,
                     binding: ResourceBinding::LocalDevice,
-                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
-                        .to_string(),
-                    display_name: "Editor on display 42".to_string(),
+                    hardware_id: "application:macos:cgwindow:bundle:com.example.Editor".to_string(),
+                    display_name: "Editor".to_string(),
                     metadata: live_remote_target_metadata(json!({
                         "platform": "macos",
                         "backend": "macos_core_graphics",
-                        "display_id": 42,
+                        "display_ids": [42],
                         "bundle_id": "com.example.Editor",
                         "app_identity": "com.example.Editor",
                         "primary_pid": 9001,
                         "resolved_window_ids": [10, 11, 12],
                         "window_set_epoch": 123,
-                        "primary_x": 10,
-                        "primary_y": 20,
-                        "primary_width": 100,
-                        "primary_height": 80,
+                        "union_x": 10,
+                        "union_y": 20,
+                        "union_width": 270,
+                        "union_height": 80,
                     })),
                     first_seen_at: "2026-06-01T00:00:00Z".to_string(),
                 },
@@ -2448,7 +2649,7 @@ mod tests {
         .expect("application subset observation");
 
         match observation {
-            TargetObservation::ApplicationWindowSetChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 app_window_set,
                 geometry,
                 target_identity_epoch,
@@ -2465,7 +2666,7 @@ mod tests {
     }
 
     #[test]
-    fn application_observation_rejects_multi_display_window_set() {
+    fn application_observation_rebinds_cross_display_window_set() {
         let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let observation = observe_binding_against_host_snapshot(
@@ -2510,10 +2711,18 @@ mod tests {
         .expect("application observation");
 
         match observation {
-            TargetObservation::Lost { reason, .. } => {
-                assert_eq!(reason.as_str(), "target_multi_display_unsupported");
+            TargetObservation::ApplicationSurfaceChanged {
+                app_window_set,
+                geometry,
+                ..
+            } => {
+                assert_eq!(app_window_set.resolved_window_count(), 2);
+                assert_eq!(geometry.x, Some(10.0));
+                assert_eq!(geometry.y, Some(20.0));
+                assert_eq!(geometry.width, Some(540.0));
+                assert_eq!(geometry.height, Some(530.0));
             }
-            other => panic!("expected multi-display application target loss, got {other:?}"),
+            other => panic!("cross-display application drift must rebind, got {other:?}"),
         }
     }
 }

@@ -114,7 +114,7 @@ grep -q "real plugin.status test must assert metadata_json_plus_binary" /tmp/che
   fail "expected real plugin.status wire-kind assertion failure"
 cp "$REPO_ROOT/src/daemon/ability/builtins/real_invoke_tests.rs" "$SB/src/daemon/ability/builtins/real_invoke_tests.rs"
 
-perl -0pi -e 's/full RemoteApp product closure incomplete as of 2026-08-22/implemented; full acceptance verified 2026-08-16/' \
+perl -0pi -e 's/full RemoteApp product closure incomplete as of [0-9-]+/implemented; full acceptance verified 2026-08-24/' \
   "$SB/docs/design/remoteapp-targeted-session-spec.md"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-status.out 2>&1; then
   fail "checker accepted targeted-session SPEC that claims full product acceptance"

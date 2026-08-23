@@ -14,8 +14,8 @@ use std::collections::{BTreeSet, HashSet};
 use serde_json::{json, Value};
 
 use crate::daemon::persistence::resources::{
-    self, upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert,
-    ResourcesFile,
+    self, application_surface_layout_epoch, application_window_set_epoch, upsert_resource,
+    ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
 };
 
 /// Freshness lease for live remote target picker rows.
@@ -650,7 +650,7 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
                 area,
                 focused: focused == Some(true),
                 bounds,
-                display_id: None,
+                display_ids: Vec::new(),
                 bundle_id: None,
             });
         out.push(DiscoveredResource {
@@ -680,6 +680,8 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
     }
     out.extend(apps.into_iter().map(|((pid, app_name), app)| {
         let window_set_epoch = app.window_set_epoch();
+        let surface_layout = app.surface_layout();
+        let surface_layout_epoch = app.surface_layout_epoch();
         DiscoveredResource {
             kind: ResourceType::Application,
             hardware_id: format!("application:xcap:{platform}:pid:{pid}"),
@@ -698,6 +700,8 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
                 "window_count": app.window_count,
                 "resolved_window_ids": app.window_ids,
                 "window_set_epoch": window_set_epoch,
+                "front_to_back_surfaces": surface_layout,
+                "surface_layout_epoch": surface_layout_epoch,
                 "target_identity_epoch": window_set_epoch,
                 "primary_window_id": app.primary_window_id,
                 "primary_pid": app.primary_pid,
@@ -706,6 +710,10 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
                 "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
                 "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
                 "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
+                "union_x": app.union_bounds.and_then(|bounds| bounds.x),
+                "union_y": app.union_bounds.and_then(|bounds| bounds.y),
+                "union_width": app.union_bounds.and_then(|bounds| bounds.width),
+                "union_height": app.union_bounds.and_then(|bounds| bounds.height),
             }),
         }
     }));
@@ -738,14 +746,22 @@ struct AppAggregate {
     primary_pid: Option<u32>,
     primary_title: Option<String>,
     primary_bounds: Option<ScreenTargetBounds>,
+    union_bounds: Option<ScreenTargetBounds>,
     primary_area: u64,
-    display_id: Option<u32>,
+    display_ids: Vec<u32>,
     bundle_id: Option<String>,
     app_identity: Option<String>,
     window_ids: Vec<u32>,
+    front_to_back_surfaces: Vec<AppWindowSurfaceObservation>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AppWindowSurfaceObservation {
+    window_id: u32,
+    bounds: ScreenTargetBounds,
+}
+
+#[derive(Debug, Clone)]
 struct AppWindowObservation<'a> {
     window_id: u32,
     pid: Option<u32>,
@@ -753,7 +769,7 @@ struct AppWindowObservation<'a> {
     area: u64,
     focused: bool,
     bounds: ScreenTargetBounds,
-    display_id: Option<u32>,
+    display_ids: Vec<u32>,
     bundle_id: Option<&'a str>,
 }
 
@@ -766,16 +782,21 @@ impl AppAggregate {
             area,
             focused,
             bounds,
-            display_id,
+            display_ids,
             bundle_id,
         } = observation;
         self.window_count += 1;
         self.window_ids.push(window_id);
         self.window_ids.sort_unstable();
         self.window_ids.dedup();
-        if self.display_id.is_none() {
-            self.display_id = display_id;
-        }
+        self.front_to_back_surfaces
+            .retain(|surface| surface.window_id != window_id);
+        self.front_to_back_surfaces
+            .push(AppWindowSurfaceObservation { window_id, bounds });
+        self.display_ids.extend(display_ids);
+        self.display_ids.sort_unstable();
+        self.display_ids.dedup();
+        self.union_bounds = union_screen_target_bounds(self.union_bounds, bounds);
         if self.bundle_id.is_none() {
             self.bundle_id = bundle_id.map(ToOwned::to_owned);
         }
@@ -794,16 +815,77 @@ impl AppAggregate {
     }
 
     fn window_set_epoch(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        self.display_id.hash(&mut hasher);
-        self.bundle_id.hash(&mut hasher);
-        self.primary_pid.hash(&mut hasher);
-        self.window_ids.hash(&mut hasher);
-        hasher.finish()
+        let window_ids = self
+            .window_ids
+            .iter()
+            .copied()
+            .map(u64::from)
+            .collect::<Vec<_>>();
+        application_window_set_epoch(
+            None,
+            self.bundle_id.as_deref(),
+            self.primary_pid.map(i64::from),
+            &window_ids,
+        )
     }
+
+    fn surface_layout(&self) -> Vec<Value> {
+        self.front_to_back_surfaces
+            .iter()
+            .filter_map(|surface| {
+                Some(json!({
+                    "window_id": surface.window_id,
+                    "x": surface.bounds.x?,
+                    "y": surface.bounds.y?,
+                    "width": surface.bounds.width?,
+                    "height": surface.bounds.height?,
+                }))
+            })
+            .collect()
+    }
+
+    fn surface_layout_epoch(&self) -> Option<u64> {
+        let surfaces = self
+            .front_to_back_surfaces
+            .iter()
+            .map(|surface| {
+                Some((
+                    u64::from(surface.window_id),
+                    surface.bounds.x?,
+                    surface.bounds.y?,
+                    u64::from(surface.bounds.width?),
+                    u64::from(surface.bounds.height?),
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!surfaces.is_empty()).then(|| application_surface_layout_epoch(&surfaces))
+    }
+}
+
+fn union_screen_target_bounds(
+    current: Option<ScreenTargetBounds>,
+    next: ScreenTargetBounds,
+) -> Option<ScreenTargetBounds> {
+    let (next_x, next_y, next_width, next_height) = (next.x?, next.y?, next.width?, next.height?);
+    let next_max_x = next_x.checked_add(i64::from(next_width))?;
+    let next_max_y = next_y.checked_add(i64::from(next_height))?;
+    let Some(current) = current else {
+        return Some(next);
+    };
+    let (current_x, current_y, current_width, current_height) =
+        (current.x?, current.y?, current.width?, current.height?);
+    let current_max_x = current_x.checked_add(i64::from(current_width))?;
+    let current_max_y = current_y.checked_add(i64::from(current_height))?;
+    let min_x = current_x.min(next_x);
+    let min_y = current_y.min(next_y);
+    let max_x = current_max_x.max(next_max_x);
+    let max_y = current_max_y.max(next_max_y);
+    Some(ScreenTargetBounds::new(
+        Some(min_x),
+        Some(min_y),
+        u32::try_from(max_x.checked_sub(min_x)?).ok(),
+        u32::try_from(max_y.checked_sub(min_y)?).ok(),
+    ))
 }
 
 fn screen_target_area(width: Option<u32>, height: Option<u32>) -> u64 {
@@ -824,6 +906,7 @@ mod macos_screen_targets {
     use objc2_app_kit::NSRunningApplication;
 
     type CFArrayRef = *const c_void;
+    type CFBooleanRef = *const c_void;
     type CFDictionaryRef = *const c_void;
     type CFIndex = isize;
     type CFNumberRef = *const c_void;
@@ -877,6 +960,8 @@ mod macos_screen_targets {
     unsafe extern "C" {
         fn CFArrayGetCount(array: CFArrayRef) -> CFIndex;
         fn CFArrayGetValueAtIndex(array: CFArrayRef, idx: CFIndex) -> *const c_void;
+        fn CFBooleanGetTypeID() -> CFTypeID;
+        fn CFBooleanGetValue(boolean: CFBooleanRef) -> u8;
         fn CFDictionaryGetValueIfPresent(
             dict: CFDictionaryRef,
             key: *const c_void,
@@ -940,6 +1025,7 @@ mod macos_screen_targets {
         number: CfOwned,
         owner_name: CfOwned,
         owner_pid: CfOwned,
+        onscreen: CfOwned,
     }
 
     impl WindowKeys {
@@ -952,6 +1038,7 @@ mod macos_screen_targets {
                 number: CfOwned::new_string("kCGWindowNumber")?,
                 owner_name: CfOwned::new_string("kCGWindowOwnerName")?,
                 owner_pid: CfOwned::new_string("kCGWindowOwnerPID")?,
+                onscreen: CfOwned::new_string("kCGWindowIsOnscreen")?,
             })
         }
     }
@@ -1006,6 +1093,9 @@ mod macos_screen_targets {
             if alpha <= 0.01 {
                 continue;
             }
+            if !get_bool(dict, keys.onscreen.as_ptr()).unwrap_or(false) {
+                continue;
+            }
             let Some(window_id) =
                 get_i64(dict, keys.number.as_ptr()).and_then(|value| u32::try_from(value).ok())
             else {
@@ -1029,10 +1119,11 @@ mod macos_screen_targets {
                 Some(width),
                 Some(height),
             );
-            let display_id = display_id_for_rect(rect);
+            let display_ids = display_ids_for_rect(rect);
+            let display_id = display_ids.first().copied();
             let bundle_id = pid.and_then(bundle_id_for_pid);
             let app_identity = bundle_id.as_deref();
-            if let Some(app_key) = app_aggregate_key(display_id, pid, app_identity) {
+            if let Some(app_key) = app_aggregate_key(pid, app_identity) {
                 apps.entry(app_key)
                     .or_insert_with(|| (app_name.clone(), AppAggregate::default()))
                     .1
@@ -1043,7 +1134,7 @@ mod macos_screen_targets {
                         area,
                         focused: false,
                         bounds,
-                        display_id,
+                        display_ids: display_ids.clone(),
                         bundle_id: app_identity,
                     });
             }
@@ -1061,6 +1152,7 @@ mod macos_screen_targets {
                     "window_id": window_id,
                     "pid": pid,
                     "display_id": display_id,
+                    "display_ids": display_ids,
                     "bundle_id": bundle_id,
                     "app_identity": app_identity,
                     "app_name": app_name,
@@ -1077,34 +1169,38 @@ mod macos_screen_targets {
 
         out.extend(apps.into_iter().map(|(_key, (app_name, app))| {
             let window_set_epoch = app.window_set_epoch();
-            let display_id = app
-                .display_id
-                .expect("macOS application aggregate keys require display_id");
+            let surface_layout = app.surface_layout();
+            let surface_layout_epoch = app.surface_layout_epoch();
+            let primary_pid = app
+                .primary_pid
+                .expect("macOS application aggregate keys require a process id");
             let identity_suffix = app
                 .bundle_id
                 .as_deref()
-                .map(|bundle_id| format!("bundle:{bundle_id}"))
-                .or_else(|| app.primary_pid.map(|pid| format!("pid:{pid}")))
-                .expect("macOS application aggregate keys require bundle_id or primary_pid");
+                .map(|bundle_id| format!("pid:{primary_pid}:bundle:{bundle_id}"))
+                .unwrap_or_else(|| format!("pid:{primary_pid}"));
             DiscoveredResource {
                 kind: ResourceType::Application,
-                hardware_id: format!("application:macos:cgwindow:{display_id}:{identity_suffix}"),
-                display_name: format!("{app_name} on display {display_id}"),
+                hardware_id: format!("application:macos:cgwindow:{identity_suffix}"),
+                display_name: app_name.clone(),
                 metadata: serde_json::json!({
                     "backend": "macos_core_graphics",
                     "capture_target": "application",
                     "discovery_source": "auto_bootstrap",
-                    "discovery_scope": "display_scoped_windows",
+                    "discovery_scope": "application_window_set",
                     "auto_prune": true,
                     "platform_backend": "core_graphics_cgwindowlist",
-                    "display_scoped": true,
-                    "display_id": display_id,
+                    "display_scoped": false,
+                    "display_id": null,
+                    "display_ids": app.display_ids,
                     "app_name": app_name,
                     "bundle_id": app.bundle_id,
                     "app_identity": app.app_identity,
                     "window_count": app.window_count,
                     "resolved_window_ids": app.window_ids,
                     "window_set_epoch": window_set_epoch,
+                    "front_to_back_surfaces": surface_layout,
+                    "surface_layout_epoch": surface_layout_epoch,
                     "target_identity_epoch": window_set_epoch,
                     "primary_window_id": app.primary_window_id,
                     "primary_pid": app.primary_pid,
@@ -1113,13 +1209,17 @@ mod macos_screen_targets {
                     "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
                     "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
                     "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
+                    "union_x": app.union_bounds.and_then(|bounds| bounds.x),
+                    "union_y": app.union_bounds.and_then(|bounds| bounds.y),
+                    "union_width": app.union_bounds.and_then(|bounds| bounds.width),
+                    "union_height": app.union_bounds.and_then(|bounds| bounds.height),
                 }),
             }
         }));
         Ok(out)
     }
 
-    fn display_id_for_rect(rect: CGRect) -> Option<u32> {
+    fn display_ids_for_rect(rect: CGRect) -> Vec<u32> {
         let mut displays = [0_u32; 8];
         let mut count = 0_u32;
         let error = unsafe {
@@ -1131,12 +1231,16 @@ mod macos_screen_targets {
             )
         };
         if error != 0 || count == 0 {
-            return None;
+            return Vec::new();
         }
-        displays
-            .first()
+        let mut display_ids = displays[..usize::try_from(count).unwrap_or(0).min(displays.len())]
+            .iter()
             .copied()
             .filter(|display_id| *display_id != 0)
+            .collect::<Vec<_>>();
+        display_ids.sort_unstable();
+        display_ids.dedup();
+        display_ids
     }
 
     fn bundle_id_for_pid(pid: u32) -> Option<String> {
@@ -1148,17 +1252,15 @@ mod macos_screen_targets {
             .filter(|bundle_id| !bundle_id.is_empty())
     }
 
-    fn app_aggregate_key(
-        display_id: Option<u32>,
-        pid: Option<u32>,
-        app_identity: Option<&str>,
-    ) -> Option<String> {
-        let display_id = display_id?;
-        app_identity
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|identity| format!("{display_id}:bundle:{identity}"))
-            .or_else(|| pid.map(|pid| format!("{display_id}:pid:{pid}")))
+    fn app_aggregate_key(pid: Option<u32>, app_identity: Option<&str>) -> Option<String> {
+        let pid = pid?;
+        Some(
+            app_identity
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|identity| format!("pid:{pid}:bundle:{identity}"))
+                .unwrap_or_else(|| format!("pid:{pid}")),
+        )
     }
 
     fn positive_dimension(value: f64) -> Option<u32> {
@@ -1221,6 +1323,12 @@ mod macos_screen_targets {
             )
         };
         (ok != 0).then_some(out)
+    }
+
+    fn get_bool(dict: CFDictionaryRef, key: *const c_void) -> Option<bool> {
+        let value = get_value(dict, key)? as CFBooleanRef;
+        let is_boolean = unsafe { CFGetTypeID(value) == CFBooleanGetTypeID() };
+        is_boolean.then(|| unsafe { CFBooleanGetValue(value) != 0 })
     }
 
     fn get_f64(dict: CFDictionaryRef, key: *const c_void) -> Option<f64> {
@@ -2043,7 +2151,7 @@ mod tests {
     }
 
     #[test]
-    fn app_aggregate_preserves_primary_window_bounds() {
+    fn app_aggregate_preserves_global_surface_layout_and_primary_window() {
         let mut aggregate = AppAggregate::default();
         aggregate.record_window(AppWindowObservation {
             window_id: 10,
@@ -2052,7 +2160,7 @@ mod tests {
             area: 10_000,
             focused: false,
             bounds: ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
-            display_id: Some(42),
+            display_ids: vec![42],
             bundle_id: Some("com.example.app"),
         });
         aggregate.record_window(AppWindowObservation {
@@ -2062,16 +2170,28 @@ mod tests {
             area: 9_000,
             focused: true,
             bounds: ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
-            display_id: Some(42),
+            display_ids: vec![43],
             bundle_id: Some("com.example.app"),
         });
 
         assert_eq!(aggregate.primary_window_id, Some(11));
-        assert_eq!(aggregate.display_id, Some(42));
+        assert_eq!(aggregate.display_ids, vec![42, 43]);
         assert_eq!(aggregate.bundle_id.as_deref(), Some("com.example.app"));
         assert_eq!(aggregate.app_identity.as_deref(), Some("com.example.app"));
         assert_eq!(aggregate.window_ids, vec![10, 11]);
         assert_ne!(aggregate.window_set_epoch(), 0);
+        assert!(aggregate
+            .surface_layout_epoch()
+            .is_some_and(|epoch| epoch != 0));
+        assert_eq!(
+            aggregate
+                .surface_layout()
+                .iter()
+                .map(|surface| surface["window_id"].as_u64())
+                .collect::<Vec<_>>(),
+            vec![Some(10), Some(11)],
+            "resource inventory must preserve the platform front-to-back enumeration order"
+        );
         assert_eq!(
             aggregate.primary_bounds,
             Some(ScreenTargetBounds::new(
@@ -2079,6 +2199,15 @@ mod tests {
                 Some(400),
                 Some(90),
                 Some(100)
+            ))
+        );
+        assert_eq!(
+            aggregate.union_bounds,
+            Some(ScreenTargetBounds::new(
+                Some(10),
+                Some(20),
+                Some(380),
+                Some(480)
             ))
         );
     }

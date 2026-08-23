@@ -467,6 +467,18 @@ fn xcap_supported_screen_entry(entry: &ResourceEntry) -> bool {
 
 #[cfg(test)]
 fn native_supported_screen_entry(entry: &ResourceEntry) -> bool {
+    let entry_platform = entry
+        .metadata
+        .get("platform")
+        .and_then(Value::as_str)
+        .unwrap_or(if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "unknown"
+        });
+    if entry_platform != "macos" {
+        return false;
+    }
     match entry.kind {
         ResourceType::Display => true,
         ResourceType::Window | ResourceType::Application => {

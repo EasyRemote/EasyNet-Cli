@@ -23,7 +23,7 @@ use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionS
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
 use crate::daemon::plugins::remote_desktop::target_observer::{
-    validate_live_target_input, TargetInputGuardProof,
+    validate_live_target_input, validate_live_target_pointer_input, TargetInputGuardProof,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapshot;
 
@@ -412,6 +412,24 @@ impl EffectiveRemoteDesktopInputPolicy {
             .map_err(|failure| failure.as_str())
     }
 
+    fn target_pointer_input_guard_validation(
+        &self,
+        frame: &PointerInputFrame,
+    ) -> Result<Option<TargetInputGuardProof>, &'static str> {
+        if self.input_scope != InputScope::TargetLocal {
+            return Ok(None);
+        }
+        let (Some(binding), Some(snapshot)) =
+            (self.target_binding.as_ref(), self.target_snapshot.as_ref())
+        else {
+            return Err("target_input_guard_unavailable");
+        };
+        let point = map_pointer_point(frame, self.pointer_target);
+        validate_live_target_pointer_input(binding, snapshot, point.x, point.y)
+            .map(Some)
+            .map_err(|failure| failure.as_str())
+    }
+
     fn accepted_input_context(&self) -> InputFrameTargetContext {
         InputFrameTargetContext {
             target_geometry_revision: self
@@ -503,10 +521,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effecti
             ) {
                 return InputApplyOutcome::rejected(reason);
             }
-            let target_guard_validation = match input_policy.target_input_guard_validation() {
-                Ok(validation) => validation,
-                Err(reason) => return InputApplyOutcome::rejected(reason),
-            };
+            let target_guard_validation =
+                match input_policy.target_pointer_input_guard_validation(frame) {
+                    Ok(validation) => validation,
+                    Err(reason) => return InputApplyOutcome::rejected(reason),
+                };
             apply_pointer_frame(frame, pointer_target)
                 .with_target_guard_validation(target_guard_validation)
         }
@@ -3114,7 +3133,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_application_pointer_through_primary_window_bounds() {
+    fn maps_application_pointer_through_committed_union_surface_bounds() {
         let entry = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/application.test".into(),
             owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
@@ -3131,6 +3150,10 @@ mod tests {
                 "primary_y": 400,
                 "primary_width": 1000,
                 "primary_height": 500,
+                "union_x": 300,
+                "union_y": 400,
+                "union_width": 1000,
+                "union_height": 500,
                 "resolved_window_ids": [70],
                 "window_set_epoch": 1,
             })),
