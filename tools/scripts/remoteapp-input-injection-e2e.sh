@@ -49,7 +49,8 @@ Evidence contract:
   Accessibility/input permission, input-control consent, display_global input
   scope, focus validation, coordinate mapping, target geometry revision,
   strictly ordered INPUT_FRAME_APPLIED events, OS-observed pointer/key effects
-  bound to the same Resource/session/revision after host application, bounded
+  bound to the same Resource/session/revision/input event/focus epoch after
+  host application by an observer independent from the injector, bounded
   receive/apply latency, stale client-sequence rejection, and a visible terminal
   receipt. Windows/Linux must pass or report explicit product unsupported state.
 
@@ -213,6 +214,9 @@ for platform_name in sorted(required_platforms):
         require(isinstance(platform.get("target_geometry_revision"), int)
                 and platform.get("target_geometry_revision") > 0,
                 f"{prefix}: target_geometry_revision must be positive")
+        require(isinstance(platform.get("target_focus_epoch"), int)
+                and platform.get("target_focus_epoch") > 0,
+                f"{prefix}: target_focus_epoch must be positive")
         require(platform.get("source_only_proof") is False,
                 f"{prefix}: source_only_proof must be false")
         require(platform.get("policy_only") is False,
@@ -272,6 +276,9 @@ for platform_name in sorted(required_platforms):
             require(isinstance(result.get("client_sequence"), int)
                     and result.get("client_sequence") > 0,
                     f"{result_prefix}: client_sequence must be positive")
+            require(isinstance(result.get("input_event_id"), str)
+                    and result.get("input_event_id"),
+                    f"{result_prefix}: input_event_id must be recorded")
             require(isinstance(result.get("client_sent_at_ms"), int)
                     and result.get("client_sent_at_ms") > 0,
                     f"{result_prefix}: client_sent_at_ms must be positive")
@@ -303,6 +310,10 @@ for platform_name in sorted(required_platforms):
                     f"{result_prefix}: os_effect.observed must be true")
             require(os_effect.get("os_effect_probe_source") in os_effect_probe_sources,
                     f"{result_prefix}: os_effect_probe_source must identify the platform observer")
+            require(os_effect.get("observer_independent_from_injector") is True,
+                    f"{result_prefix}: os_effect observer must be independent from injector")
+            require(os_effect.get("input_event_id") == result.get("input_event_id"),
+                    f"{result_prefix}: os_effect input_event_id must bind input_event_id")
             require(normalize(os_effect.get("platform")) == platform_name,
                     f"{result_prefix}: os_effect.platform must match platform")
             require(os_effect.get("subject_ura") == subject_ura,
@@ -311,6 +322,8 @@ for platform_name in sorted(required_platforms):
                     f"{result_prefix}: os_effect session_id must bind session_id")
             require(os_effect.get("target_geometry_revision") == platform.get("target_geometry_revision"),
                     f"{result_prefix}: os_effect target_geometry_revision must match platform scenario")
+            require(os_effect.get("target_focus_epoch") == platform.get("target_focus_epoch"),
+                    f"{result_prefix}: os_effect target_focus_epoch must match platform scenario")
             require(isinstance(os_effect.get("observed_at_ms"), int)
                     and os_effect.get("observed_at_ms") > result.get("host_applied_at_ms", 0),
                     f"{result_prefix}: os_effect observed_at_ms must be after host_applied_at_ms")
@@ -483,6 +496,7 @@ macos = {
     "focus_validated": True,
     "coordinate_mapping_validated": True,
     "target_geometry_revision": 7,
+    "target_focus_epoch": 11,
     "source_only_proof": False,
     "policy_only": False,
     "abilities": abilities,
@@ -492,6 +506,7 @@ macos = {
             "result": "input_applied",
             "event_type": "INPUT_FRAME_APPLIED",
             "client_sequence": 1,
+            "input_event_id": "input-event-pointer-1",
             "client_sent_at_ms": 1787331000000,
             "host_received_at_ms": 1787331000010,
             "host_applied_at_ms": 1787331000019,
@@ -502,10 +517,13 @@ macos = {
             "os_effect": {
                 "observed": True,
                 "os_effect_probe_source": "macos_accessibility_api",
+                "observer_independent_from_injector": True,
+                "input_event_id": "input-event-pointer-1",
                 "platform": "macos",
                 "subject_ura": subject,
                 "session_id": session_id,
                 "target_geometry_revision": 7,
+                "target_focus_epoch": 11,
                 "observed_at_ms": 1787331000026,
                 "effect_type": "pointer_position",
                 "coordinate_space": "display_global",
@@ -520,6 +538,7 @@ macos = {
             "result": "input_applied",
             "event_type": "INPUT_FRAME_APPLIED",
             "client_sequence": 2,
+            "input_event_id": "input-event-keyboard-2",
             "client_sent_at_ms": 1787331000100,
             "host_received_at_ms": 1787331000120,
             "host_applied_at_ms": 1787331000135,
@@ -529,10 +548,13 @@ macos = {
             "os_effect": {
                 "observed": True,
                 "os_effect_probe_source": "macos_accessibility_api",
+                "observer_independent_from_injector": True,
+                "input_event_id": "input-event-keyboard-2",
                 "platform": "macos",
                 "subject_ura": subject,
                 "session_id": session_id,
                 "target_geometry_revision": 7,
+                "target_focus_epoch": 11,
                 "observed_at_ms": 1787331000144,
                 "effect_type": "key_echo",
                 "focused_resource_ura": subject,

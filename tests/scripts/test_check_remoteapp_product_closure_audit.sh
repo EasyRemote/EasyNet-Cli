@@ -235,6 +235,24 @@ grep -q "input injection verifier must require stale sequence rejection evidence
   fail "expected input injection stale sequence rejection failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 
+perl -0pi -e 's#target_focus_epoch must be positive#target_focus_epoch may be absent#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-focus-epoch.out 2>&1; then
+  fail "checker accepted input injection verifier without focus epoch evidence"
+fi
+grep -q "input injection verifier must require focused target epoch evidence" /tmp/check-remoteapp-product-closure-input-focus-epoch.out || \
+  fail "expected input injection focus-epoch failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#input_event_id must be recorded#input_event_id may be absent#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-event-id.out 2>&1; then
+  fail "checker accepted input injection verifier without stable input event identity"
+fi
+grep -q "input injection verifier must require stable input event identity" /tmp/check-remoteapp-product-closure-input-event-id.out || \
+  fail "expected input injection event-id failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
 perl -0pi -e 's#os_effect_probe_source#telemetry_probe_source#g' \
   "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-os-effect-source.out 2>&1; then
@@ -244,6 +262,24 @@ grep -q "input injection verifier must require platform OS-effect observer evide
   fail "expected input injection OS-effect observer failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 
+perl -0pi -e 's#os_effect observer must be independent from injector#os_effect observer may be injector#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-observer-independence.out 2>&1; then
+  fail "checker accepted input injection verifier without independent OS-effect observer evidence"
+fi
+grep -q "input injection verifier must require independent OS-effect observer evidence" /tmp/check-remoteapp-product-closure-input-observer-independence.out || \
+  fail "expected input injection observer-independence failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#os_effect input_event_id must bind input_event_id#os_effect input_event_id may differ#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-effect-event-id.out 2>&1; then
+  fail "checker accepted input injection verifier without OS-effect input event binding"
+fi
+grep -q "input injection verifier must bind OS effect to the applied input event" /tmp/check-remoteapp-product-closure-input-effect-event-id.out || \
+  fail "expected input injection OS-effect event-id binding failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
 perl -0pi -e 's#os_effect observed_at_ms must be after host_applied_at_ms#os_effect observed_at_ms may precede host_applied_at_ms#g' \
   "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-os-effect-order.out 2>&1; then
@@ -251,6 +287,15 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "input injection verifier must require OS effect after host application" /tmp/check-remoteapp-product-closure-input-os-effect-order.out || \
   fail "expected input injection OS-effect timing failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#os_effect target_focus_epoch must match platform scenario#os_effect focus epoch may differ#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-effect-focus-epoch.out 2>&1; then
+  fail "checker accepted input injection verifier without OS-effect focus epoch binding"
+fi
+grep -q "input injection verifier must bind OS effect to target focus epoch" /tmp/check-remoteapp-product-closure-input-effect-focus-epoch.out || \
+  fail "expected input injection OS-effect focus epoch failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 
 perl -0pi -e 's#pointer OS effect must be observed within tolerance#pointer OS effect tolerance is optional#g' \

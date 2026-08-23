@@ -80,7 +80,7 @@
         "frontend exposes Request permission recovery when daemon input_readiness reports input_injection_unavailable",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate current-session input policy implementation test",
         "device capability projection exposes input_control_support for macOS/Linux/Windows with macOS display tied to runtime permission and non-display/non-macOS input unsupported",
-        "remoteapp-input-injection-e2e.sh verifier for real pointer/keyboard input injection artifacts with monotonic applied sequence, stale sequence rejection, platform OS-effect observer, post-application observation timing, target geometry revision binding, bounded pointer position tolerance, and keyboard focus/resource evidence"
+        "remoteapp-input-injection-e2e.sh verifier for real pointer/keyboard input injection artifacts with monotonic applied sequence, stable input event identity, stale sequence rejection, independent platform OS-effect observer, post-application observation timing, target geometry/focus epoch binding, bounded pointer position tolerance, and keyboard focus/resource evidence"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-input-injection-e2e.sh artifact",
@@ -89,11 +89,13 @@
         "target epoch checks on execution path",
         "OS permission checks",
         "monotonic client sequence application",
+        "stable input_event_id binding between applied input and OS effect",
         "stale/replayed client sequence rejection before host application",
         "latency measurements",
         "successful input injection E2E",
-        "observed OS pointer/key effects from a platform observer",
+        "observed OS pointer/key effects from a platform observer independent from the injection path",
         "OS effect timestamps after host_applied_at_ms",
+        "OS effect binding to selected Resource URA, session id, input_event_id, target_geometry_revision, and target_focus_epoch",
         "pointer expected/observed position within bounded tolerance",
         "keyboard focus/resource binding to the selected target",
         "visible terminal receipt"

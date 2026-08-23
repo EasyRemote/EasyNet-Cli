@@ -507,10 +507,14 @@ require 'coordinate_mapping_validated' "$INPUT_INJECTION" \
   'input injection verifier must require coordinate mapping validation'
 require 'target_geometry_revision' "$INPUT_INJECTION" \
   'input injection verifier must inspect target geometry revision'
+require 'target_focus_epoch must be positive' "$INPUT_INJECTION" \
+  'input injection verifier must require focused target epoch evidence'
 require 'INPUT_FRAME_APPLIED' "$INPUT_INJECTION" \
   'input injection verifier must inspect input-applied events'
 require 'client_sequence' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sequence evidence'
+require 'input_event_id must be recorded' "$INPUT_INJECTION" \
+  'input injection verifier must require stable input event identity'
 require 'client_sent_at_ms' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sent_at_ms evidence'
 require 'host_received_at_ms' "$INPUT_INJECTION" \
@@ -569,10 +573,16 @@ require 'observed_effect' "$INPUT_INJECTION" \
   'input injection verifier must require observed OS input effect'
 require 'os_effect_probe_source' "$INPUT_INJECTION" \
   'input injection verifier must require platform OS-effect observer evidence'
+require 'os_effect observer must be independent from injector' "$INPUT_INJECTION" \
+  'input injection verifier must require independent OS-effect observer evidence'
+require 'os_effect input_event_id must bind input_event_id' "$INPUT_INJECTION" \
+  'input injection verifier must bind OS effect to the applied input event'
 require 'os_effect observed_at_ms must be after host_applied_at_ms' "$INPUT_INJECTION" \
   'input injection verifier must require OS effect after host application'
 require 'os_effect target_geometry_revision must match platform scenario' "$INPUT_INJECTION" \
   'input injection verifier must bind OS effect to target geometry revision'
+require 'os_effect target_focus_epoch must match platform scenario' "$INPUT_INJECTION" \
+  'input injection verifier must bind OS effect to target focus epoch'
 require 'pointer OS effect must be observed within tolerance' "$INPUT_INJECTION" \
   'input injection verifier must require bounded pointer OS effect evidence'
 require 'keyboard OS effect must bind focused Resource URA' "$INPUT_INJECTION" \
