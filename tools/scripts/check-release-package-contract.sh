@@ -61,6 +61,7 @@ if require_file "packaging/release/build-release-tarball.sh"; then
         "include/easynet_cli.exports.v7" \
         "include/easynet_cli.exports.v8" \
         "docs/spec/ffi-abi-v7.md" \
+        "docs/spec/ffi-abi-v8.md" \
         "easynet-keyring" \
         "libaxon_dendrite_bridge"
     do
@@ -76,7 +77,8 @@ if require_file "packaging/release/install.sh"; then
         "include/easynet_cli.h" \
         "easynet_cli.exports.v7" \
         "easynet_cli.exports.v8" \
-        "ffi-abi-v7.md"
+        "ffi-abi-v7.md" \
+        "ffi-abi-v8.md"
     do
         require_literal "packaging/release/install.sh" "$literal"
     done
@@ -93,6 +95,11 @@ if require_file "packaging/release/dev-install-local.sh"; then
     done
 fi
 
+if require_file "packaging/release/build-windows-cli.ps1"; then
+    require_literal "packaging/release/build-windows-cli.ps1" "docs\spec\ffi-abi-v8.md"
+    require_literal "packaging/release/build-windows-cli.ps1" "ffi-abi-v8.md"
+fi
+
 if require_file "packaging/release/e2e-release-install.sh"; then
     for literal in \
         "easynet-keyring" \
@@ -100,6 +107,7 @@ if require_file "packaging/release/e2e-release-install.sh"; then
         "include/easynet_cli.exports.v7" \
         "include/easynet_cli.exports.v8" \
         "docs/spec/ffi-abi-v7.md" \
+        "docs/spec/ffi-abi-v8.md" \
         "#define RUNTIME_ABI_VERSION 7u" \
         "c abi:"
     do
@@ -147,6 +155,12 @@ if require_file "docs/spec/ffi-abi-v7.md"; then
     require_literal "docs/spec/ffi-abi-v7.md" "include/easynet_cli.h"
     require_literal "docs/spec/ffi-abi-v7.md" "include/easynet_cli.exports.v7"
     require_literal "docs/spec/ffi-abi-v7.md" "include/easynet_cli.exports.v8"
+fi
+
+if require_file "docs/spec/ffi-abi-v8.md"; then
+    require_literal "docs/spec/ffi-abi-v8.md" "runtime_invocation_stream_open_v8"
+    require_literal "docs/spec/ffi-abi-v8.md" "runtime_feature_discovery"
+    require_literal "docs/spec/ffi-abi-v8.md" "RemoteApp WebRTC"
 fi
 
 if [[ "$violations" -eq 0 ]]; then

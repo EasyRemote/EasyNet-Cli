@@ -10,6 +10,7 @@ HEADER="include/easynet_cli.h"
 V7_ALLOWLIST="include/easynet_cli.exports.v7"
 V8_ALLOWLIST="include/easynet_cli.exports.v8"
 FEATURE_FIXTURE="sdk/conformance/fixtures/feature-discovery.v7.json"
+SPEC="docs/spec/ffi-abi-v8.md"
 EXPECTED_V7_COUNT=56
 EXPECTED_V8_COUNT=57
 V8_SYMBOL="runtime_invocation_stream_open_v8"
@@ -68,6 +69,21 @@ for symbol in explicit + generated:
 PY
 }
 
+exported_symbols() {
+    local lib="$1"
+    case "$(uname -s)" in
+        Darwin)
+            nm -gU "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            ;;
+        Linux)
+            nm -D --defined-only "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 if require_file "$V7_ALLOWLIST"; then
     if ! LC_ALL=C sort -c "$V7_ALLOWLIST" 2>/dev/null; then
         record_violation "v7 allowlist must be sorted" "$V7_ALLOWLIST"
@@ -103,6 +119,7 @@ if require_file "$HEADER"; then
     require_literal "$HEADER" "#define RUNTIME_ABI_VERSION 7u"
     require_literal "$HEADER" "#define RUNTIME_ABI_V8_EXTENSION_VERSION 8u"
     require_literal "$HEADER" "typedef void (*RuntimeInvocationStreamV8Callback)"
+    require_literal "$HEADER" "v8 payload"
     require_literal "$HEADER" "$V8_SYMBOL"
     extract_header_symbols "$HEADER" | LC_ALL=C sort >"$tmp/header.symbols"
     if ! diff -u "$V8_ALLOWLIST" "$tmp/header.symbols" >"$tmp/header.diff"; then
@@ -121,6 +138,20 @@ if require_file "$FEATURE_FIXTURE"; then
     require_literal "$FEATURE_FIXTURE" '"stream_raw_payload": true'
     require_literal "$FEATURE_FIXTURE" '"symbol": "runtime_invocation_stream_open_v8"'
     require_literal "$FEATURE_FIXTURE" '"stream_raw_payload_v8": true'
+fi
+
+if require_file "$SPEC"; then
+    for literal in \
+        "include/easynet_cli.h" \
+        "include/easynet_cli.exports.v7" \
+        "include/easynet_cli.exports.v8" \
+        "runtime_invocation_stream_open_v8" \
+        "runtime_feature_discovery" \
+        "all-null callback" \
+        "RemoteApp WebRTC"
+    do
+        require_literal "$SPEC" "$literal"
+    done
 fi
 
 if ! rg -q "InvocationStreamV8Callback" src/ffi/invocation/mod.rs; then
@@ -143,6 +174,14 @@ fi
 if ! rg -q '"terminal_receipt"' sdk/python/easynet_sdk/stream.py; then
     record_violation "Python SDK raw stream metadata contract must include terminal_receipt" \
         "sdk/python/easynet_sdk/stream.py"
+fi
+if ! rg -q 'v8.get\("symbol"\) == "runtime_invocation_stream_open_v8"' sdk/python/easynet_sdk/_cabi.py; then
+    record_violation "Python SDK must bind the advertised v8 feature to the canonical symbol" \
+        "sdk/python/easynet_sdk/_cabi.py"
+fi
+if ! rg -q 'symbols.get\("stream_raw_payload_v8"\) is True' sdk/python/easynet_sdk/_cabi.py; then
+    record_violation "Python SDK must require the v8 symbol feature bit" \
+        "sdk/python/easynet_sdk/_cabi.py"
 fi
 if ! rg -q "test_raw_stream_packet_requires_canonical_metadata_fields" sdk/python/tests/test_stream.py; then
     record_violation "Python stream tests must reject incomplete v8 raw metadata" \
@@ -168,9 +207,39 @@ fi
 if ! rg -q "TestCABIRuntimeProviderFallsBackToV7StreamOpen" sdk/go/cabi_runtime_test.go; then
     record_violation "Go C ABI provider must test v7 fallback" "sdk/go/cabi_runtime_test.go"
 fi
+if ! rg -q 'v8\["symbol"\] == "runtime_invocation_stream_open_v8"' sdk/go/cabi_runtime.go; then
+    record_violation "Go SDK must bind the advertised v8 feature to the canonical symbol" \
+        "sdk/go/cabi_runtime.go"
+fi
+if ! rg -q 'featureSymbols\["stream_raw_payload_v8"\] == true' sdk/go/cabi_runtime.go; then
+    record_violation "Go SDK must require the v8 symbol feature bit" \
+        "sdk/go/cabi_runtime.go"
+fi
 if rg -q "RawStreamPacket|_stream_chunk_packet" sdk/python/easynet_sdk/providers/runtime/direct.py; then
     record_violation "direct runtime provider must remain canonical JSON/base64" \
         "sdk/python/easynet_sdk/providers/runtime/direct.py"
+fi
+
+lib="${EASYNET_FFI_DYLIB:-}"
+if [[ -z "$lib" ]]; then
+    case "$(uname -s)" in
+        Darwin) lib="target/debug/libeasynet_cli.dylib" ;;
+        Linux) lib="target/debug/libeasynet_cli.so" ;;
+        *) lib="" ;;
+    esac
+fi
+if [[ -n "$lib" && -f "$lib" ]]; then
+    if ! command -v nm >/dev/null 2>&1; then
+        record_violation "nm unavailable for exact v8 export check" "$lib"
+    else
+        exported_symbols "$lib" | LC_ALL=C sort >"$tmp/dylib.symbols"
+        if ! diff -u "$V8_ALLOWLIST" "$tmp/dylib.symbols" >"$tmp/dylib.diff"; then
+            record_violation "dynamic-library exports must match exact v8 allowlist" \
+                "$(cat "$tmp/dylib.diff")"
+        fi
+    fi
+elif [[ "${EASYNET_FFI_REQUIRE_DYLIB:-0}" == "1" ]]; then
+    record_violation "dynamic library required but missing" "${lib:-unsupported platform}"
 fi
 
 if [[ "$violations" -ne 0 ]]; then

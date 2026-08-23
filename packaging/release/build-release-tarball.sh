@@ -14,7 +14,8 @@
 #   include/easynet_cli.h                — libeasynet_cli generic C ABI header
 #   include/easynet_cli.exports.v7       — exact 56-symbol base export allowlist
 #   include/easynet_cli.exports.v8       — exact 57-symbol raw-stream extension allowlist
-#   docs/spec/ffi-abi-v7.md              — binding-facing ABI spec
+#   docs/spec/ffi-abi-v7.md              — frozen base ABI spec
+#   docs/spec/ffi-abi-v8.md              — raw-stream extension spec
 #
 # Critically: NO `axon-runtime`. The production installer cleans up
 # any axon-runtime binary it finds (`packaging/release/install.sh` lines around 264-268
@@ -137,8 +138,9 @@ abi_header="$cli_root/include/easynet_cli.h"
 abi_exports="$cli_root/include/easynet_cli.exports.v7"
 abi_exports_v8="$cli_root/include/easynet_cli.exports.v8"
 abi_spec="$cli_root/docs/spec/ffi-abi-v7.md"
+abi_spec_v8="$cli_root/docs/spec/ffi-abi-v8.md"
 
-for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$bridge_lib" "$abi_header" "$abi_exports" "$abi_exports_v8" "$abi_spec"; do
+for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$bridge_lib" "$abi_header" "$abi_exports" "$abi_exports_v8" "$abi_spec" "$abi_spec_v8"; do
     if [ ! -f "$path" ]; then
         echo "build-release-tarball.sh: expected artefact missing: $path" >&2
         exit 1
@@ -166,6 +168,7 @@ cp "$abi_header" "$stage_dir/include/easynet_cli.h"
 cp "$abi_exports" "$stage_dir/include/easynet_cli.exports.v7"
 cp "$abi_exports_v8" "$stage_dir/include/easynet_cli.exports.v8"
 cp "$abi_spec" "$stage_dir/docs/spec/ffi-abi-v7.md"
+cp "$abi_spec_v8" "$stage_dir/docs/spec/ffi-abi-v8.md"
 
 # Strip symbols on release builds to match what production tarballs
 # look like; debug profile keeps symbols for stack traces.
@@ -183,11 +186,12 @@ tar -czf "$out_file" -C "$stage_dir" \
     include/easynet_cli.h \
     include/easynet_cli.exports.v7 \
     include/easynet_cli.exports.v8 \
-    docs/spec/ffi-abi-v7.md
+    docs/spec/ffi-abi-v7.md \
+    docs/spec/ffi-abi-v8.md
 
 echo
 echo "[OK] release tarball ready"
 echo "  path:    $out_file"
-echo "  shape:   easynet, easynet-daemon, easynet-keyring, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, include/easynet_cli.exports.v7, include/easynet_cli.exports.v8, docs/spec/ffi-abi-v7.md"
+echo "  shape:   easynet, easynet-daemon, easynet-keyring, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, include/easynet_cli.exports.v7, include/easynet_cli.exports.v8, docs/spec/ffi-abi-v7.md, docs/spec/ffi-abi-v8.md"
 echo "  axon-runtime: NOT shipped (production-shape contract)"
 echo "  size:    $(wc -c < "$out_file" | awk '{printf "%.1f MiB", $1/1024/1024}')"

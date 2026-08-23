@@ -14,6 +14,7 @@ make_sandbox() {
     sandbox="$(mktemp -d)"
     mkdir -p "$sandbox/packaging/release" "$sandbox/include" "$sandbox/docs/spec"
     cp "$REPO_ROOT/packaging/release/build-release-tarball.sh" "$sandbox/packaging/release/build-release-tarball.sh"
+    cp "$REPO_ROOT/packaging/release/build-windows-cli.ps1" "$sandbox/packaging/release/build-windows-cli.ps1"
     cp "$REPO_ROOT/packaging/release/e2e-release-flow.sh" "$sandbox/packaging/release/e2e-release-flow.sh"
     cp "$REPO_ROOT/packaging/release/e2e-release-install.sh" "$sandbox/packaging/release/e2e-release-install.sh"
     cp "$REPO_ROOT/packaging/release/install.sh" "$sandbox/packaging/release/install.sh"
@@ -22,6 +23,7 @@ make_sandbox() {
     cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
     cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
+    cp "$REPO_ROOT/docs/spec/ffi-abi-v8.md" "$sandbox/docs/spec/ffi-abi-v8.md"
     echo "$sandbox"
 }
 
@@ -94,6 +96,14 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "wrong ABI v8 additive symbol should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's#docs/spec/ffi-abi-v8\.md#docs/spec/missing-ffi-abi-v8.md#g' \
+    "$SB/packaging/release/build-release-tarball.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing ABI v8 spec should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's#e2e-release-install\.sh#e2e-release-packaging/release/install.sh#g' \

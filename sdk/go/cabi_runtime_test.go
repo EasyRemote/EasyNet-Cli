@@ -696,6 +696,34 @@ func TestCABIRuntimeProviderFallsBackToV7WhenV8FeatureDisabled(t *testing.T) {
 	}
 }
 
+func TestCABIRuntimeProviderFallsBackToV7WhenV8FeatureContractDrifts(t *testing.T) {
+	for name, library := range map[string]string{
+		"wrong symbol":            buildFakeCABIStreamLibraryV8WrongSymbol(t),
+		"symbol feature disabled": buildFakeCABIStreamLibraryV8SymbolFeatureDisabled(t),
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := openFakeCABIRuntimeWithLibrary(t, library)
+			stream, err := client.InvokeStream(context.Background(), completeDraftForRuntimeTest(t))
+			if err != nil {
+				t.Fatalf("InvokeStream: %v", err)
+			}
+			event, err := stream.Next(context.Background())
+			if err != nil {
+				t.Fatalf("stream event: %v", err)
+			}
+			if string(event.PayloadJSON()) != `{"step":1}` {
+				t.Fatalf("v7 fallback payload_json = %s", event.PayloadJSON())
+			}
+			if len(event.PayloadBytes()) != 0 {
+				t.Fatalf("feature-contract fallback unexpectedly produced raw payload bytes: %q", event.PayloadBytes())
+			}
+			if err := stream.Close(context.Background()); err != nil {
+				t.Fatalf("stream close: %v", err)
+			}
+		})
+	}
+}
+
 func TestCABIRuntimeProviderPreservesStreamOrderAndSingleTerminal(t *testing.T) {
 	observation := observeCABIStreamLifecycle(t)
 
@@ -1213,6 +1241,32 @@ func buildFakeCABIStreamLibraryV8FeatureDisabled(t *testing.T) string {
 	)
 	if source == fakeCABIStreamSource+fakeCABIStreamV8Extension {
 		t.Fatal("fake C ABI v8 feature marker was not replaced")
+	}
+	return buildFakeCABIStreamLibraryFromSource(t, source)
+}
+
+func buildFakeCABIStreamLibraryV8WrongSymbol(t *testing.T) string {
+	source := strings.Replace(
+		fakeCABIStreamSource+fakeCABIStreamV8Extension,
+		"runtime_invocation_stream_open_v8\\\"}},",
+		"runtime_stream_open_raw\\\"}},",
+		1,
+	)
+	if source == fakeCABIStreamSource+fakeCABIStreamV8Extension {
+		t.Fatal("fake C ABI v8 symbol marker was not replaced")
+	}
+	return buildFakeCABIStreamLibraryFromSource(t, source)
+}
+
+func buildFakeCABIStreamLibraryV8SymbolFeatureDisabled(t *testing.T) string {
+	source := strings.Replace(
+		fakeCABIStreamSource+fakeCABIStreamV8Extension,
+		"\\\"stream_raw_payload_v8\\\":true",
+		"\\\"stream_raw_payload_v8\\\":false",
+		1,
+	)
+	if source == fakeCABIStreamSource+fakeCABIStreamV8Extension {
+		t.Fatal("fake C ABI v8 symbol feature marker was not replaced")
 	}
 	return buildFakeCABIStreamLibraryFromSource(t, source)
 }

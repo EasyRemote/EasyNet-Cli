@@ -134,6 +134,8 @@
         "frontend session details surface media bitrate, FPS, drops, and backpressure from daemon/browser media stats",
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",
         "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract",
+        "Python and Go select ABI v8 only when the optional symbol exists and feature discovery agrees on the enabled extension, exact runtime_invocation_stream_open_v8 symbol, and stream_raw_payload_v8 capability bit; every malformed negotiation falls back to v7",
+        "the standalone ABI v8 spec and mutation gate are wired into CI and SDK cutover, while RemoteApp interactive media remains on WebRTC/binary InvokeBidi instead of creating a second server-stream media tunnel",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate WebRTC app/window display-fallback rejection and native plugin catalogue implementation tests",
         "native ScreenCaptureKit stream captures screen and system audio together; VideoToolbox emits H.264 and the bounded host-audio path emits 20 ms Opus frames into tracks on the same WebRTC PeerConnection",
         "native WebRTC media loop emits remoteapp_media_pipeline_stats_v1 stats bound to selected Resource URA, session id, transport epoch, media source epoch, media pipeline id, negotiated H.264/Opus payload metadata, WebRTC transport, requested/effective/measured FPS, target/observed bitrate, bounded video/audio queue and backpressure counters, audio pipeline readiness, separately observed audio media, and adaptation events",

@@ -1696,8 +1696,14 @@ func cabiRuntimeFeatureDiscovery(symbols cabiRuntimeSymbols) cabiRuntimeFeatures
 	if !ok {
 		return cabiRuntimeFeatures{}
 	}
+	featureSymbols, ok := decoded["symbols"].(map[string]any)
+	if !ok {
+		return cabiRuntimeFeatures{}
+	}
 	return cabiRuntimeFeatures{
-		streamRawPayloadV8: v8["stream_raw_payload"] == true,
+		streamRawPayloadV8: v8["stream_raw_payload"] == true &&
+			v8["symbol"] == "runtime_invocation_stream_open_v8" &&
+			featureSymbols["stream_raw_payload_v8"] == true,
 	}
 }
 

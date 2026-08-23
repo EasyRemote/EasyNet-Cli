@@ -152,7 +152,14 @@ class RuntimeCABILibrary:
         v8 = extensions.get("v8")
         if not isinstance(v8, dict):
             return False
-        return v8.get("stream_raw_payload") is True
+        symbols = decoded.get("symbols")
+        if not isinstance(symbols, dict):
+            return False
+        return (
+            v8.get("stream_raw_payload") is True
+            and v8.get("symbol") == "runtime_invocation_stream_open_v8"
+            and symbols.get("stream_raw_payload_v8") is True
+        )
 
     def init(self, control_path: str = "") -> int:
         out_handle = ctypes.c_uint64(0)

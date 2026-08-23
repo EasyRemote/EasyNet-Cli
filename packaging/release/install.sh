@@ -71,6 +71,7 @@ main() {
     echo "    easynet_cli.exports.v7       → $INCLUDE_DIR/"
     echo "    easynet_cli.exports.v8       → $INCLUDE_DIR/"
     echo "    ffi-abi-v7.md                → $DOC_DIR/"
+    echo "    ffi-abi-v8.md                → $DOC_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
         echo "  To activate in this terminal, run:"
@@ -206,6 +207,7 @@ download_and_install() {
     mv "${TMPDIR}/include/easynet_cli.exports.v7" "${INCLUDE_DIR}/easynet_cli.exports.v7"
     mv "${TMPDIR}/include/easynet_cli.exports.v8" "${INCLUDE_DIR}/easynet_cli.exports.v8"
     mv "${TMPDIR}/docs/spec/ffi-abi-v7.md" "${DOC_DIR}/ffi-abi-v7.md"
+    mv "${TMPDIR}/docs/spec/ffi-abi-v8.md" "${DOC_DIR}/ffi-abi-v8.md"
 
     # Install dendrite bridge library under the REAL user's home so
     # the daemon can dlopen it without LD_LIBRARY_PATH gymnastics.

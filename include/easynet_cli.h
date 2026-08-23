@@ -46,8 +46,9 @@ typedef uint64_t RuntimeSignedInvocationId;
 typedef uint64_t RuntimeInvocationHandleId;
 
 /*
- * Callbacks run on library-owned threads. JSON pointers are borrowed for the
- * duration of the call and must be copied by bindings that retain them.
+ * Callbacks run on library-owned threads. JSON pointers and the v8 payload
+ * pointer are borrowed for the duration of the call and must be copied by
+ * bindings that retain them.
  * `close_send` is a half-close; cancel/close/shutdown are terminal actions.
  */
 typedef void (*RuntimeInvocationStreamCallback)(

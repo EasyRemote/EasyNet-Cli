@@ -15,7 +15,7 @@
 #   * `easynet_cli.h`            is installed under the sandbox include dir
 #   * `easynet_cli.exports.v7`   is installed under the sandbox include dir
 #   * `easynet_cli.exports.v8`   is installed under the sandbox include dir
-#   * `ffi-abi-v7.md`            is installed under the sandbox doc dir
+#   * `ffi-abi-v7.md` and `ffi-abi-v8.md` are installed under the sandbox doc dir
 #   * `EASYNET_DENDRITE_BRIDGE_LIB` env var points at that library
 #   * `axon-runtime`             is NOT installed anywhere
 #
@@ -147,7 +147,8 @@ for required in \
     include/easynet_cli.h \
     include/easynet_cli.exports.v7 \
     include/easynet_cli.exports.v8 \
-    docs/spec/ffi-abi-v7.md
+    docs/spec/ffi-abi-v7.md \
+    docs/spec/ffi-abi-v8.md
 do
     if [ ! -f "$extract_dir/$required" ]; then
         echo "[FAIL] tarball missing required artefact: $required" >&2
@@ -174,6 +175,7 @@ mv "$extract_dir/include/easynet_cli.h" "$include_dir/easynet_cli.h"
 mv "$extract_dir/include/easynet_cli.exports.v7" "$include_dir/easynet_cli.exports.v7"
 mv "$extract_dir/include/easynet_cli.exports.v8" "$include_dir/easynet_cli.exports.v8"
 mv "$extract_dir/docs/spec/ffi-abi-v7.md" "$doc_dir/ffi-abi-v7.md"
+mv "$extract_dir/docs/spec/ffi-abi-v8.md" "$doc_dir/ffi-abi-v8.md"
 
 # Step 5: env stamping (mirror packaging/release/install.sh::setup_env). We don't
 # write into a real shell profile — the harness's caller picks up
@@ -200,7 +202,8 @@ for assert in \
     "$include_dir/easynet_cli.h:exists" \
     "$include_dir/easynet_cli.exports.v7:exists" \
     "$include_dir/easynet_cli.exports.v8:exists" \
-    "$doc_dir/ffi-abi-v7.md:exists"
+    "$doc_dir/ffi-abi-v7.md:exists" \
+    "$doc_dir/ffi-abi-v8.md:exists"
 do
     path="${assert%:*}"
     kind="${assert##*:}"
@@ -269,6 +272,10 @@ fi
 
 if ! grep -q 'include/easynet_cli.h' "$doc_dir/ffi-abi-v7.md"; then
     echo "[FAIL] installed ffi-abi-v7.md does not reference the C header contract" >&2
+    fail=1
+fi
+if ! grep -q 'runtime_invocation_stream_open_v8' "$doc_dir/ffi-abi-v8.md"; then
+    echo "[FAIL] installed ffi-abi-v8.md does not define the raw stream extension" >&2
     fail=1
 fi
 

@@ -153,7 +153,12 @@ class FakeRawCABI:
     """Strict generic C ABI fake: product-specific symbol lookups cannot succeed."""
 
     def __init__(
-        self, *, stream_v8: bool = False, stream_v8_feature: bool | None = None
+        self,
+        *,
+        stream_v8: bool = False,
+        stream_v8_feature: bool | None = None,
+        stream_v8_symbol: str = "runtime_invocation_stream_open_v8",
+        stream_v8_symbol_feature: bool | None = None,
     ) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
         self.callback_buffers: list[ctypes.Array[ctypes.c_char]] = []
@@ -171,6 +176,12 @@ class FakeRawCABI:
         self.stream_callbacks: dict[int, tuple[object, object]] = {}
         self.stream_v8_opens = 0
         self.stream_v8_feature = stream_v8 if stream_v8_feature is None else stream_v8_feature
+        self.stream_v8_symbol = stream_v8_symbol
+        self.stream_v8_symbol_feature = (
+            self.stream_v8_feature
+            if stream_v8_symbol_feature is None
+            else stream_v8_symbol_feature
+        )
         self.bidi_sends: list[dict[str, object]] = []
         self.bidi_close_sends: list[int] = []
         self.bidi_closes: list[int] = []
@@ -271,12 +282,15 @@ class FakeRawCABI:
                     "abi_extensions": {
                         "v8": {
                             "stream_raw_payload": self.stream_v8_feature,
-                            "symbol": "runtime_invocation_stream_open_v8",
+                            "symbol": self.stream_v8_symbol,
                         }
                     },
                     "sdk_version": "0.91.30",
                     "profiles": {"runtime_core": "provider-backed"},
-                    "symbols": {"generic_invocation": True},
+                    "symbols": {
+                        "generic_invocation": True,
+                        "stream_raw_payload_v8": self.stream_v8_symbol_feature,
+                    },
                     "axon_pb": True,
                 },
                 separators=(",", ":"),
@@ -732,6 +746,17 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertTrue(enabled.stream_v8_available)
         self.assertFalse(disabled.stream_v8_available)
+
+    def test_library_rejects_drifted_v8_feature_contract(self) -> None:
+        wrong_symbol = RuntimeCABILibrary(
+            FakeRawCABI(stream_v8=True, stream_v8_symbol="runtime_stream_open_raw")
+        )
+        missing_symbol_feature = RuntimeCABILibrary(
+            FakeRawCABI(stream_v8=True, stream_v8_symbol_feature=False)
+        )
+
+        self.assertFalse(wrong_symbol.stream_v8_available)
+        self.assertFalse(missing_symbol_feature.stream_v8_available)
 
     def test_library_exposes_runtime_host_not_daemon_lifecycle_methods(self) -> None:
         lifecycle_methods = {
