@@ -22,6 +22,7 @@ CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e
 LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_EVENTS="$ROOT/plugins/remote-desktop/src/session_events.rs"
+TARGET_TRACKING="$ROOT/plugins/remote-desktop/src/target_tracking.rs"
 SESSION_RECOVERY="$ROOT/plugins/remote-desktop/src/session_recovery.rs"
 SESSION_STATE="$ROOT/plugins/remote-desktop/src/session_state.rs"
 SESSION_LIFECYCLE="$ROOT/plugins/remote-desktop/src/session_lifecycle.rs"
@@ -76,6 +77,7 @@ reject() {
 [[ -f "$CRASH_RESTART_RECOVERY" ]] || fail "missing RemoteApp crash/restart recovery evidence verifier"
 [[ -f "$LIFECYCLE_HARNESS_LIB" ]] || fail "missing RemoteApp lifecycle harness helper library"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
+[[ -f "$TARGET_TRACKING" ]] || fail "missing RemoteApp target tracking state machine"
 [[ -f "$SESSION_RECOVERY" ]] || fail "missing RemoteApp session recovery snapshot store"
 [[ -f "$SESSION_STATE" ]] || fail "missing RemoteApp session lifecycle state machine"
 [[ -f "$SESSION_LIFECYCLE" ]] || fail "missing RemoteApp session lifecycle module"
@@ -1189,6 +1191,18 @@ require 'with_target_binding_context\(self\.target\.binding\(\)\)' "$SESSION" \
   'session aggregate projected-event boundary must attach selected target context'
 require 'fn with_target_binding_context' "$SESSION_EVENTS" \
   'RemoteApp event projections must expose a typed target-context enrichment boundary'
+require 'fn with_event_target_context' "$TARGET_TRACKING" \
+  'RemoteApp target tracking state machine must own target lifecycle event context projection'
+require 'to_tracking_value' "$TARGET_TRACKING" \
+  'RemoteApp target tracking events must include canonical target binding evidence projected from tracker state'
+require 'fn to_tracking_value' "$ROOT/plugins/remote-desktop/src/target.rs" \
+  'RemoteApp target binding must expose a tracker-state projection without duplicating binding internals'
+require '"scope_audit"\.to_string\(\), self\.binding\.scope_audit_value\(\)' "$TARGET_TRACKING" \
+  'RemoteApp target tracking events must include capture/input scope audit evidence'
+require '"latest_target_diagnostic"\.to_string\(\)' "$TARGET_TRACKING" \
+  'RemoteApp target tracking events must include latest target diagnostic evidence'
+require 'assert_target_tracking_payload_context' "$SESSION" \
+  'RemoteApp session tests must prove target tracking events preserve full selected-target payload context'
 require 'self\.terminal_receipt = Some\(self\.project_terminal_receipt' "$SESSION" \
   'session close and timeout paths must populate terminal receipt from terminal events'
 require 'session_close_events_project_terminal_reason_code' "$SESSION" \

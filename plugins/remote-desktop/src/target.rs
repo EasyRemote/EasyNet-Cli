@@ -1532,6 +1532,30 @@ impl RemoteAppTargetBinding {
         })
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn to_tracking_value(
+        &self,
+        target_identity_epoch: u64,
+        target_geometry_revision: u64,
+        media_source_epoch: u64,
+        geometry: &TargetGeometry,
+    ) -> Value {
+        let mut value = self.to_value();
+        let Value::Object(fields) = &mut value else {
+            return value;
+        };
+        fields.insert(
+            "target_identity_epoch".to_string(),
+            json!(target_identity_epoch),
+        );
+        fields.insert(
+            "target_geometry_revision".to_string(),
+            json!(target_geometry_revision),
+        );
+        fields.insert("media_source_epoch".to_string(), json!(media_source_epoch));
+        fields.insert("bounds".to_string(), geometry.to_value());
+        value
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn scope_audit_value(&self) -> Value {
         self.scope_audit.to_value()
     }

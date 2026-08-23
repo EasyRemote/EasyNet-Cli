@@ -1300,6 +1300,67 @@ mod tests {
     };
     use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
+    fn assert_target_tracking_payload_context(event: &Value, session: &RemoteDesktopSession) {
+        let payload = &event["payload"];
+        assert_eq!(
+            payload["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            payload["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            payload["binding_epoch"],
+            json!(session.target_binding().binding_epoch())
+        );
+        assert_eq!(
+            payload["target_identity_epoch"],
+            event["target_identity_epoch"]
+        );
+        assert_eq!(
+            payload["target_geometry_revision"],
+            event["target_geometry_revision"]
+        );
+        assert_eq!(
+            payload["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
+            payload["consent_epoch"],
+            json!(session.target_binding().consent_epoch())
+        );
+        assert_eq!(
+            payload["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            payload["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            payload["target_binding"]["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
+            payload["target_binding"]["target_identity_epoch"],
+            payload["target_identity_epoch"]
+        );
+        assert_eq!(
+            payload["target_binding"]["target_geometry_revision"],
+            payload["target_geometry_revision"]
+        );
+        assert_eq!(payload["target_binding"]["bounds"], payload["geometry"]);
+        assert_eq!(
+            payload["scope_audit"]["input_scope_reason"],
+            payload["target_binding"]["input_scope_reason"]
+        );
+        assert!(
+            payload["latest_target_diagnostic"].is_object(),
+            "target lifecycle payload must include latest target diagnostic context"
+        );
+    }
+
     #[test]
     fn session_commits_target_observations_through_owned_tracker() {
         let mut session = RemoteDesktopSession::new(test_session_init(
@@ -1778,6 +1839,7 @@ mod tests {
                 .as_u64()
                 .unwrap())
         );
+        assert_target_tracking_payload_context(target_event, &session);
     }
 
     #[test]
@@ -2792,6 +2854,7 @@ mod tests {
             rebind_attempted["payload"]["frontend_action"],
             json!("retry_session")
         );
+        assert_target_tracking_payload_context(rebind_attempted, &session);
         let rebind_failed = events
             .iter()
             .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
@@ -2837,6 +2900,7 @@ mod tests {
             rebind_failed["payload"]["reason_code"],
             json!("explicit_rebind_required")
         );
+        assert_target_tracking_payload_context(rebind_failed, &session);
         assert_eq!(
             rebind_failed["payload"]["frontend_action"],
             json!("refresh_targets")
@@ -3042,6 +3106,17 @@ mod tests {
         assert_eq!(
             rebind_failed["payload"]["pending_media_source_epoch"],
             json!(pending.media_source_epoch())
+        );
+        assert_target_tracking_payload_context(rebind_failed, &session);
+        assert_eq!(
+            rebind_failed["payload"]["target_binding"]["binding_epoch"],
+            json!(original_binding_epoch),
+            "current binding context must not be overwritten by pending rebind evidence"
+        );
+        assert_eq!(
+            rebind_failed["payload"]["target_binding"]["media_source_epoch"],
+            json!(original_media_source_epoch),
+            "failed pending media rebind keeps the committed media source context"
         );
         assert_eq!(
             rebind_failed["event_type_proto"],

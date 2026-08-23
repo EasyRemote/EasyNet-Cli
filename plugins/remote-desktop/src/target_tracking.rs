@@ -862,7 +862,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             FrontendAction::RetrySession.as_str(),
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -890,7 +890,7 @@ impl RemoteAppTargetBindingStateMachine {
                 "app_window_set": app_window_set.to_value(),
             }),
             FrontendAction::RetrySession.as_str(),
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_ATTEMPTED",
             payload,
@@ -1013,7 +1013,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -1041,7 +1041,7 @@ impl RemoteAppTargetBindingStateMachine {
                 "pending_geometry": pending.binding.geometry().to_value(),
             }),
             frontend_action,
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_FAILED",
             payload,
@@ -1299,7 +1299,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -1318,7 +1318,7 @@ impl RemoteAppTargetBindingStateMachine {
                 "geometry": self.snapshot.geometry.to_value(),
             }),
             frontend_action,
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_ATTEMPTED",
             payload,
@@ -1362,7 +1362,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -1383,7 +1383,7 @@ impl RemoteAppTargetBindingStateMachine {
                 "geometry": self.snapshot.geometry.to_value(),
             }),
             frontend_action,
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_FAILED",
             payload,
@@ -1479,10 +1479,11 @@ impl RemoteAppTargetBindingStateMachine {
         observed_at_ms: u64,
         previous_target_geometry_revision: Option<u64>,
     ) -> Value {
-        json!({
+        self.with_event_target_context(json!({
             "subject_ura": self.binding.subject_ura(),
             "binding_id": self.snapshot.binding_id,
             "binding_epoch": self.snapshot.binding_epoch,
+            "consent_epoch": self.binding.consent_epoch(),
             "previous_target_identity_epoch": self.snapshot.target_identity_epoch,
             "target_identity_epoch": self.snapshot.target_identity_epoch,
             "previous_target_geometry_revision": previous_target_geometry_revision,
@@ -1497,7 +1498,50 @@ impl RemoteAppTargetBindingStateMachine {
             "frontend_action": Value::Null,
             "observed_at_ms": observed_at_ms,
             "geometry": self.snapshot.geometry.to_value(),
-        })
+        }))
+    }
+
+    fn with_event_target_context(&self, mut payload: Value) -> Value {
+        let Value::Object(fields) = &mut payload else {
+            return payload;
+        };
+        fields.insert("subject_ura".to_string(), json!(self.binding.subject_ura()));
+        fields.insert("binding_id".to_string(), json!(self.snapshot.binding_id));
+        fields.insert(
+            "binding_epoch".to_string(),
+            json!(self.snapshot.binding_epoch),
+        );
+        fields.insert(
+            "target_identity_epoch".to_string(),
+            json!(self.snapshot.target_identity_epoch),
+        );
+        fields.insert(
+            "target_geometry_revision".to_string(),
+            json!(self.snapshot.target_geometry_revision),
+        );
+        fields.insert(
+            "media_source_epoch".to_string(),
+            json!(self.snapshot.media_source_epoch),
+        );
+        fields.insert(
+            "consent_epoch".to_string(),
+            json!(self.binding.consent_epoch()),
+        );
+        fields.insert(
+            "target_binding".to_string(),
+            self.binding.to_tracking_value(
+                self.snapshot.target_identity_epoch,
+                self.snapshot.target_geometry_revision,
+                self.snapshot.media_source_epoch,
+                &self.snapshot.geometry,
+            ),
+        );
+        fields.insert("scope_audit".to_string(), self.binding.scope_audit_value());
+        fields.insert(
+            "latest_target_diagnostic".to_string(),
+            self.snapshot.diagnostic.clone(),
+        );
+        payload
     }
 }
 
