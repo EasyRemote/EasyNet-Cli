@@ -1143,7 +1143,12 @@ fn device_capabilities_view() {
 }
 
 fn input_control_support_view(input_available: bool) {
+    let runtime_backend = input_injection_backend();
+    let runtime_blocked_reason = input_injection_unavailable_reason();
     json!({
+        "runtime_backend": runtime_backend,
+        "runtime_blocked_reason": runtime_blocked_reason,
+        "certification": "live_e2e_required",
         "requires_input_control_consent": true,
         "input_transport": "webrtc_data_channel",
         "platforms": {
@@ -1153,14 +1158,14 @@ fn input_control_support_view(input_available: bool) {
                 "application": {"status": "available", "reason": "macos_target_input_guard_ready", "scope": "target_local"}
             },
             "linux": {
-                "display": {"status": "unsupported", "reason": "linux_input_injection_backend_not_implemented"},
-                "window": {"status": "unsupported", "reason": "linux_input_injection_backend_not_implemented"},
-                "application": {"status": "unsupported", "reason": "linux_input_injection_backend_not_implemented"}
+                "display": {"status": "x11_baseline_ready", "reason": "linux_x11_xtest_target_guard_ready"},
+                "window": {"status": "x11_baseline_ready", "reason": "linux_x11_xtest_target_guard_ready"},
+                "application": {"status": "x11_baseline_ready", "reason": "linux_x11_xtest_target_guard_ready"}
             },
             "windows": {
-                "display": {"status": "unsupported", "reason": "windows_input_injection_backend_not_implemented"},
-                "window": {"status": "unsupported", "reason": "windows_input_injection_backend_not_implemented"},
-                "application": {"status": "unsupported", "reason": "windows_input_injection_backend_not_implemented"}
+                "display": {"status": "baseline_ready", "reason": "windows_sendinput_target_guard_ready"},
+                "window": {"status": "baseline_ready", "reason": "windows_sendinput_target_guard_ready"},
+                "application": {"status": "baseline_ready", "reason": "windows_sendinput_target_guard_ready"}
             }
         }
     });
@@ -2793,9 +2798,9 @@ perl -0pi -e 's/"target_scope_ready": session\.target_scope_ready\(\),//' \
 run_fail 'public production readiness must expose target scope readiness'
 
 write_fixture
-perl -0pi -e 's/let ready = transport_view\.production_ready\(session\);//' \
+perl -0pi -e 's/let video_ready = transport_view\.production_ready\(session\);//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
-run_fail 'public production readiness must bind ready to media plus route readiness'
+run_fail 'public production readiness must bind video readiness to media plus route readiness'
 
 write_fixture
 perl -0pi -e 's/"ready": ready,//' \
@@ -2803,7 +2808,7 @@ perl -0pi -e 's/"ready": ready,//' \
 run_fail 'public production readiness ready predicate must use the route-gated transport production predicate'
 
 write_fixture
-perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session, transport_view\),//' \
+perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(/"blocked_reason": legacy_readiness_reason\(/' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 
@@ -2865,12 +2870,12 @@ run_fail 'production input path must read the latest session target snapshot'
 write_fixture
 perl -0pi -e 's/let binding = session\.target_binding\(\);/let binding = cached_binding;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
-run_fail 'production input path must read the session-owned target binding'
+run_fail 'production input path must read the current session-owned target binding'
 
 write_fixture
 perl -0pi -e 's/base_policy\.for_current_target\(snapshot, binding\);/base_policy;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
-run_fail 'production input path must reapply the current binding through the typed effective policy after deriving latest pointer target geometry'
+run_fail 'production input path must reapply the current binding and snapshot through the typed effective policy'
 
 write_fixture
 perl -0pi -e 's/current_session_input_policy_uses_same_geometry_revision_as_target_event/current_session_input_policy_allows_stale_geometry_revision/' \
@@ -3015,7 +3020,7 @@ run_fail 'device capabilities must expose diagnostic target subjects separately 
 write_fixture
 perl -0pi -e 's/XCAP_OPENH264_WEBRTC_BACKEND\.supported_subjects_value\(\)/json!(["display", "window"])/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must derive diagnostic target subjects from the display-only xcap WebRTC backend'
+run_fail 'device capabilities must derive baseline target subjects from the xcap WebRTC backend'
 
 write_fixture
 perl -0pi -e 's/"production_target_subjects_blocked_reason": if production_ready \{\s*Value::Null\s*\} else \{\s*json!\(production_backend\.unavailable_reason\(\)\.unwrap_or\("production_backend_not_ready"\)\)\s*\},//s' \
@@ -3050,17 +3055,17 @@ run_fail 'device capabilities must derive input control support from runtime inp
 write_fixture
 perl -0pi -e 's/linux_xcap_target_baseline_ready/linux_capture_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must expose Linux xcap target baseline readiness'
+run_fail 'device capabilities must expose Linux exact-target xcap baseline readiness'
 
 write_fixture
 perl -0pi -e 's/windows_xcap_target_baseline_ready/windows_capture_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must expose Windows xcap target baseline readiness'
+run_fail 'device capabilities must expose Windows exact-target xcap baseline readiness'
 
 write_fixture
 perl -0pi -e 's/"baseline_ready"/"production_ready"/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must distinguish executable baseline from production certification'
+run_fail 'device capabilities must distinguish executable baseline from certified production capture'
 
 write_fixture
 perl -0pi -e 's/"requires_input_control_consent": true/"requires_input_control_consent": false/' \
@@ -3068,29 +3073,29 @@ perl -0pi -e 's/"requires_input_control_consent": true/"requires_input_control_c
 run_fail 'device capabilities must expose explicit input-control consent requirement'
 
 write_fixture
-perl -0pi -e 's/target_scoped_keyboard_pointer_dispatch_unsafe/target_scoped_input_available/g' \
+perl -0pi -e 's/macos_target_input_guard_ready/macos_input_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must keep macOS window/application input unsupported until target-scoped dispatch is safe'
+run_fail 'device capabilities must expose guarded macOS window/application input readiness'
 
 write_fixture
-perl -0pi -e 's/linux_input_injection_backend_not_implemented/linux_input_available/g' \
+perl -0pi -e 's/linux_x11_xtest_target_guard_ready/linux_input_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must mark Linux input injection unsupported'
+run_fail 'device capabilities must expose the guarded Linux X11 input baseline'
 
 write_fixture
-perl -0pi -e 's/windows_input_injection_backend_not_implemented/windows_input_available/g' \
+perl -0pi -e 's/windows_sendinput_target_guard_ready/windows_input_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must mark Windows input injection unsupported'
+run_fail 'device capabilities must expose the guarded Windows SendInput baseline'
 
 write_fixture
 perl -0pi -e 's/"display_scoped_application_window_set"/"application"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must expose the application target model instead of flattening applications to display capture'
+run_fail 'device capabilities must expose the macOS display-scoped application target model'
 
 write_fixture
 perl -0pi -e 's/"process_scoped_application_window_set"/"application"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must expose the process-scoped application target model'
+run_fail 'device capabilities must expose the Windows/Linux process-scoped application target model'
 
 write_fixture
 perl -0pi -e 's#display/window/application target capture#display capture#' \

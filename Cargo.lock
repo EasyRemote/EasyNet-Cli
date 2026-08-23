@@ -1770,6 +1770,7 @@ dependencies = [
  "indicatif",
  "jpeg-encoder",
  "libc",
+ "libloading",
  "nokhwa",
  "num_cpus",
  "objc2",

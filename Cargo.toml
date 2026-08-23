@@ -376,7 +376,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
 
 # The remote invocation adapter uses a tonic UDS client to submit a complete
 # signed `InvokeRequest` to the local daemon's Invocation server.

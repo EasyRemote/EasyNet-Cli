@@ -1231,10 +1231,16 @@ require '"requires_input_control_consent": true' "$VIEW_DEVICE" \
   'device capabilities must expose explicit input-control consent requirement'
 require '"macos_target_input_guard_ready"' "$VIEW_DEVICE" \
   'device capabilities must expose guarded macOS window/application input readiness'
-require '"linux_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \
-  'device capabilities must mark Linux input injection unsupported'
-require '"windows_input_injection_backend_not_implemented"' "$VIEW_DEVICE" \
-  'device capabilities must mark Windows input injection unsupported'
+require '"linux_x11_xtest_target_guard_ready"' "$VIEW_DEVICE" \
+  'device capabilities must expose the guarded Linux X11 input baseline'
+require '"windows_sendinput_target_guard_ready"' "$VIEW_DEVICE" \
+  'device capabilities must expose the guarded Windows SendInput baseline'
+require '"runtime_backend": runtime_backend' "$VIEW_DEVICE" \
+  'device capabilities must distinguish current-host input runtime from platform implementation state'
+require '"runtime_blocked_reason": runtime_blocked_reason' "$VIEW_DEVICE" \
+  'device capabilities must expose current-host input backend failure reason'
+require '"certification": "live_e2e_required"' "$VIEW_DEVICE" \
+  'device capabilities must not promote executable input backends without live OS-effect evidence'
 require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
   'device capabilities must expose the macOS display-scoped application target model'
 require '"process_scoped_application_window_set"' "$VIEW_DEVICE" \

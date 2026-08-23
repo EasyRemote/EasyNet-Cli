@@ -587,6 +587,15 @@ pub fn input_injection_available() -> bool {
     platform::input_injection_available()
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn input_injection_backend() -> &'static str {
+    platform::input_injection_backend()
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn input_injection_unavailable_reason(
+) -> Option<&'static str> {
+    platform::input_injection_unavailable_reason()
+}
+
 pub fn request_input_injection_permission() -> bool {
     platform::request_input_injection_permission()
 }
@@ -852,7 +861,12 @@ impl InputSequenceGate {
 }
 
 fn input_runtime_permission_denied(reason: &str) -> bool {
-    matches!(reason, "accessibility_permission_denied")
+    matches!(
+        reason,
+        "accessibility_permission_denied"
+            | "windows_send_input_denied"
+            | "linux_xtest_injection_denied"
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -901,7 +915,7 @@ fn input_activation_reject_reason(
     policy: &EffectiveRemoteDesktopInputPolicy,
 ) -> Option<&'static str> {
     if !input_injection_available() {
-        return Some("input_injection_unavailable");
+        return input_injection_unavailable_reason().or(Some("input_injection_unavailable"));
     }
     let key_reason = policy.reject_reason("key");
     let pointer_reason = policy.reject_reason("pointer");
@@ -1413,7 +1427,7 @@ impl InputFrameTargetContext {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MappedPointerPoint {
     x: f64,
@@ -1443,7 +1457,7 @@ fn value_f64(value: &Value) -> Option<f64> {
     value.as_f64().filter(|value| value.is_finite())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 fn map_pointer_point(
     frame: &PointerInputFrame,
     target: Option<PointerTargetGeometry>,
@@ -1478,7 +1492,7 @@ fn map_pointer_point(
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 fn clamp_target_axis(value: f64, target_span: Option<f64>) -> f64 {
     let Some(span) = target_span.filter(|span| span.is_finite() && *span > 0.0) else {
         return value.max(0.0);
@@ -1486,7 +1500,7 @@ fn clamp_target_axis(value: f64, target_span: Option<f64>) -> f64 {
     value.clamp(0.0, (span - 1.0).max(0.0))
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 fn map_axis(
     raw: f64,
     normalized: Option<f64>,
@@ -1665,6 +1679,14 @@ mod platform {
 
     pub(super) fn input_injection_available() -> bool {
         unsafe { AXIsProcessTrusted() }
+    }
+
+    pub(super) fn input_injection_backend() -> &'static str {
+        "macos_coregraphics_cgevent"
+    }
+
+    pub(super) fn input_injection_unavailable_reason() -> Option<&'static str> {
+        (!input_injection_available()).then_some(ACCESSIBILITY_DENIED_REASON)
     }
 
     pub(super) fn request_input_injection_permission() -> bool {
@@ -1867,12 +1889,28 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+#[path = "input/windows.rs"]
+mod platform;
+
+#[cfg(target_os = "linux")]
+#[path = "input/linux.rs"]
+mod platform;
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod platform {
     use super::{InputApplyOutcome, KeyInputFrame, PointerInputFrame, PointerTargetGeometry};
 
     pub(super) fn input_injection_available() -> bool {
         false
+    }
+
+    pub(super) fn input_injection_backend() -> &'static str {
+        "unsupported"
+    }
+
+    pub(super) fn input_injection_unavailable_reason() -> Option<&'static str> {
+        Some("platform_input_injection_unavailable")
     }
 
     pub(super) fn request_input_injection_permission() -> bool {

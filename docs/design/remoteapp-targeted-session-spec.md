@@ -64,11 +64,14 @@ Implemented targeted-session state and explicit unsupported product boundaries:
   after a renewed capture proof commits. Rebind attempts that cannot be proven
   emit `TARGET_REBIND_FAILED`. Multi-display application capture remains
   unsupported until `MultiAppSurface`/multi-stream support exists.
-- macOS interactive app/window input uses `target_local` only after explicit
+- Interactive app/window input uses `target_local` only after explicit
   input-control consent. The daemon revalidates exact identity, visibility,
   focus, geometry, and application window-set state immediately before every
-  OS input event; other platforms remain fail-closed until they implement the
-  same execution guarantee.
+  OS input event. macOS posts guarded `CGEvent` effects; Windows has a guarded
+  User32 `SendInput` baseline; Linux has a guarded X11/XTest baseline and fails
+  closed on Wayland until a portal `RemoteDesktop` session is bound to the
+  selected Resource. Windows/Linux remain `baseline_ready`, not product-ready,
+  until independent live OS-effect E2E certifies the same guarantee.
 - Direct WebRTC route discovery is provider-backed. Host candidates,
   configured STUN server-reflexive routes, standard TURN relay routes, and
   EasyNet relay routes are represented as typed route evidence. Provider and
@@ -1247,6 +1250,13 @@ X11 window enumeration/capture/input
 explicit weaker-security labeling
 ```
 
+The executable X11 input baseline dynamically loads X11/XTest, proves the
+extension is present, serializes one display connection, maps pointer frames
+through the committed target geometry, bounds wheel expansion, and rejects
+partial/failed effects with a stable typed reason. If `WAYLAND_DISPLAY` is
+present it does not guess that XWayland owns the selected Resource: the session
+fails closed with `linux_wayland_portal_remote_desktop_not_implemented`.
+
 ### Windows v1
 
 Inventory:
@@ -1268,6 +1278,12 @@ Input:
 ```text
 SendInput with focus/target validation
 ```
+
+The executable input baseline maps target-local coordinates into the Windows
+virtual desktop, emits pointer/button/wheel/key effects through one auditable
+`SendInput` path, bounds wheel deltas, and rejects partial application. UIPI or
+other host rejection is surfaced as `windows_send_input_denied`; source
+availability alone does not promote the backend beyond `baseline_ready`.
 
 RemoteApp launch reference:
 
@@ -1296,6 +1312,9 @@ application:
 capability claim:
   baseline_ready, not production_ready
   promotion requires live Windows and Linux decoded-frame/leakage/rebind E2E
+  input promotion additionally requires independent pointer/key OS-effect,
+  focus/resource binding, coordinate tolerance, permission/UIPI denial, and
+  latency evidence on real Windows and Linux hosts
 ```
 
 ## 16. External reference boundaries

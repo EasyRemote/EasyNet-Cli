@@ -3,7 +3,7 @@
   "product": "RemoteApp interactive desktop",
   "status": "incomplete",
   "product_complete": false,
-  "updated_at": "2026-08-23",
+  "updated_at": "2026-08-24",
   "architecture_invariants": [
     "User Principal is the caller/accountability root, not an Agent.",
     "Device is the execution substrate and key custodian, not the public callee.",
@@ -21,12 +21,12 @@
         "macOS ScreenCaptureKit target model",
         "macOS ScreenCaptureKit application filter excludes uncommitted same-app same-display windows from committed window-set sessions",
         "host decoded-frame harnesses",
-        "non-macOS app/window target observation fails closed",
+        "Windows/Linux xcap baseline resolves exact window identity and process-scoped application window sets, observes drift, and fails closed rather than widening to display capture",
         "frontend session details surface daemon target loss reason and recovery action",
         "frontend action row executes daemon-guided refresh_targets recovery by refetching target inventory",
         "check-remoteapp-main-crate-implementation-tests.sh runs main-crate app/window target observation and fail-closed implementation tests",
         "device capability projection advertises production_target_subjects only when the production gate is ready and keeps diagnostic_target_subjects display-only",
-        "device capability projection exposes platform_support for macOS/Linux/Windows with Linux app/window and Windows capture explicitly unsupported",
+        "device capability projection exposes platform_support for macOS/Linux/Windows and labels Windows/Linux exact-target capture baseline_ready rather than production_ready",
         "2026-08-23 local product-flow both report passed decoded-frame WebRTC for macOS window and application targets with selected Resource URA subjects and no display fallback",
         "remoteapp-cross-platform-capture-e2e.sh verifier for real macOS/Windows/Linux capture or explicit unsupported artifacts with decoded-frame probe evidence bound to target identity/frame source/geometry revision, selected sentinel hash rendering, and no unrelated sentinel leakage for window/application captures"
       ],
@@ -74,7 +74,10 @@
         "frontend watch_events maps daemon input activation blocks and input frame rejections into visible RemoteApp status without closing media transport",
         "frontend session details separately surface input scope and pointer/keyboard enablement from daemon input_readiness",
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
-        "macOS window/application sessions with explicit input-control consent resolve target_local scope; non-macOS target-local input remains unsupported",
+        "window/application sessions with explicit input-control consent resolve target_local scope only behind the fresh per-event target guard",
+        "Windows input has a User32 SendInput baseline with virtual-desktop coordinate mapping, bounded wheel deltas, keyboard mapping, and partial-application rejection",
+        "Linux X11 input has a dynamically loaded serialized XTest baseline with bounded wheel expansion and deterministic keyboard mapping",
+        "Linux Wayland input fails closed until xdg-desktop-portal RemoteDesktop session identity is bound to the selected Resource",
         "every target_local pointer/key execution re-enumerates host windows and fails closed on identity, display, visibility, focus, geometry, or application window-set drift before CGEvent posting",
         "macOS focus observation marks only the first regular visible window of the frontmost process as focused instead of treating every same-process window as the receiver",
         "CLI create-remote-desktop-session exposes explicit --input-control consent while keeping the default no-input grant fail-closed",
@@ -85,7 +88,7 @@
         "remote_desktop.request_permission contract and frontend status expose Accessibility/input-injection permission alongside Screen Recording",
         "frontend exposes Request permission recovery when daemon input_readiness reports input_injection_unavailable",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate current-session input policy implementation test",
-        "device capability projection exposes input_control_support for macOS/Linux/Windows with macOS display/window/application tied to runtime permission and guarded scope while non-macOS input remains unsupported",
+        "device capability projection separates compiled backend state, current-host runtime availability/block reason, and live_e2e_required certification for macOS/Linux/Windows input",
         "remoteapp-input-injection-e2e.sh verifier derives display_global versus target_local from target kind and requires a fresh per-event target guard proof for window/application artifacts in addition to independent OS-effect evidence",
         "host-remoteapp-target-input-e2e.sh drives the production WebRTC media and easynet.remote_desktop.input.v1 data-channel paths in one session, requests explicit input-control consent, observes daemon applied/rejected events, and closes through public watch_events/end_session abilities",
         "the host fixture runs selected and unrelated AppKit processes with independent mouse/key callback logs; the first live window attempt reached the real create_session boundary and failed closed because target/debug/easynet-daemon lacked macOS Screen Recording permission"
@@ -101,6 +104,9 @@
         "stale/replayed client sequence rejection before host application",
         "latency measurements",
         "successful input injection E2E",
+        "real Windows SendInput pointer/key OS-effect E2E including UIPI denial",
+        "real Linux X11/XTest pointer/key OS-effect E2E",
+        "Linux Wayland portal RemoteDesktop implementation and OS-effect E2E or an explicit product-level unsupported decision",
         "live target_local window and application input artifacts with fresh pre-dispatch target guard evidence",
         "observed OS pointer/key effects from a platform observer independent from the injection path",
         "OS effect timestamps after host_applied_at_ms",
@@ -116,7 +122,8 @@
         "runtime permission block projection does not prove live macOS permission revocation E2E",
         "input readiness and policy gates do not prove successful OS injection",
         "the input injection verifier self-test does not prove live host input control",
-        "a permission-gated host-runner failure does not prove pointer or keyboard injection"
+        "a permission-gated host-runner failure does not prove pointer or keyboard injection",
+        "Windows/Linux source and cross-compilation evidence do not prove live OS effects"
       ]
     },
     {

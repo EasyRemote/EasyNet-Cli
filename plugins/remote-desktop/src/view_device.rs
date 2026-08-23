@@ -12,7 +12,8 @@ use crate::daemon::plugins::remote_desktop::constants::{
     DEFAULT_VIDEO_STREAM_BITRATE_KBPS, MAX_ATTACH_FPS, NATIVE_MAX_BITRATE_KBPS,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, unsupported_input_channel_types_value, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, input_injection_backend, input_injection_unavailable_reason,
+    unsupported_input_channel_types_value, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, native_webrtc_backend_runtime_descriptor, production_gate_view,
@@ -28,10 +29,9 @@ const PLATFORM_REASON_MACOS_NATIVE_BACKEND_READY: &str =
 const PLATFORM_REASON_LINUX_XCAP_BASELINE_READY: &str = "linux_xcap_target_baseline_ready";
 const PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY: &str = "windows_xcap_target_baseline_ready";
 const INPUT_REASON_MACOS_PERMISSION_GRANTED: &str = "macos_accessibility_permission_granted";
-const INPUT_REASON_MACOS_PERMISSION_DENIED: &str = "macos_accessibility_permission_denied";
 const INPUT_REASON_MACOS_TARGET_GUARD_READY: &str = "macos_target_input_guard_ready";
-const INPUT_REASON_LINUX_UNSUPPORTED: &str = "linux_input_injection_backend_not_implemented";
-const INPUT_REASON_WINDOWS_UNSUPPORTED: &str = "windows_input_injection_backend_not_implemented";
+const INPUT_REASON_LINUX_X11_READY: &str = "linux_x11_xtest_target_guard_ready";
+const INPUT_REASON_WINDOWS_READY: &str = "windows_sendinput_target_guard_ready";
 
 /// Build media quality targets from create-session video constraints.
 pub(in crate::daemon::plugins::remote_desktop) fn quality_targets(video: &Value) -> Value {
@@ -299,54 +299,77 @@ fn media_pipeline_support_view(
     })
 }
 
-fn input_support(status: &str, reason: &str, scope: Value) -> Value {
+fn input_support(status: &str, reason: &str, scope: Value, backend: &str) -> Value {
     json!({
         "status": status,
         "reason": reason,
         "scope": scope,
+        "backend": backend,
+        "certification": "live_e2e_required",
     })
 }
 
 fn input_control_support_view(input_available: bool) -> Value {
-    let macos_display_status = if input_available {
-        "available"
-    } else {
-        "permission_denied"
-    };
-    let macos_display_reason = if input_available {
-        INPUT_REASON_MACOS_PERMISSION_GRANTED
-    } else {
-        INPUT_REASON_MACOS_PERMISSION_DENIED
-    };
-    let macos_target_reason = if input_available {
-        INPUT_REASON_MACOS_TARGET_GUARD_READY
-    } else {
-        INPUT_REASON_MACOS_PERMISSION_DENIED
+    let current_os = std::env::consts::OS;
+    let runtime_backend = input_injection_backend();
+    let runtime_blocked_reason = input_injection_unavailable_reason();
+    let platform_row = |platform: &str,
+                        non_current_status: &str,
+                        backend: &str,
+                        ready_reason: &str,
+                        scope: Value| {
+        if current_os == platform {
+            input_support(
+                if input_available {
+                    "available"
+                } else if platform == "macos" {
+                    "permission_denied"
+                } else {
+                    "unavailable"
+                },
+                if input_available {
+                    ready_reason
+                } else {
+                    runtime_blocked_reason.unwrap_or("input_injection_unavailable")
+                },
+                scope,
+                runtime_backend,
+            )
+        } else {
+            input_support(non_current_status, ready_reason, scope, backend)
+        }
     };
 
     json!({
         "schema_version": 1,
-        "current_host_os": std::env::consts::OS,
+        "current_host_os": current_os,
+        "runtime_backend": runtime_backend,
+        "runtime_available": input_available,
+        "runtime_blocked_reason": runtime_blocked_reason,
         "requires_input_control_consent": true,
         "input_transport": "webrtc_data_channel",
         "platforms": {
             "macos": {
-                "display": input_support(macos_display_status, macos_display_reason, json!("display_global")),
-                "window": input_support(macos_display_status, macos_target_reason, json!("target_local")),
-                "application": input_support(macos_display_status, macos_target_reason, json!("target_local")),
+                "display": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_PERMISSION_GRANTED, json!("display_global")),
+                "window": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_TARGET_GUARD_READY, json!("target_local")),
+                "application": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_TARGET_GUARD_READY, json!("target_local")),
             },
             "linux": {
-                "display": input_support("unsupported", INPUT_REASON_LINUX_UNSUPPORTED, Value::Null),
-                "window": input_support("unsupported", INPUT_REASON_LINUX_UNSUPPORTED, Value::Null),
-                "application": input_support("unsupported", INPUT_REASON_LINUX_UNSUPPORTED, Value::Null),
+                "display": platform_row("linux", "x11_baseline_ready", "linux_x11_xtest", INPUT_REASON_LINUX_X11_READY, json!("display_global")),
+                "window": platform_row("linux", "x11_baseline_ready", "linux_x11_xtest", INPUT_REASON_LINUX_X11_READY, json!("target_local")),
+                "application": platform_row("linux", "x11_baseline_ready", "linux_x11_xtest", INPUT_REASON_LINUX_X11_READY, json!("target_local")),
             },
             "windows": {
-                "display": input_support("unsupported", INPUT_REASON_WINDOWS_UNSUPPORTED, Value::Null),
-                "window": input_support("unsupported", INPUT_REASON_WINDOWS_UNSUPPORTED, Value::Null),
-                "application": input_support("unsupported", INPUT_REASON_WINDOWS_UNSUPPORTED, Value::Null),
+                "display": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("display_global")),
+                "window": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("target_local")),
+                "application": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("target_local")),
             },
         },
-        "non_claim": "input support metadata does not replace live OS input injection E2E evidence",
+        "environment_constraints": {
+            "linux": "X11/XTest only; pure Wayland requires xdg-desktop-portal RemoteDesktop integration",
+            "windows": "SendInput is subject to UIPI integrity-level restrictions",
+        },
+        "non_claim": "executable input backends do not replace live Windows/Linux/macOS OS input injection E2E evidence",
     })
 }
 
@@ -669,12 +692,16 @@ mod tests {
         let input_support = &capabilities["metadata"]["input_control_support"];
 
         assert_eq!(input_support["schema_version"], json!(1));
+        assert_eq!(
+            input_support["runtime_available"],
+            capabilities["input_injection"]
+        );
         assert_eq!(input_support["requires_input_control_consent"], json!(true));
         assert_eq!(
             input_support["input_transport"],
             json!("webrtc_data_channel")
         );
-        if capabilities["input_injection"] == json!(true) {
+        if std::env::consts::OS == "macos" && capabilities["input_injection"] == json!(true) {
             assert_eq!(
                 input_support["platforms"]["macos"]["display"]["status"],
                 json!("available")
@@ -683,14 +710,19 @@ mod tests {
                 input_support["platforms"]["macos"]["display"]["scope"],
                 json!("display_global")
             );
-        } else {
+        } else if std::env::consts::OS == "macos" {
             assert_eq!(
                 input_support["platforms"]["macos"]["display"]["status"],
                 json!("permission_denied")
             );
             assert_eq!(
                 input_support["platforms"]["macos"]["display"]["reason"],
-                json!("macos_accessibility_permission_denied")
+                json!("accessibility_permission_denied")
+            );
+        } else {
+            assert_eq!(
+                input_support["platforms"]["macos"]["display"]["status"],
+                json!("implementation_ready")
             );
         }
         assert_eq!(
@@ -703,23 +735,45 @@ mod tests {
         );
         assert_eq!(
             input_support["platforms"]["macos"]["application"]["reason"],
-            json!(if capabilities["input_injection"] == json!(true) {
+            json!(if std::env::consts::OS != "macos"
+                || capabilities["input_injection"] == json!(true)
+            {
                 "macos_target_input_guard_ready"
             } else {
-                "macos_accessibility_permission_denied"
+                "accessibility_permission_denied"
             })
         );
         assert_eq!(
             input_support["platforms"]["linux"]["display"]["reason"],
-            json!("linux_input_injection_backend_not_implemented")
+            if std::env::consts::OS == "linux" && capabilities["input_injection"] != json!(true) {
+                input_support["runtime_blocked_reason"].clone()
+            } else {
+                json!("linux_x11_xtest_target_guard_ready")
+            }
         );
         assert_eq!(
             input_support["platforms"]["windows"]["application"]["status"],
-            json!("unsupported")
+            json!(if std::env::consts::OS == "windows" {
+                if capabilities["input_injection"] == json!(true) {
+                    "available"
+                } else {
+                    "unavailable"
+                }
+            } else {
+                "baseline_ready"
+            })
         );
-        assert!(input_support["non_claim"]
-            .as_str()
-            .is_some_and(|message| message.contains("live OS input injection E2E")));
+        assert_eq!(
+            input_support["platforms"]["windows"]["application"]["backend"],
+            json!("windows_user32_sendinput")
+        );
+        assert_eq!(
+            input_support["platforms"]["linux"]["window"]["scope"],
+            json!("target_local")
+        );
+        assert!(input_support["non_claim"].as_str().is_some_and(
+            |message| message.contains("live Windows/Linux/macOS OS input injection E2E")
+        ));
     }
 
     #[test]
