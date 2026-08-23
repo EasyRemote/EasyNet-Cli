@@ -154,6 +154,24 @@ grep -q "input injection verifier must reject high latency" /tmp/check-remoteapp
   fail "expected input injection latency-bound failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 
+perl -0pi -e 's#input_results client_sequence must be strictly increasing#input_results client_sequence may repeat#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-sequence-order.out 2>&1; then
+  fail "checker accepted input injection verifier without monotonic applied sequence validation"
+fi
+grep -q "input injection verifier must reject non-monotonic applied input sequences" /tmp/check-remoteapp-product-closure-input-sequence-order.out || \
+  fail "expected input injection sequence-order failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
+perl -0pi -e 's#stale_client_sequence rejection must be observed#stale_client_sequence rejection is optional#g' \
+  "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-input-stale-rejection.out 2>&1; then
+  fail "checker accepted input injection verifier without stale sequence rejection evidence"
+fi
+grep -q "input injection verifier must require stale sequence rejection evidence" /tmp/check-remoteapp-product-closure-input-stale-rejection.out || \
+  fail "expected input injection stale sequence rejection failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
+
 perl -0pi -e 's#real_media_adaptation_matrix#source_only_media_matrix#g' \
   "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-proof-mode.out 2>&1; then

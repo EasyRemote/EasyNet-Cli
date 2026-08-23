@@ -481,6 +481,16 @@ require 'client_sequence' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sequence evidence'
 require 'client_sent_at_ms' "$INPUT_INJECTION" \
   'input injection verifier must preserve client_sent_at_ms evidence'
+require 'host_received_at_ms' "$INPUT_INJECTION" \
+  'input injection verifier must preserve host receive timing evidence'
+require 'input_results client_sequence must be strictly increasing' "$INPUT_INJECTION" \
+  'input injection verifier must reject non-monotonic applied input sequences'
+require 'rejected_input_results' "$INPUT_INJECTION" \
+  'input injection verifier must inspect rejected input evidence'
+require 'stale_client_sequence rejection must be observed' "$INPUT_INJECTION" \
+  'input injection verifier must require stale sequence rejection evidence'
+require 'stale rejected input must not be host-applied' "$INPUT_INJECTION" \
+  'input injection verifier must prove stale rejected input is not applied'
 require 'struct InputSequenceGate' "$INPUT" \
   'RemoteApp daemon input execution path must have a per-channel client sequence gate'
 require 'sequence_gate\.reject_reason\(client_sequence\)' "$INPUT" \

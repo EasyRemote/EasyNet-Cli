@@ -48,8 +48,9 @@ Evidence contract:
   policy-only readiness. macOS must pass pointer and keyboard injection with
   Accessibility/input permission, input-control consent, display_global input
   scope, focus validation, coordinate mapping, target geometry revision,
-  INPUT_FRAME_APPLIED events, bounded latency, and a visible terminal receipt.
-  Windows/Linux must pass or report explicit product unsupported state.
+  strictly ordered INPUT_FRAME_APPLIED events, bounded receive/apply latency,
+  stale client-sequence rejection, and a visible terminal receipt. Windows/Linux
+  must pass or report explicit product unsupported state.
 
 Non-claims:
   A skipped report or self-test does not prove input product readiness.
@@ -228,10 +229,18 @@ for platform_name in sorted(required_platforms):
         input_results = platform.get("input_results")
         require(isinstance(input_results, list) and input_results,
                 f"{prefix}: input_results must be non-empty")
+        applied_sequences = []
+        last_sequence = 0
         result_by_kind = {}
         if isinstance(input_results, list):
             for result in input_results:
                 if isinstance(result, dict) and isinstance(result.get("kind"), str):
+                    sequence = result.get("client_sequence")
+                    if isinstance(sequence, int):
+                        require(sequence > last_sequence,
+                                f"{prefix}: input_results client_sequence must be strictly increasing")
+                        last_sequence = sequence
+                        applied_sequences.append(sequence)
                     result_by_kind[result["kind"]] = result
         missing_inputs = sorted(required_inputs - set(result_by_kind))
         require(not missing_inputs, f"{prefix}: missing input results: " + ", ".join(missing_inputs))
@@ -251,9 +260,12 @@ for platform_name in sorted(required_platforms):
             require(isinstance(result.get("client_sent_at_ms"), int)
                     and result.get("client_sent_at_ms") > 0,
                     f"{result_prefix}: client_sent_at_ms must be positive")
+            require(isinstance(result.get("host_received_at_ms"), int)
+                    and result.get("host_received_at_ms") >= result.get("client_sent_at_ms", 0),
+                    f"{result_prefix}: host_received_at_ms must be >= client_sent_at_ms")
             require(isinstance(result.get("host_applied_at_ms"), int)
-                    and result.get("host_applied_at_ms") >= result.get("client_sent_at_ms", 0),
-                    f"{result_prefix}: host_applied_at_ms must be >= client_sent_at_ms")
+                    and result.get("host_applied_at_ms") >= result.get("host_received_at_ms", 0),
+                    f"{result_prefix}: host_applied_at_ms must be >= host_received_at_ms")
             latency = result.get("latency_ms")
             try:
                 latency_value = float(latency)
@@ -275,6 +287,32 @@ for platform_name in sorted(required_platforms):
             if kind == "keyboard":
                 require(isinstance(result.get("key_code"), str) and result.get("key_code"),
                         f"{result_prefix}: key_code must be recorded")
+
+        rejected_results = platform.get("rejected_input_results")
+        require(isinstance(rejected_results, list) and rejected_results,
+                f"{prefix}: rejected_input_results must include stale sequence rejection evidence")
+        stale_rejections = []
+        if isinstance(rejected_results, list):
+            for rejection in rejected_results:
+                if not isinstance(rejection, dict):
+                    continue
+                if (rejection.get("event_type") == "INPUT_FRAME_REJECTED"
+                        and rejection.get("reason") == "stale_client_sequence"):
+                    stale_rejections.append(rejection)
+        require(stale_rejections,
+                f"{prefix}: stale_client_sequence rejection must be observed")
+        max_applied_sequence = max(applied_sequences) if applied_sequences else 0
+        for index, rejection in enumerate(stale_rejections):
+            rejection_prefix = f"{prefix}/stale_rejection[{index}]"
+            require(rejection.get("subject_ura") == subject_ura,
+                    f"{rejection_prefix}: subject_ura must bind selected Resource URA")
+            require(rejection.get("session_id") == session_id,
+                    f"{rejection_prefix}: session_id must bind session_id")
+            require(isinstance(rejection.get("client_sequence"), int)
+                    and 0 < rejection.get("client_sequence") <= max_applied_sequence,
+                    f"{rejection_prefix}: client_sequence must be stale against applied input")
+            require("host_applied_at_ms" not in rejection or rejection.get("host_applied_at_ms") in {None, ""},
+                    f"{rejection_prefix}: stale rejected input must not be host-applied")
 
         latency_summary = platform.get("latency_summary")
         require(isinstance(latency_summary, dict), f"{prefix}: latency_summary must be present")
@@ -300,6 +338,7 @@ for platform_name in sorted(required_platforms):
             "platform": platform_name,
             "status": "passed",
             "input_results": sorted(result_by_kind),
+            "stale_client_sequence_rejected": bool(stale_rejections),
             "max_latency_ms": max(latencies) if latencies else None,
         })
     elif status == "unsupported":
@@ -311,10 +350,13 @@ for platform_name in sorted(required_platforms):
                 f"{prefix}: show_unsupported must be true")
         require(platform.get("input_results") is None or platform.get("input_results") == [],
                 f"{prefix}: unsupported scenario must not report applied input")
+        require(platform.get("rejected_input_results") is None or platform.get("rejected_input_results") == [],
+                f"{prefix}: unsupported scenario must not report rejected input effects")
         platform_reports.append({
             "platform": platform_name,
             "status": "unsupported",
             "input_results": [],
+            "stale_client_sequence_rejected": False,
             "max_latency_ms": None,
         })
     else:
@@ -395,6 +437,7 @@ macos = {
             "event_type": "INPUT_FRAME_APPLIED",
             "client_sequence": 1,
             "client_sent_at_ms": 1787331000000,
+            "host_received_at_ms": 1787331000010,
             "host_applied_at_ms": 1787331000019,
             "latency_ms": 19,
             "observed_effect": "pointer_position_changed",
@@ -407,11 +450,21 @@ macos = {
             "event_type": "INPUT_FRAME_APPLIED",
             "client_sequence": 2,
             "client_sent_at_ms": 1787331000100,
+            "host_received_at_ms": 1787331000120,
             "host_applied_at_ms": 1787331000135,
             "latency_ms": 35,
             "observed_effect": "key_echo_observed",
             "key_code": "KeyA",
         },
+    ],
+    "rejected_input_results": [
+        {
+            "event_type": "INPUT_FRAME_REJECTED",
+            "reason": "stale_client_sequence",
+            "client_sequence": 1,
+            "subject_ura": subject,
+            "session_id": session_id,
+        }
     ],
     "latency_summary": {"p95_ms": 35, "max_ms": 35},
     "terminal_receipt": {
@@ -426,6 +479,7 @@ unsupported = lambda platform: {
     "unsupported_state": "explicit_product_unsupported",
     "show_unsupported": True,
     "input_results": [],
+    "rejected_input_results": [],
 }
 evidence = {
     "status": "passed",
