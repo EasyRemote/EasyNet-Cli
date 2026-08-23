@@ -595,6 +595,33 @@ grep -q "crash/restart recovery verifier must require replay guard recovery" /tm
   fail "expected crash/restart replay-guard failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 
+perl -0pi -e 's#scenario_started_at_ms must be recorded#scenario start timestamp is optional#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-scenario-start.out 2>&1; then
+  fail "checker accepted crash/restart verifier without scenario start timestamp evidence"
+fi
+grep -q "crash/restart recovery verifier must require scenario start timestamp evidence" /tmp/check-remoteapp-product-closure-crash-scenario-start.out || \
+  fail "expected crash/restart scenario start timestamp failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
+perl -0pi -e 's#events must be strictly ordered by at_ms#events may be unordered by at_ms#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-event-order.out 2>&1; then
+  fail "checker accepted crash/restart verifier without ordered lifecycle events"
+fi
+grep -q "crash/restart recovery verifier must require ordered lifecycle events" /tmp/check-remoteapp-product-closure-crash-event-order.out || \
+  fail "expected crash/restart lifecycle event order failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
+perl -0pi -e 's#PROCESS_STOPPED_UNCLEAN must occur before DAEMON_RESTARTED#DAEMON_RESTARTED may occur before PROCESS_STOPPED_UNCLEAN#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-daemon-order.out 2>&1; then
+  fail "checker accepted crash/restart verifier without daemon restart ordering"
+fi
+grep -q "crash/restart recovery verifier must require daemon restart event ordering" /tmp/check-remoteapp-product-closure-crash-daemon-order.out || \
+  fail "expected crash/restart daemon restart ordering failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
 perl -0pi -e 's#must remain stable across restart#may be replaced across restart#g' \
   "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-session-stability.out 2>&1; then
@@ -604,6 +631,15 @@ grep -q "crash/restart recovery verifier must reject public session replacement"
   fail "expected crash/restart session-stability failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 
+perl -0pi -e 's#first_frame_rendered_after_restart_at_ms must be after media_reattached_at_ms#first rendered frame may precede media reattach#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-frame-order.out 2>&1; then
+  fail "checker accepted crash/restart verifier without rendered-after-media ordering"
+fi
+grep -q "crash/restart recovery verifier must require rendered media after media reattachment" /tmp/check-remoteapp-product-closure-crash-frame-order.out || \
+  fail "expected crash/restart rendered-after-media ordering failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
 perl -0pi -e 's#terminal receipt id must be replayed#terminal receipt id may be replaced#g' \
   "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-terminal-replay.out 2>&1; then
@@ -611,6 +647,24 @@ if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/ch
 fi
 grep -q "crash/restart recovery verifier must require original terminal receipt replay" /tmp/check-remoteapp-product-closure-crash-terminal-replay.out || \
   fail "expected crash/restart terminal-replay failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
+perl -0pi -e 's#show_session_after_restart_observed_at_ms must be after TERMINAL_RECEIPT_REPLAYED#show_session may precede terminal receipt replay#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-show-after-replay.out 2>&1; then
+  fail "checker accepted crash/restart verifier without show_session-after-replay timing"
+fi
+grep -q "crash/restart recovery verifier must require public show_session after receipt replay" /tmp/check-remoteapp-product-closure-crash-show-after-replay.out || \
+  fail "expected crash/restart show-session-after-replay failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+
+perl -0pi -e 's#endpoint_ready_at_ms must be after DAEMON_READY_AFTER_RESTART#endpoint readiness may precede daemon ready#g' \
+  "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-crash-endpoint-order.out 2>&1; then
+  fail "checker accepted crash/restart verifier without endpoint-after-ready timing"
+fi
+grep -q "crash/restart recovery verifier must require endpoint readiness after daemon-ready event" /tmp/check-remoteapp-product-closure-crash-endpoint-order.out || \
+  fail "expected crash/restart endpoint-after-ready failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh" "$SB/tools/scripts/remoteapp-crash-restart-recovery-e2e.sh"
 
 python3 - "$SB/docs/design/remoteapp-product-readiness-matrix.json" <<'PY'

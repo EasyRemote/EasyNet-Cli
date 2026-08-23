@@ -46,8 +46,9 @@ Evidence contract:
   plugin_worker_restart, terminal_receipt_replay_after_crash, and
   stale_socket_restart_cleanup. Evidence must prove public RemoteApp ability
   paths, same-session recovery or same terminal receipt replay, recovered replay
-  guards/idempotency, watch/media reattachment, endpoint readiness, and visible
-  terminal receipts.
+  guards/idempotency, ordered lifecycle events, watch/media reattachment,
+  endpoint readiness, post-reattach rendered frames, and visible terminal
+  receipts.
 
 Non-claims:
   A skipped report or self-test does not prove crash/restart product readiness.
@@ -139,6 +140,10 @@ def integer(value, default=0):
     except (TypeError, ValueError):
         return default
 
+def find_event_at(event_times, event_type):
+    values = event_times.get(event_type) or []
+    return values[0] if values else 0
+
 required_scenarios = {
     "daemon_restart_active_session",
     "plugin_worker_restart",
@@ -194,6 +199,9 @@ def require_common(prefix, scenario):
     require(isinstance(session_id, str) and session_id, f"{prefix}: session_id must be recorded")
     require(isinstance(scenario.get("descriptor_version"), str) and scenario.get("descriptor_version"),
             f"{prefix}: descriptor_version must be recorded")
+    scenario_started_at_ms = integer(scenario.get("scenario_started_at_ms"))
+    require(scenario_started_at_ms > 0,
+            f"{prefix}: scenario_started_at_ms must be recorded")
     abilities = scenario.get("abilities")
     require(isinstance(abilities, list) and abilities, f"{prefix}: abilities must be non-empty")
     ability_by_name = {}
@@ -210,7 +218,7 @@ def require_common(prefix, scenario):
             if ability_name != "remote_desktop.create_session":
                 require(ability.get("session_id") == session_id,
                         f"{prefix}: {ability_name} must bind session_id")
-    return subject_ura, session_id
+    return subject_ura, session_id, scenario_started_at_ms
 
 def require_recovery_guards(prefix, recovery):
     require(isinstance(recovery, dict), f"{prefix}: recovery evidence must be present")
@@ -248,10 +256,36 @@ for scenario_name in sorted(required_scenarios):
     if not isinstance(scenario, dict):
         continue
     prefix = scenario_name
-    subject_ura, session_id = require_common(prefix, scenario)
+    subject_ura, session_id, scenario_started_at_ms = require_common(prefix, scenario)
     events = scenario.get("events")
     require(isinstance(events, list) and events, f"{prefix}: events must be non-empty")
-    event_types = [event.get("type") for event in events if isinstance(event, dict)]
+    event_types = []
+    event_times = {}
+    last_event_at_ms = 0
+    if isinstance(events, list):
+        for index, event in enumerate(events):
+            if not isinstance(event, dict):
+                errors.append(f"{prefix}: events[{index}] must be an object")
+                continue
+            event_prefix = f"{prefix}: events[{index}]"
+            event_type = event.get("type")
+            event_at_ms = integer(event.get("at_ms"))
+            event_types.append(event_type)
+            event_times.setdefault(event_type, []).append(event_at_ms)
+            require(event_at_ms >= scenario_started_at_ms,
+                    f"{event_prefix}.at_ms must be at or after scenario_started_at_ms")
+            require(event_at_ms > last_event_at_ms,
+                    f"{prefix}: events must be strictly ordered by at_ms")
+            last_event_at_ms = max(last_event_at_ms, event_at_ms)
+            require(event.get("selected_resource_ura") == subject_ura,
+                    f"{event_prefix}.selected_resource_ura must bind selected Resource URA")
+            require(event.get("session_id") == session_id,
+                    f"{event_prefix}.session_id must bind session_id")
+
+    def require_event_order(first, second, message):
+        require(find_event_at(event_times, first) > 0 and find_event_at(event_times, second) > 0
+                and find_event_at(event_times, first) < find_event_at(event_times, second),
+                f"{prefix}: {message}")
 
     if scenario_name == "daemon_restart_active_session":
         require("PROCESS_STOPPED_UNCLEAN" in event_types,
@@ -260,6 +294,10 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: must include DAEMON_RESTARTED")
         require("SESSION_REHYDRATED" in event_types,
                 f"{prefix}: must include SESSION_REHYDRATED")
+        require_event_order("PROCESS_STOPPED_UNCLEAN", "DAEMON_RESTARTED",
+                            "PROCESS_STOPPED_UNCLEAN must occur before DAEMON_RESTARTED")
+        require_event_order("DAEMON_RESTARTED", "SESSION_REHYDRATED",
+                            "DAEMON_RESTARTED must occur before SESSION_REHYDRATED")
         require_recovery_guards(prefix, scenario.get("recovery"))
         before = scenario.get("before_restart")
         after = scenario.get("after_restart")
@@ -276,12 +314,23 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: after_restart.session_state must be active")
         require(after.get("show_session_public") is True,
                 f"{prefix}: show_session after restart must use public ability")
+        show_session_observed_at_ms = integer(after.get("show_session_observed_at_ms"))
+        require(show_session_observed_at_ms > find_event_at(event_times, "DAEMON_RESTARTED"),
+                f"{prefix}: show_session_observed_at_ms must be after DAEMON_RESTARTED")
         require(after.get("watch_events_reattached") is True,
                 f"{prefix}: watch_events_reattached must be true")
+        watch_reattached_at_ms = integer(after.get("watch_events_reattached_at_ms"))
+        require(watch_reattached_at_ms > find_event_at(event_times, "SESSION_REHYDRATED"),
+                f"{prefix}: watch_events_reattached_at_ms must be after SESSION_REHYDRATED")
         require(after.get("media_reattached") is True,
                 f"{prefix}: media_reattached must be true")
+        media_reattached_at_ms = integer(after.get("media_reattached_at_ms"))
+        require(media_reattached_at_ms > watch_reattached_at_ms,
+                f"{prefix}: media_reattached_at_ms must be after watch_events_reattached_at_ms")
         require(integer(after.get("frames_rendered_after_restart")) > 0,
                 f"{prefix}: frames_rendered_after_restart must be positive")
+        require(integer(after.get("first_frame_rendered_after_restart_at_ms")) > media_reattached_at_ms,
+                f"{prefix}: first_frame_rendered_after_restart_at_ms must be after media_reattached_at_ms")
         require_recovery_guards(prefix, scenario.get("recovery"))
         require_terminal(prefix, scenario.get("terminal_receipt"), session_id)
 
@@ -292,12 +341,19 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: must include PLUGIN_WORKER_RESTARTED")
         require("TARGET_MONITOR_RESTARTED" in event_types,
                 f"{prefix}: must include TARGET_MONITOR_RESTARTED")
+        require_event_order("PLUGIN_WORKER_CRASHED", "PLUGIN_WORKER_RESTARTED",
+                            "PLUGIN_WORKER_CRASHED must occur before PLUGIN_WORKER_RESTARTED")
+        require_event_order("PLUGIN_WORKER_RESTARTED", "TARGET_MONITOR_RESTARTED",
+                            "PLUGIN_WORKER_RESTARTED must occur before TARGET_MONITOR_RESTARTED")
         require(scenario.get("same_public_session") is True,
                 f"{prefix}: same_public_session must be true")
         require(integer(scenario.get("media_source_epoch_after")) > integer(scenario.get("media_source_epoch_before")),
                 f"{prefix}: media_source_epoch_after must increase")
         require(integer(scenario.get("frames_rendered_after_worker_restart")) > 0,
                 f"{prefix}: frames_rendered_after_worker_restart must be positive")
+        require(integer(scenario.get("first_frame_rendered_after_worker_restart_at_ms"))
+                > find_event_at(event_times, "TARGET_MONITOR_RESTARTED"),
+                f"{prefix}: first_frame_rendered_after_worker_restart_at_ms must be after TARGET_MONITOR_RESTARTED")
         require(scenario.get("new_consent_required") is False,
                 f"{prefix}: plugin restart must not mint new consent")
         require_recovery_guards(prefix, scenario.get("recovery"))
@@ -310,6 +366,10 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: must include PROCESS_STOPPED_UNCLEAN")
         require("TERMINAL_RECEIPT_REPLAYED" in event_types,
                 f"{prefix}: must include TERMINAL_RECEIPT_REPLAYED")
+        require_event_order("END_SESSION_ACCEPTED", "PROCESS_STOPPED_UNCLEAN",
+                            "END_SESSION_ACCEPTED must occur before PROCESS_STOPPED_UNCLEAN")
+        require_event_order("PROCESS_STOPPED_UNCLEAN", "TERMINAL_RECEIPT_REPLAYED",
+                            "PROCESS_STOPPED_UNCLEAN must occur before TERMINAL_RECEIPT_REPLAYED")
         receipt_before = scenario.get("terminal_receipt_before_crash")
         receipt_after = scenario.get("terminal_receipt_after_restart")
         require(isinstance(receipt_before, dict) and isinstance(receipt_after, dict),
@@ -326,6 +386,9 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: repeat_end_session_idempotent must be true")
         require(scenario.get("show_session_after_restart_state") == "closed",
                 f"{prefix}: show_session_after_restart_state must be closed")
+        require(integer(scenario.get("show_session_after_restart_observed_at_ms"))
+                > find_event_at(event_times, "TERMINAL_RECEIPT_REPLAYED"),
+                f"{prefix}: show_session_after_restart_observed_at_ms must be after TERMINAL_RECEIPT_REPLAYED")
         require_recovery_guards(prefix, scenario.get("recovery"))
         require_terminal(prefix, receipt_after, session_id)
 
@@ -336,10 +399,17 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: must include STALE_INVOCATION_SOCKET_DETECTED")
         require("DAEMON_READY_AFTER_RESTART" in event_types,
                 f"{prefix}: must include DAEMON_READY_AFTER_RESTART")
+        require_event_order("STALE_CONTROL_SOCKET_DETECTED", "DAEMON_READY_AFTER_RESTART",
+                            "STALE_CONTROL_SOCKET_DETECTED must occur before DAEMON_READY_AFTER_RESTART")
+        require_event_order("STALE_INVOCATION_SOCKET_DETECTED", "DAEMON_READY_AFTER_RESTART",
+                            "STALE_INVOCATION_SOCKET_DETECTED must occur before DAEMON_READY_AFTER_RESTART")
         require(scenario.get("control_endpoint_ready") is True,
                 f"{prefix}: control_endpoint_ready must be true")
         require(scenario.get("invocation_endpoint_ready") is True,
                 f"{prefix}: invocation_endpoint_ready must be true")
+        endpoint_ready_at_ms = integer(scenario.get("endpoint_ready_at_ms"))
+        require(endpoint_ready_at_ms > find_event_at(event_times, "DAEMON_READY_AFTER_RESTART"),
+                f"{prefix}: endpoint_ready_at_ms must be after DAEMON_READY_AFTER_RESTART")
         require(scenario.get("stale_socket_cleanup_explicit") is True,
                 f"{prefix}: stale_socket_cleanup_explicit must be true")
         require(scenario.get("manual_cleanup_required") is False,
@@ -430,16 +500,25 @@ def common(name, subject, session_id):
         "selected_resource_ura": subject,
         "session_id": session_id,
         "descriptor_version": "1.0.0",
+        "scenario_started_at_ms": 1787333000000,
         "abilities": abilities(subject, session_id),
+    }
+
+def event(event_type, subject, session_id, offset_ms):
+    return {
+        "type": event_type,
+        "at_ms": 1787333000000 + offset_ms,
+        "selected_resource_ura": subject,
+        "session_id": session_id,
     }
 
 subject = "easynet:///r/acme/resource/device.dev/window.recovery"
 
 daemon = common("daemon_restart_active_session", subject, "sess-daemon-restart")
 daemon["events"] = [
-    {"type": "PROCESS_STOPPED_UNCLEAN"},
-    {"type": "DAEMON_RESTARTED"},
-    {"type": "SESSION_REHYDRATED"},
+    event("PROCESS_STOPPED_UNCLEAN", subject, daemon["session_id"], 1000),
+    event("DAEMON_RESTARTED", subject, daemon["session_id"], 2100),
+    event("SESSION_REHYDRATED", subject, daemon["session_id"], 2600),
 ]
 daemon["before_restart"] = {
     "session_id": daemon["session_id"],
@@ -456,47 +535,54 @@ daemon["after_restart"] = {
     "transport_epoch": 3,
     "session_state": "active",
     "show_session_public": True,
+    "show_session_observed_at_ms": 1787333003000,
     "watch_events_reattached": True,
+    "watch_events_reattached_at_ms": 1787333003400,
     "media_reattached": True,
+    "media_reattached_at_ms": 1787333003800,
     "frames_rendered_after_restart": 24,
+    "first_frame_rendered_after_restart_at_ms": 1787333004300,
 }
 daemon["recovery"] = recovery(1, 2)
 daemon["terminal_receipt"] = terminal(daemon["session_id"], "receipt-daemon")
 
 plugin = common("plugin_worker_restart", subject, "sess-plugin-restart")
 plugin["events"] = [
-    {"type": "PLUGIN_WORKER_CRASHED"},
-    {"type": "PLUGIN_WORKER_RESTARTED"},
-    {"type": "TARGET_MONITOR_RESTARTED"},
+    event("PLUGIN_WORKER_CRASHED", subject, plugin["session_id"], 1000),
+    event("PLUGIN_WORKER_RESTARTED", subject, plugin["session_id"], 1800),
+    event("TARGET_MONITOR_RESTARTED", subject, plugin["session_id"], 2400),
 ]
 plugin["same_public_session"] = True
 plugin["media_source_epoch_before"] = 4
 plugin["media_source_epoch_after"] = 5
 plugin["frames_rendered_after_worker_restart"] = 31
+plugin["first_frame_rendered_after_worker_restart_at_ms"] = 1787333003100
 plugin["new_consent_required"] = False
 plugin["recovery"] = recovery(2, 3)
 plugin["terminal_receipt"] = terminal(plugin["session_id"], "receipt-plugin")
 
 receipt = common("terminal_receipt_replay_after_crash", subject, "sess-receipt-replay")
 receipt["events"] = [
-    {"type": "END_SESSION_ACCEPTED"},
-    {"type": "PROCESS_STOPPED_UNCLEAN"},
-    {"type": "TERMINAL_RECEIPT_REPLAYED"},
+    event("END_SESSION_ACCEPTED", subject, receipt["session_id"], 1000),
+    event("PROCESS_STOPPED_UNCLEAN", subject, receipt["session_id"], 1300),
+    event("TERMINAL_RECEIPT_REPLAYED", subject, receipt["session_id"], 2600),
 ]
 receipt["terminal_receipt_before_crash"] = terminal(receipt["session_id"], "receipt-replayed")
 receipt["terminal_receipt_after_restart"] = terminal(receipt["session_id"], "receipt-replayed")
 receipt["repeat_end_session_idempotent"] = True
 receipt["show_session_after_restart_state"] = "closed"
+receipt["show_session_after_restart_observed_at_ms"] = 1787333003100
 receipt["recovery"] = recovery(3, 4)
 
 socket = common("stale_socket_restart_cleanup", subject, "sess-stale-socket")
 socket["events"] = [
-    {"type": "STALE_CONTROL_SOCKET_DETECTED"},
-    {"type": "STALE_INVOCATION_SOCKET_DETECTED"},
-    {"type": "DAEMON_READY_AFTER_RESTART"},
+    event("STALE_CONTROL_SOCKET_DETECTED", subject, socket["session_id"], 1000),
+    event("STALE_INVOCATION_SOCKET_DETECTED", subject, socket["session_id"], 1200),
+    event("DAEMON_READY_AFTER_RESTART", subject, socket["session_id"], 2500),
 ]
 socket["control_endpoint_ready"] = True
 socket["invocation_endpoint_ready"] = True
+socket["endpoint_ready_at_ms"] = 1787333002900
 socket["stale_socket_cleanup_explicit"] = True
 socket["manual_cleanup_required"] = False
 socket["recovery"] = recovery(4, 5)

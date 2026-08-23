@@ -885,10 +885,30 @@ require 'DAEMON_RESTARTED' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must inspect daemon restart evidence'
 require 'SESSION_REHYDRATED' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must inspect session rehydration evidence'
+require 'scenario_started_at_ms must be recorded' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require scenario start timestamp evidence'
+require 'events must be strictly ordered by at_ms' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require ordered lifecycle events'
+require 'selected_resource_ura must bind selected Resource URA' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must bind lifecycle events to selected Resource URA'
+require 'session_id must bind session_id' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must bind lifecycle events to the session'
+require 'PROCESS_STOPPED_UNCLEAN must occur before DAEMON_RESTARTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require daemon restart event ordering'
+require 'DAEMON_RESTARTED must occur before SESSION_REHYDRATED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require session rehydration after daemon restart'
 require 'PLUGIN_WORKER_RESTARTED' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must inspect plugin worker restart evidence'
+require 'PLUGIN_WORKER_CRASHED must occur before PLUGIN_WORKER_RESTARTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require plugin worker restart event ordering'
+require 'PLUGIN_WORKER_RESTARTED must occur before TARGET_MONITOR_RESTARTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require target monitor restart after plugin worker restart'
 require 'TERMINAL_RECEIPT_REPLAYED' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must inspect terminal receipt replay evidence'
+require 'END_SESSION_ACCEPTED must occur before PROCESS_STOPPED_UNCLEAN' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require end-session acceptance before crash'
+require 'PROCESS_STOPPED_UNCLEAN must occur before TERMINAL_RECEIPT_REPLAYED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require terminal receipt replay after crash'
 require 'STALE_CONTROL_SOCKET_DETECTED' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must inspect stale control socket evidence'
 require 'STALE_INVOCATION_SOCKET_DETECTED' "$CRASH_RESTART_RECOVERY" \
@@ -903,12 +923,24 @@ require 'must remain stable across restart' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must reject public session replacement'
 require 'watch_events_reattached' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must require watch_events reattachment'
+require 'watch_events_reattached_at_ms must be after SESSION_REHYDRATED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require watch_events reattachment after rehydration'
 require 'media_reattached' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must require media reattachment'
+require 'media_reattached_at_ms must be after watch_events_reattached_at_ms' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require media reattachment after watch_events'
 require 'frames_rendered_after_restart must be positive' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must require post-restart rendered media'
+require 'first_frame_rendered_after_restart_at_ms must be after media_reattached_at_ms' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require rendered media after media reattachment'
+require 'first_frame_rendered_after_worker_restart_at_ms must be after TARGET_MONITOR_RESTARTED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require rendered media after plugin worker recovery'
 require 'terminal receipt id must be replayed' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must require original terminal receipt replay'
+require 'show_session_after_restart_observed_at_ms must be after TERMINAL_RECEIPT_REPLAYED' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require public show_session after receipt replay'
+require 'endpoint_ready_at_ms must be after DAEMON_READY_AFTER_RESTART' "$CRASH_RESTART_RECOVERY" \
+  'crash/restart recovery verifier must require endpoint readiness after daemon-ready event'
 require 'manual_cleanup_required.*False|manual_cleanup_required.*false' "$CRASH_RESTART_RECOVERY" \
   'crash/restart recovery verifier must reject manual stale-socket cleanup'
 require 'remote_desktop\.create_session' "$CRASH_RESTART_RECOVERY" \
