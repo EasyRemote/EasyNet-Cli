@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use rtc::media::Sample;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::PeerConnection;
 
@@ -32,6 +32,250 @@ use crate::daemon::plugins::remote_desktop::target::{
 };
 use crate::daemon::plugins::remote_desktop::transport::webrtc_media::DirectWebRtcMediaExecution;
 use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
+
+const NATIVE_WEBRTC_VIDEO_CODEC: &str = "h264";
+const NATIVE_WEBRTC_VIDEO_PAYLOAD_CONTENT_TYPE: &str = "video/h264; stream-format=annexb";
+const NATIVE_WEBRTC_VIDEO_TRANSPORT: &str = "webrtc";
+const NATIVE_MEDIA_PIPELINE_STATS_CONTRACT: &str = "remoteapp_media_pipeline_stats_v1";
+
+#[derive(Debug, Clone, Copy)]
+struct NativeMediaDropCounters {
+    input_dropped_frames: u64,
+    output_dropped_units: u64,
+    rtp_stale_units_dropped: u64,
+    rtp_sender_backpressure_drops: u64,
+}
+
+impl NativeMediaDropCounters {
+    fn total_frames_dropped(self) -> u64 {
+        self.input_dropped_frames
+            .saturating_add(self.output_dropped_units)
+            .saturating_add(self.rtp_stale_units_dropped)
+            .saturating_add(self.rtp_sender_backpressure_drops)
+    }
+}
+
+struct NativeMediaStatsSample<'a> {
+    session_id: &'a str,
+    transport_epoch: TransportEpoch,
+    selected_resource_ura: &'a str,
+    media_source_epoch: u64,
+    config: &'a BuiltinH264Config,
+    width: usize,
+    height: usize,
+    stream_elapsed: Duration,
+    sampled_at_ms: u64,
+    current_bitrate_kbps: u32,
+    min_bitrate_kbps: u32,
+    written_units: u64,
+    written_keyframes: u64,
+    written_bytes: u64,
+    drop_counters: NativeMediaDropCounters,
+    queued_units: usize,
+    in_flight_frames: usize,
+    max_in_flight_frames: usize,
+    submitted_frames: u64,
+    emitted_units: u64,
+    configured_bitrate_kbps: u32,
+    adaptation_events: Vec<Value>,
+    webrtc_stats: Value,
+    latency_stats: Value,
+    terminal: bool,
+}
+
+impl NativeMediaStatsSample<'_> {
+    fn to_json(self) -> Value {
+        let adaptation_event_types: Vec<Value> = self
+            .adaptation_events
+            .iter()
+            .filter_map(|event| event.get("event_type").and_then(Value::as_str))
+            .map(|event_type| json!(event_type))
+            .collect();
+        let frames_dropped = self.drop_counters.total_frames_dropped();
+        let mut payload = Map::new();
+        payload.insert(
+            "contract".to_string(),
+            json!(NATIVE_MEDIA_PIPELINE_STATS_CONTRACT),
+        );
+        payload.insert("path".to_string(), json!("native_webrtc"));
+        payload.insert(
+            "media_pipeline_id".to_string(),
+            json!(self.config.backend.backend_id()),
+        );
+        payload.insert(
+            "selected_resource_ura".to_string(),
+            json!(self.selected_resource_ura),
+        );
+        payload.insert("session_id".to_string(), json!(self.session_id));
+        payload.insert(
+            "transport_epoch".to_string(),
+            json!(self.transport_epoch.value()),
+        );
+        payload.insert(
+            "media_source_epoch".to_string(),
+            json!(self.media_source_epoch),
+        );
+        payload.insert("sampled_at_ms".to_string(), json!(self.sampled_at_ms));
+        payload.insert("terminal".to_string(), json!(self.terminal));
+        payload.insert(
+            "backend_id".to_string(),
+            json!(self.config.backend.backend_id()),
+        );
+        payload.insert(
+            "capture_api".to_string(),
+            json!(self.config.backend.capture_api()),
+        );
+        payload.insert(
+            "encoder_name".to_string(),
+            json!(self.config.backend.encoder()),
+        );
+        payload.insert("carrier".to_string(), json!(self.config.backend.carrier()));
+        payload.insert("video_codec".to_string(), json!(NATIVE_WEBRTC_VIDEO_CODEC));
+        payload.insert("codec_negotiated".to_string(), json!(true));
+        payload.insert(
+            "payload_content_type".to_string(),
+            json!(NATIVE_WEBRTC_VIDEO_PAYLOAD_CONTENT_TYPE),
+        );
+        payload.insert(
+            "video_transport".to_string(),
+            json!(NATIVE_WEBRTC_VIDEO_TRANSPORT),
+        );
+        payload.insert(
+            "requested_fps".to_string(),
+            json!(self.config.requested_fps),
+        );
+        payload.insert("effective_fps".to_string(), json!(self.config.fps));
+        payload.insert("target_fps".to_string(), json!(self.config.fps));
+        payload.insert(
+            "measured_fps".to_string(),
+            json!(measured_fps(self.written_units, self.stream_elapsed)),
+        );
+        payload.insert(
+            "target_bitrate_kbps".to_string(),
+            json!(self.current_bitrate_kbps),
+        );
+        payload.insert(
+            "configured_target_bitrate_kbps".to_string(),
+            json!(self.config.bitrate_kbps),
+        );
+        payload.insert(
+            "observed_bitrate_kbps".to_string(),
+            json!(observed_bitrate_kbps(
+                self.written_bytes,
+                self.stream_elapsed
+            )),
+        );
+        payload.insert(
+            "keyframe_interval_frames".to_string(),
+            json!(self.config.keyframe_interval_frames),
+        );
+        payload.insert("width".to_string(), json!(self.width));
+        payload.insert("height".to_string(), json!(self.height));
+        payload.insert("frames_encoded".to_string(), json!(self.emitted_units));
+        payload.insert("rtp_units_written".to_string(), json!(self.written_units));
+        payload.insert(
+            "rtp_keyframes_written".to_string(),
+            json!(self.written_keyframes),
+        );
+        payload.insert("rtp_bytes_written".to_string(), json!(self.written_bytes));
+        payload.insert("frames_dropped".to_string(), json!(frames_dropped));
+        payload.insert(
+            "input_dropped_frames".to_string(),
+            json!(self.drop_counters.input_dropped_frames),
+        );
+        payload.insert(
+            "output_dropped_units".to_string(),
+            json!(self.drop_counters.output_dropped_units),
+        );
+        payload.insert(
+            "rtp_stale_units_dropped".to_string(),
+            json!(self.drop_counters.rtp_stale_units_dropped),
+        );
+        payload.insert(
+            "rtp_sender_backpressure_drops".to_string(),
+            json!(self.drop_counters.rtp_sender_backpressure_drops),
+        );
+        payload.insert(
+            "max_frame_queue_depth".to_string(),
+            json!(self.config.max_frame_queue_depth),
+        );
+        payload.insert("queued_units".to_string(), json!(self.queued_units));
+        payload.insert("in_flight_frames".to_string(), json!(self.in_flight_frames));
+        payload.insert(
+            "max_in_flight_frames".to_string(),
+            json!(self.max_in_flight_frames),
+        );
+        payload.insert("drop_stale_frames".to_string(), json!(true));
+        payload.insert(
+            "drop_policy".to_string(),
+            json!("bounded_queue_drop_stale_frames"),
+        );
+        payload.insert(
+            "backpressure_policy".to_string(),
+            json!("drop_frame_and_adapt_bitrate"),
+        );
+        payload.insert(
+            "adaptation_algorithm".to_string(),
+            json!("native_encoder_feedback"),
+        );
+        payload.insert(
+            "adaptation_events".to_string(),
+            json!(self.adaptation_events),
+        );
+        payload.insert(
+            "adaptation_event_types".to_string(),
+            json!(adaptation_event_types),
+        );
+        payload.insert("audio_codec".to_string(), Value::Null);
+        payload.insert("audio_ready".to_string(), json!(false));
+        payload.insert("host_audio_not_implemented".to_string(), json!(true));
+        payload.insert(
+            "audio_blocker".to_string(),
+            json!("host_audio_not_implemented"),
+        );
+        payload.insert(
+            "adaptive_bitrate".to_string(),
+            json!({
+                "current_kbps": self.current_bitrate_kbps,
+                "target_kbps": self.config.bitrate_kbps,
+                "min_kbps": self.min_bitrate_kbps,
+            }),
+        );
+        payload.insert("webrtc_stats".to_string(), self.webrtc_stats);
+        payload.insert("latency_stats".to_string(), self.latency_stats);
+        payload.insert(
+            "encoder_stats".to_string(),
+            json!({
+                "submitted_frames": self.submitted_frames,
+                "emitted_units": self.emitted_units,
+                "queued_units": self.queued_units,
+                "in_flight_frames": self.in_flight_frames,
+                "max_in_flight_frames": self.max_in_flight_frames,
+                "configured_bitrate_kbps": self.configured_bitrate_kbps,
+                "input_dropped_frames": self.drop_counters.input_dropped_frames,
+                "output_dropped_units": self.drop_counters.output_dropped_units,
+            }),
+        );
+        Value::Object(payload)
+    }
+}
+
+fn measured_fps(written_units: u64, elapsed: Duration) -> f64 {
+    let elapsed_ms = elapsed.as_millis();
+    if elapsed_ms == 0 || written_units == 0 {
+        return 0.0;
+    }
+    let fps = written_units as f64 * 1000.0 / elapsed_ms as f64;
+    (fps * 10.0).round() / 10.0
+}
+
+fn observed_bitrate_kbps(written_bytes: u64, elapsed: Duration) -> u64 {
+    let elapsed_ms = elapsed.as_millis();
+    if elapsed_ms == 0 || written_bytes == 0 {
+        return 0;
+    }
+    ((written_bytes as u128 * 8).saturating_add(elapsed_ms.saturating_sub(1)) / elapsed_ms) as u64
+}
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
 ///
@@ -117,12 +361,16 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     )?;
     let mut active_media_source_epoch = target_binding.media_source_epoch();
 
+    let stream_started_at = Instant::now();
     let frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
     let mut written_units = 0_u64;
     let mut written_keyframes = 0_u64;
     let mut written_bytes = 0_u64;
     let mut rtp_stale_units_dropped = 0_u64;
     let mut rtp_sender_backpressure_drops = 0_u64;
+    let mut last_reported_frames_dropped = 0_u64;
+    let mut last_reported_backpressure_drops = 0_u64;
+    let mut adaptation_event_sequence = 0_u64;
     let mut last_stats_at = Instant::now();
     let mut bitrate_controller = NativeAdaptiveBitrate::new(config.bitrate_kbps);
     let mut latency_stats = NativeLatencyStats::default();
@@ -189,6 +437,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             let stats = encoder.stats();
             let (webrtc_stats, available_outgoing_bitrate_bps) =
                 webrtc_stats_snapshot(peer_connection).await;
+            let sampled_at_ms = now_ms();
+            let previous_bitrate_kbps = bitrate_controller.current_kbps;
             if let Some(next_bitrate) = bitrate_controller.update(
                 stats.input_dropped_frames,
                 stats
@@ -199,6 +449,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 stats.in_flight_frames,
                 available_outgoing_bitrate_bps,
             ) {
+                adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
                 if let Err(err) = encoder.set_bitrate_kbps(next_bitrate) {
                     crate::op_event!(
                         component = remote_desktop,
@@ -207,39 +458,108 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     );
                 }
             }
-            execution.record_pipeline_stats(json!({
-                "path": "native_webrtc",
-                "backend_id": config.backend.backend_id(),
-                "capture_api": config.backend.capture_api(),
-                "encoder_name": config.backend.encoder(),
-                "carrier": config.backend.carrier(),
-                "target_fps": fps,
-                "target_bitrate_kbps": config.bitrate_kbps,
-                "width": req_width,
-                "height": req_height,
-                "adaptive_bitrate": {
-                    "current_kbps": bitrate_controller.current_kbps,
-                    "target_kbps": bitrate_controller.target_kbps,
-                    "min_kbps": bitrate_controller.min_kbps,
-                },
-                "webrtc_stats": webrtc_stats,
-                "latency_stats": latency_stats.to_json(),
-                "rtp_units_written": written_units,
-                "rtp_keyframes_written": written_keyframes,
-                "rtp_bytes_written": written_bytes,
-                "rtp_stale_units_dropped": rtp_stale_units_dropped,
-                "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
-                "encoder_stats": {
-                    "submitted_frames": stats.submitted_frames,
-                    "input_dropped_frames": stats.input_dropped_frames,
-                    "output_dropped_units": stats.output_dropped_units,
-                    "emitted_units": stats.emitted_units,
-                    "queued_units": stats.queued_units,
-                    "in_flight_frames": stats.in_flight_frames,
-                    "max_in_flight_frames": stats.max_in_flight_frames,
-                    "configured_bitrate_kbps": stats.configured_bitrate_kbps,
-                },
-            }));
+            let drop_counters = NativeMediaDropCounters {
+                input_dropped_frames: stats.input_dropped_frames,
+                output_dropped_units: stats.output_dropped_units,
+                rtp_stale_units_dropped,
+                rtp_sender_backpressure_drops,
+            };
+            let total_frames_dropped = drop_counters.total_frames_dropped();
+            let frame_drop_delta =
+                total_frames_dropped.saturating_sub(last_reported_frames_dropped);
+            let backpressure_delta =
+                rtp_sender_backpressure_drops.saturating_sub(last_reported_backpressure_drops);
+            let mut adaptation_events = Vec::new();
+            if bitrate_controller.current_kbps != previous_bitrate_kbps {
+                adaptation_events.push(native_media_adaptation_event(
+                    adaptation_event_sequence,
+                    if bitrate_controller.current_kbps < previous_bitrate_kbps {
+                        "bitrate_downshift"
+                    } else {
+                        "bitrate_upshift"
+                    },
+                    sampled_at_ms,
+                    execution.session_id(),
+                    execution.epoch(),
+                    target_binding,
+                    active_media_source_epoch,
+                    config.backend.backend_id(),
+                    json!({
+                        "algorithm": "native_encoder_feedback",
+                        "previous_bitrate_kbps": previous_bitrate_kbps,
+                        "next_bitrate_kbps": bitrate_controller.current_kbps,
+                        "available_outgoing_bitrate_bps": available_outgoing_bitrate_bps,
+                    }),
+                ));
+            }
+            if backpressure_delta > 0 {
+                adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
+                adaptation_events.push(native_media_adaptation_event(
+                    adaptation_event_sequence,
+                    "backpressure_detected",
+                    sampled_at_ms,
+                    execution.session_id(),
+                    execution.epoch(),
+                    target_binding,
+                    active_media_source_epoch,
+                    config.backend.backend_id(),
+                    json!({
+                        "algorithm": "native_encoder_feedback",
+                        "delta": backpressure_delta,
+                        "total": rtp_sender_backpressure_drops,
+                    }),
+                ));
+            }
+            if frame_drop_delta > 0 {
+                adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
+                adaptation_events.push(native_media_adaptation_event(
+                    adaptation_event_sequence,
+                    "frame_drop",
+                    sampled_at_ms,
+                    execution.session_id(),
+                    execution.epoch(),
+                    target_binding,
+                    active_media_source_epoch,
+                    config.backend.backend_id(),
+                    json!({
+                        "algorithm": "native_encoder_feedback",
+                        "delta": frame_drop_delta,
+                        "total": total_frames_dropped,
+                    }),
+                ));
+            }
+            last_reported_frames_dropped = total_frames_dropped;
+            last_reported_backpressure_drops = rtp_sender_backpressure_drops;
+            execution.record_pipeline_stats(
+                NativeMediaStatsSample {
+                    session_id: execution.session_id(),
+                    transport_epoch: execution.epoch(),
+                    selected_resource_ura: target_binding.subject_ura(),
+                    media_source_epoch: active_media_source_epoch,
+                    config,
+                    width: req_width,
+                    height: req_height,
+                    stream_elapsed: stream_started_at.elapsed(),
+                    sampled_at_ms,
+                    current_bitrate_kbps: bitrate_controller.current_kbps,
+                    min_bitrate_kbps: bitrate_controller.min_kbps,
+                    written_units,
+                    written_keyframes,
+                    written_bytes,
+                    drop_counters,
+                    queued_units: stats.queued_units,
+                    in_flight_frames: stats.in_flight_frames,
+                    max_in_flight_frames: stats.max_in_flight_frames,
+                    submitted_frames: stats.submitted_frames,
+                    emitted_units: stats.emitted_units,
+                    configured_bitrate_kbps: stats.configured_bitrate_kbps,
+                    adaptation_events,
+                    webrtc_stats,
+                    latency_stats: latency_stats.to_json(),
+                    terminal: false,
+                }
+                .to_json(),
+            );
             last_stats_at = Instant::now();
         }
         tokio::select! {
@@ -250,34 +570,69 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     capture.stop();
     let stats = encoder.stats();
     let (webrtc_stats, _) = webrtc_stats_snapshot(peer_connection).await;
-    execution.record_pipeline_stats(json!({
-        "path": "native_webrtc",
-        "backend_id": config.backend.backend_id(),
-        "terminal": true,
-        "rtp_units_written": written_units,
-        "rtp_keyframes_written": written_keyframes,
-        "rtp_bytes_written": written_bytes,
-        "rtp_stale_units_dropped": rtp_stale_units_dropped,
-        "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
-        "adaptive_bitrate": {
-            "current_kbps": bitrate_controller.current_kbps,
-            "target_kbps": bitrate_controller.target_kbps,
-            "min_kbps": bitrate_controller.min_kbps,
-        },
-        "webrtc_stats": webrtc_stats,
-        "latency_stats": latency_stats.to_json(),
-        "encoder_stats": {
-            "submitted_frames": stats.submitted_frames,
-            "input_dropped_frames": stats.input_dropped_frames,
-            "output_dropped_units": stats.output_dropped_units,
-            "emitted_units": stats.emitted_units,
-            "queued_units": stats.queued_units,
-            "in_flight_frames": stats.in_flight_frames,
-            "max_in_flight_frames": stats.max_in_flight_frames,
-            "configured_bitrate_kbps": stats.configured_bitrate_kbps,
-        },
-    }));
+    execution.record_pipeline_stats(
+        NativeMediaStatsSample {
+            session_id: execution.session_id(),
+            transport_epoch: execution.epoch(),
+            selected_resource_ura: target_binding.subject_ura(),
+            media_source_epoch: active_media_source_epoch,
+            config,
+            width: req_width,
+            height: req_height,
+            stream_elapsed: stream_started_at.elapsed(),
+            sampled_at_ms: now_ms(),
+            current_bitrate_kbps: bitrate_controller.current_kbps,
+            min_bitrate_kbps: bitrate_controller.min_kbps,
+            written_units,
+            written_keyframes,
+            written_bytes,
+            drop_counters: NativeMediaDropCounters {
+                input_dropped_frames: stats.input_dropped_frames,
+                output_dropped_units: stats.output_dropped_units,
+                rtp_stale_units_dropped,
+                rtp_sender_backpressure_drops,
+            },
+            queued_units: stats.queued_units,
+            in_flight_frames: stats.in_flight_frames,
+            max_in_flight_frames: stats.max_in_flight_frames,
+            submitted_frames: stats.submitted_frames,
+            emitted_units: stats.emitted_units,
+            configured_bitrate_kbps: stats.configured_bitrate_kbps,
+            adaptation_events: Vec::new(),
+            webrtc_stats,
+            latency_stats: latency_stats.to_json(),
+            terminal: true,
+        }
+        .to_json(),
+    );
     Ok(())
+}
+
+fn native_media_adaptation_event(
+    sequence: u64,
+    event_type: &'static str,
+    observed_at_ms: u64,
+    session_id: &str,
+    transport_epoch: TransportEpoch,
+    target_binding: &RemoteAppTargetBinding,
+    media_source_epoch: u64,
+    media_pipeline_id: &str,
+    detail: Value,
+) -> Value {
+    json!({
+        "event_type": event_type,
+        "sequence": sequence,
+        "observed_at_ms": observed_at_ms,
+        "selected_resource_ura": target_binding.subject_ura(),
+        "session_id": session_id,
+        "transport_epoch": transport_epoch.value(),
+        "media_source_epoch": media_source_epoch,
+        "media_pipeline_id": media_pipeline_id,
+        "video_codec": NATIVE_WEBRTC_VIDEO_CODEC,
+        "video_transport": NATIVE_WEBRTC_VIDEO_TRANSPORT,
+        "audio_codec": Value::Null,
+        "detail": detail,
+    })
 }
 
 fn apply_pending_media_rebind(
@@ -336,6 +691,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::constants::{
         direct_webrtc_endpoint_ura, TRANSPORT_WEBRTC,
     };
+    use crate::daemon::plugins::remote_desktop::media::MACOS_SCK_VIDEOTOOLBOX_BACKEND;
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::target::{
         AppWindowSetProof, TargetGeometry, TargetResolutionError,
@@ -427,5 +783,130 @@ mod tests {
                 json!(pending.media_source_epoch())
             );
         });
+    }
+
+    #[test]
+    fn native_media_pipeline_stats_project_product_evidence_contract() {
+        let init = test_application_session_init(
+            "rd-native-media-stats",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        );
+        let config = BuiltinH264Config {
+            backend: MACOS_SCK_VIDEOTOOLBOX_BACKEND,
+            requested_fps: 144,
+            fps: 60,
+            bitrate_kbps: 6_000,
+            max_frame_queue_depth: 3,
+            keyframe_interval_frames: 30,
+        };
+        let adaptation_event = native_media_adaptation_event(
+            7,
+            "bitrate_downshift",
+            1_700,
+            "rd-native-media-stats",
+            TransportEpoch::new(4),
+            &init.target_binding,
+            init.target_binding.media_source_epoch(),
+            config.backend.backend_id(),
+            json!({
+                "algorithm": "native_encoder_feedback",
+                "previous_bitrate_kbps": 6000,
+                "next_bitrate_kbps": 4500,
+            }),
+        );
+
+        let stats = NativeMediaStatsSample {
+            session_id: "rd-native-media-stats",
+            transport_epoch: TransportEpoch::new(4),
+            selected_resource_ura: init.target_binding.subject_ura(),
+            media_source_epoch: init.target_binding.media_source_epoch(),
+            config: &config,
+            width: 1512,
+            height: 982,
+            stream_elapsed: Duration::from_secs(2),
+            sampled_at_ms: 1_700,
+            current_bitrate_kbps: 4_500,
+            min_bitrate_kbps: 500,
+            written_units: 120,
+            written_keyframes: 4,
+            written_bytes: 1_250_000,
+            drop_counters: NativeMediaDropCounters {
+                input_dropped_frames: 1,
+                output_dropped_units: 2,
+                rtp_stale_units_dropped: 3,
+                rtp_sender_backpressure_drops: 4,
+            },
+            queued_units: 1,
+            in_flight_frames: 1,
+            max_in_flight_frames: 2,
+            submitted_frames: 126,
+            emitted_units: 122,
+            configured_bitrate_kbps: 4_500,
+            adaptation_events: vec![adaptation_event],
+            webrtc_stats: json!({
+                "selected_candidate_pair": {
+                    "selected_route_class": "direct"
+                }
+            }),
+            latency_stats: json!({
+                "encode_submit_to_rtp_write": {
+                    "max_ms": 18
+                }
+            }),
+            terminal: false,
+        }
+        .to_json();
+
+        assert_eq!(
+            stats["contract"],
+            json!(NATIVE_MEDIA_PIPELINE_STATS_CONTRACT)
+        );
+        assert_eq!(
+            stats["media_pipeline_id"],
+            json!(config.backend.backend_id())
+        );
+        assert_eq!(
+            stats["selected_resource_ura"],
+            json!(init.target_binding.subject_ura())
+        );
+        assert_eq!(
+            stats["media_source_epoch"],
+            json!(init.target_binding.media_source_epoch())
+        );
+        assert_eq!(stats["session_id"], json!("rd-native-media-stats"));
+        assert_eq!(stats["transport_epoch"], json!(4));
+        assert_eq!(stats["video_codec"], json!("h264"));
+        assert_eq!(
+            stats["payload_content_type"],
+            json!("video/h264; stream-format=annexb")
+        );
+        assert_eq!(stats["video_transport"], json!("webrtc"));
+        assert_eq!(stats["requested_fps"], json!(144));
+        assert_eq!(stats["effective_fps"], json!(60));
+        assert_eq!(stats["target_fps"], json!(60));
+        assert_eq!(stats["measured_fps"], json!(60.0));
+        assert_eq!(stats["target_bitrate_kbps"], json!(4_500));
+        assert_eq!(stats["observed_bitrate_kbps"], json!(5_000));
+        assert_eq!(stats["frames_dropped"], json!(10));
+        assert_eq!(
+            stats["drop_policy"],
+            json!("bounded_queue_drop_stale_frames")
+        );
+        assert_eq!(
+            stats["adaptation_event_types"],
+            json!(["bitrate_downshift"])
+        );
+        assert_eq!(
+            stats["adaptation_events"][0]["selected_resource_ura"],
+            json!(init.target_binding.subject_ura())
+        );
+        assert_eq!(
+            stats["adaptation_events"][0]["media_pipeline_id"],
+            json!(config.backend.backend_id())
+        );
+        assert_eq!(stats["host_audio_not_implemented"], json!(true));
+        assert_eq!(stats["audio_ready"], json!(false));
+        assert!(stats["audio_codec"].is_null());
+        assert_eq!(stats["terminal"], json!(false));
     }
 }

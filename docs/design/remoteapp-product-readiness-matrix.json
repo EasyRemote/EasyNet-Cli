@@ -128,6 +128,7 @@
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",
         "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate WebRTC app/window display-fallback rejection and native plugin catalogue implementation tests",
+        "native ScreenCaptureKit + VideoToolbox WebRTC media loop emits remoteapp_media_pipeline_stats_v1 stats bound to selected Resource URA, session id, transport epoch, media source epoch, media pipeline id, negotiated H.264 payload content type, WebRTC transport, requested/effective/measured FPS, target/observed bitrate, bounded queue stale-frame drop policy, and drop/backpressure/adaptation events without claiming host audio readiness",
         "remoteapp-media-adaptation-e2e.sh verifier requires real audio/video artifacts with cross-scenario degraded target/observed bitrate delta, FPS/drop delta, backpressure frame-drop delta versus baseline, same target/pipeline/codec comparability, adaptation events bound to the scenario Resource/session/pipeline, impairment-time ordering, and decoded media render-probe payload evidence after adaptation events",
         "remote_desktop.attach plugin manifest and compiled registration declare metadata_json_plus_binary bidi framing instead of JSON-only framing, while preserving canonical Invocation/session metadata outside raw media payloads"
       ],

@@ -29,6 +29,7 @@ CRASH_RESTART_RECOVERY="$ROOT/tools/scripts/remoteapp-crash-restart-recovery-e2e
 LIFECYCLE_HARNESS_LIB="$ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_EVENTS="$ROOT/plugins/remote-desktop/src/session_events.rs"
+NATIVE_WEBRTC_MEDIA="$ROOT/plugins/remote-desktop/src/transport/webrtc_native_media.rs"
 TARGET_TRACKING="$ROOT/plugins/remote-desktop/src/target_tracking.rs"
 SESSION_RECOVERY="$ROOT/plugins/remote-desktop/src/session_recovery.rs"
 SESSION_STATE="$ROOT/plugins/remote-desktop/src/session_state.rs"
@@ -96,6 +97,7 @@ reject() {
 [[ -f "$CRASH_RESTART_RECOVERY" ]] || fail "missing RemoteApp crash/restart recovery evidence verifier"
 [[ -f "$LIFECYCLE_HARNESS_LIB" ]] || fail "missing RemoteApp lifecycle harness helper library"
 [[ -f "$SESSION" ]] || fail "missing RemoteApp session aggregate"
+[[ -f "$NATIVE_WEBRTC_MEDIA" ]] || fail "missing RemoteApp native WebRTC media loop"
 [[ -f "$TARGET_TRACKING" ]] || fail "missing RemoteApp target tracking state machine"
 [[ -f "$SESSION_RECOVERY" ]] || fail "missing RemoteApp session recovery snapshot store"
 [[ -f "$SESSION_STATE" ]] || fail "missing RemoteApp session lifecycle state machine"
@@ -913,6 +915,24 @@ require 'media_pipeline_stats_projects_target_binding_context' "$SESSION_EVENTS"
   'RemoteApp media pipeline stats projection must carry selected target binding evidence'
 require 'latest\["payload"\]\["target_binding"\]\["subject_ura"\]' "$SESSION" \
   'RemoteApp media pipeline stats event-log rows must preserve selected Resource evidence'
+require 'remoteapp_media_pipeline_stats_v1' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media loop must emit product-shaped media pipeline stats'
+require 'selected_resource_ura' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must bind the selected Resource URA'
+require 'media_source_epoch' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must bind the media source epoch'
+require 'payload_content_type' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must expose negotiated payload content type'
+require 'measured_fps' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must expose measured FPS'
+require 'observed_bitrate_kbps' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must expose observed bitrate'
+require 'bounded_queue_drop_stale_frames' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must expose the bounded stale-frame drop policy'
+require 'native_media_adaptation_event' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media loop must bind adaptation events to session and pipeline context'
+require 'host_audio_not_implemented' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must keep host-audio unsupported state explicit'
 require 'scenario_started_at_ms must be recorded' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require scenario start timestamp evidence'
 require 'impairment_applied_at_ms must be after scenario_started_at_ms' "$MEDIA_ADAPTATION" \
