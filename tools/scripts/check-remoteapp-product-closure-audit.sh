@@ -647,6 +647,8 @@ require 'local_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs
   'native WebRTC stats must project selected local candidate type for network fallback evidence'
 require 'remote_candidate_type' "$ROOT/plugins/remote-desktop/src/media/native.rs" \
   'native WebRTC stats must project selected remote candidate type for network fallback evidence'
+require 'selected_route_class' "$ROOT/plugins/remote-desktop/src/media/native.rs" \
+  'native WebRTC stats must project selected route class for network fallback evidence'
 require '"protocol"' "$ROOT/plugins/remote-desktop/src/media/native.rs" \
   'native WebRTC stats must project selected candidate pair protocol for network fallback evidence'
 require 'remote_desktop\.create_session' "$NETWORK_FALLBACK" \

@@ -259,6 +259,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn webrtc_stats_snapshot(
                 "remote_candidate_id": pair.remote_candidate_id,
                 "local_candidate_type": candidate_type_value(local_candidate),
                 "remote_candidate_type": candidate_type_value(remote_candidate),
+                "selected_route_class": selected_candidate_route_class(local_candidate, remote_candidate),
                 "protocol": selected_candidate_protocol(local_candidate, remote_candidate),
                 "local_candidate_stats_found": local_candidate.is_some(),
                 "remote_candidate_stats_found": remote_candidate.is_some(),
@@ -313,6 +314,37 @@ fn candidate_type_value(candidate: Option<&RTCIceCandidateStats>) -> Option<Stri
     candidate
         .map(|stats| stats.candidate_type.to_string())
         .filter(|candidate_type| candidate_type != "Unspecified")
+}
+
+#[cfg(target_os = "macos")]
+fn selected_candidate_route_class(
+    local_candidate: Option<&RTCIceCandidateStats>,
+    remote_candidate: Option<&RTCIceCandidateStats>,
+) -> Option<&'static str> {
+    let candidate_types: Vec<_> = [local_candidate, remote_candidate]
+        .into_iter()
+        .flatten()
+        .filter_map(|candidate| candidate_type_value(Some(candidate)))
+        .collect();
+    if candidate_types
+        .iter()
+        .any(|candidate_type| candidate_type == "relay")
+    {
+        Some("relay")
+    } else if candidate_types
+        .iter()
+        .any(|candidate_type| matches!(candidate_type.as_str(), "srflx" | "prflx"))
+    {
+        Some("stun_srflx")
+    } else if !candidate_types.is_empty()
+        && candidate_types
+            .iter()
+            .all(|candidate_type| candidate_type == "host")
+    {
+        Some("direct")
+    } else {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -534,12 +566,48 @@ mod tests {
             selected_candidate_protocol(Some(&local), Some(&remote)),
             Some("udp".to_string())
         );
+        assert_eq!(
+            selected_candidate_route_class(Some(&local), Some(&remote)),
+            Some("relay")
+        );
     }
 
     #[test]
     fn selected_candidate_pair_route_evidence_does_not_guess_missing_stats() {
         assert_eq!(candidate_type_value(None), None);
+        assert_eq!(selected_candidate_route_class(None, None), None);
         assert_eq!(selected_candidate_protocol(None, None), None);
+    }
+
+    #[test]
+    fn selected_candidate_pair_route_class_distinguishes_direct_and_stun() {
+        let local_host = ice_candidate_stat(
+            "local-host",
+            RTCStatsType::LocalCandidate,
+            RTCIceCandidateType::Host,
+            "udp",
+        );
+        let remote_host = ice_candidate_stat(
+            "remote-host",
+            RTCStatsType::RemoteCandidate,
+            RTCIceCandidateType::Host,
+            "udp",
+        );
+        let remote_srflx = ice_candidate_stat(
+            "remote-srflx",
+            RTCStatsType::RemoteCandidate,
+            RTCIceCandidateType::Srflx,
+            "udp",
+        );
+
+        assert_eq!(
+            selected_candidate_route_class(Some(&local_host), Some(&remote_host)),
+            Some("direct")
+        );
+        assert_eq!(
+            selected_candidate_route_class(Some(&local_host), Some(&remote_srflx)),
+            Some("stun_srflx")
+        );
     }
 
     #[test]
