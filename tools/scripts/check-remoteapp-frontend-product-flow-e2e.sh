@@ -20,6 +20,9 @@ FRONTEND_PROTOCOL="$FRONTEND_ROOT/src/lib/api/remote-desktop-protocol.ts"
 FRONTEND_BROWSER_RUNNER="$FRONTEND_ROOT/scripts/remoteapp-browser-lifecycle.mjs"
 REMOTEAPP_NETWORK="$ROOT/plugins/remote-desktop/src/network.rs"
 REMOTEAPP_TRANSPORT_VIEW="$ROOT/plugins/remote-desktop/src/view_transport.rs"
+BUILTIN_PLUGIN_PACKAGE="$ROOT/src/daemon/plugins/package.rs"
+REMOTEAPP_REGISTRATION="$ROOT/plugins/remote-desktop/src/registration.rs"
+BROWSER_REGISTRATION="$ROOT/plugins/browser/src/registration.rs"
 AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
 
@@ -85,6 +88,9 @@ require_order() {
 [[ -f "$FRONTEND_BROWSER_RUNNER" ]] || fail "missing real frontend RemoteApp browser lifecycle runner"
 [[ -f "$REMOTEAPP_NETWORK" ]] || fail "missing RemoteApp network route model"
 [[ -f "$REMOTEAPP_TRANSPORT_VIEW" ]] || fail "missing RemoteApp transport view projection"
+[[ -f "$BUILTIN_PLUGIN_PACKAGE" ]] || fail "missing builtin plugin package adapter"
+[[ -f "$REMOTEAPP_REGISTRATION" ]] || fail "missing RemoteApp builtin registration"
+[[ -f "$BROWSER_REGISTRATION" ]] || fail "missing Browser builtin registration"
 [[ -f "$AUDIT" ]] || fail "missing RemoteApp product readiness audit"
 [[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
 
@@ -92,6 +98,12 @@ bash "$HARNESS" --self-test >/dev/null
 bash "$BROWSER_LIFECYCLE" --self-test >/dev/null
 bash "$CROSS_DEVICE_SMOKE" --self-test >/dev/null
 bash "$HUB_API_PREFLIGHT" --self-test >/dev/null
+require 'with_bidi_wire_kind\(plugin_bidi_wire_kind_to_descriptor\(bidi_wire_kind\)\)' "$BUILTIN_PLUGIN_PACKAGE" \
+  'builtin plugin registry manifests must preserve their typed bidi wire contract'
+require 'attach_registry_manifest_preserves_metadata_binary_bidi_wire_kind' "$REMOTEAPP_REGISTRATION" \
+  'RemoteApp registration must test the live registry manifest metadata-binary projection'
+require 'manifest\.bidi_wire_kind\(\)' "$BROWSER_REGISTRATION" \
+  'Browser registration must test the live registry manifest JSON-frame projection'
 require 'real_browser_tauri_lifecycle' "$BROWSER_LIFECYCLE" \
   'Browser/Tauri lifecycle verifier must require real frontend lifecycle proof mode'
 require 'component_mock.*False|component_mock.*false' "$BROWSER_LIFECYCLE" \

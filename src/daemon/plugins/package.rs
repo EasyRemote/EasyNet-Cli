@@ -226,6 +226,14 @@ impl BuiltinPluginAbilitySpec {
                 ability: self.name.to_string(),
                 reason: source.to_string(),
             })?;
+        if let Some(bidi_wire_kind) = self.bidi_wire_kind {
+            manifest = manifest
+                .with_bidi_wire_kind(plugin_bidi_wire_kind_to_descriptor(bidi_wire_kind))
+                .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                    ability: self.name.to_string(),
+                    reason: source.to_string(),
+                })?;
+        }
         if !self.subject_ura_kinds.is_empty() {
             manifest = manifest
                 .with_subject_scope(

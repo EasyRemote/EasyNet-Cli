@@ -523,6 +523,23 @@ mod tests {
     }
 
     #[test]
+    fn attach_registry_manifest_preserves_metadata_binary_bidi_wire_kind() {
+        let attach = compiled_ability_bindings()
+            .into_iter()
+            .find(|binding| binding.spec.name == ABILITY_ATTACH_SESSION)
+            .expect("remote desktop attach binding");
+        let manifest = attach
+            .spec
+            .to_registry_manifest()
+            .expect("remote desktop attach registry manifest");
+
+        assert_eq!(
+            manifest.bidi_wire_kind(),
+            Some(crate::daemon::ability::manifest::AbilityBidiWireKind::MetadataJsonPlusBinary)
+        );
+    }
+
+    #[test]
     fn every_remote_desktop_handler_binding_matches_spec_call_mode() {
         for binding in compiled_ability_bindings() {
             assert_eq!(
