@@ -998,6 +998,7 @@ impl RemoteDesktopSession {
             self.signaling.webrtc_ice_state(),
             self.signaling.webrtc_error(),
         );
+        let payload = session_events::with_target_binding_context(self.target.binding(), payload);
         self.push_event(event_type, payload);
     }
 
@@ -2108,6 +2109,55 @@ mod tests {
             latest["payload"]["stats"]["browser_stats"]["decode_avg_ms"],
             json!(5.0)
         );
+    }
+
+    #[test]
+    fn record_webrtc_diagnostic_projects_target_binding_context() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-webrtc-diagnostic-target",
+            "easynet:///r/acme/resource/window.webrtc-diagnostic",
+            vec!["webrtc".into()],
+        ));
+
+        session.record_webrtc_diagnostic(
+            "WEBRTC_DIAGNOSTIC",
+            Some("ice_disconnected".to_string()),
+            json!({
+                "ice_connection_state": "disconnected",
+                "peer_connection_state": "connecting",
+                "selected_candidate_pair": {
+                    "candidate_pair_id": "pair-webrtc-1"
+                }
+            }),
+        );
+
+        let event = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("WEBRTC_DIAGNOSTIC"))
+            .expect("WEBRTC_DIAGNOSTIC event");
+        assert_eq!(
+            event["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            event["binding_epoch"],
+            json!(session.target_binding().binding_epoch())
+        );
+        assert_eq!(
+            event["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
+        assert_eq!(
+            event["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            event["payload"]["diagnostic"]["selected_candidate_pair"]["candidate_pair_id"],
+            json!("pair-webrtc-1")
+        );
+        assert_eq!(event["payload"]["webrtc_ice_state"], json!("disconnected"));
+        assert_eq!(event["payload"]["webrtc_error"], json!("ice_disconnected"));
     }
 
     #[test]

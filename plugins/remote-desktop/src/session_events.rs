@@ -51,7 +51,10 @@ impl RemoteDesktopEventProjection {
     }
 }
 
-fn with_target_binding_context(binding: &RemoteAppTargetBinding, mut payload: Value) -> Value {
+pub(in crate::daemon::plugins::remote_desktop) fn with_target_binding_context(
+    binding: &RemoteAppTargetBinding,
+    mut payload: Value,
+) -> Value {
     let Value::Object(fields) = &mut payload else {
         return payload;
     };

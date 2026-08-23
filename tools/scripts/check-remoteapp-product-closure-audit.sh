@@ -824,6 +824,10 @@ require 'webrtc callee_device_ura must bind callee device' "$NETWORK_FALLBACK" \
   'network fallback verifier must bind WebRTC evidence to callee device'
 require 'webrtc route_kind must match scenario' "$NETWORK_FALLBACK" \
   'network fallback verifier must bind WebRTC evidence to route scenario'
+require 'record_webrtc_diagnostic_projects_target_binding_context' "$SESSION" \
+  'RemoteApp session tests must prove WebRTC diagnostic events carry selected target binding evidence'
+require 'with_target_binding_context\(self\.target\.binding\(\), payload\)' "$SESSION" \
+  'RemoteApp WebRTC diagnostic event path must attach selected target context before event-log commit'
 require 'selected_candidate_pair\.selected must be true' "$NETWORK_FALLBACK" \
   'network fallback verifier must require selected ICE pair evidence'
 require 'selected_candidate_pair\.nominated must be true' "$NETWORK_FALLBACK" \
