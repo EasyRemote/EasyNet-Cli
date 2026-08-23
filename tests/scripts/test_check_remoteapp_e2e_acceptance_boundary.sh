@@ -16,6 +16,7 @@ SESSION_TIMEOUT="$REPO_ROOT/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 SESSION_CANCEL="$REPO_ROOT/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 PERMISSION_REVOKE="$REPO_ROOT/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 SESSION_RESUME="$REPO_ROOT/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+LIFECYCLE_HARNESS_LIB="$REPO_ROOT/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
@@ -33,6 +34,7 @@ cp "$SESSION_TIMEOUT" "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e
 cp "$SESSION_CANCEL" "$SANDBOX/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 cp "$PERMISSION_REVOKE" "$SANDBOX/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 cp "$SESSION_RESUME" "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+cp "$LIFECYCLE_HARNESS_LIB" "$SANDBOX/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
@@ -48,6 +50,7 @@ chmod +x "$SANDBOX/tools/scripts/host-remoteapp-session-timeout-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-session-cancel-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-permission-revoke-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.sh"
+chmod +x "$SANDBOX/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-01 target picker freshness | live refresh returns known target |
 | E2E-02 permission subject correctness | invalid_argument for target Resource subjects |
@@ -93,7 +96,7 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh.good"
-perl -0pi -e 's/run_easynet ability bidi remote_desktop\.attach/echo skipped remote desktop attach bidi probe/' \
+perl -0pi -e 's/run_easynet ability bidi "\$ATTACH_ABILITY_URA"/echo skipped remote desktop attach bidi probe/' \
   "$SANDBOX/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp e2e acceptance checker accepted view-only input harness without public attach Bidi probe" >&2

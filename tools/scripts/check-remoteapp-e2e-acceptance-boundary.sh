@@ -176,8 +176,10 @@ require 'input_plane\.policy|input_plane.*policy' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must verify the WebRTC input plane policy'
 require 'input_scope_unsupported' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must prove key/pointer rejection uses input_scope_unsupported'
-require 'ability bidi remote_desktop\.attach' "$VIEW_ONLY_INPUT_SAFETY" \
-  'host view-only input E2E must exercise the public remote_desktop.attach InvokeBidi input path'
+require 'run_easynet ability bidi "\$ATTACH_ABILITY_URA"' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must exercise the public remote_desktop.attach InvokeBidi input path through the resolved Ability URA'
+require 'remote_desktop\.attach bidi Ability URA must resolve exactly once' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must resolve the public attach Ability URA before opening InvokeBidi'
 require 'client_sequence' "$VIEW_ONLY_INPUT_SAFETY" \
   'host view-only input E2E must send and verify client sequence telemetry'
 require 'client_sent_at_ms' "$VIEW_ONLY_INPUT_SAFETY" \

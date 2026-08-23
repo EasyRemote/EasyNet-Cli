@@ -103,8 +103,8 @@ RemoteApp ability names, host-local `permission_status`, selected Resource URA
 binding for session abilities, real browser/Tauri automation evidence source
 and strictly increasing `observed_at_ms` for every step, rejection of
 component-snapshot-only evidence, connected WebRTC state, attached media stream
-evidence, visible media element, positive rendered frame count, visible
-`media_pipeline_support`, visible input status with either applied-input
+evidence, visible media element, positive rendered frame count, visible `media_pipeline_support`,
+visible input status with either applied-input
 telemetry or explicit policy-block reason, and no product-complete claim. Its
 self-test only proves the contract validator; a live Browser/Tauri artifact is
 still required.
