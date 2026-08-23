@@ -67,10 +67,12 @@ Current frontend lifecycle evidence:
   timeout/cancel/revoke/resume lifecycle reports. It now also requires existing
   `evidence_json` artifacts for the domain verifier reports, explicit passed
   frontend product-flow steps for Browser/Tauri, cross-device,
-  permission-subject, and target-picker coverage, and non-empty observed
-  caller/provider device pairs with distinct device URAs in the cross-device
-  report. This gate is an aggregate completion guard, not a substitute for any
-  live domain artifact.
+  permission-subject, target-picker, window/application decoded-frame, and
+  window/application view-only-input coverage with `target_kind=both`, and
+  non-empty observed caller/provider device pairs with distinct device URAs in
+  the cross-device report. This gate is an aggregate completion guard, not a
+  substitute for any live domain artifact, and it rejects target-narrowed
+  frontend product-flow evidence.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:

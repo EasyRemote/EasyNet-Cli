@@ -348,10 +348,12 @@ stable `script` identity of each report so a wrong or shape-compatible artifact
 cannot stand in for the required domain verifier. It also requires domain
 reports to name an existing `evidence_json` artifact, requires the frontend
 product-flow report to expose passed Browser/Tauri, cross-device,
-permission-subject, and target-picker steps, and requires cross-device topology
-to include observed caller/provider device pairs with distinct device URAs. This
-gate is not itself new product evidence; it prevents partial or empty-shell
-evidence from being reported as full interactive desktop completion.
+permission-subject, target-picker, window/application decoded-frame, and
+window/application view-only-input steps with `target_kind=both`, and requires
+cross-device topology to include observed caller/provider device pairs with
+distinct device URAs. This gate is not itself new product evidence; it prevents
+partial, target-narrowed, or empty-shell evidence from being reported as full
+interactive desktop completion.
 
 ## Product closure matrix
 

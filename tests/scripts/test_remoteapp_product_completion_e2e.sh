@@ -37,6 +37,18 @@ grep -q "child verifier must not claim product completion" "$SCRIPT" || \
   fail "completion gate must reject child product-complete claims"
 grep -q "requires_evidence_json" "$SCRIPT" || \
   fail "completion gate must require live evidence_json artifacts"
+grep -q "expected_target_kind" "$SCRIPT" || \
+  fail "completion gate must require full product-flow target coverage"
+grep -q "target_kind is" "$SCRIPT" || \
+  fail "completion gate must reject product-flow reports that are not target_kind=both"
+grep -q "host-decoded-frame-window" "$SCRIPT" || \
+  fail "completion gate must require window decoded-frame product-flow evidence"
+grep -q "host-decoded-frame-application" "$SCRIPT" || \
+  fail "completion gate must require application decoded-frame product-flow evidence"
+grep -q "host-view-only-input-window" "$SCRIPT" || \
+  fail "completion gate must require window view-only input product-flow evidence"
+grep -q "host-view-only-input-application" "$SCRIPT" || \
+  fail "completion gate must require application view-only input product-flow evidence"
 grep -q "evidence_json path does not exist" "$SCRIPT" || \
   fail "completion gate must reject missing evidence_json artifacts"
 grep -q "required product-flow step" "$SCRIPT" || \
@@ -47,6 +59,8 @@ grep -q "self-test accepted missing evidence_json artifact" "$SCRIPT" || \
   fail "completion gate self-test must cover missing evidence_json artifacts"
 grep -q "self-test accepted missing frontend product-flow step" "$SCRIPT" || \
   fail "completion gate self-test must cover missing product-flow steps"
+grep -q "self-test accepted product-flow target_kind other than both" "$SCRIPT" || \
+  fail "completion gate self-test must cover product-flow target-kind narrowing"
 grep -q "self-test accepted missing observed cross-device pairs" "$SCRIPT" || \
   fail "completion gate self-test must cover missing observed cross-device pairs"
 grep -q "expected_script" "$SCRIPT" || \

@@ -75,12 +75,17 @@ required = [
         "id": "frontend_product_flow",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON",
         "expected_script": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
+        "expected_target_kind": "both",
         "coverage_keys": [],
         "required_steps": [
             "frontend-browser-lifecycle",
             "cross-device-product-smoke",
             "host-permission-subject",
             "host-target-picker-freshness",
+            "host-decoded-frame-window",
+            "host-decoded-frame-application",
+            "host-view-only-input-window",
+            "host-view-only-input-application",
         ],
         "evidence_contract_contains": [
             "Browser/Tauri RemoteApp lifecycle evidence",
@@ -244,6 +249,17 @@ for item in required:
         )
         check["errors"].append(message)
         add_error(item_id, message)
+    expected_target_kind = item.get("expected_target_kind")
+    if expected_target_kind:
+        check["expected_target_kind"] = expected_target_kind
+        check["observed_target_kind"] = report.get("target_kind")
+        if report.get("target_kind") != expected_target_kind:
+            message = (
+                f"target_kind is {report.get('target_kind')!r}, "
+                f"expected {expected_target_kind!r}"
+            )
+            check["errors"].append(message)
+            add_error(item_id, message)
     child_claim = report.get("product_complete_claim")
     if child_claim is True:
         message = "child verifier must not claim product completion"
@@ -455,6 +471,7 @@ report = {
     "coverage": coverage_by_id.get(item_id, {}),
 }
 if item_id == "frontend_product_flow":
+    report["target_kind"] = "both"
     report["evidence_contract"] = [
         "Browser/Tauri RemoteApp lifecycle evidence",
         "cross-device product smoke with distinct device URAs",
@@ -464,6 +481,10 @@ if item_id == "frontend_product_flow":
         {"name": "cross-device-product-smoke", "status": "passed"},
         {"name": "host-permission-subject", "status": "passed"},
         {"name": "host-target-picker-freshness", "status": "passed"},
+        {"name": "host-decoded-frame-window", "status": "passed"},
+        {"name": "host-decoded-frame-application", "status": "passed"},
+        {"name": "host-view-only-input-window", "status": "passed"},
+        {"name": "host-view-only-input-application", "status": "passed"},
     ]
 if item_id == "cross_device_smoke":
     report["topology"] = {
@@ -560,6 +581,36 @@ PY
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
     "$0" --check --out-dir "$tmp/missing-product-flow-step" >/dev/null 2>&1; then
     echo "self-test accepted missing frontend product-flow step" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
+
+  python3 - "$tmp/frontend_product_flow.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["target_kind"] = "window"
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_REPORT_JSON="$tmp/session_timeout.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_REPORT_JSON="$tmp/session_cancel.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_REPORT_JSON="$tmp/permission_revoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_REPORT_JSON="$tmp/session_resume.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/product-flow-window-only" >/dev/null 2>&1; then
+    echo "self-test accepted product-flow target_kind other than both" >&2
     exit 1
   fi
   write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
@@ -772,6 +823,12 @@ case "$MODE" in
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON' "$0"
     grep -q 'topology.local_provider_boundary_only is not false' "$0"
     grep -q 'requires_evidence_json' "$0"
+    grep -q 'expected_target_kind' "$0"
+    grep -q 'target_kind is' "$0"
+    grep -q 'host-decoded-frame-window' "$0"
+    grep -q 'host-decoded-frame-application' "$0"
+    grep -q 'host-view-only-input-window' "$0"
+    grep -q 'host-view-only-input-application' "$0"
     grep -q 'evidence_json path does not exist' "$0"
     grep -q 'required product-flow step' "$0"
     grep -q 'topology.observed_device_pairs must not be empty' "$0"
@@ -779,6 +836,7 @@ case "$MODE" in
     grep -q 'self-test accepted wrong report script identity' "$0"
     grep -q 'self-test accepted missing evidence_json artifact' "$0"
     grep -q 'self-test accepted missing frontend product-flow step' "$0"
+    grep -q 'self-test accepted product-flow target_kind other than both' "$0"
     grep -q 'self-test accepted missing observed cross-device pairs' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test

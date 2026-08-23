@@ -255,6 +255,10 @@ require 'frontend product-flow, Browser/Tauri' "$AUDIT" \
   'audit must summarize product-completion required reports'
 require 'stable `script` identity' "$AUDIT" \
   'audit must record product-completion report provenance validation'
+require 'target_kind=both' "$AUDIT" \
+  'audit must record that product-completion requires both window and application target coverage'
+require 'target-narrowed' "$AUDIT" \
+  'audit must reject target-narrowed evidence as product completion'
 require 'check-remoteapp-main-crate-implementation-tests.sh' "$AUDIT" \
   'audit must name the main-crate implementation test gate'
 require 'production_target_subjects' "$AUDIT" \
@@ -400,6 +404,10 @@ require 'frontend product-flow, Browser/Tauri' "$PLAN" \
   'plan evidence audit must summarize product-completion required reports'
 require 'stable `script` identity' "$PLAN" \
   'plan evidence audit must record product-completion report provenance validation'
+require 'target_kind=both' "$PLAN" \
+  'plan evidence audit must record both-target product-flow completion coverage'
+require 'target-narrowed' "$PLAN" \
+  'plan evidence audit must reject narrowed product-flow evidence as product completion'
 require 'Historical local cross-device `--run` evidence' "$PLAN" \
   'plan evidence audit must classify the Service projection failure as historical evidence'
 require 'accepted_count=0, expected_count=5' "$PLAN" \
@@ -493,6 +501,18 @@ require 'child verifier must not claim product completion' "$PRODUCT_COMPLETION"
   'product-completion gate must reject child product-complete claims'
 require 'requires_evidence_json' "$PRODUCT_COMPLETION" \
   'product-completion gate must require live evidence_json artifacts from domain verifiers'
+require 'expected_target_kind' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require full frontend product-flow target coverage'
+require 'target_kind is' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject frontend product-flow reports that are not target_kind=both'
+require 'host-decoded-frame-window' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require window decoded-frame product-flow evidence'
+require 'host-decoded-frame-application' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require application decoded-frame product-flow evidence'
+require 'host-view-only-input-window' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require window view-only input product-flow evidence'
+require 'host-view-only-input-application' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require application view-only input product-flow evidence'
 require 'evidence_json path does not exist' "$PRODUCT_COMPLETION" \
   'product-completion gate must fail when a report evidence_json artifact is missing'
 require 'required product-flow step' "$PRODUCT_COMPLETION" \
@@ -503,6 +523,8 @@ require 'self-test accepted missing evidence_json artifact' "$PRODUCT_COMPLETION
   'product-completion gate self-test must reject missing evidence_json artifacts'
 require 'self-test accepted missing frontend product-flow step' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject incomplete frontend product-flow reports'
+require 'self-test accepted product-flow target_kind other than both' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject narrowed frontend product-flow target coverage'
 require 'self-test accepted missing observed cross-device pairs' "$PRODUCT_COMPLETION" \
   'product-completion gate self-test must reject missing observed cross-device pairs'
 require 'expected_script' "$PRODUCT_COMPLETION" \

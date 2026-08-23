@@ -16,8 +16,9 @@ traceability. It still does not own the per-domain evidence semantics; each
 domain verifier remains the source of truth. The completion gate only verifies
 that the supplied report came from the expected verifier, names an existing
 evidence artifact where the domain verifier owns one, exposes the required
-frontend product-flow steps, and carries concrete cross-device observed pairs
-before trusting that verifier's `passed` status and coverage summary.
+frontend product-flow steps for the full window+application target bundle, and
+carries concrete cross-device observed pairs before trusting that verifier's
+`passed` status and coverage summary.
 
 ## Invariants
 
@@ -26,10 +27,11 @@ before trusting that verifier's `passed` status and coverage summary.
   verifier path.
 - Domain verifier reports that own a live evidence artifact must expose
   `evidence_json`, and that path must exist when the aggregate gate runs.
-- The frontend product-flow report must include passed steps for Browser/Tauri
-  lifecycle, cross-device product smoke, permission-subject, and target-picker
-  freshness, so an empty passed report cannot stand in for the user-visible
-  lifecycle bundle.
+- The frontend product-flow report must have `target_kind=both` and include
+  passed steps for Browser/Tauri lifecycle, cross-device product smoke,
+  permission-subject, target-picker freshness, window/application decoded-frame,
+  and window/application view-only-input coverage, so an empty or target-narrowed
+  passed report cannot stand in for the user-visible lifecycle bundle.
 - The cross-device smoke report must include at least one observed
   caller/provider device pair where both URAs are present and distinct.
 - Host lifecycle E2E reports must include the same `script` identity field as
