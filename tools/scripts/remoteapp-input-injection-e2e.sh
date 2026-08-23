@@ -6,7 +6,7 @@
 #   and keyboard input injection. It does not simulate OS input.
 # - High-frequency pointer/key frames remain on the negotiated session data
 #   channel; this harness only verifies session setup, permission, consent,
-#   applied events, latency, and terminal evidence.
+#   applied events, OS-observed effects, latency, and terminal evidence.
 # - A live pass requires either --evidence-json from an external runner or
 #   --runner-cmd that writes the evidence JSON path provided through
 #   EASYNET_REMOTEAPP_INPUT_INJECTION_EVIDENCE_JSON.
@@ -48,9 +48,10 @@ Evidence contract:
   policy-only readiness. macOS must pass pointer and keyboard injection with
   Accessibility/input permission, input-control consent, display_global input
   scope, focus validation, coordinate mapping, target geometry revision,
-  strictly ordered INPUT_FRAME_APPLIED events, bounded receive/apply latency,
-  stale client-sequence rejection, and a visible terminal receipt. Windows/Linux
-  must pass or report explicit product unsupported state.
+  strictly ordered INPUT_FRAME_APPLIED events, OS-observed pointer/key effects
+  bound to the same Resource/session/revision after host application, bounded
+  receive/apply latency, stale client-sequence rejection, and a visible terminal
+  receipt. Windows/Linux must pass or report explicit product unsupported state.
 
 Non-claims:
   A skipped report or self-test does not prove input product readiness.
@@ -134,9 +135,23 @@ def is_ura(value):
 def normalize(value):
     return value.lower() if isinstance(value, str) else value
 
+def require_position(value, message):
+    require(isinstance(value, dict), message)
+    if not isinstance(value, dict):
+        return
+    require(isinstance(value.get("x"), (int, float)), message + ".x")
+    require(isinstance(value.get("y"), (int, float)), message + ".y")
+
 required_platforms = {"macos", "windows", "linux"}
 required_inputs = {"pointer", "keyboard"}
 terminal_reasons = {"caller_ended", "user_cancelled", "input_injection_e2e_cleanup"}
+os_effect_probe_sources = {
+    "macos_accessibility_api",
+    "macos_cgevent_observer",
+    "win32_sendinput_observer",
+    "linux_uinput_observer",
+    "platform_automation",
+}
 
 require(evidence.get("status") == "passed", "evidence.status must be passed")
 require(evidence.get("proof_mode") == "real_input_injection_matrix",
@@ -279,14 +294,55 @@ for platform_name in sorted(required_platforms):
                 "key_echo_observed",
                 "key_event_observed",
             }, f"{result_prefix}: observed_effect must prove OS input effect")
+            os_effect = result.get("os_effect")
+            require(isinstance(os_effect, dict),
+                    f"{result_prefix}: os_effect must be present")
+            if not isinstance(os_effect, dict):
+                os_effect = {}
+            require(os_effect.get("observed") is True,
+                    f"{result_prefix}: os_effect.observed must be true")
+            require(os_effect.get("os_effect_probe_source") in os_effect_probe_sources,
+                    f"{result_prefix}: os_effect_probe_source must identify the platform observer")
+            require(normalize(os_effect.get("platform")) == platform_name,
+                    f"{result_prefix}: os_effect.platform must match platform")
+            require(os_effect.get("subject_ura") == subject_ura,
+                    f"{result_prefix}: os_effect subject_ura must bind selected Resource URA")
+            require(os_effect.get("session_id") == session_id,
+                    f"{result_prefix}: os_effect session_id must bind session_id")
+            require(os_effect.get("target_geometry_revision") == platform.get("target_geometry_revision"),
+                    f"{result_prefix}: os_effect target_geometry_revision must match platform scenario")
+            require(isinstance(os_effect.get("observed_at_ms"), int)
+                    and os_effect.get("observed_at_ms") > result.get("host_applied_at_ms", 0),
+                    f"{result_prefix}: os_effect observed_at_ms must be after host_applied_at_ms")
             if kind == "pointer":
                 require(result.get("coordinate_mapping") == "target_geometry_revision_matched",
                         f"{result_prefix}: coordinate mapping must bind target_geometry_revision")
                 require(result.get("target_geometry_revision") == platform.get("target_geometry_revision"),
                         f"{result_prefix}: target_geometry_revision must match platform scenario")
+                require(os_effect.get("effect_type") == "pointer_position",
+                        f"{result_prefix}: pointer OS effect must be pointer_position")
+                require(os_effect.get("coordinate_space") == "display_global",
+                        f"{result_prefix}: pointer OS effect must use display_global coordinates")
+                require_position(os_effect.get("expected_position"),
+                                 f"{result_prefix}: pointer OS effect expected_position must be numeric")
+                require_position(os_effect.get("observed_position"),
+                                 f"{result_prefix}: pointer OS effect observed_position must be numeric")
+                require(os_effect.get("within_tolerance_px") is True,
+                        f"{result_prefix}: pointer OS effect must be observed within tolerance")
+                tolerance_px = os_effect.get("position_tolerance_px")
+                require(isinstance(tolerance_px, (int, float)) and 0 <= tolerance_px <= 8,
+                        f"{result_prefix}: pointer OS effect tolerance must be bounded")
             if kind == "keyboard":
                 require(isinstance(result.get("key_code"), str) and result.get("key_code"),
                         f"{result_prefix}: key_code must be recorded")
+                require(os_effect.get("effect_type") in {"key_event", "key_echo"},
+                        f"{result_prefix}: keyboard OS effect must be key_event or key_echo")
+                require(os_effect.get("focused_resource_ura") == subject_ura,
+                        f"{result_prefix}: keyboard OS effect must bind focused Resource URA")
+                require(os_effect.get("expected_key_code") == result.get("key_code"),
+                        f"{result_prefix}: keyboard OS effect expected_key_code must match input")
+                require(os_effect.get("observed_key_code") == result.get("key_code"),
+                        f"{result_prefix}: keyboard OS effect observed_key_code must match input")
 
         rejected_results = platform.get("rejected_input_results")
         require(isinstance(rejected_results, list) and rejected_results,
@@ -443,6 +499,21 @@ macos = {
             "observed_effect": "pointer_position_changed",
             "coordinate_mapping": "target_geometry_revision_matched",
             "target_geometry_revision": 7,
+            "os_effect": {
+                "observed": True,
+                "os_effect_probe_source": "macos_accessibility_api",
+                "platform": "macos",
+                "subject_ura": subject,
+                "session_id": session_id,
+                "target_geometry_revision": 7,
+                "observed_at_ms": 1787331000026,
+                "effect_type": "pointer_position",
+                "coordinate_space": "display_global",
+                "expected_position": {"x": 320, "y": 240},
+                "observed_position": {"x": 321, "y": 240},
+                "within_tolerance_px": True,
+                "position_tolerance_px": 2,
+            },
         },
         {
             "kind": "keyboard",
@@ -455,6 +526,19 @@ macos = {
             "latency_ms": 35,
             "observed_effect": "key_echo_observed",
             "key_code": "KeyA",
+            "os_effect": {
+                "observed": True,
+                "os_effect_probe_source": "macos_accessibility_api",
+                "platform": "macos",
+                "subject_ura": subject,
+                "session_id": session_id,
+                "target_geometry_revision": 7,
+                "observed_at_ms": 1787331000144,
+                "effect_type": "key_echo",
+                "focused_resource_ura": subject,
+                "expected_key_code": "KeyA",
+                "observed_key_code": "KeyA",
+            },
         },
     ],
     "rejected_input_results": [

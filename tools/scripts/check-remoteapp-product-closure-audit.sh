@@ -545,6 +545,16 @@ require 'latency_ms must be within threshold' "$INPUT_INJECTION" \
   'input injection verifier must reject high latency'
 require 'observed_effect' "$INPUT_INJECTION" \
   'input injection verifier must require observed OS input effect'
+require 'os_effect_probe_source' "$INPUT_INJECTION" \
+  'input injection verifier must require platform OS-effect observer evidence'
+require 'os_effect observed_at_ms must be after host_applied_at_ms' "$INPUT_INJECTION" \
+  'input injection verifier must require OS effect after host application'
+require 'os_effect target_geometry_revision must match platform scenario' "$INPUT_INJECTION" \
+  'input injection verifier must bind OS effect to target geometry revision'
+require 'pointer OS effect must be observed within tolerance' "$INPUT_INJECTION" \
+  'input injection verifier must require bounded pointer OS effect evidence'
+require 'keyboard OS effect must bind focused Resource URA' "$INPUT_INJECTION" \
+  'input injection verifier must require keyboard focus/resource binding'
 require 'terminal_receipt' "$INPUT_INJECTION" \
   'input injection verifier must inspect terminal receipt evidence'
 require 'product_complete_claim.*False|product_complete_claim.*false' "$INPUT_INJECTION" \
