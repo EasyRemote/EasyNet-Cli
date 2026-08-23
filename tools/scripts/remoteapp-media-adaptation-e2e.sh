@@ -42,10 +42,11 @@ Environment:
 Evidence contract:
   The evidence JSON must prove a real media adaptation matrix, not source-only
   codec configuration. It must include baseline, degraded_network, and
-  backpressure scenarios with negotiated video codec, host audio, FPS/bitrate
-  telemetry, adaptation/drop/backpressure evidence, rendered media, public
-  RemoteApp session abilities, selected Resource URA subject binding, and a
-  visible terminal receipt.
+  backpressure scenarios over the same selected Resource URA and media pipeline
+  identity, with negotiated video codec, host audio, FPS/bitrate telemetry,
+  adaptation/drop/backpressure evidence, rendered media, public RemoteApp
+  session abilities, selected Resource URA subject binding, and a visible
+  terminal receipt.
 
 Non-claims:
   A skipped report or self-test does not prove media product readiness. This
@@ -197,9 +198,12 @@ for scenario_name in sorted(required_scenarios):
             f"{prefix}: policy_only must be false")
     subject_ura = scenario.get("selected_resource_ura")
     session_id = scenario.get("session_id")
+    media_pipeline_id = scenario.get("media_pipeline_id")
     require(is_ura(subject_ura), f"{prefix}: selected_resource_ura must be canonical")
     require(isinstance(session_id, str) and session_id,
             f"{prefix}: session_id must be recorded")
+    require(isinstance(media_pipeline_id, str) and media_pipeline_id,
+            f"{prefix}: media_pipeline_id must be recorded")
 
     abilities = scenario.get("abilities")
     require(isinstance(abilities, list) and abilities,
@@ -346,7 +350,10 @@ for scenario_name in sorted(required_scenarios):
     scenario_reports.append({
         "scenario": scenario_name,
         "video_codec": codec,
+        "video_transport": transport,
         "audio_codec": audio_codec,
+        "selected_resource_ura": subject_ura,
+        "media_pipeline_id": media_pipeline_id,
         "measured_fps": measured_fps,
         "observed_bitrate_kbps": integer(video.get("observed_bitrate_kbps")),
         "frames_rendered": integer(video.get("frames_rendered")),
@@ -374,6 +381,20 @@ if isinstance(baseline, dict) and isinstance(backpressure, dict):
     backpressure_frames_dropped = integer(nested_get(backpressure, "drop_policy.frames_dropped"))
     require(backpressure_frames_dropped > baseline_frames_dropped,
             "backpressure frames_dropped must exceed baseline")
+
+if all(isinstance(scenario_by_name.get(name), dict) for name in required_scenarios):
+    comparable_fields = (
+        ("selected_resource_ura", "selected_resource_ura must match across media scenarios"),
+        ("media_pipeline_id", "media_pipeline_id must match across media scenarios"),
+        ("video.codec", "video.codec must match across media scenarios"),
+        ("video.transport", "video.transport must match across media scenarios"),
+        ("audio.codec", "audio.codec must match across media scenarios"),
+    )
+    for field_path, message in comparable_fields:
+        baseline_value = nested_get(baseline, field_path)
+        for scenario_name in sorted(required_scenarios - {"baseline"}):
+            require(nested_get(scenario_by_name[scenario_name], field_path) == baseline_value,
+                    message)
 
 if errors:
     report = {
@@ -460,6 +481,7 @@ def scenario(name, *, degraded=False, backpressure=False):
         "policy_only": False,
         "selected_resource_ura": subject,
         "session_id": session_id,
+        "media_pipeline_id": "remoteapp-media-h264-opus-webrtc",
         "abilities": abilities(subject, session_id),
         "video": {
             "codec_negotiated": True,

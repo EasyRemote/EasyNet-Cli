@@ -199,6 +199,24 @@ grep -q "media adaptation verifier must require degraded target bitrate downshif
   fail "expected media adaptation degraded target bitrate delta failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 
+perl -0pi -e 's#media_pipeline_id must match across media scenarios#media_pipeline_id may differ across media scenarios#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-pipeline-match.out 2>&1; then
+  fail "checker accepted media adaptation verifier without media pipeline comparability"
+fi
+grep -q "media adaptation verifier must compare one media pipeline across scenarios" /tmp/check-remoteapp-product-closure-media-pipeline-match.out || \
+  fail "expected media adaptation pipeline comparability failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
+perl -0pi -e 's#selected_resource_ura must match across media scenarios#selected_resource_ura may differ across media scenarios#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-resource-match.out 2>&1; then
+  fail "checker accepted media adaptation verifier without selected resource comparability"
+fi
+grep -q "media adaptation verifier must compare the same selected resource across scenarios" /tmp/check-remoteapp-product-closure-media-resource-match.out || \
+  fail "expected media adaptation selected resource comparability failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
 perl -0pi -e 's#audio.status must be passed#audio.status may be unsupported#g' \
   "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-audio.out 2>&1; then

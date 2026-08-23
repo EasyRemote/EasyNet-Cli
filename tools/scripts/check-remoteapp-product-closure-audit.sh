@@ -553,6 +553,8 @@ require 'backpressure' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require backpressure evidence'
 require 'codec_negotiated' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect codec negotiation'
+require 'media_pipeline_id' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must bind comparable scenarios to one media pipeline'
 require 'payload_content_type' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must preserve payload content type'
 require 'requested_fps' "$MEDIA_ADAPTATION" \
@@ -579,6 +581,16 @@ require 'frames_dropped' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require frame drop evidence'
 require 'backpressure frames_dropped must exceed baseline' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require backpressure drop delta'
+require 'selected_resource_ura must match across media scenarios' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must compare the same selected resource across scenarios'
+require 'media_pipeline_id must match across media scenarios' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must compare one media pipeline across scenarios'
+require 'video.codec must match across media scenarios' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must compare one video codec across scenarios'
+require 'video.transport must match across media scenarios' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must compare one video transport across scenarios'
+require 'audio.codec must match across media scenarios' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must compare one audio codec across scenarios'
 require 'audio.status must be passed' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require live host audio evidence'
 require 'host audio unsupported state is not product media evidence' "$MEDIA_ADAPTATION" \

@@ -118,7 +118,7 @@
         "ABI v8 raw stream metadata contract preserves canonical lifecycle fields without base64 payload projection",
         "release packaging and install gates ship the v8 raw-stream export allowlist beside the base v7 ABI contract",
         "check-remoteapp-main-crate-implementation-tests.sh runs the main-crate WebRTC app/window display-fallback rejection and native plugin catalogue implementation tests",
-        "remoteapp-media-adaptation-e2e.sh verifier requires real audio/video artifacts with cross-scenario degraded target/observed bitrate delta, FPS/drop delta, and backpressure frame-drop delta versus baseline"
+        "remoteapp-media-adaptation-e2e.sh verifier requires real audio/video artifacts with cross-scenario degraded target/observed bitrate delta, FPS/drop delta, backpressure frame-drop delta versus baseline, and same target/pipeline/codec comparability"
       ],
       "required_evidence_before_product_complete": [
         "live remoteapp-media-adaptation-e2e.sh artifact",
@@ -129,6 +129,8 @@
         "target and observed bitrate report",
         "frame-rate/bitrate soak under load",
         "baseline/degraded-network/backpressure scenarios",
+        "same selected Resource URA across media scenarios",
+        "same media_pipeline_id, video codec/transport, and audio codec across media scenarios",
         "bounded queue depth and explicit stale-frame drop policy",
         "degraded network adaptation/drop policy E2E",
         "rendered media after adaptation",
