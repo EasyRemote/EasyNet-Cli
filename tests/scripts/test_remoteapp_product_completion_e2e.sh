@@ -17,6 +17,14 @@ grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON" "$S
   fail "completion gate must require Browser/Tauri lifecycle report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require cross-device smoke report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require cross-device RemoteApp product report"
+grep -q "tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh" "$SCRIPT" || \
+  fail "completion gate must pin cross-device RemoteApp verifier identity"
+grep -q "requires_cross_device_remoteapp_scenarios" "$SCRIPT" || \
+  fail "completion gate must require cross-device RemoteApp target scenarios"
+grep -q "self-test accepted cross-device RemoteApp report without application target" "$SCRIPT" || \
+  fail "completion gate self-test must cover incomplete cross-device RemoteApp targets"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require cross-platform capture report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON" "$SCRIPT" || \
@@ -152,7 +160,7 @@ import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["status"] == "failed"
 assert report["product_complete_claim"] is False
-assert report["required_evidence_count"] == 17
+assert report["required_evidence_count"] == 18
 assert any("missing required report env" in error for error in report["errors"])
 PY
 

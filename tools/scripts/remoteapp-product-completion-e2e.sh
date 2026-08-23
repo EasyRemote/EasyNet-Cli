@@ -30,6 +30,7 @@ Required report environment:
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON
+  EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON
@@ -191,6 +192,24 @@ required = [
         ],
         "cross_device": True,
         "requires_observed_device_pairs": True,
+    },
+    {
+        "id": "cross_device_remoteapp",
+        "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON",
+        "expected_script": "tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh",
+        "coverage_keys": [
+            "remoteapp_cross_device_session",
+            "display",
+            "window",
+            "application",
+            "remote_media_rendered",
+            "input_policy_checked",
+            "distinct_device_uras_observed",
+        ],
+        "cross_device": True,
+        "requires_observed_device_pairs": True,
+        "requires_evidence_json": True,
+        "requires_cross_device_remoteapp_scenarios": True,
     },
     {
         "id": "cross_platform_capture",
@@ -436,6 +455,81 @@ def validate_network_route_scenarios(item_id, check, report):
             check["errors"].append(message)
             add_error(item_id, message)
 
+def validate_cross_device_remoteapp_scenarios(item_id, check, report):
+    required_targets = {"display", "window", "application"}
+    scenarios = report.get("scenarios")
+    check["required_cross_device_remoteapp_targets"] = sorted(required_targets)
+    if not isinstance(scenarios, list) or not scenarios:
+        message = "cross-device RemoteApp scenarios summary must be a non-empty list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+
+    seen_targets = set()
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            message = f"cross-device RemoteApp scenarios[{index}] must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        target_kind = scenario.get("target_kind")
+        if target_kind not in required_targets:
+            message = f"cross-device RemoteApp scenarios[{index}].target_kind is {target_kind!r}, expected one of {sorted(required_targets)}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if target_kind in seen_targets:
+            message = f"cross-device RemoteApp target {target_kind!r} appears more than once"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        seen_targets.add(target_kind)
+        prefix = f"cross-device RemoteApp target {target_kind}"
+
+        caller_device_ura = scenario.get("caller_device_ura")
+        provider_device_ura = scenario.get("provider_device_ura")
+        selected_resource_ura = scenario.get("selected_resource_ura")
+        session_id = scenario.get("session_id")
+        if not isinstance(caller_device_ura, str) or not caller_device_ura.startswith("easynet:///"):
+            message = f"{prefix}: caller_device_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(provider_device_ura, str) or not provider_device_ura.startswith("easynet:///"):
+            message = f"{prefix}: provider_device_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if caller_device_ura == provider_device_ura:
+            message = f"{prefix}: caller/provider device URAs must be distinct"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(selected_resource_ura, str) or not selected_resource_ura.startswith("easynet:///"):
+            message = f"{prefix}: selected_resource_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(session_id, str) or not session_id:
+            message = f"{prefix}: session_id must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("frames_captured")):
+            message = f"{prefix}: frames_captured must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not positive_int(scenario.get("frames_rendered")):
+            message = f"{prefix}: frames_rendered must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if scenario.get("input_policy_mode") not in {"interactive", "view_only", "policy_blocked"}:
+            message = f"{prefix}: input_policy_mode must be interactive, view_only, or policy_blocked"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+    observed_targets = sorted(seen_targets)
+    check["observed_cross_device_remoteapp_targets"] = observed_targets
+    missing_targets = sorted(required_targets - seen_targets)
+    if missing_targets:
+        message = "cross-device RemoteApp scenarios missing targets: " + ", ".join(missing_targets)
+        check["errors"].append(message)
+        add_error(item_id, message)
+
 for item in required:
     item_id = item["id"]
     env_name = item["env"]
@@ -516,6 +610,8 @@ for item in required:
             add_error(item_id, message)
     if item.get("requires_network_route_scenarios"):
         validate_network_route_scenarios(item_id, check, report)
+    if item.get("requires_cross_device_remoteapp_scenarios"):
+        validate_cross_device_remoteapp_scenarios(item_id, check, report)
     if item.get("requires_platforms_passed"):
         platform_entries = report.get("platforms")
         check["required_passed_platforms"] = item["requires_platforms_passed"]
@@ -850,6 +946,16 @@ coverage_by_id = {
         "distinct_device_uras_observed": True,
         "local_provider_boundary_only": False,
     },
+    "cross_device_remoteapp": {
+        "remoteapp_cross_device_session": True,
+        "display": True,
+        "window": True,
+        "application": True,
+        "remote_media_rendered": True,
+        "input_policy_checked": True,
+        "distinct_device_uras_observed": True,
+        "local_provider_boundary_only": False,
+    },
     "cross_platform_capture": {"macos": True, "windows": True, "linux": True},
     "input_injection": {"macos": True, "windows": True, "linux": True},
     "media_adaptation": {"baseline": True, "degraded_network": True, "backpressure": True},
@@ -877,6 +983,7 @@ script_by_id = {
     "frontend_product_flow": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
     "browser_lifecycle": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
     "cross_device_smoke": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
+    "cross_device_remoteapp": "tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh",
     "cross_platform_capture": "tools/scripts/remoteapp-cross-platform-capture-e2e.sh",
     "input_injection": "tools/scripts/remoteapp-input-injection-e2e.sh",
     "media_adaptation": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
@@ -894,6 +1001,7 @@ script_by_id = {
 }
 evidence_json_ids = {
     "browser_lifecycle",
+    "cross_device_remoteapp",
     "cross_platform_capture",
     "input_injection",
     "media_adaptation",
@@ -1004,6 +1112,36 @@ if item_id == "cross_device_smoke":
         "distinct_device_uras_observed": True,
         "local_provider_boundary_only": False,
     }
+if item_id == "cross_device_remoteapp":
+    caller = "easynet:///r/localhost/device/synthetic-caller"
+    provider = "easynet:///r/localhost/device/synthetic-provider"
+    report["topology"] = {
+        "requires_distinct_devices": True,
+        "observed_device_pairs": [
+            {
+                "step": "cross-device-remoteapp",
+                "caller_ura": caller,
+                "provider_ura": provider,
+                "distinct_device_uras": True,
+            }
+        ],
+        "distinct_device_uras_observed": True,
+        "local_provider_boundary_only": False,
+    }
+    report["scenario_count"] = 3
+    report["scenarios"] = [
+        {
+            "target_kind": target_kind,
+            "caller_device_ura": caller,
+            "provider_device_ura": provider,
+            "selected_resource_ura": f"easynet:///r/localhost/resource/device.synthetic-provider/{target_kind}.selected",
+            "session_id": f"rd-product-cross-device-{target_kind}",
+            "frames_captured": 12,
+            "frames_rendered": 10,
+            "input_policy_mode": "view_only",
+        }
+        for target_kind in ("display", "window", "application")
+    ]
 path.parent.mkdir(parents=True, exist_ok=True)
 if item_id == "frontend_product_flow":
     for step in report["steps"]:
@@ -1108,6 +1246,7 @@ run_self_test() {
     frontend_product_flow
     browser_lifecycle
     cross_device_smoke
+    cross_device_remoteapp
     cross_platform_capture
     input_injection
     media_adaptation
@@ -1134,6 +1273,7 @@ run_self_test() {
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_PERMISSION_REVOKE_APPLICATION_REPORT_JSON="$tmp/permission_revoke_application.json"
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_WINDOW_REPORT_JSON="$tmp/session_resume_window.json"
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_JSON="$tmp/session_resume_application.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON="$tmp/cross_device_remoteapp.json"
 
   env \
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
@@ -1485,6 +1625,35 @@ PY
   fi
   write_synthetic_report "$tmp/cross_device_smoke.json" cross_device_smoke
 
+  python3 - "$tmp/cross_device_remoteapp.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["scenarios"] = [
+    scenario for scenario in report["scenarios"]
+    if scenario.get("target_kind") != "application"
+]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-cross-device-remoteapp-target" >/dev/null 2>&1; then
+    echo "self-test accepted cross-device RemoteApp report without application target" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/cross_device_remoteapp.json" cross_device_remoteapp
+
   python3 - "$tmp/cross_platform_capture.json" <<'PY'
 import json
 import pathlib
@@ -1649,6 +1818,7 @@ PY
   if env \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON \
+    -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON \
@@ -1685,6 +1855,7 @@ case "$MODE" in
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON' "$0"
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON' "$0"
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON' "$0"
+    grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON' "$0"
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_WINDOW_REPORT_JSON' "$0"
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_TIMEOUT_APPLICATION_REPORT_JSON' "$0"
     grep -q 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_CANCEL_WINDOW_REPORT_JSON' "$0"
@@ -1697,7 +1868,9 @@ case "$MODE" in
     grep -q 'requires_evidence_json' "$0"
     grep -q 'requires_platforms_passed' "$0"
     grep -q 'requires_network_route_scenarios' "$0"
+    grep -q 'requires_cross_device_remoteapp_scenarios' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
+    grep -q 'cross-device RemoteApp scenarios summary must be a non-empty list' "$0"
     grep -q 'unsupported_targets must be empty' "$0"
     grep -q "expected 'passed'" "$0"
     grep -q 'expected_target_kind' "$0"
