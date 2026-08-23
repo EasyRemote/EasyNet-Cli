@@ -289,6 +289,7 @@ required = [
             "stale_socket_restart_cleanup",
         ],
         "requires_evidence_json": True,
+        "requires_crash_restart_recovery_scenarios": True,
     },
 ]
 
@@ -877,6 +878,181 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
         check["errors"].append(message)
         add_error(item_id, message)
 
+def validate_crash_restart_recovery_scenarios(item_id, check, report):
+    required_scenarios = {
+        "daemon_restart_active_session",
+        "plugin_worker_restart",
+        "terminal_receipt_replay_after_crash",
+        "stale_socket_restart_cleanup",
+    }
+    scenarios = report.get("scenarios")
+    check["required_crash_restart_recovery_scenarios"] = sorted(required_scenarios)
+    if not isinstance(scenarios, list) or not scenarios:
+        message = "crash/restart recovery scenarios summary must be a non-empty list"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+
+    scenario_by_name = {}
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            message = f"crash/restart recovery scenarios[{index}] must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        scenario_name = scenario.get("scenario")
+        if scenario_name not in required_scenarios:
+            message = f"crash/restart recovery scenarios[{index}].scenario is {scenario_name!r}, expected one of {sorted(required_scenarios)}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if scenario_name in scenario_by_name:
+            message = f"crash/restart recovery scenario {scenario_name!r} appears more than once"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        scenario_by_name[scenario_name] = scenario
+
+    observed_scenarios = sorted(scenario_by_name)
+    check["observed_crash_restart_recovery_scenarios"] = observed_scenarios
+    missing_scenarios = sorted(required_scenarios - set(scenario_by_name))
+    if missing_scenarios:
+        message = "crash/restart recovery scenarios missing: " + ", ".join(missing_scenarios)
+        check["errors"].append(message)
+        add_error(item_id, message)
+
+    required_events = {
+        "daemon_restart_active_session": {
+            "PROCESS_STOPPED_UNCLEAN",
+            "DAEMON_RESTARTED",
+            "SESSION_REHYDRATED",
+        },
+        "plugin_worker_restart": {
+            "PLUGIN_WORKER_CRASHED",
+            "PLUGIN_WORKER_RESTARTED",
+            "TARGET_MONITOR_RESTARTED",
+        },
+        "terminal_receipt_replay_after_crash": {
+            "END_SESSION_ACCEPTED",
+            "PROCESS_STOPPED_UNCLEAN",
+            "TERMINAL_RECEIPT_REPLAYED",
+        },
+        "stale_socket_restart_cleanup": {
+            "STALE_CONTROL_SOCKET_DETECTED",
+            "STALE_INVOCATION_SOCKET_DETECTED",
+            "DAEMON_READY_AFTER_RESTART",
+        },
+    }
+
+    for scenario_name, scenario in scenario_by_name.items():
+        prefix = f"crash/restart recovery scenario {scenario_name}"
+        if scenario.get("status") != "passed":
+            message = f"{prefix}: status is {scenario.get('status')!r}, expected 'passed'"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            continue
+        if not isinstance(scenario.get("selected_resource_ura"), str) or not scenario.get("selected_resource_ura").startswith("easynet:///"):
+            message = f"{prefix}: selected_resource_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("session_id"), str) or not scenario.get("session_id"):
+            message = f"{prefix}: session_id must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(scenario.get("descriptor_version"), str) or not scenario.get("descriptor_version"):
+            message = f"{prefix}: descriptor_version must be set"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        events = {
+            event_type
+            for event_type in scenario.get("events", [])
+            if isinstance(event_type, str)
+        }
+        missing_events = sorted(required_events[scenario_name] - events)
+        if missing_events:
+            message = f"{prefix}: events missing {', '.join(missing_events)}"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        recovery = scenario.get("recovery")
+        if not isinstance(recovery, dict):
+            message = f"{prefix}: recovery summary must be an object"
+            check["errors"].append(message)
+            add_error(item_id, message)
+            recovery = {}
+        for field in ("wal_replayed", "idempotency_state_recovered", "replay_guard_recovered", "lock_owner_recovered"):
+            if recovery.get(field) is not True:
+                message = f"{prefix}: recovery.{field} must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+        if recovery.get("duplicate_invocation_replayed") is not False:
+            message = f"{prefix}: recovery.duplicate_invocation_replayed must be false"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if int_value(recovery.get("restart_epoch_after")) <= int_value(recovery.get("restart_epoch_before")):
+            message = f"{prefix}: recovery restart epoch must increase"
+            check["errors"].append(message)
+            add_error(item_id, message)
+
+        if scenario_name == "daemon_restart_active_session":
+            for field in ("same_session_after_restart", "watch_events_reattached", "media_reattached", "terminal_receipt_visible"):
+                if scenario.get(field) is not True:
+                    message = f"{prefix}: {field} must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if scenario.get("session_state_after_restart") != "active":
+                message = f"{prefix}: session_state_after_restart must be active"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not positive_int(scenario.get("frames_rendered_after_restart")):
+                message = f"{prefix}: frames_rendered_after_restart must be positive"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+        if scenario_name == "plugin_worker_restart":
+            if scenario.get("same_public_session") is not True:
+                message = f"{prefix}: same_public_session must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("media_source_epoch_increased") is not True:
+                message = f"{prefix}: media_source_epoch_increased must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if not positive_int(scenario.get("frames_rendered_after_worker_restart")):
+                message = f"{prefix}: frames_rendered_after_worker_restart must be positive"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("new_consent_required") is not False:
+                message = f"{prefix}: new_consent_required must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if scenario.get("terminal_receipt_visible") is not True:
+                message = f"{prefix}: terminal_receipt_visible must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+        if scenario_name == "terminal_receipt_replay_after_crash":
+            for field in ("terminal_receipt_replayed", "repeat_end_session_idempotent", "terminal_receipt_visible"):
+                if scenario.get(field) is not True:
+                    message = f"{prefix}: {field} must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if scenario.get("show_session_after_restart_state") != "closed":
+                message = f"{prefix}: show_session_after_restart_state must be closed"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
+        if scenario_name == "stale_socket_restart_cleanup":
+            for field in ("control_endpoint_ready", "invocation_endpoint_ready", "stale_socket_cleanup_explicit", "terminal_receipt_visible"):
+                if scenario.get(field) is not True:
+                    message = f"{prefix}: {field} must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if scenario.get("manual_cleanup_required") is not False:
+                message = f"{prefix}: manual_cleanup_required must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+
 for item in required:
     item_id = item["id"]
     env_name = item["env"]
@@ -963,6 +1139,8 @@ for item in required:
         validate_multi_window_scenarios(item_id, check, report)
     if item.get("requires_cross_device_remoteapp_scenarios"):
         validate_cross_device_remoteapp_scenarios(item_id, check, report)
+    if item.get("requires_crash_restart_recovery_scenarios"):
+        validate_crash_restart_recovery_scenarios(item_id, check, report)
     if item.get("requires_platforms_passed"):
         platform_entries = report.get("platforms")
         check["required_passed_platforms"] = item["requires_platforms_passed"]
@@ -1595,6 +1773,97 @@ if item_id == "cross_device_remoteapp":
             "input_policy_mode": "view_only",
         }
         for target_kind in ("display", "window", "application")
+    ]
+if item_id == "crash_restart_recovery":
+    report["scenarios"] = [
+        {
+            "scenario": "daemon_restart_active_session",
+            "status": "passed",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/window.recovery",
+            "session_id": "sess-daemon-restart",
+            "descriptor_version": "1.0.0",
+            "events": ["PROCESS_STOPPED_UNCLEAN", "DAEMON_RESTARTED", "SESSION_REHYDRATED"],
+            "recovery": {
+                "wal_replayed": True,
+                "idempotency_state_recovered": True,
+                "replay_guard_recovered": True,
+                "lock_owner_recovered": True,
+                "duplicate_invocation_replayed": False,
+                "restart_epoch_before": 1,
+                "restart_epoch_after": 2,
+            },
+            "same_session_after_restart": True,
+            "session_state_after_restart": "active",
+            "watch_events_reattached": True,
+            "media_reattached": True,
+            "frames_rendered_after_restart": 24,
+            "terminal_receipt_visible": True,
+        },
+        {
+            "scenario": "plugin_worker_restart",
+            "status": "passed",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/window.recovery",
+            "session_id": "sess-plugin-restart",
+            "descriptor_version": "1.0.0",
+            "events": ["PLUGIN_WORKER_CRASHED", "PLUGIN_WORKER_RESTARTED", "TARGET_MONITOR_RESTARTED"],
+            "recovery": {
+                "wal_replayed": True,
+                "idempotency_state_recovered": True,
+                "replay_guard_recovered": True,
+                "lock_owner_recovered": True,
+                "duplicate_invocation_replayed": False,
+                "restart_epoch_before": 2,
+                "restart_epoch_after": 3,
+            },
+            "same_public_session": True,
+            "media_source_epoch_increased": True,
+            "frames_rendered_after_worker_restart": 31,
+            "new_consent_required": False,
+            "terminal_receipt_visible": True,
+        },
+        {
+            "scenario": "terminal_receipt_replay_after_crash",
+            "status": "passed",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/window.recovery",
+            "session_id": "sess-receipt-replay",
+            "descriptor_version": "1.0.0",
+            "events": ["END_SESSION_ACCEPTED", "PROCESS_STOPPED_UNCLEAN", "TERMINAL_RECEIPT_REPLAYED"],
+            "recovery": {
+                "wal_replayed": True,
+                "idempotency_state_recovered": True,
+                "replay_guard_recovered": True,
+                "lock_owner_recovered": True,
+                "duplicate_invocation_replayed": False,
+                "restart_epoch_before": 3,
+                "restart_epoch_after": 4,
+            },
+            "terminal_receipt_replayed": True,
+            "repeat_end_session_idempotent": True,
+            "show_session_after_restart_state": "closed",
+            "terminal_receipt_visible": True,
+        },
+        {
+            "scenario": "stale_socket_restart_cleanup",
+            "status": "passed",
+            "selected_resource_ura": "easynet:///r/localhost/resource/device.synthetic/window.recovery",
+            "session_id": "sess-stale-socket",
+            "descriptor_version": "1.0.0",
+            "events": ["STALE_CONTROL_SOCKET_DETECTED", "STALE_INVOCATION_SOCKET_DETECTED", "DAEMON_READY_AFTER_RESTART"],
+            "recovery": {
+                "wal_replayed": True,
+                "idempotency_state_recovered": True,
+                "replay_guard_recovered": True,
+                "lock_owner_recovered": True,
+                "duplicate_invocation_replayed": False,
+                "restart_epoch_before": 4,
+                "restart_epoch_after": 5,
+            },
+            "control_endpoint_ready": True,
+            "invocation_endpoint_ready": True,
+            "stale_socket_cleanup_explicit": True,
+            "manual_cleanup_required": False,
+            "terminal_receipt_visible": True,
+        },
     ]
 path.parent.mkdir(parents=True, exist_ok=True)
 if item_id == "frontend_product_flow":
@@ -2351,6 +2620,32 @@ PY
   fi
   write_synthetic_report "$tmp/network_fallback.json" network_fallback
 
+  python3 - "$tmp/crash_restart_recovery.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+del report["scenarios"]
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/missing-crash-restart-scenarios" >/dev/null 2>&1; then
+    echo "self-test accepted crash/restart recovery report without scenarios" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/crash_restart_recovery.json" crash_restart_recovery
+
   if env \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON \
     -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON \
@@ -2407,10 +2702,12 @@ case "$MODE" in
     grep -q 'requires_multi_window_scenarios' "$0"
     grep -q 'requires_network_route_scenarios' "$0"
     grep -q 'requires_cross_device_remoteapp_scenarios' "$0"
+    grep -q 'requires_crash_restart_recovery_scenarios' "$0"
     grep -q 'media adaptation scenarios summary must be a non-empty list' "$0"
     grep -q 'multi-window tracking scenarios summary must be a non-empty list' "$0"
     grep -q 'network fallback scenarios summary must be a non-empty list' "$0"
     grep -q 'cross-device RemoteApp scenarios summary must be a non-empty list' "$0"
+    grep -q 'crash/restart recovery scenarios summary must be a non-empty list' "$0"
     grep -q 'unsupported_targets must be empty' "$0"
     grep -q "expected 'passed'" "$0"
     grep -q 'expected_target_kind' "$0"
@@ -2448,6 +2745,7 @@ case "$MODE" in
     grep -q 'self-test accepted multi-window tracking report without scenarios' "$0"
     grep -q 'self-test accepted unsupported multi-display application as product completion' "$0"
     grep -q 'self-test accepted network fallback report without route scenarios' "$0"
+    grep -q 'self-test accepted crash/restart recovery report without scenarios' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test
     ;;

@@ -71,6 +71,12 @@ grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_
   fail "completion gate must require application session resume report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require crash/restart recovery report"
+grep -q "requires_crash_restart_recovery_scenarios" "$SCRIPT" || \
+  fail "completion gate must require crash/restart recovery scenario summaries"
+grep -q "crash/restart recovery scenarios summary must be a non-empty list" "$SCRIPT" || \
+  fail "completion gate must reject crash/restart reports without scenario summaries"
+grep -q "self-test accepted crash/restart recovery report without scenarios" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing crash/restart scenario summaries"
 grep -q "local-provider-only cross-device evidence" "$SCRIPT" || \
   fail "completion gate self-test must reject local-provider-only evidence"
 grep -q "child verifier must not claim product completion" "$SCRIPT" || \

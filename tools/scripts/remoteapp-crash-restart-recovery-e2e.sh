@@ -251,6 +251,28 @@ def require_terminal(prefix, terminal, session_id):
             f"{prefix}: terminal_receipt.receipt_id must be recorded")
 
 scenario_reports = []
+def recovery_summary(recovery):
+    if not isinstance(recovery, dict):
+        recovery = {}
+    return {
+        "wal_replayed": recovery.get("wal_replayed"),
+        "idempotency_state_recovered": recovery.get("idempotency_state_recovered"),
+        "replay_guard_recovered": recovery.get("replay_guard_recovered"),
+        "lock_owner_recovered": recovery.get("lock_owner_recovered"),
+        "duplicate_invocation_replayed": recovery.get("duplicate_invocation_replayed"),
+        "restart_epoch_before": recovery.get("restart_epoch_before"),
+        "restart_epoch_after": recovery.get("restart_epoch_after"),
+    }
+
+def terminal_visible(terminal, session_id):
+    return (
+        isinstance(terminal, dict)
+        and terminal.get("terminal") is True
+        and terminal.get("session_id") == session_id
+        and isinstance(terminal.get("receipt_id"), str)
+        and bool(terminal.get("receipt_id"))
+    )
+
 for scenario_name in sorted(required_scenarios):
     scenario = scenario_by_name.get(scenario_name)
     if not isinstance(scenario, dict):
@@ -333,6 +355,29 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: first_frame_rendered_after_restart_at_ms must be after media_reattached_at_ms")
         require_recovery_guards(prefix, scenario.get("recovery"))
         require_terminal(prefix, scenario.get("terminal_receipt"), session_id)
+        scenario_reports.append({
+            "scenario": scenario_name,
+            "status": scenario.get("status"),
+            "selected_resource_ura": subject_ura,
+            "session_id": session_id,
+            "descriptor_version": scenario.get("descriptor_version"),
+            "events": event_types,
+            "recovery": recovery_summary(scenario.get("recovery")),
+            "same_session_after_restart": (
+                isinstance(before, dict)
+                and isinstance(after, dict)
+                and before.get("session_id") == after.get("session_id") == session_id
+                and before.get("selected_resource_ura") == after.get("selected_resource_ura") == subject_ura
+                and before.get("descriptor_version") == after.get("descriptor_version")
+                and before.get("target_binding_epoch") == after.get("target_binding_epoch")
+                and before.get("transport_epoch") == after.get("transport_epoch")
+            ),
+            "session_state_after_restart": after.get("session_state") if isinstance(after, dict) else None,
+            "watch_events_reattached": after.get("watch_events_reattached") if isinstance(after, dict) else None,
+            "media_reattached": after.get("media_reattached") if isinstance(after, dict) else None,
+            "frames_rendered_after_restart": after.get("frames_rendered_after_restart") if isinstance(after, dict) else None,
+            "terminal_receipt_visible": terminal_visible(scenario.get("terminal_receipt"), session_id),
+        })
 
     if scenario_name == "plugin_worker_restart":
         require("PLUGIN_WORKER_CRASHED" in event_types,
@@ -358,6 +403,23 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: plugin restart must not mint new consent")
         require_recovery_guards(prefix, scenario.get("recovery"))
         require_terminal(prefix, scenario.get("terminal_receipt"), session_id)
+        scenario_reports.append({
+            "scenario": scenario_name,
+            "status": scenario.get("status"),
+            "selected_resource_ura": subject_ura,
+            "session_id": session_id,
+            "descriptor_version": scenario.get("descriptor_version"),
+            "events": event_types,
+            "recovery": recovery_summary(scenario.get("recovery")),
+            "same_public_session": scenario.get("same_public_session"),
+            "media_source_epoch_increased": (
+                integer(scenario.get("media_source_epoch_after"))
+                > integer(scenario.get("media_source_epoch_before"))
+            ),
+            "frames_rendered_after_worker_restart": scenario.get("frames_rendered_after_worker_restart"),
+            "new_consent_required": scenario.get("new_consent_required"),
+            "terminal_receipt_visible": terminal_visible(scenario.get("terminal_receipt"), session_id),
+        })
 
     if scenario_name == "terminal_receipt_replay_after_crash":
         require("END_SESSION_ACCEPTED" in event_types,
@@ -391,6 +453,23 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: show_session_after_restart_observed_at_ms must be after TERMINAL_RECEIPT_REPLAYED")
         require_recovery_guards(prefix, scenario.get("recovery"))
         require_terminal(prefix, receipt_after, session_id)
+        scenario_reports.append({
+            "scenario": scenario_name,
+            "status": scenario.get("status"),
+            "selected_resource_ura": subject_ura,
+            "session_id": session_id,
+            "descriptor_version": scenario.get("descriptor_version"),
+            "events": event_types,
+            "recovery": recovery_summary(scenario.get("recovery")),
+            "terminal_receipt_replayed": (
+                isinstance(receipt_before, dict)
+                and isinstance(receipt_after, dict)
+                and receipt_before.get("receipt_id") == receipt_after.get("receipt_id")
+            ),
+            "repeat_end_session_idempotent": scenario.get("repeat_end_session_idempotent"),
+            "show_session_after_restart_state": scenario.get("show_session_after_restart_state"),
+            "terminal_receipt_visible": terminal_visible(receipt_after, session_id),
+        })
 
     if scenario_name == "stale_socket_restart_cleanup":
         require("STALE_CONTROL_SOCKET_DETECTED" in event_types,
@@ -416,8 +495,20 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: manual_cleanup_required must be false")
         require_recovery_guards(prefix, scenario.get("recovery"))
         require_terminal(prefix, scenario.get("terminal_receipt"), session_id)
-
-    scenario_reports.append({"scenario": scenario_name, "status": "passed"})
+        scenario_reports.append({
+            "scenario": scenario_name,
+            "status": scenario.get("status"),
+            "selected_resource_ura": subject_ura,
+            "session_id": session_id,
+            "descriptor_version": scenario.get("descriptor_version"),
+            "events": event_types,
+            "recovery": recovery_summary(scenario.get("recovery")),
+            "control_endpoint_ready": scenario.get("control_endpoint_ready"),
+            "invocation_endpoint_ready": scenario.get("invocation_endpoint_ready"),
+            "stale_socket_cleanup_explicit": scenario.get("stale_socket_cleanup_explicit"),
+            "manual_cleanup_required": scenario.get("manual_cleanup_required"),
+            "terminal_receipt_visible": terminal_visible(scenario.get("terminal_receipt"), session_id),
+        })
 
 if errors:
     report = {
