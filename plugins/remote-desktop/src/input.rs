@@ -644,6 +644,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     apply_input_frame_with_effective_policy(&effective_input_policy, &frame);
                 if outcome.applied {
                     accepted_count = accepted_count.saturating_add(1);
+                    sessions.mark_input_frame_applied(&session_id, epoch);
                     if accepted_count == 1 || accepted_count.is_multiple_of(120) {
                         flush_input_rejections(
                             &mut reject_diagnostics,

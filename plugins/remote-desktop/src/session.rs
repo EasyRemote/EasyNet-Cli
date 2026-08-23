@@ -760,6 +760,25 @@ impl RemoteDesktopSession {
         changed
     }
 
+    /// Confirm that an input frame has been accepted by the host OS for the
+    /// current direct-input epoch. This is the recovery edge after a runtime
+    /// permission block: the input plane supplies execution proof, while the
+    /// aggregate owns lifecycle reactivation and blocker clearing.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_input_frame_applied(
+        &mut self,
+        epoch: TransportEpoch,
+    ) -> bool {
+        let had_runtime_block = self.input_runtime_block_reason.is_some();
+        let changed = self.activate_input_for_transport_epoch(epoch);
+        if had_runtime_block && changed {
+            self.push_projected_event(session_events::input_permission_restored(
+                epoch.value(),
+                self.transport.media_transport_ready(),
+            ));
+        }
+        changed
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn block_input_for_runtime_permission(
         &mut self,
         epoch: TransportEpoch,
@@ -1230,7 +1249,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use crate::daemon::plugins::remote_desktop::constants::{
         direct_webrtc_endpoint_ura, REASON_SESSION_EXPIRED, REASON_TARGET_PERMISSION_REVOKED,
@@ -1807,7 +1826,7 @@ mod tests {
         );
 
         assert!(session.report_client_media_state(epoch, "presenting"));
-        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert!(session.mark_input_frame_applied(epoch));
         assert_eq!(
             session.lifecycle_phase(),
             RemoteDesktopSessionPhase::InputActive
@@ -2010,7 +2029,7 @@ mod tests {
             !session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied"),
             "permission block projection must be edge-triggered"
         );
-        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert!(session.mark_input_frame_applied(epoch));
         assert_eq!(
             session.input_runtime_block_reason(),
             None,
@@ -2035,6 +2054,19 @@ mod tests {
             json!("request_permission")
         );
         assert_eq!(blocked["payload"]["media_transport_ready"], json!(true));
+
+        let restored_events: Vec<_> = session
+            .events()
+            .into_iter()
+            .filter(|event| event["event_type"] == json!("INPUT_PERMISSION_RESTORED"))
+            .collect();
+        assert_eq!(restored_events.len(), 1);
+        let restored = &restored_events[0];
+        assert_eq!(restored["state"], json!("connected"));
+        assert_eq!(restored["transport_epoch"], json!(epoch.value()));
+        assert_eq!(restored["payload"]["input_activation"], json!("enabled"));
+        assert_eq!(restored["payload"]["recoverability"], json!("resolved"));
+        assert_eq!(restored["payload"]["frontend_action"], Value::Null);
     }
 
     #[test]

@@ -495,6 +495,8 @@ require 'input_runtime_permission_denied\(reason\)' "$INPUT" \
   'RemoteApp daemon input execution path must detect runtime permission denial'
 require 'mark_input_permission_blocked' "$INPUT" \
   'RemoteApp daemon input execution path must project runtime permission denial to the session aggregate'
+require 'mark_input_frame_applied' "$INPUT" \
+  'RemoteApp daemon input execution path must let successful host input application clear runtime permission blockers'
 require 'input_runtime_block_reason' "$SESSION" \
   'RemoteApp session aggregate must retain runtime input permission block reason'
 require 'session\.input_runtime_block_reason\(\)' "$SESSION_VIEW" \
@@ -505,8 +507,14 @@ require 'INPUT_PERMISSION_BLOCKED' "$ROOT/plugins/remote-desktop/src/session_eve
   'RemoteApp session events must expose runtime input permission blocks'
 require 'input_permission_block_projects_request_permission_recovery' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
   'RemoteApp session event tests must prove runtime input permission blocks project request-permission recovery'
+require 'INPUT_PERMISSION_RESTORED' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+  'RemoteApp session events must expose runtime input permission restore'
+require 'input_permission_restore_projects_resolved_recovery' "$ROOT/plugins/remote-desktop/src/session_events.rs" \
+  'RemoteApp session event tests must prove runtime input permission restore projects resolved recovery'
 require 'INPUT_PERMISSION_BLOCKED' "$EVENT_LOG" \
   'RemoteApp event log must classify runtime input permission blocks as input events'
+require 'INPUT_PERMISSION_RESTORED' "$EVENT_LOG" \
+  'RemoteApp event log must classify runtime input permission restores as input events'
 require 'runtime_input_permission_block_deactivates_input_without_failing_media' "$SESSION" \
   'RemoteApp session tests must prove runtime input permission block does not fail media'
 require 'latency_ms must be within threshold' "$INPUT_INJECTION" \

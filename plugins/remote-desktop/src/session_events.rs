@@ -313,6 +313,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_permission_blocked(
     )
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn input_permission_restored(
+    transport_epoch: u64,
+    media_transport_ready: bool,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "INPUT_PERMISSION_RESTORED",
+        json!({
+            "transport_kind": TRANSPORT_WEBRTC,
+            "input_plane": "webrtc_data_channel",
+            "transport_epoch": transport_epoch,
+            "input_activation": "enabled",
+            "input_activation_reason": Value::Null,
+            "media_transport_ready": media_transport_ready,
+            "recoverability": "resolved",
+            "frontend_action": Value::Null,
+        }),
+    )
+}
+
 /// Build a media-pipeline stats payload.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(in crate::daemon::plugins::remote_desktop) fn media_pipeline_stats(
@@ -518,17 +537,18 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_failure_conte
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
     use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
-        capture_target_resolved, input_permission_blocked, media_source_lost,
-        preview_transport_connected, session_closed, session_closing, session_created,
-        session_degraded, session_expired, transport_blocked, webrtc_failed_with_context,
-        webrtc_sender_ready, webrtc_transport_failure_context, WebRtcFailureEventKind,
+        capture_target_resolved, input_permission_blocked, input_permission_restored,
+        media_source_lost, preview_transport_connected, session_closed, session_closing,
+        session_created, session_degraded, session_expired, transport_blocked,
+        webrtc_failed_with_context, webrtc_sender_ready, webrtc_transport_failure_context,
+        WebRtcFailureEventKind,
     };
 
     #[test]
@@ -701,6 +721,21 @@ mod tests {
         assert_eq!(payload["media_transport_ready"], json!(true));
         assert_eq!(payload["recoverability"], json!("request_input_permission"));
         assert_eq!(payload["frontend_action"], json!("request_permission"));
+    }
+
+    #[test]
+    fn input_permission_restore_projects_resolved_recovery() {
+        let (event_type, payload) = input_permission_restored(18, true).into_parts();
+
+        assert_eq!(event_type, "INPUT_PERMISSION_RESTORED");
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["input_plane"], json!("webrtc_data_channel"));
+        assert_eq!(payload["transport_epoch"], json!(18));
+        assert_eq!(payload["input_activation"], json!("enabled"));
+        assert_eq!(payload["input_activation_reason"], Value::Null);
+        assert_eq!(payload["media_transport_ready"], json!(true));
+        assert_eq!(payload["recoverability"], json!("resolved"));
+        assert_eq!(payload["frontend_action"], Value::Null);
     }
 
     #[test]

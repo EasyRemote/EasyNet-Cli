@@ -193,6 +193,21 @@ impl RemoteDesktopSessionStore {
         session.activate_input_for_transport_epoch(epoch)
     }
 
+    /// Confirm a host-applied input frame for the current direct WebRTC epoch.
+    /// This lets the session aggregate clear any runtime input-permission
+    /// blocker using execution proof instead of frontend inference.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_input_frame_applied(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.mark_input_frame_applied(epoch)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn mark_input_permission_blocked(
         &self,
         session_id: &str,

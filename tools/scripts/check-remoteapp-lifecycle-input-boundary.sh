@@ -1072,6 +1072,8 @@ require 'input_runtime_permission_denied\(reason\)' "$INPUT" \
   'WebRTC input execution must detect OS/runtime input permission denial from apply outcome'
 require 'mark_input_permission_blocked' "$INPUT" \
   'WebRTC input execution must project runtime input permission denial to the session aggregate'
+require 'mark_input_frame_applied' "$INPUT" \
+  'WebRTC input execution must report successful host input application to the session aggregate'
 require 'input_runtime_block_reason' "$SESSION" \
   'session aggregate must retain runtime input permission block reason for later show_session projection'
 require 'input_runtime_block_reason' "$SESSION_RECOVERY" \
@@ -1088,8 +1090,14 @@ require 'INPUT_PERMISSION_BLOCKED' "$SESSION_EVENTS" \
   'session events must expose a stable runtime input permission blocked event'
 require 'input_permission_block_projects_request_permission_recovery' "$SESSION_EVENTS" \
   'session event tests must prove runtime input permission blocks project request-permission recovery'
+require 'INPUT_PERMISSION_RESTORED' "$SESSION_EVENTS" \
+  'session events must expose a stable runtime input permission restored event'
+require 'input_permission_restore_projects_resolved_recovery' "$SESSION_EVENTS" \
+  'session event tests must prove runtime input permission restore projects resolved recovery'
 require 'INPUT_PERMISSION_BLOCKED' "$EVENT_LOG" \
   'event log must classify runtime input permission blocks as input events'
+require 'INPUT_PERMISSION_RESTORED' "$EVENT_LOG" \
+  'event log must classify runtime input permission restores as input events'
 require 'deactivate_input_for_runtime_block' "$SESSION_STATE" \
   'session lifecycle must distinguish runtime input permission block from target loss'
 require 'runtime_input_permission_block_deactivates_input_without_failing_media' "$SESSION" \
