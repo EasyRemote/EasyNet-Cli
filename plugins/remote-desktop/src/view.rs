@@ -459,7 +459,7 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-view-runtime-input-block"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert!(
             session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied")

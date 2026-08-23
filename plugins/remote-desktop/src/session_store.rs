@@ -1001,7 +1001,7 @@ mod tests {
             assert!(sessions
                 .get_mut("rd-production-ready")
                 .unwrap()
-                .report_client_media_state(TransportEpoch::new(1), "presenting"));
+                .report_client_media_state(TransportEpoch::new(1), "presenting", None));
         });
         store.with_sessions(|sessions| {
             let view = serialize_session(sessions.get("rd-production-ready").unwrap());

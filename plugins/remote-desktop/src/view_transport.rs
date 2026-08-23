@@ -591,7 +591,7 @@ mod tests {
             }))
             .expect("local host candidate records");
         session.mark_webrtc_media_sending(epoch, endpoint_ura);
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.media_transport_ready());
         assert!(session.client_media_ready());
         assert!(session.production_media_ready());

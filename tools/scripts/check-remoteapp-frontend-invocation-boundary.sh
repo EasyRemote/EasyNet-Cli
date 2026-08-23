@@ -153,6 +153,28 @@ require 'transport_epoch: epoch' "$STORE" \
   'frontend client media report must bind presentation state to the negotiated transport epoch'
 require 'state: desired' "$STORE" \
   'frontend client media report must submit the latest desired client media state'
+require 'collectRemoteDesktopClientEvidence' "$STORE" \
+  'frontend must collect browser-observed RemoteApp WebRTC/client media evidence from RTCPeerConnection stats'
+require 'client_transport: clientTransport' "$STORE" \
+  'frontend client media report must include bounded browser-observed transport evidence'
+require 'selected_candidate_pair' "$STORE" \
+  'frontend client media report must include selected WebRTC candidate-pair evidence'
+require 'candidate_pair_id' "$STORE" \
+  'frontend selected candidate-pair evidence must expose candidate_pair_id for network fallback verification'
+require 'browser_stats: browserStatsReport' "$STORE" \
+  'frontend client media report must include browser decode/render stats'
+require 'remoteDesktopSelectedCandidatePairReport' "$STORE" \
+  'frontend must derive selected WebRTC candidate-pair evidence from RTCStatsReport'
+require 'candidateType' "$STORE" \
+  'frontend selected candidate-pair report must expose only bounded candidate type metadata, not raw candidate strings'
+require 'currentRoundTripTime' "$STORE" \
+  'frontend selected candidate-pair report must convert browser RTT telemetry into daemon report args'
+require 'remoteDesktopBrowserStatsReportArgs' "$STORE" \
+  'frontend browser stats must be projected into daemon report_client_state schema'
+require 'browser_stats' "$PROTOCOL" \
+  'frontend protocol projection must read daemon-persisted browser_stats from RemoteApp media_stats'
+require 'sampled_at_ms' "$PROTOCOL" \
+  'frontend protocol projection must preserve sampled_at_ms for client media evidence'
 require "clientMediaReportedState === 'presenting'" "$STORE" \
   'frontend presentation timeout must observe the reported client-presenting state'
 require 'remote desktop did not present a frame within' "$STORE" \

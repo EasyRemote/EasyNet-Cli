@@ -164,7 +164,7 @@ pub fn add_ice_candidate_input_schema() -> Value {
 }
 
 pub fn report_client_state_description() -> &'static str {
-    "Report browser-observed media presentation for the active remote desktop transport epoch."
+    "Report browser-observed media presentation and bounded transport evidence for the active remote desktop transport epoch."
 }
 
 pub fn report_client_state_input_schema() -> Value {
@@ -176,9 +176,71 @@ pub fn report_client_state_input_schema() -> Value {
             "session_id": { "type": "string" },
             "session_token": { "type": "string" },
             "transport_epoch": { "type": "integer", "minimum": 1 },
-            "state": { "type": "string", "enum": ["presenting", "stalled", "detached"] }
+            "state": { "type": "string", "enum": ["presenting", "stalled", "detached"] },
+            "client_transport": remote_desktop_client_transport_schema(),
+            "browser_stats": remote_desktop_browser_stats_schema()
         }
     })
+}
+
+fn remote_desktop_client_transport_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "ice_connection_state": bounded_string_schema(),
+            "peer_connection_state": bounded_string_schema(),
+            "route_kind": bounded_string_schema(),
+            "sampled_at_ms": { "type": "number" },
+            "selected_candidate_pair": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": bounded_string_schema(),
+                    "candidate_pair_id": bounded_string_schema(),
+                    "local_candidate_id": bounded_string_schema(),
+                    "remote_candidate_id": bounded_string_schema(),
+                    "local_candidate_type": bounded_string_schema(),
+                    "remote_candidate_type": bounded_string_schema(),
+                    "selected_route_class": bounded_string_schema(),
+                    "protocol": bounded_string_schema(),
+                    "state": bounded_string_schema(),
+                    "selected": { "type": "boolean" },
+                    "nominated": { "type": "boolean" },
+                    "current_round_trip_time_ms": { "type": "number" },
+                    "available_outgoing_bitrate_bps": { "type": "number" },
+                    "available_incoming_bitrate_bps": { "type": "number" },
+                    "packets_discarded_on_send": { "type": "number" },
+                    "bytes_discarded_on_send": { "type": "number" }
+                }
+            }
+        }
+    })
+}
+
+fn remote_desktop_browser_stats_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "sampled_at_ms": { "type": "number" },
+            "frames_decoded": { "type": "number" },
+            "frames_dropped": { "type": "number" },
+            "frames_received": { "type": "number" },
+            "frame_width": { "type": "number" },
+            "frame_height": { "type": "number" },
+            "jitter_buffer_avg_ms": { "type": "number" },
+            "jitter_buffer_target_avg_ms": { "type": "number" },
+            "decode_avg_ms": { "type": "number" },
+            "processing_avg_ms": { "type": "number" },
+            "freeze_count": { "type": "number" },
+            "pause_count": { "type": "number" }
+        }
+    })
+}
+
+fn bounded_string_schema() -> Value {
+    json!({ "type": "string", "minLength": 1, "maxLength": 256 })
 }
 
 /// Human-readable contract for `remote_desktop.watch_events`.

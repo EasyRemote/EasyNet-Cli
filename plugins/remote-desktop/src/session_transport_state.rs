@@ -255,6 +255,20 @@ impl RemoteDesktopTransportState {
         true
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn merge_media_stats(
+        &mut self,
+        epoch: TransportEpoch,
+        stats: Value,
+    ) -> bool {
+        if !self.accepts_epoch(epoch) {
+            return false;
+        }
+        let mut merged = self.media_stats().unwrap_or_else(|| json!({}));
+        merge_json_object(&mut merged, stats);
+        self.media_stats = Some(RemoteDesktopMediaStats::new(merged));
+        true
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn preview_attached(&self) -> bool {
         self.preview_stop_tx.is_some()
     }
@@ -288,6 +302,26 @@ impl RemoteDesktopTransportState {
         stop_tx: watch::Sender<bool>,
     ) {
         self.preview_stop_tx = Some(stop_tx);
+    }
+}
+
+fn merge_json_object(target: &mut Value, patch: Value) {
+    let Value::Object(target_object) = target else {
+        *target = patch;
+        return;
+    };
+    let Value::Object(patch_object) = patch else {
+        return;
+    };
+    for (key, value) in patch_object {
+        match (target_object.get_mut(&key), value) {
+            (Some(existing @ Value::Object(_)), patch @ Value::Object(_)) => {
+                merge_json_object(existing, patch);
+            }
+            (_, value) => {
+                target_object.insert(key, value);
+            }
+        }
     }
 }
 

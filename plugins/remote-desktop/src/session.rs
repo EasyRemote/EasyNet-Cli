@@ -1043,6 +1043,22 @@ impl RemoteDesktopSession {
         ));
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn merge_client_media_stats(
+        &mut self,
+        epoch: TransportEpoch,
+        stats: Value,
+    ) -> bool {
+        if self.lifecycle.is_terminal() || !self.transport.merge_media_stats(epoch, stats.clone()) {
+            return false;
+        }
+        self.touch();
+        self.push_projected_event(session_events::media_pipeline_stats(
+            self.transport.media_transport_ready(),
+            stats,
+        ));
+        true
+    }
+
     /// Detach preview transport state and return the stop signal to notify.
     pub(in crate::daemon::plugins::remote_desktop) fn detach_preview_transport(
         &mut self,
@@ -1173,8 +1189,12 @@ impl RemoteDesktopSession {
         &mut self,
         epoch: TransportEpoch,
         state: &str,
+        client_media_stats: Option<Value>,
     ) -> bool {
         if self.lifecycle.is_terminal() {
+            return false;
+        }
+        if self.transport_epoch() != Some(epoch.value()) {
             return false;
         }
         let changed = match state {
@@ -1182,21 +1202,26 @@ impl RemoteDesktopSession {
             "stalled" | "detached" => self.transport.mark_client_stalled(epoch),
             _ => false,
         };
-        if !changed {
+        let stats_recorded = client_media_stats
+            .map(|stats| self.merge_client_media_stats(epoch, stats))
+            .unwrap_or(false);
+        if !changed && !stats_recorded && state != "presenting" {
             return false;
         }
-        self.reconcile_lifecycle();
-        self.touch();
-        self.push_projected_event(session_events::client_media_state_changed(
-            state,
-            epoch.value(),
-        ));
-        if let Some(phase @ PrimaryMediaPhase::Degraded) = self.transport.primary_phase() {
-            self.push_projected_event(session_events::session_degraded(
+        if changed {
+            self.reconcile_lifecycle();
+            self.touch();
+            self.push_projected_event(session_events::client_media_state_changed(
                 state,
                 epoch.value(),
-                phase.as_str(),
             ));
+            if let Some(phase @ PrimaryMediaPhase::Degraded) = self.transport.primary_phase() {
+                self.push_projected_event(session_events::session_degraded(
+                    state,
+                    epoch.value(),
+                    phase.as_str(),
+                ));
+            }
         }
         true
     }
@@ -1388,7 +1413,7 @@ mod tests {
             )
             .expect("local answer records on rehydrated session");
         session.mark_webrtc_media_sending(epoch, endpoint_ura);
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
 
         assert_eq!(session.session_id(), "rd-rehydrate-media-resume");
         assert_eq!(session.transport_epoch(), Some(epoch.value()));
@@ -1825,7 +1850,7 @@ mod tests {
             "input cannot activate while media is device-sending but not client-presenting"
         );
 
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.mark_input_frame_applied(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -1851,14 +1876,14 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-client-media-stalled"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert_eq!(session.state(), RemoteDesktopState::Connected);
         assert_eq!(
             session.transport_state()["primary"],
             json!("client_presenting")
         );
 
-        assert!(session.report_client_media_state(epoch, "stalled"));
+        assert!(session.report_client_media_state(epoch, "stalled", None));
         assert_eq!(session.state(), RemoteDesktopState::Degraded);
         assert_eq!(session.transport_state()["primary"], json!("degraded"));
         assert!(session.media_transport_ready());
@@ -1905,6 +1930,83 @@ mod tests {
     }
 
     #[test]
+    fn client_media_report_merges_transport_evidence_without_overwriting_device_stats() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-client-transport-evidence",
+            "easynet:///r/acme/resource/display.client-transport",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(41);
+
+        session.begin_webrtc_negotiation(epoch);
+        session.record_media_stats(
+            epoch,
+            json!({
+                "backend_id": "macos-sck-videotoolbox-webrtc",
+                "target_fps": 60,
+                "webrtc_stats": {
+                    "outbound_rtp": {
+                        "frames_sent": 10
+                    }
+                }
+            }),
+        );
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-client-transport-evidence"),
+        );
+
+        assert!(session.report_client_media_state(
+            epoch,
+            "presenting",
+            Some(json!({
+                "webrtc_stats": {
+                    "selected_candidate_pair": {
+                        "id": "pair-1",
+                        "candidate_pair_id": "pair-1",
+                        "local_candidate_id": "local-1",
+                        "remote_candidate_id": "remote-1",
+                        "selected_route_class": "direct",
+                        "state": "succeeded",
+                        "selected": true,
+                        "nominated": true
+                    }
+                },
+                "browser_stats": {
+                    "frames_decoded": 12,
+                    "frame_width": 1280,
+                    "frame_height": 720
+                }
+            }))
+        ));
+        assert!(session.report_client_media_state(
+            epoch,
+            "presenting",
+            Some(json!({
+                "browser_stats": {
+                    "frames_decoded": 24,
+                    "decode_avg_ms": 5.0
+                }
+            }))
+        ));
+
+        let stats = session.media_stats().expect("merged media stats");
+        assert_eq!(stats["backend_id"], json!("macos-sck-videotoolbox-webrtc"));
+        assert_eq!(stats["target_fps"], json!(60));
+        assert_eq!(
+            stats["webrtc_stats"]["outbound_rtp"]["frames_sent"],
+            json!(10)
+        );
+        assert_eq!(
+            stats["webrtc_stats"]["selected_candidate_pair"]["candidate_pair_id"],
+            json!("pair-1")
+        );
+        assert_eq!(stats["browser_stats"]["frames_decoded"], json!(24));
+        assert_eq!(stats["browser_stats"]["frame_width"], json!(1280));
+        assert_eq!(stats["browser_stats"]["decode_avg_ms"], json!(5.0));
+    }
+
+    #[test]
     fn input_activation_requires_target_input_enabled_snapshot() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-input-target-gate",
@@ -1916,7 +2018,7 @@ mod tests {
         session.begin_webrtc_negotiation(epoch);
         session
             .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-target-gate"));
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert_eq!(
             session.lifecycle_phase(),
             RemoteDesktopSessionPhase::MediaActive
@@ -1952,7 +2054,7 @@ mod tests {
 
         session.begin_webrtc_negotiation(epoch);
         session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-focus-loss"));
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -2004,7 +2106,7 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-input-permission-blocked"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -2081,7 +2183,7 @@ mod tests {
         session.begin_webrtc_negotiation(epoch);
         session
             .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-pending-loss"));
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -2138,7 +2240,7 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-consent-revoked-gate"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -2374,7 +2476,7 @@ mod tests {
         );
         assert_eq!(session.transport_state()["device_sending"], json!(false));
 
-        assert!(!session.report_client_media_state(epoch, "stalled"));
+        assert!(!session.report_client_media_state(epoch, "stalled", None));
         assert_eq!(session.state(), RemoteDesktopState::Suspended);
         assert_eq!(
             session.transport_state()["primary"],
@@ -2405,7 +2507,7 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-target-rebind-failed"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.production_media_ready());
 
         session.record_target_observation(TargetObservation::Lost {

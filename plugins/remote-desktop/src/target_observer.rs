@@ -1437,7 +1437,7 @@ mod tests {
             )
             .expect("local answer records");
         session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-window-reappear"));
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(
             session.production_media_ready(),
             "fixture starts with production media online before target loss"

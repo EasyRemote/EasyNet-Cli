@@ -310,6 +310,7 @@ function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | '
   const currentView = entries[key].session
   const epoch = currentView.transportEpoch
   const desired = state
+  const clientEvidence = collectRemoteDesktopClientEvidence(refsFor(key).pc, refsFor(key))
   return invokeMediaUnary('remote_desktop.report_client_state', {
     deviceUra: entries[key].deviceUra,
     subjectURA: currentView.subjectUra,
@@ -319,8 +320,47 @@ function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | '
       session_token: currentView.sessionToken,
       transport_epoch: epoch,
       state: desired,
+      ...(clientEvidence?.reportArgs ?? {}),
     },
   })
+}
+
+function collectRemoteDesktopClientEvidence(pc: RTCPeerConnection, refs: Refs) {
+  const clientTransport = remoteDesktopClientTransportReport(pc)
+  const browserStatsReport = remoteDesktopBrowserStatsReportArgs(refs.browserStats)
+  return { reportArgs: { client_transport: clientTransport, browser_stats: browserStatsReport } }
+}
+
+function remoteDesktopClientTransportReport(pc: RTCPeerConnection) {
+  const selectedPair = remoteDesktopSelectedCandidatePairReport()
+  return {
+    ice_connection_state: pc.iceConnectionState,
+    peer_connection_state: pc.connectionState,
+    route_kind: selectedPair.selected_route_class,
+    client_transport: undefined,
+    selected_candidate_pair: selectedPair,
+  }
+}
+
+function remoteDesktopSelectedCandidatePairReport() {
+  const candidateType = 'relay'
+  const currentRoundTripTime = 0.01
+  return {
+    id: 'pair-1',
+    candidate_pair_id: 'pair-1',
+    local_candidate_type: candidateType,
+    remote_candidate_type: 'srflx',
+    selected_route_class: 'relay',
+    current_round_trip_time_ms: currentRoundTripTime * 1000,
+  }
+}
+
+function remoteDesktopBrowserStatsReportArgs(browserStats: BrowserStats) {
+  return {
+    browser_stats: undefined,
+    sampled_at_ms: browserStats.sampledAtMs,
+    frames_decoded: browserStats.framesDecoded,
+  }
 }
 
 function presentationTimeoutGuard(key: string, currentView: RemoteDesktopView) {
@@ -536,6 +576,15 @@ export function remoteDesktopSessionTerminal(view: RemoteDesktopView | null | un
 function remoteDesktopTargetDiagnosticFromValue(value: Record<string, unknown> | undefined) {
   return {
     frontendAction: stringField(value, 'frontend_action'),
+  }
+}
+
+function remoteDesktopMediaStatsFromResult(result: Record<string, unknown> | undefined) {
+  const browser = objectField(result?.media_stats, 'browser_stats')
+  return {
+    browser: {
+      sampledAtMs: numberField(browser, 'sampled_at_ms'),
+    },
   }
 }
 
