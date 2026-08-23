@@ -1351,7 +1351,7 @@ int32_t runtime_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
 		active_stream_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}");
 	}
 	if (stream_id == 404 && active_stream_v8_callback != 0) {
-		active_stream_v8_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}", 0, 0);
+		active_stream_v8_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"transport_terminal\":false,\"payload_content_type\":\"application/json\",\"admission_receipt\":null,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true},\"error\":null}", 0, 0);
 	}
 	return stream_id == 404 ? 0 : 4;
 }
@@ -1414,14 +1414,14 @@ int32_t runtime_invocation_stream_open_v8(uint64_t handle, const char *invocatio
 	active_stream_user_data = user_data;
 	active_stream_cancel_calls = 0;
 	if (strstr(invocation_json, "conformance_backpressure") != 0) {
-		char event[160];
+		char event[260];
 		for (int sequence = 1; sequence <= 1025; sequence++) {
-			snprintf(event, sizeof(event), "{\"sequence\":%d,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false}", sequence);
+			snprintf(event, sizeof(event), "{\"sequence\":%d,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"transport_terminal\":false,\"payload_content_type\":\"application/json\",\"admission_receipt\":null,\"terminal_receipt\":null,\"error\":null}", sequence);
 			on_chunk(user_data, event, 0, 0);
 		}
 	} else {
 		const char *payload = "{\"step\":1}";
-		on_chunk(user_data, "{\"sequence\":1,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"payload_content_type\":\"application/json\"}", (const uint8_t *)payload, strlen(payload));
+		on_chunk(user_data, "{\"sequence\":1,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"transport_terminal\":false,\"payload_content_type\":\"application/json\",\"admission_receipt\":null,\"terminal_receipt\":null,\"error\":null}", (const uint8_t *)payload, strlen(payload));
 	}
 	return 0;
 }

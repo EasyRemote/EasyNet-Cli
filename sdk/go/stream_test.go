@@ -174,6 +174,100 @@ func TestStreamEventRejectsLegacyChunkKind(t *testing.T) {
 	}
 }
 
+func TestRawStreamPacketRequiresCanonicalMetadataContract(t *testing.T) {
+	base := map[string]any{
+		"sequence":             1,
+		"kind":                 "data",
+		"state":                "Open",
+		"terminal":             false,
+		"transport_terminal":   false,
+		"payload_content_type": "application/json",
+		"admission_receipt":    nil,
+		"terminal_receipt":     nil,
+		"error":                nil,
+	}
+
+	for _, field := range rawStreamRequiredMetadataFields {
+		metadata := cloneMap(base)
+		delete(metadata, field)
+		raw, err := json.Marshal(metadata)
+		if err != nil {
+			t.Fatalf("marshal metadata without %s: %v", field, err)
+		}
+		_, err = NewStreamEventFromRawPacket(rawStreamPacket{
+			metadataJSON: raw,
+			payload:      []byte(`{"ok":true}`),
+		})
+		if err == nil || !strings.Contains(err.Error(), "missing required canonical field "+field) {
+			t.Fatalf("raw stream packet accepted metadata without %s: %v", field, err)
+		}
+	}
+}
+
+func TestRawStreamPacketRejectsInvalidMetadataTypesAndPayloadDuplication(t *testing.T) {
+	for name, mutation := range map[string]func(map[string]any){
+		"state":                func(metadata map[string]any) { metadata["state"] = 7 },
+		"terminal":             func(metadata map[string]any) { metadata["terminal"] = "false" },
+		"transport_terminal":   func(metadata map[string]any) { metadata["transport_terminal"] = "false" },
+		"payload_content_type": func(metadata map[string]any) { metadata["payload_content_type"] = nil },
+		"payload_base64":       func(metadata map[string]any) { metadata["payload_base64"] = "e30=" },
+		"payload_json":         func(metadata map[string]any) { metadata["payload_json"] = map[string]any{"dup": true} },
+	} {
+		metadata := canonicalRawStreamMetadata()
+		mutation(metadata)
+		raw, err := json.Marshal(metadata)
+		if err != nil {
+			t.Fatalf("marshal %s metadata: %v", name, err)
+		}
+		_, err = NewStreamEventFromRawPacket(rawStreamPacket{
+			metadataJSON: raw,
+			payload:      []byte(`{"ok":true}`),
+		})
+		if err == nil {
+			t.Fatalf("raw stream packet accepted invalid %s metadata", name)
+		}
+	}
+}
+
+func TestRawStreamPacketPreservesPayloadBytesAndProjectsJSON(t *testing.T) {
+	raw, err := json.Marshal(canonicalRawStreamMetadata())
+	if err != nil {
+		t.Fatalf("marshal canonical raw metadata: %v", err)
+	}
+	event, err := NewStreamEventFromRawPacket(rawStreamPacket{
+		metadataJSON: raw,
+		payload:      []byte(`{"ok":true}`),
+	})
+	if err != nil {
+		t.Fatalf("NewStreamEventFromRawPacket: %v", err)
+	}
+	if string(event.PayloadBytes()) != `{"ok":true}` || string(event.PayloadJSON()) != `{"ok":true}` {
+		t.Fatalf("raw payload not preserved: bytes=%q json=%s", event.PayloadBytes(), event.PayloadJSON())
+	}
+}
+
+func canonicalRawStreamMetadata() map[string]any {
+	return map[string]any{
+		"sequence":             1,
+		"kind":                 "data",
+		"state":                "Open",
+		"terminal":             false,
+		"transport_terminal":   false,
+		"payload_content_type": "application/json",
+		"admission_receipt":    nil,
+		"terminal_receipt":     nil,
+		"error":                nil,
+	}
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	clone := make(map[string]any, len(value))
+	for key, item := range value {
+		clone[key] = item
+	}
+	return clone
+}
+
 func TestStreamTerminalEventProjectsTerminalReceipt(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
 		`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true},"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,

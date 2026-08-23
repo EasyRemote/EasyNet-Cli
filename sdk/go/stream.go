@@ -11,6 +11,18 @@ import (
 
 const MaxStreamBufferedEvents = 1024
 
+var rawStreamRequiredMetadataFields = []string{
+	"sequence",
+	"kind",
+	"state",
+	"terminal",
+	"transport_terminal",
+	"payload_content_type",
+	"admission_receipt",
+	"terminal_receipt",
+	"error",
+}
+
 // StreamState is the Runtime Core server-stream state.
 type StreamState string
 
@@ -674,6 +686,9 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 }
 
 func NewStreamEventFromRawPacket(packet rawStreamPacket) (StreamEvent, error) {
+	if err := requireRawStreamMetadataContract(packet.metadataJSON); err != nil {
+		return StreamEvent{}, err
+	}
 	event, err := NewStreamEventFromJSON(packet.metadataJSON)
 	if err != nil {
 		return StreamEvent{}, err
@@ -691,6 +706,31 @@ func NewStreamEventFromRawPacket(packet rawStreamPacket) (StreamEvent, error) {
 	event.payloadBytes = append([]byte(nil), packet.payload...)
 	event.payloadJSON = payloadJSON
 	return event, nil
+}
+
+func requireRawStreamMetadataContract(raw []byte) error {
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return invalidRuntimePayload(fmt.Sprintf("decode stream event JSON: %v", err), err)
+	}
+	for _, field := range rawStreamRequiredMetadataFields {
+		if _, ok := decoded[field]; !ok {
+			return invalidRuntimePayload("raw stream packet metadata missing required canonical field "+field, nil)
+		}
+	}
+	if _, ok := decoded["state"].(string); !ok {
+		return invalidRuntimePayload("raw stream packet metadata state must be a string", nil)
+	}
+	if _, ok := decoded["terminal"].(bool); !ok {
+		return invalidRuntimePayload("raw stream packet metadata terminal must be a boolean", nil)
+	}
+	if _, ok := decoded["transport_terminal"].(bool); !ok {
+		return invalidRuntimePayload("raw stream packet metadata transport_terminal must be a boolean", nil)
+	}
+	if _, ok := decoded["payload_content_type"].(string); !ok {
+		return invalidRuntimePayload("raw stream packet metadata payload_content_type must be a string", nil)
+	}
+	return nil
 }
 
 func streamPayloadBase64Bytes(value string) ([]byte, error) {

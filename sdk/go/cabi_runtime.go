@@ -2072,7 +2072,7 @@ func (i *cabiCallbackInbox) recv(ctx context.Context) (cabiCallbackPacket, error
 }
 
 func cabiCallbackBackpressureFailure() []byte {
-	return []byte(`{"kind":"error","state":"Failed","terminal":false,"transport_terminal":true,"error":{"code":"ADMISSION_DENIED","stage":"cabi_callback","message":"C ABI callback queue limit exceeded","retry":"after_backoff","details":{"wire_code":"RESOURCE_EXHAUSTED","reason":"callback_queue_overflow","bounded_queue":true}}}`)
+	return []byte(`{"kind":"error","state":"Failed","terminal":false,"transport_terminal":true,"payload_content_type":"application/json","admission_receipt":null,"terminal_receipt":null,"error":{"code":"ADMISSION_DENIED","stage":"cabi_callback","message":"C ABI callback queue limit exceeded","retry":"after_backoff","details":{"wire_code":"RESOURCE_EXHAUSTED","reason":"callback_queue_overflow","bounded_queue":true}}}`)
 }
 
 func (i *cabiCallbackInbox) close() {
