@@ -553,10 +553,18 @@ require 'observed_bitrate_kbps' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect observed bitrate'
 require 'bitrate_downshift' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require bitrate downshift evidence'
+require 'degraded_network target_bitrate_kbps must be lower than baseline' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require degraded target bitrate downshift'
+require 'degraded_network observed_bitrate_kbps must be lower than baseline' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require degraded observed bitrate downshift'
+require 'degraded_network must reduce effective_fps or drop frames versus baseline' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require degraded FPS/drop delta'
 require 'backpressure_detected' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require backpressure detection evidence'
 require 'frames_dropped' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require frame drop evidence'
+require 'backpressure frames_dropped must exceed baseline' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require backpressure drop delta'
 require 'audio.status must be passed' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must require live host audio evidence'
 require 'host audio unsupported state is not product media evidence' "$MEDIA_ADAPTATION" \

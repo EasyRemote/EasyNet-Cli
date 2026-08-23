@@ -141,6 +141,13 @@ def integer(value, default=0):
     except (TypeError, ValueError):
         return default
 
+def nested_get(value, path, default=None):
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return default
+        value = value[part]
+    return value
+
 required_scenarios = {"baseline", "degraded_network", "backpressure"}
 allowed_video_codecs = {"h264", "avc1", "vp8", "vp9", "av1", "hevc"}
 allowed_audio_codecs = {"opus", "aac", "pcm", "flac"}
@@ -345,6 +352,29 @@ for scenario_name in sorted(required_scenarios):
         "frames_rendered": integer(video.get("frames_rendered")),
     })
 
+baseline = scenario_by_name.get("baseline")
+degraded = scenario_by_name.get("degraded_network")
+backpressure = scenario_by_name.get("backpressure")
+if isinstance(baseline, dict) and isinstance(degraded, dict):
+    baseline_target_bitrate = integer(nested_get(baseline, "video.target_bitrate_kbps"))
+    degraded_target_bitrate = integer(nested_get(degraded, "video.target_bitrate_kbps"))
+    baseline_observed_bitrate = integer(nested_get(baseline, "video.observed_bitrate_kbps"))
+    degraded_observed_bitrate = integer(nested_get(degraded, "video.observed_bitrate_kbps"))
+    baseline_effective_fps = number(nested_get(baseline, "video.effective_fps"))
+    degraded_effective_fps = number(nested_get(degraded, "video.effective_fps"))
+    degraded_frames_dropped = integer(nested_get(degraded, "drop_policy.frames_dropped"))
+    require(degraded_target_bitrate < baseline_target_bitrate,
+            "degraded_network target_bitrate_kbps must be lower than baseline")
+    require(degraded_observed_bitrate < baseline_observed_bitrate,
+            "degraded_network observed_bitrate_kbps must be lower than baseline")
+    require(degraded_effective_fps < baseline_effective_fps or degraded_frames_dropped > 0,
+            "degraded_network must reduce effective_fps or drop frames versus baseline")
+if isinstance(baseline, dict) and isinstance(backpressure, dict):
+    baseline_frames_dropped = integer(nested_get(baseline, "drop_policy.frames_dropped"))
+    backpressure_frames_dropped = integer(nested_get(backpressure, "drop_policy.frames_dropped"))
+    require(backpressure_frames_dropped > baseline_frames_dropped,
+            "backpressure frames_dropped must exceed baseline")
+
 if errors:
     report = {
         "script": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
@@ -442,7 +472,7 @@ def scenario(name, *, degraded=False, backpressure=False):
             "requested_fps": 60,
             "effective_fps": 60 if not degraded else 30,
             "measured_fps": 59.5 if not degraded else 29.2,
-            "target_bitrate_kbps": 6000,
+            "target_bitrate_kbps": 2500 if degraded else 6000,
             "observed_bitrate_kbps": 5800 if not degraded else 2400,
             "keyframe_interval_frames": 30,
             "p95_frame_latency_ms": 42,

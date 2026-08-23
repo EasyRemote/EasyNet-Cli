@@ -154,6 +154,15 @@ grep -q "media adaptation verifier must require bitrate downshift evidence" /tmp
   fail "expected media adaptation bitrate-downshift failure"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 
+perl -0pi -e 's#degraded_network target_bitrate_kbps must be lower than baseline#degraded_network target bitrate may match baseline#g' \
+  "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-target-delta.out 2>&1; then
+  fail "checker accepted media adaptation verifier without degraded target bitrate delta"
+fi
+grep -q "media adaptation verifier must require degraded target bitrate downshift" /tmp/check-remoteapp-product-closure-media-target-delta.out || \
+  fail "expected media adaptation degraded target bitrate delta failure"
+cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+
 perl -0pi -e 's#audio.status must be passed#audio.status may be unsupported#g' \
   "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
 if (cd "$SB" && CHECK_REMOTEAPP_PRODUCT_CLOSURE_ROOT="$SB" bash tools/scripts/check-remoteapp-product-closure-audit.sh) >/tmp/check-remoteapp-product-closure-media-audio.out 2>&1; then
