@@ -2535,7 +2535,6 @@ fn real_http_request_hits_a_localhost_listener() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_net_tunnel_round_trips_bytes_through_dispatcher() {
-    use base64::Engine as _;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -2588,11 +2587,12 @@ async fn real_net_tunnel_round_trips_bytes_through_dispatcher() {
         .to_string();
 
     bidi.to_client
-        .send(json!({
-            "type": "data",
-            "connection_id": connection_id,
-            "data": base64::engine::general_purpose::STANDARD.encode(b"ping"),
-        }))
+        .send_frame(
+            crate::daemon::ability::dispatch::BidiInputFrame::new(b"ping".to_vec())
+                .with_content_type(
+                    crate::support::platform::tunnel_codec::TUNNEL_DATA_CONTENT_TYPE,
+                ),
+        )
         .await
         .expect("send tunnel data");
     bidi.to_client
@@ -2609,15 +2609,13 @@ async fn real_net_tunnel_round_trips_bytes_through_dispatcher() {
         let frame = tokio::time::timeout(std::time::Duration::from_secs(2), output.recv())
             .await
             .expect("tunnel output timeout")
-            .expect("tunnel output")
-            .into_json_value()
-            .expect("tunnel JSON");
+            .expect("tunnel output");
+        if frame.content_type == crate::support::platform::tunnel_codec::TUNNEL_DATA_CONTENT_TYPE {
+            response.extend(frame.payload);
+            continue;
+        }
+        let frame = frame.into_json_value().expect("tunnel JSON");
         match frame["type"].as_str().expect("tunnel frame type") {
-            "data" => response.extend(
-                base64::engine::general_purpose::STANDARD
-                    .decode(frame["data"].as_str().expect("tunnel base64 payload"))
-                    .expect("decode tunnel payload"),
-            ),
             "half_close" => {}
             "complete" => break,
             "error" => panic!("net.tunnel returned error: {frame}"),
@@ -3462,7 +3460,6 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 // requires a token-grep match for the ability name in this file.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
-    use base64::Engine;
     let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
@@ -3488,12 +3485,14 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
         .expect("file_transfer bidi");
 
     let bytes = b"real-invoke-device-file-transfer";
-    let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     bidi.to_client
-        .send(json!({"type": "chunk", "data": chunk_b64}))
+        .send_frame(
+            crate::daemon::ability::dispatch::BidiInputFrame::new(bytes.to_vec())
+                .with_content_type("application/octet-stream"),
+        )
         .await
         .unwrap();
-    bidi.to_client.send(json!({"type": "eof"})).await.unwrap();
+    drop(bidi.to_client);
 
     // Drain frames until we see complete or timeout.
     let mut from = bidi.from_client;
@@ -3508,7 +3507,8 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
                     break;
                 }
             }
-            _ => break,
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
     assert!(got_complete, "expected `complete` frame from fs.transfer");
@@ -3518,7 +3518,6 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
-    use base64::Engine;
     let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
@@ -3552,16 +3551,12 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     while std::time::Instant::now() < deadline {
         match tokio::time::timeout(std::time::Duration::from_millis(500), from.recv()).await {
             Ok(Some(f)) => {
+                if f.content_type == "application/octet-stream" {
+                    downloaded.extend(f.payload);
+                    continue;
+                }
                 let f = f.into_json_value().expect("fs.transfer emits JSON");
                 match f["type"].as_str() {
-                    Some("chunk") => {
-                        let chunk = f["data"].as_str().expect("chunk carries base64 data");
-                        downloaded.extend(
-                            base64::engine::general_purpose::STANDARD
-                                .decode(chunk)
-                                .expect("chunk base64 decodes"),
-                        );
-                    }
                     Some("complete") => {
                         got_complete = true;
                         break;
@@ -3569,7 +3564,8 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
                     other => panic!("unexpected file_transfer download frame {other:?}: {f}"),
                 }
             }
-            _ => break,
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
     assert!(
