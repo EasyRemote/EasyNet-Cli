@@ -189,8 +189,16 @@ impl StreamDispatcher {
         };
         let forwarded_request = stream_request_as_invoke_request(request);
         require_complete_signed_remote_request(&forwarded_request)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&forwarded_request, &selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
+            self.sessions.device_trust_sync.as_ref(),
+            &selected_route.execution_host_ura,
+            "InvokeStream HubSession",
+        )
+        .await?;
         crate::op_event!(
             component = daemon_invocation,
             kind = canonical_invoke_stream_hub_session_selected_route,
@@ -397,7 +405,8 @@ impl StreamDispatcher {
             payload_ref: request.payload_ref.clone(),
             ..axon_sdk::pb::axon::v1::InvokeRequest::default()
         };
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&forwarded_request, &selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
             receipt_resolver.as_ref(),
@@ -1588,9 +1597,10 @@ mod tests {
     async fn forwarded_remote_stream_times_out_without_terminal_event() {
         let pending = PendingStreamDispatchMap::new();
         let handle = pending.register_pending_for("easynet:///r/test/device/target");
-        let binding =
-            ForwardedInvocationBinding::from_request(&forwarded_request_for_timeout_test())
-                .expect("forwarded binding");
+        let binding = ForwardedInvocationBinding::for_delegated_request(
+            &forwarded_request_for_timeout_test(),
+        )
+        .expect("forwarded binding");
 
         let response = project_forwarded_remote_stream(
             RemoteStreamEventSource::Presence {
@@ -1626,9 +1636,10 @@ mod tests {
         let handle = pending.register_pending_for("easynet:///r/test/device/target");
         let call_id = handle.call_id();
         let (carrier_tx, mut carrier_rx) = mpsc::channel(2);
-        let binding =
-            ForwardedInvocationBinding::from_request(&forwarded_request_for_timeout_test())
-                .expect("forwarded binding");
+        let binding = ForwardedInvocationBinding::for_delegated_request(
+            &forwarded_request_for_timeout_test(),
+        )
+        .expect("forwarded binding");
 
         let response = project_forwarded_remote_stream(
             RemoteStreamEventSource::Presence {

@@ -638,8 +638,16 @@ impl BidiDispatcher {
             ));
         };
         let request = bidi_open_to_invoke_request(envelope_open)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&request, selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
+            self.sessions.device_trust_sync.as_ref(),
+            &selected_route.execution_host_ura,
+            "InvokeBidi HubSession",
+        )
+        .await?;
         let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
         let mut handle = escalation
             .escalate_bidi(request)
@@ -896,7 +904,8 @@ impl BidiDispatcher {
 
         let forwarded_request =
             remote_bidi_forwarded_request(selected_route, envelope_open, call_mode)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&forwarded_request, selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
             receipt_resolver.as_ref(),

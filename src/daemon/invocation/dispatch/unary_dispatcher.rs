@@ -2024,7 +2024,7 @@ impl UnaryDispatcher {
         route: &DelegatedInvokeRoute,
     ) -> Result<Response<InvokeResponse>, Status> {
         require_complete_signed_remote_request(request)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let forwarded_binding = ForwardedInvocationBinding::for_delegated_request(request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         let client = self.federation.client.as_ref().ok_or_else(|| {
             Status::failed_precondition("remote Invoke: federation dialer is not configured")
@@ -2081,8 +2081,10 @@ impl UnaryDispatcher {
             execution_host_ura = route.execution_host_ura.as_str(),
             route_ura = route.route_ura.as_str(),
         );
+        let forwarded_binding = ForwardedInvocationBinding::for_selected_route(request, route)?;
         self.forward_canonical_invoke_through_upstream_hub(
             request,
+            forwarded_binding,
             "remote Invoke HubSession dispatch",
         )
         .await
@@ -2103,8 +2105,10 @@ impl UnaryDispatcher {
             peer_realm = route.realm.as_str(),
             peer_hub_ura = route.hub_ura.as_str(),
         );
+        let forwarded_binding = ForwardedInvocationBinding::for_delegated_request(request)?;
         self.forward_canonical_invoke_through_upstream_hub(
             request,
+            forwarded_binding,
             "remote Invoke upstream-Hub peer delegation",
         )
         .await
@@ -2113,6 +2117,7 @@ impl UnaryDispatcher {
     async fn forward_canonical_invoke_through_upstream_hub(
         &self,
         request: &InvokeRequest,
+        forwarded_binding: ForwardedInvocationBinding,
         context: &'static str,
     ) -> Result<Response<InvokeResponse>, Status> {
         require_complete_signed_remote_request(request)?;
@@ -2121,17 +2126,27 @@ impl UnaryDispatcher {
                 "{context}: authenticated upstream session is not configured"
             )));
         };
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        if let Some(execution_host_ura) = forwarded_binding.selected_execution_host_ura() {
+            ensure_forwarded_receipt_signer_key(
+                receipt_resolver.as_ref(),
+                self.sessions.device_trust_sync.as_ref(),
+                execution_host_ura,
+                context,
+            )
+            .await?;
+        }
         match handle.escalate_invoke(request.clone()).await {
             Ok(response) => {
-                ensure_forwarded_response_receipt_signer_keys(
-                    receipt_resolver.as_ref(),
-                    self.sessions.device_trust_sync.as_ref(),
-                    &response,
-                    context,
-                )
-                .await?;
+                if forwarded_binding.selected_execution_host_ura().is_none() {
+                    ensure_forwarded_response_receipt_signer_keys(
+                        receipt_resolver.as_ref(),
+                        self.sessions.device_trust_sync.as_ref(),
+                        &response,
+                        context,
+                    )
+                    .await?;
+                }
                 let finalized = ForwardedFinalizedInvocation::verify_response(
                     &forwarded_binding,
                     response,
@@ -2185,7 +2200,8 @@ impl UnaryDispatcher {
             request.target.as_ref(),
             &request.arguments,
         )?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(request, selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         self.reject_self_presence_host(selected_route, "Invoke")
             .await?;

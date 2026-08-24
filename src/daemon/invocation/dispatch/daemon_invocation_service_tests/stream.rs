@@ -912,12 +912,13 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             },
         )
         .expect("canonical presence key");
-    publish_test_projected_route(
+    publish_test_projected_route_with_descriptor_ref(
         &svc,
         &target_system_agent_ura,
         ABILITY,
         TARGET_DEVICE_URA,
         crate::daemon::ability::CallMode::Stream,
+        &descriptor_ref,
     );
 
     let resp = svc

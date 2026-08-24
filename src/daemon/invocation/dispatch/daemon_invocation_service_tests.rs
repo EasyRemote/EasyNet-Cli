@@ -646,9 +646,50 @@ fn publish_test_projected_route(
     execution_host_ura: &str,
     call_mode: crate::daemon::ability::CallMode,
 ) {
+    let projected_public_name =
+        crate::core::ura::owner_local_ability_name(callee_owner_ura, public_name);
+    let ability_ura = crate::core::ura::owner_ability_ura(callee_owner_ura, &projected_public_name)
+        .unwrap_or_else(|| {
+            panic!("derive test ability URA for {callee_owner_ura} {projected_public_name}")
+        });
+    let descriptor_ref = if call_mode == crate::daemon::ability::CallMode::Rpc {
+        test_descriptor_ref(callee_owner_ura, public_name)
+    } else {
+        axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+            "{ability_ura}@1.0.0#{}!{}",
+            "a".repeat(64),
+            test_admission_action_for_call_mode(call_mode),
+        ))
+        .expect("test descriptor_ref must be canonical")
+    };
+    publish_test_projected_route_with_descriptor_ref(
+        svc,
+        callee_owner_ura,
+        public_name,
+        execution_host_ura,
+        call_mode,
+        &descriptor_ref,
+    );
+}
+
+fn publish_test_projected_route_with_descriptor_ref(
+    svc: &DaemonInvocationService,
+    callee_owner_ura: &str,
+    public_name: &str,
+    execution_host_ura: &str,
+    call_mode: crate::daemon::ability::CallMode,
+    descriptor_ref: &str,
+) {
     let public_name = crate::core::ura::owner_local_ability_name(callee_owner_ura, public_name);
     let ability_ura = crate::core::ura::owner_ability_ura(callee_owner_ura, &public_name)
         .unwrap_or_else(|| panic!("derive test ability URA for {callee_owner_ura} {public_name}"));
+    let descriptor_ability_ura =
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(descriptor_ref)
+            .expect("project explicit test descriptor ability");
+    assert_eq!(
+        descriptor_ability_ura, ability_ura,
+        "explicit test descriptor must bind the projected owner ability",
+    );
     let host_ura = match crate::core::ura::parse_ura(callee_owner_ura).map(|parsed| parsed.kind) {
         Ok(crate::core::ura::URAKind::Agent) => {
             let advertised_host_node_id = crate::core::ura::parse_ura(execution_host_ura)
@@ -707,8 +748,8 @@ fn publish_test_projected_route(
                     tags: vec![format!("class:{}", test_call_mode_class(call_mode))],
                     callable_summary: test_callable_summary_for_mode(
                         &public_name,
-                        &ability_ura,
                         call_mode,
+                        descriptor_ref,
                     ),
                 },
             ],
@@ -718,16 +759,15 @@ fn publish_test_projected_route(
 
 fn test_callable_summary_for_mode(
     public_name: &str,
-    ability_ura: &str,
     call_mode: crate::daemon::ability::CallMode,
+    descriptor_ref: &str,
 ) -> crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary {
-    let descriptor_revision = format!("sha256:{}", "a".repeat(64));
-    let admission_action = test_admission_action_for_call_mode(call_mode);
-    let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
-        "{ability_ura}@1.0.0#{}!{admission_action}",
-        "a".repeat(64)
-    ))
-    .expect("test descriptor_ref must be canonical");
+    let descriptor_hash = axon_sdk::invocation::descriptor_hash_from_descriptor_ref(descriptor_ref)
+        .expect("explicit test descriptor hash");
+    let descriptor_revision = format!("sha256:{}", hex::encode(descriptor_hash));
+    let admission_action =
+        axon_sdk::invocation::admission_action_from_descriptor_ref(descriptor_ref)
+            .expect("explicit test descriptor action");
     let mut callable_summary =
         crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
             public_name.to_string(),
@@ -735,8 +775,11 @@ fn test_callable_summary_for_mode(
     callable_summary.mode_geometry.push(
         crate::daemon::federation::read_model::owner_projection::AbilityCallModeGeometry {
             call_mode,
-            descriptor_ref,
-            descriptor_version: "1.0.0".to_string(),
+            descriptor_ref: descriptor_ref.to_string(),
+            descriptor_version:
+                axon_sdk::invocation::descriptor_version_from_descriptor_ref(descriptor_ref)
+                    .expect("explicit test descriptor version")
+                    .to_string(),
             descriptor_revision,
             admission_action: admission_action.to_string(),
             schema_hash: format!("sha256:{}", "b".repeat(64)),

@@ -718,7 +718,7 @@ impl DaemonMissionInvocationGateway {
             ..InvokeRequest::default()
         };
         let binding =
-            crate::daemon::invocation::dispatch::forwarded_finalization::ForwardedInvocationBinding::from_request(&request)
+            crate::daemon::invocation::dispatch::forwarded_finalization::ForwardedInvocationBinding::for_delegated_request(&request)
                 .map_err(|status| anyhow::anyhow!(
                     "Mission remote child request is not receipt-verifiable: {}",
                     status.message()
