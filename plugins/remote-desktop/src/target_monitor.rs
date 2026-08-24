@@ -26,14 +26,16 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::daemon::plugins::remote_desktop::lifecycle_worker::LifecycleWorker;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{now_ms, TargetMediaSourceLost};
-use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
+use crate::daemon::plugins::remote_desktop::session_recovery::{
+    RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore,
+};
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target_observer::observe_bound_session_target_once;
@@ -58,6 +60,31 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTargetMonitor
     generation: Arc<AtomicU64>,
     snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
     provider_deadline: Duration,
+}
+
+/// Runtime components required by target observation workers.
+///
+/// This context deliberately does not retain `RemoteDesktopPlugin`. A worker
+/// may be the final thread using these components while the plugin owner is
+/// being dropped. Retaining the aggregate from that worker would let the last
+/// `Arc<RemoteDesktopPlugin>` drop on the generation thread, whose target
+/// monitor then joins the supervisor while the supervisor joins the
+/// generation: a circular join. Component ownership keeps shutdown acyclic.
+#[derive(Clone)]
+struct TargetMonitorRuntimeContext {
+    sessions: Arc<RemoteDesktopSessionStore>,
+    transports: Arc<RemoteDesktopTransportManager>,
+    recovery: Arc<RemoteDesktopRecoveryStore>,
+}
+
+impl TargetMonitorRuntimeContext {
+    fn from_plugin(plugin: &RemoteDesktopPlugin) -> Self {
+        Self {
+            sessions: plugin.session_store(),
+            transports: plugin.transport_manager(),
+            recovery: plugin.recovery_store(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -206,10 +233,11 @@ impl RemoteDesktopTargetMonitor {
         let generation = Arc::clone(&self.generation);
         let snapshot_executor = Arc::clone(&self.snapshot_executor);
         let provider_deadline = self.provider_deadline;
+        let runtime = TargetMonitorRuntimeContext::from_plugin(plugin);
         worker
             .start(|| {
                 spawn_target_monitor_supervisor(
-                    Arc::downgrade(plugin),
+                    runtime,
                     initial_tracked,
                     generation,
                     snapshot_executor,
@@ -228,10 +256,11 @@ impl RemoteDesktopTargetMonitor {
         let generation = Arc::clone(&self.generation);
         let snapshot_executor = Arc::clone(&self.snapshot_executor);
         let provider_deadline = self.provider_deadline;
+        let runtime = TargetMonitorRuntimeContext::from_plugin(plugin);
         worker
             .start(|| {
                 spawn_target_monitor_supervisor(
-                    Arc::downgrade(plugin),
+                    runtime,
                     initial_tracked,
                     generation,
                     snapshot_executor,
@@ -271,7 +300,7 @@ impl Drop for RemoteDesktopTargetMonitor {
 }
 
 fn spawn_target_monitor_supervisor(
-    plugin: Weak<RemoteDesktopPlugin>,
+    runtime: TargetMonitorRuntimeContext,
     initial_tracked: HashSet<String>,
     generation_counter: Arc<AtomicU64>,
     snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
@@ -282,7 +311,7 @@ fn spawn_target_monitor_supervisor(
         .name("easynet-rd-target-supervisor".into())
         .spawn(move || {
             run_target_monitor_supervisor(
-                plugin,
+                runtime,
                 rx,
                 initial_tracked,
                 generation_counter,
@@ -294,7 +323,7 @@ fn spawn_target_monitor_supervisor(
 }
 
 fn run_target_monitor_supervisor(
-    plugin: Weak<RemoteDesktopPlugin>,
+    runtime: TargetMonitorRuntimeContext,
     rx: Receiver<TargetMonitorCommand>,
     initial_tracked: HashSet<String>,
     generation_counter: Arc<AtomicU64>,
@@ -308,7 +337,7 @@ fn run_target_monitor_supervisor(
     loop {
         if generation.is_none() {
             match spawn_target_monitor_generation(
-                plugin.clone(),
+                runtime.clone(),
                 tracked.clone(),
                 &generation_counter,
                 Arc::clone(&snapshot_executor),
@@ -319,12 +348,9 @@ fn run_target_monitor_supervisor(
                     continue;
                 }
                 Err(error) => {
-                    if plugin.upgrade().is_none() {
-                        return;
-                    }
                     let attempted_generation = generation_counter.load(Ordering::Acquire);
                     let retry_after = record_target_monitor_failure(
-                        &plugin,
+                        &runtime,
                         &tracked,
                         &mut consecutive_failures,
                         attempted_generation,
@@ -370,11 +396,8 @@ fn run_target_monitor_supervisor(
                     }
                 }
             }
-            if plugin.upgrade().is_none() {
-                return;
-            }
             let retry_after = record_target_monitor_failure(
-                &plugin,
+                &runtime,
                 &tracked,
                 &mut consecutive_failures,
                 failed_generation,
@@ -420,7 +443,7 @@ fn run_target_monitor_supervisor(
 }
 
 fn record_target_monitor_failure(
-    plugin: &Weak<RemoteDesktopPlugin>,
+    runtime: &TargetMonitorRuntimeContext,
     tracked: &HashSet<String>,
     consecutive_failures: &mut u32,
     failed_generation: u64,
@@ -433,7 +456,7 @@ fn record_target_monitor_failure(
         retry_after.as_millis()
     );
     if *consecutive_failures == TARGET_MONITOR_FAILURE_BUDGET {
-        mark_target_monitor_unhealthy(plugin, tracked, failed_generation);
+        mark_target_monitor_unhealthy(runtime, tracked, failed_generation);
     }
     retry_after
 }
@@ -462,7 +485,7 @@ fn wait_for_target_monitor_retry(
 }
 
 fn spawn_target_monitor_generation(
-    plugin: Weak<RemoteDesktopPlugin>,
+    runtime: TargetMonitorRuntimeContext,
     initial_tracked: HashSet<String>,
     generation_counter: &AtomicU64,
     snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
@@ -476,7 +499,7 @@ fn spawn_target_monitor_generation(
         .spawn(move || {
             run_target_monitor_generation(
                 id,
-                plugin,
+                runtime,
                 rx,
                 event_tx,
                 initial_tracked,
@@ -496,7 +519,7 @@ fn spawn_target_monitor_generation(
 
 fn run_target_monitor_generation(
     generation: u64,
-    plugin: Weak<RemoteDesktopPlugin>,
+    runtime: TargetMonitorRuntimeContext,
     rx: Receiver<TargetMonitorCommand>,
     event_tx: Sender<TargetMonitorGenerationEvent>,
     initial_tracked: HashSet<String>,
@@ -529,7 +552,7 @@ fn run_target_monitor_generation(
 
         match poll_tracked_sessions(
             generation,
-            &plugin,
+            &runtime,
             &mut tracked,
             &snapshot_executor,
             provider_deadline,
@@ -605,15 +628,12 @@ fn target_monitor_retry_after(consecutive_failures: u32) -> Duration {
 }
 
 fn mark_target_monitor_unhealthy(
-    plugin: &Weak<RemoteDesktopPlugin>,
+    runtime: &TargetMonitorRuntimeContext,
     tracked: &HashSet<String>,
     failed_generation: u64,
 ) {
-    let Some(plugin) = plugin.upgrade() else {
-        return;
-    };
-    let sessions = plugin.session_store();
-    let transports = plugin.transport_manager();
+    let sessions = &runtime.sessions;
+    let transports = &runtime.transports;
     for session_id in tracked {
         let Some(inputs) = sessions.target_observation_inputs_for_session(session_id) else {
             continue;
@@ -633,29 +653,36 @@ fn mark_target_monitor_unhealthy(
         let media_source_lost = commit.and_then(|commit| commit.media_source_lost);
         stop_lost_media_source(transports.as_ref(), session_id, media_source_lost);
         if state_changed {
-            persist_target_monitor_snapshot(&plugin, &sessions, session_id, "unhealthy state");
+            persist_target_monitor_snapshot(
+                &runtime.recovery,
+                sessions,
+                session_id,
+                "unhealthy state",
+            );
         }
     }
 }
 
 fn poll_tracked_sessions(
     generation: u64,
-    plugin: &Weak<RemoteDesktopPlugin>,
+    runtime: &TargetMonitorRuntimeContext,
     tracked: &mut HashSet<String>,
     snapshot_executor: &TargetSnapshotDeadlineExecutor,
     provider_deadline: Duration,
 ) -> Result<bool, TargetSnapshotDeadlineError> {
-    let Some(plugin) = plugin.upgrade() else {
-        return Ok(false);
-    };
-    let sessions = plugin.session_store();
-    let transports = plugin.transport_manager();
+    let sessions = &runtime.sessions;
+    let transports = &runtime.transports;
     let provider = snapshot_executor.sample_for_generation(generation, provider_deadline)?;
     tracked.retain(|session_id| {
         let result = observe_bound_session_target_once(&sessions, session_id, &provider);
         stop_lost_media_source(transports.as_ref(), session_id, result.media_source_lost);
         if result.state_changed {
-            persist_target_monitor_snapshot(&plugin, &sessions, session_id, "target observation");
+            persist_target_monitor_snapshot(
+                &runtime.recovery,
+                sessions,
+                session_id,
+                "target observation",
+            );
         }
         result.keep_tracking
     });
@@ -663,7 +690,7 @@ fn poll_tracked_sessions(
 }
 
 fn persist_target_monitor_snapshot(
-    plugin: &RemoteDesktopPlugin,
+    recovery: &RemoteDesktopRecoveryStore,
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
     context: &str,
@@ -675,7 +702,7 @@ fn persist_target_monitor_snapshot(
     });
     match snapshot {
         Ok(Some(snapshot)) => {
-            if let Err(error) = plugin.persist_recovery_snapshot(&snapshot) {
+            if let Err(error) = recovery.save(&snapshot) {
                 eprintln!(
                     "[remote-desktop] failed to persist target monitor {context} for {session_id}: {error}"
                 );
@@ -722,7 +749,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target_monitor::{
         apply_generation_command, stop_lost_media_source, target_monitor_retry_after,
         RemoteDesktopTargetMonitor, TargetMediaSourceStopper, TargetMonitorCommand,
-        TARGET_MONITOR_RETRY_MAX,
+        TargetMonitorRuntimeContext, TARGET_MONITOR_RETRY_MAX,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
         sample_platform_target_observations, PlatformTargetObservationSample,
@@ -976,6 +1003,28 @@ mod tests {
             2,
             "the completed monitor-owned sample must be discarded before input validation"
         );
+    }
+
+    #[test]
+    fn worker_context_does_not_retain_the_plugin_aggregate() {
+        let plugin = RemoteDesktopPlugin::with_target_binding_verifier(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+        );
+        assert_eq!(Arc::strong_count(&plugin), 1);
+
+        let runtime = TargetMonitorRuntimeContext::from_plugin(&plugin);
+
+        assert_eq!(
+            Arc::strong_count(&plugin),
+            1,
+            "target monitor workers must retain components, never the aggregate plugin owner"
+        );
+        drop(plugin);
+        assert_eq!(Arc::strong_count(&runtime.sessions), 1);
+        assert_eq!(Arc::strong_count(&runtime.transports), 1);
+        assert_eq!(Arc::strong_count(&runtime.recovery), 1);
     }
 
     #[test]

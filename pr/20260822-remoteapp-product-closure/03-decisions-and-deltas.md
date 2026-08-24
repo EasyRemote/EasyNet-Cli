@@ -1225,3 +1225,51 @@ Product effect:
   crash/restart recovery artifact.
 - This still does not prove product completion; live recovery artifacts remain
   required.
+
+## 2026-08-24 — Permission readiness must describe the executable host backend
+
+Decision:
+
+- A permission probe is product state, not a platform-neutral success flag.
+- The daemon must not call Windows/Linux input permission “Accessibility”, must
+  not report Wayland capture ready before a portal backend exists, and must not
+  claim that it requested an OS prompt when the platform has no request API.
+
+Implementation delta:
+
+- Added a cohesive input permission probe that binds permission identity,
+  backend, availability, requestability, and typed unavailable reason.
+- Linux screen capture now fails closed for Wayland and a missing X11
+  `DISPLAY`; unknown platforms also fail closed instead of inheriting the
+  Windows success baseline.
+- Frontend permission labels now render the platform-specific daemon contract.
+
+Product effect:
+
+- Users receive an actionable explanation matching the backend that will
+  execute input/capture.
+- This does not certify Windows/Linux product behavior; real hosts and OS-effect
+  evidence are still required.
+
+## 2026-08-24 — Target monitor worker ownership must remain acyclic
+
+Decision:
+
+- A background generation worker must not retain the plugin aggregate whose
+  destructor owns and joins that worker hierarchy.
+- Runtime component lifetime and plugin lifecycle ownership are separate
+  responsibilities.
+
+Implementation delta:
+
+- Replaced worker-held `Weak<RemoteDesktopPlugin>` upgrades with a focused
+  component context containing session, transport, and recovery stores.
+- Added regression coverage that the worker context does not increase the
+  plugin aggregate strong count while its components remain alive.
+
+Product effect:
+
+- Plugin shutdown cannot enter the observed supervisor/generation circular
+  join when the final aggregate reference is released on a worker thread.
+- Live daemon/plugin crash-restart recovery is still required before product
+  completion can be claimed.

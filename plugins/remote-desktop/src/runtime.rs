@@ -232,7 +232,6 @@ impl RemoteDesktopPlugin {
         Arc::clone(&self.transports)
     }
 
-    #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn recovery_store(
         &self,
     ) -> Arc<RemoteDesktopRecoveryStore> {

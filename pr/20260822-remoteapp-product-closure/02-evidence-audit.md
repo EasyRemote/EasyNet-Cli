@@ -576,6 +576,29 @@ Current frontend lifecycle evidence:
 
 Missing or insufficient product evidence:
 
+- Permission projection now reflects execution reality instead of a generic
+  macOS-shaped contract. macOS reports Accessibility, Windows reports User32
+  SendInput, and Linux reports X11/XTest. Linux Wayland and a daemon without an
+  X11 `DISPLAY` fail closed with typed unavailable reasons, and a permission
+  request is marked attempted only when the host can actually prompt. Unit and
+  frontend projection tests cover the contract; real Windows/Linux host
+  permission and OS-effect evidence is still required.
+- Target monitor workers now retain only session, transport, and recovery
+  components. They never retain the aggregate `RemoteDesktopPlugin`, which
+  removes the plugin-drop/supervisor/generation circular join observed during
+  the full RemoteApp test suite. The regression suite proves acyclic ownership;
+  live plugin crash/restart recovery remains a separate product requirement.
+- Verification on 2026-08-24:
+  - `cargo test --lib daemon::plugins::remote_desktop:: -- --nocapture` passed
+    394 tests with no supervisor self-join/resource-deadlock failure.
+  - `npm test -- --run src/store/media-channel-store.test.ts` passed 21 tests,
+    and `npm run build` passed in `EasyNet/Frontend`.
+  - `bash tools/scripts/check-remoteapp-product-closure-audit.sh` passed.
+  - Linux and Windows cross-target `cargo check` attempts stopped in `ring`
+    before project compilation because this host lacks
+    `aarch64-linux-gnu-gcc` and `x86_64-w64-mingw32-gcc`; these attempts are
+    environment/toolchain blockers and are not cross-platform pass evidence.
+
 - Cross-platform capture implementation/evidence using
   `remoteapp-cross-platform-capture-e2e.sh`: macOS display/window/application
   live pass plus Windows/Linux capture or explicit product unsupported state.
