@@ -8,15 +8,14 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::fs::File;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "axon-pb")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::daemon::resources::files::FilesystemResourceCapability;
 
@@ -193,7 +192,7 @@ async fn execute(plan: CopyPlan) -> anyhow::Result<()> {
 
     match plan.direction {
         CopyDirection::Upload => {
-            let (bytes, sha256) = hash_local_source(&plan.local_path, plan.max_bytes)?;
+            validate_local_source(&plan.local_path, plan.max_bytes).await?;
             let session =
                 crate::cli::daemon_client::remote_system_ability::open_remote_file_transfer(
                     &plan.remote_device_ura,
@@ -204,14 +203,12 @@ async fn execute(plan: CopyPlan) -> anyhow::Result<()> {
                         "resource_ref": resource_ref,
                         "overwrite": plan.overwrite,
                         "max_bytes": plan.max_bytes,
-                        "expected_bytes": bytes,
-                        "expected_sha256": sha256,
                     }),
                     signer,
                     TRANSFER_TIMEOUT,
                 )
                 .await?;
-            upload(session, &plan.local_path, bytes, &sha256).await?;
+            upload(session, &plan.local_path, plan.max_bytes).await?;
         }
         CopyDirection::Download => {
             if plan.local_path.exists() && !plan.overwrite {
@@ -237,8 +234,10 @@ async fn execute(plan: CopyPlan) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn hash_local_source(path: &Path, max_bytes: u64) -> anyhow::Result<(u64, String)> {
-    let metadata = std::fs::symlink_metadata(path)
+#[cfg(feature = "axon-pb")]
+async fn validate_local_source(path: &Path, max_bytes: u64) -> anyhow::Result<()> {
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
         .with_context(|| format!("read source metadata for {}", path.display()))?;
     if !metadata.file_type().is_file() {
         anyhow::bail!("INVALID_ENDPOINT: source must be a regular non-symlink file");
@@ -246,45 +245,57 @@ fn hash_local_source(path: &Path, max_bytes: u64) -> anyhow::Result<(u64, String
     if metadata.len() > max_bytes {
         anyhow::bail!("SIZE_LIMIT_EXCEEDED: source is {} bytes", metadata.len());
     }
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut total = 0_u64;
-    let mut buffer = vec![0_u8; TRANSFER_CHUNK_BYTES];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        total = total.saturating_add(read as u64);
-        if total > max_bytes {
-            anyhow::bail!("SIZE_LIMIT_EXCEEDED: source changed while hashing");
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok((total, hex::encode(hasher.finalize())))
+    Ok(())
 }
 
 #[cfg(feature = "axon-pb")]
 async fn upload(
     session: crate::support::platform::bidi_session::DaemonBidiSession,
     path: &Path,
-    expected_bytes: u64,
-    expected_sha256: &str,
+    max_bytes: u64,
 ) -> anyhow::Result<()> {
     let (mut upstream, mut downstream) = session.split();
-    let mut file = File::open(path)?;
+    let completion = receive_completion(&mut downstream, None);
+    tokio::pin!(completion);
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
     let mut buffer = vec![0_u8; TRANSFER_CHUNK_BYTES];
     loop {
-        let read = file.read(&mut buffer)?;
+        let read = tokio::select! {
+            result = &mut completion => {
+                result?;
+                anyhow::bail!("TRANSFER_INTERRUPTED: remote completed before local EOF");
+            }
+            result = file.read(&mut buffer) => result?,
+        };
         if read == 0 {
             break;
         }
-        upstream.send_binary(buffer[..read].to_vec()).await?;
+        total = total.saturating_add(read as u64);
+        if total > max_bytes {
+            anyhow::bail!("SIZE_LIMIT_EXCEEDED: source changed while streaming");
+        }
+        hasher.update(&buffer[..read]);
+        tokio::select! {
+            result = &mut completion => {
+                result?;
+                anyhow::bail!("TRANSFER_INTERRUPTED: remote completed before local EOF");
+            }
+            result = upstream.send_binary(buffer[..read].to_vec()) => result?,
+        }
     }
-    upstream.send_eof().await?;
-    let complete = receive_completion(&mut downstream, None).await?;
-    verify_completion(&complete, expected_bytes, expected_sha256)?;
-    println!("copied {expected_bytes} bytes (sha256 {expected_sha256})");
+    tokio::select! {
+        result = &mut completion => {
+            result?;
+            anyhow::bail!("TRANSFER_INTERRUPTED: remote completed before local EOF");
+        }
+        result = upstream.send_eof() => result?,
+    }
+    let complete = completion.await?;
+    let sha256 = hex::encode(hasher.finalize());
+    verify_completion(&complete, total, &sha256)?;
+    println!("copied {total} bytes (sha256 {sha256})");
     Ok(())
 }
 
@@ -324,27 +335,32 @@ async fn download(
         path: stage_path.clone(),
         committed: false,
     };
-    let mut file = std::fs::OpenOptions::new()
+    let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&stage_path)?;
+        .open(&stage_path)
+        .await?;
     let (_upstream, mut downstream) = session.split();
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
-    let complete = receive_completion(
-        &mut downstream,
-        Some((&mut file, &mut hasher, &mut total, max_bytes)),
-    )
-    .await?;
-    file.sync_all()?;
+    let mut sink = DownloadSink {
+        file: &mut file,
+        hasher: &mut hasher,
+        total: &mut total,
+        max_bytes,
+    };
+    let complete = receive_completion(&mut downstream, Some(&mut sink)).await?;
+    file.sync_all().await?;
     drop(file);
     let sha256 = hex::encode(hasher.finalize());
     verify_completion(&complete, total, &sha256)?;
     let commit = if overwrite {
-        std::fs::rename(&stage_path, destination)
+        tokio::fs::rename(&stage_path, destination).await
     } else {
-        std::fs::hard_link(&stage_path, destination)
-            .and_then(|()| std::fs::remove_file(&stage_path))
+        match tokio::fs::hard_link(&stage_path, destination).await {
+            Ok(()) => tokio::fs::remove_file(&stage_path).await,
+            Err(error) => Err(error),
+        }
     };
     commit.with_context(|| format!("ATOMIC_COMMIT_FAILED: {}", destination.display()))?;
     stage.committed = true;
@@ -353,12 +369,24 @@ async fn download(
 }
 
 #[cfg(feature = "axon-pb")]
+struct DownloadSink<'a> {
+    file: &'a mut tokio::fs::File,
+    hasher: &'a mut Sha256,
+    total: &'a mut u64,
+    max_bytes: u64,
+}
+
+#[cfg(feature = "axon-pb")]
 async fn receive_completion(
     downstream: &mut crate::support::platform::bidi_session::DaemonBidiReceiver,
-    mut download: Option<(&mut File, &mut Sha256, &mut u64, u64)>,
+    mut download: Option<&mut DownloadSink<'_>>,
 ) -> anyhow::Result<Value> {
     let mut complete = None;
     while let Some(frame) = downstream.recv().await? {
+        if let Some(binary) = frame.binary.as_ref() {
+            write_download_bytes(&mut download, &binary.data).await?;
+            continue;
+        }
         if frame.payload.get("type").and_then(Value::as_str) == Some("receipt") {
             if frame.terminal {
                 if let Some(message) = frame
@@ -371,10 +399,10 @@ async fn receive_completion(
                 let terminal_payload = frame.payload.get("payload").ok_or_else(|| {
                     anyhow::anyhow!("TRANSFER_INTERRUPTED: terminal receipt omitted payload")
                 })?;
-                complete = apply_transfer_business_frame(terminal_payload, &mut download)?;
+                complete = apply_transfer_business_frame(terminal_payload)?;
             }
         } else if frame.payload.get("type").and_then(Value::as_str) != Some("control") {
-            complete = apply_transfer_business_frame(&frame.payload, &mut download)?;
+            complete = apply_transfer_business_frame(&frame.payload)?;
         }
         if frame.terminal {
             break;
@@ -383,35 +411,8 @@ async fn receive_completion(
     complete.ok_or_else(|| anyhow::anyhow!("TRANSFER_INTERRUPTED: completion frame missing"))
 }
 
-fn apply_transfer_business_frame(
-    payload: &Value,
-    download: &mut Option<(&mut File, &mut Sha256, &mut u64, u64)>,
-) -> anyhow::Result<Option<Value>> {
+fn apply_transfer_business_frame(payload: &Value) -> anyhow::Result<Option<Value>> {
     match payload.get("type").and_then(Value::as_str) {
-        Some("chunk") => {
-            let data = payload
-                .get("data")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("TRANSFER_INTERRUPTED: chunk omitted data"))?;
-            let bytes = BASE64_STANDARD
-                .decode(data)
-                .context("TRANSFER_INTERRUPTED: invalid chunk base64")?;
-            write_download_bytes(download, &bytes)?;
-            Ok(None)
-        }
-        Some("binary") => {
-            let data = payload
-                .get("data_b64")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("TRANSFER_INTERRUPTED: binary frame omitted data_b64")
-                })?;
-            let bytes = BASE64_STANDARD
-                .decode(data)
-                .context("TRANSFER_INTERRUPTED: invalid binary frame base64")?;
-            write_download_bytes(download, &bytes)?;
-            Ok(None)
-        }
         Some("complete") => Ok(Some(payload.clone())),
         Some("error") => {
             let code = payload
@@ -429,19 +430,20 @@ fn apply_transfer_business_frame(
     }
 }
 
-fn write_download_bytes(
-    download: &mut Option<(&mut File, &mut Sha256, &mut u64, u64)>,
+#[cfg(feature = "axon-pb")]
+async fn write_download_bytes(
+    download: &mut Option<&mut DownloadSink<'_>>,
     bytes: &[u8],
 ) -> anyhow::Result<()> {
-    let Some((file, hasher, total, max_bytes)) = download.as_mut() else {
+    let Some(sink) = download.as_deref_mut() else {
         anyhow::bail!("TRANSFER_INTERRUPTED: upload received a download chunk");
     };
-    **total = (**total).saturating_add(bytes.len() as u64);
-    if **total > *max_bytes {
+    *sink.total = sink.total.saturating_add(bytes.len() as u64);
+    if *sink.total > sink.max_bytes {
         anyhow::bail!("SIZE_LIMIT_EXCEEDED: remote stream exceeded max-bytes");
     }
-    file.write_all(bytes)?;
-    hasher.update(bytes);
+    sink.file.write_all(bytes).await?;
+    sink.hasher.update(bytes);
     Ok(())
 }
 
@@ -501,15 +503,11 @@ mod tests {
 
     #[test]
     fn terminal_receipt_payload_is_the_authoritative_completion() {
-        let mut download = None;
-        let completion = apply_transfer_business_frame(
-            &json!({
-                "type": "complete",
-                "bytes": 3,
-                "sha256": "abc",
-            }),
-            &mut download,
-        )
+        let completion = apply_transfer_business_frame(&json!({
+            "type": "complete",
+            "bytes": 3,
+            "sha256": "abc",
+        }))
         .expect("valid terminal receipt payload")
         .expect("completion extracted");
 
@@ -519,32 +517,32 @@ mod tests {
 
     #[test]
     fn upload_rejects_unexpected_download_chunk() {
-        let mut download = None;
-        let error =
-            apply_transfer_business_frame(&json!({"type": "chunk", "data": "YQ=="}), &mut download)
-                .expect_err("upload cannot accept a download frame");
+        let error = apply_transfer_business_frame(&json!({"type": "chunk"}))
+            .expect_err("upload cannot accept a download frame");
 
-        assert!(error
-            .to_string()
-            .contains("upload received a download chunk"));
+        assert!(error.to_string().contains("unsupported frame"));
     }
 
-    #[test]
-    fn download_accepts_lossless_binary_wire_projection() {
+    #[tokio::test]
+    async fn download_accepts_lossless_binary_wire_projection() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("download.bin");
-        let mut file = File::create(&path).expect("create download");
+        let mut file = tokio::fs::File::create(&path)
+            .await
+            .expect("create download");
         let mut hasher = Sha256::new();
         let mut total = 0_u64;
-        let mut download = Some((&mut file, &mut hasher, &mut total, 16));
-
-        let completion = apply_transfer_business_frame(
-            &json!({"type": "binary", "stream_id": 1, "data_b64": "AAEC/w=="}),
-            &mut download,
-        )
-        .expect("binary chunk accepted");
-        assert!(completion.is_none());
-        drop(download);
+        let mut sink = DownloadSink {
+            file: &mut file,
+            hasher: &mut hasher,
+            total: &mut total,
+            max_bytes: 16,
+        };
+        write_download_bytes(&mut Some(&mut sink), &[0, 1, 2, 255])
+            .await
+            .expect("binary chunk accepted");
+        drop(sink);
+        file.sync_all().await.expect("flush download bytes");
         drop(file);
 
         assert_eq!(total, 4);
