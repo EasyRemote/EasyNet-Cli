@@ -29,6 +29,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     args: Value,
 ) -> anyhow::Result<BidiSource> {
     let session_id = require_str(&args, "session_id", ABILITY_ATTACH_SESSION)?.to_string();
+    let target_snapshot_executor = plugin.target_snapshot_executor();
     let (target_binding, options, input_policy, encoding, stop_tx, stop_rx) = {
         plugin
             .session_store()
@@ -46,6 +47,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 let input_policy = EffectiveRemoteDesktopInputPolicy::for_binding(
                     session.input_policy(),
                     &target_binding,
+                    Arc::clone(&target_snapshot_executor),
                 );
                 let (stop_tx, stop_rx) = watch::channel(false);
                 if let Some(old_stop) = session.attach_preview_transport(stop_tx.clone()) {

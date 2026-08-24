@@ -1111,6 +1111,9 @@ implements all of:
 foreground app/window validation before dispatch
 explicit target activation policy
 fresh host validation occurs after the frame epoch gates and before dispatch
+periodic observation and per-frame validation share one plugin-owned native
+snapshot executor; input waits have a 50 ms monotonic deadline and reject as
+target_input_guard_deadline_exceeded instead of blocking the data channel
 pointer coordinates hit the topmost selected native window; black gaps and
 foreign-window occlusion reject before CGEvent posting
 input disabled on TARGET_LOST/HIDDEN/MINIMIZED/FOCUS_CHANGED away

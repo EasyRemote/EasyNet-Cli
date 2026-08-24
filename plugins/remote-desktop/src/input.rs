@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -23,7 +24,11 @@ use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionS
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
 use crate::daemon::plugins::remote_desktop::target_observer::{
-    validate_live_target_input, validate_live_target_pointer_input, TargetInputGuardProof,
+    validate_target_input_observation, validate_target_pointer_input_observation,
+    TargetInputGuardProof,
+};
+use crate::daemon::plugins::remote_desktop::target_snapshot::{
+    TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapshot;
 
@@ -33,6 +38,7 @@ const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
 const MAX_CLIENT_SEQUENCE: u64 = 9_007_199_254_740_991;
 const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
 const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;
+const TARGET_INPUT_GUARD_PROVIDER_DEADLINE: Duration = Duration::from_millis(50);
 pub(in crate::daemon::plugins::remote_desktop) const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] =
     &["clipboard", "file_drop"];
 
@@ -287,17 +293,20 @@ pub(in crate::daemon::plugins::remote_desktop) struct EffectiveRemoteDesktopInpu
     target_focus_epoch: Option<u64>,
     target_binding: Option<RemoteAppTargetBinding>,
     target_snapshot: Option<TargetTrackerSnapshot>,
+    target_snapshot_executor: Option<Arc<TargetSnapshotDeadlineExecutor>>,
 }
 
 impl EffectiveRemoteDesktopInputPolicy {
     pub(in crate::daemon::plugins::remote_desktop) fn for_binding(
         requested_policy: &RemoteDesktopInputPolicy,
         binding: &RemoteAppTargetBinding,
+        target_snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
     ) -> Self {
         let snapshot = TargetTrackerSnapshot::from_binding(binding);
         let mut policy = Self::for_target_state(requested_policy, &snapshot, binding.input_scope());
         policy.target_binding = Some(binding.clone());
         policy.target_snapshot = Some(snapshot);
+        policy.target_snapshot_executor = Some(target_snapshot_executor);
         policy
     }
 
@@ -316,6 +325,7 @@ impl EffectiveRemoteDesktopInputPolicy {
             target_focus_epoch: target_focus_epoch_from_snapshot(snapshot),
             target_binding: None,
             target_snapshot: None,
+            target_snapshot_executor: None,
         };
         policy.apply_scope(input_scope);
         policy
@@ -355,6 +365,7 @@ impl EffectiveRemoteDesktopInputPolicy {
             target_focus_epoch: map.get("target_focus_epoch").and_then(Value::as_u64),
             target_binding: None,
             target_snapshot: None,
+            target_snapshot_executor: None,
         };
         policy.apply_scope(input_scope);
         policy
@@ -402,14 +413,25 @@ impl EffectiveRemoteDesktopInputPolicy {
         if self.input_scope != InputScope::TargetLocal {
             return Ok(None);
         }
-        let (Some(binding), Some(snapshot)) =
-            (self.target_binding.as_ref(), self.target_snapshot.as_ref())
-        else {
+        let (Some(binding), Some(snapshot), Some(executor)) = (
+            self.target_binding.as_ref(),
+            self.target_snapshot.as_ref(),
+            self.target_snapshot_executor.as_ref(),
+        ) else {
             return Err("target_input_guard_unavailable");
         };
-        validate_live_target_input(binding, snapshot)
-            .map(Some)
-            .map_err(|failure| failure.as_str())
+        let sample = executor
+            .sample_for_input(TARGET_INPUT_GUARD_PROVIDER_DEADLINE)
+            .map_err(target_snapshot_error_reason)?;
+        validate_target_input_observation(
+            sample.observation(),
+            binding,
+            snapshot,
+            sample.started_at_ms(),
+            sample.completed_at_ms(),
+        )
+        .map(Some)
+        .map_err(|failure| failure.as_str())
     }
 
     fn target_pointer_input_guard_validation(
@@ -419,15 +441,28 @@ impl EffectiveRemoteDesktopInputPolicy {
         if self.input_scope != InputScope::TargetLocal {
             return Ok(None);
         }
-        let (Some(binding), Some(snapshot)) =
-            (self.target_binding.as_ref(), self.target_snapshot.as_ref())
-        else {
+        let (Some(binding), Some(snapshot), Some(executor)) = (
+            self.target_binding.as_ref(),
+            self.target_snapshot.as_ref(),
+            self.target_snapshot_executor.as_ref(),
+        ) else {
             return Err("target_input_guard_unavailable");
         };
         let point = map_pointer_point(frame, self.pointer_target);
-        validate_live_target_pointer_input(binding, snapshot, point.x, point.y)
-            .map(Some)
-            .map_err(|failure| failure.as_str())
+        let sample = executor
+            .sample_for_input(TARGET_INPUT_GUARD_PROVIDER_DEADLINE)
+            .map_err(target_snapshot_error_reason)?;
+        validate_target_pointer_input_observation(
+            sample.observation(),
+            binding,
+            snapshot,
+            point.x,
+            point.y,
+            sample.started_at_ms(),
+            sample.completed_at_ms(),
+        )
+        .map(Some)
+        .map_err(|failure| failure.as_str())
     }
 
     fn accepted_input_context(&self) -> InputFrameTargetContext {
@@ -481,6 +516,16 @@ impl EffectiveRemoteDesktopInputPolicy {
             map.insert("target_focus_epoch".to_string(), json!(target_focus_epoch));
         }
         Value::Object(map)
+    }
+}
+
+fn target_snapshot_error_reason(error: TargetSnapshotDeadlineError) -> &'static str {
+    match error {
+        TargetSnapshotDeadlineError::DeadlineExceeded { .. } => {
+            "target_input_guard_deadline_exceeded"
+        }
+        TargetSnapshotDeadlineError::SpawnFailed(_)
+        | TargetSnapshotDeadlineError::WorkerFailed { .. } => "target_input_guard_snapshot_failed",
     }
 }
 
@@ -1951,6 +1996,9 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex};
+
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -1958,12 +2006,61 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::{
         ResourceEntryTargetResolver, TargetGeometry,
     };
+    use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
+    use crate::daemon::plugins::remote_desktop::target_observer::{
+        sample_platform_target_observations, PlatformTargetObservationSample,
+    };
+    use crate::daemon::plugins::remote_desktop::target_snapshot::{
+        TargetObservationSampler, TargetSnapshotDeadlineExecutor,
+    };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         RemoteAppTargetBindingStateMachine, TargetObservation,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
         live_remote_target_metadata, test_session_init,
     };
+
+    struct BlockingInputTargetSampler {
+        calls: AtomicUsize,
+        released: Mutex<bool>,
+        release_signal: Condvar,
+    }
+
+    impl BlockingInputTargetSampler {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                released: Mutex::new(false),
+                release_signal: Condvar::new(),
+            }
+        }
+
+        fn release(&self) {
+            let mut released = self
+                .released
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *released = true;
+            self.release_signal.notify_all();
+        }
+    }
+
+    impl TargetObservationSampler for BlockingInputTargetSampler {
+        fn sample(&self) -> PlatformTargetObservationSample {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            let mut released = self
+                .released
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            while !*released {
+                released = self
+                    .release_signal
+                    .wait(released)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            sample_platform_target_observations()
+        }
+    }
 
     fn binding_for_mode(
         entry: &ResourceEntry,
@@ -2850,6 +2947,63 @@ mod tests {
     }
 
     #[test]
+    fn target_local_input_provider_hang_rejects_with_bounded_deadline() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/device.dev-1/streams/window.deadline".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Deadline Window".into(),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Editor",
+                "focused": true,
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                "remote_desktop.create_session",
+                &entry,
+                "interactive",
+                1,
+                true,
+            )
+            .expect("interactive window binding resolves with input consent");
+        assert_eq!(binding.input_scope(), InputScope::TargetLocal);
+        let sampler = Arc::new(BlockingInputTargetSampler::new());
+        let sampler_trait: Arc<dyn TargetObservationSampler> = sampler.clone();
+        let executor = Arc::new(TargetSnapshotDeadlineExecutor::new(sampler_trait));
+        let policy = EffectiveRemoteDesktopInputPolicy::for_binding(
+            &RemoteDesktopInputPolicy::new(true, true),
+            &binding,
+            executor,
+        );
+        let focus_epoch = policy.target_focus_epoch.expect("target focus epoch");
+        let frame = parse_input_frame(&format!(
+            r#"{{"type":"key","action":"down","code":"KeyA","target_focus_epoch":{focus_epoch}}}"#
+        ))
+        .expect("key frame");
+
+        let started = std::time::Instant::now();
+        let outcome = apply_input_frame_with_effective_policy(&policy, &frame);
+        assert!(!outcome.applied);
+        assert_eq!(outcome.reason, Some("target_input_guard_deadline_exceeded"));
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "host target provider hang must not block the input channel indefinitely"
+        );
+        assert_eq!(sampler.calls.load(Ordering::Acquire), 1);
+        sampler.release();
+    }
+
+    #[test]
     fn input_rejects_stale_target_focus_epoch_before_os_injection() {
         let missing_focus =
             parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
@@ -2995,6 +3149,7 @@ mod tests {
         let base = EffectiveRemoteDesktopInputPolicy::for_binding(
             &RemoteDesktopInputPolicy::new(true, true),
             &creation_binding,
+            RemoteDesktopTargetMonitor::new().snapshot_executor(),
         );
 
         let current = base.for_current_target(&rebound_snapshot, &rebound_binding);

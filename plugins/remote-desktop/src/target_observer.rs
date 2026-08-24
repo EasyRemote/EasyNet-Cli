@@ -293,24 +293,22 @@ pub(in crate::daemon::plugins::remote_desktop) fn sample_platform_target_observa
     platform::sample_platform_target_observations()
 }
 
-/// Validate target-local input against a fresh host snapshot immediately
-/// before the caller posts an OS event.
-///
-/// This is deliberately separate from periodic lifecycle observation: an
-/// input decision may not rely on a target/focus sample that became stale
-/// between observer ticks.
-pub(in crate::daemon::plugins::remote_desktop) fn validate_live_target_input(
+/// Validate target-local input against a deadline-bounded host snapshot
+/// acquired immediately before the caller posts an OS event.
+pub(in crate::daemon::plugins::remote_desktop) fn validate_target_input_observation(
+    observation: &PlatformTargetObservationSample,
     binding: &RemoteAppTargetBinding,
     snapshot: &TargetTrackerSnapshot,
+    snapshot_started_at_ms: u64,
+    validated_at_ms: u64,
 ) -> Result<TargetInputGuardProof, TargetInputGuardFailure> {
-    let snapshot_started_at_ms = now_ms();
-    let host_snapshot = platform::live_host_target_snapshot()?;
+    let host_snapshot = input_guard_host_snapshot(observation)?;
     validate_target_input_against_host_snapshot(binding, snapshot, &host_snapshot)?;
     Ok(TargetInputGuardProof::from_validated_target(
         binding,
         snapshot,
         snapshot_started_at_ms,
-        now_ms(),
+        validated_at_ms,
         None,
     ))
 }
@@ -319,14 +317,16 @@ pub(in crate::daemon::plugins::remote_desktop) fn validate_live_target_input(
 /// snapshot. Target-local pointer input may only land on an unobscured window
 /// that belongs to the committed target surface; black compositor gaps and
 /// windows belonging to other applications fail closed.
-pub(in crate::daemon::plugins::remote_desktop) fn validate_live_target_pointer_input(
+pub(in crate::daemon::plugins::remote_desktop) fn validate_target_pointer_input_observation(
+    observation: &PlatformTargetObservationSample,
     binding: &RemoteAppTargetBinding,
     snapshot: &TargetTrackerSnapshot,
     host_x: f64,
     host_y: f64,
+    snapshot_started_at_ms: u64,
+    validated_at_ms: u64,
 ) -> Result<TargetInputGuardProof, TargetInputGuardFailure> {
-    let snapshot_started_at_ms = now_ms();
-    let host_snapshot = platform::live_host_target_snapshot()?;
+    let host_snapshot = input_guard_host_snapshot(observation)?;
     validate_target_input_against_host_snapshot(binding, snapshot, &host_snapshot)?;
     let window_id =
         validate_pointer_target_against_host_snapshot(binding, &host_snapshot, host_x, host_y)?;
@@ -334,9 +334,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn validate_live_target_pointer_i
         binding,
         snapshot,
         snapshot_started_at_ms,
-        now_ms(),
+        validated_at_ms,
         Some(window_id),
     ))
+}
+
+fn input_guard_host_snapshot(
+    observation: &PlatformTargetObservationSample,
+) -> Result<&HostTargetSnapshot, TargetInputGuardFailure> {
+    match &observation.state {
+        PlatformTargetObservationSampleState::HostSnapshot(snapshot) => Ok(snapshot),
+        PlatformTargetObservationSampleState::SnapshotFailed { .. }
+        | PlatformTargetObservationSampleState::PermissionRevoked { .. } => {
+            Err(TargetInputGuardFailure::SnapshotFailed)
+        }
+        #[cfg(not(target_os = "macos"))]
+        PlatformTargetObservationSampleState::UnsupportedPlatform => {
+            Err(TargetInputGuardFailure::UnsupportedPlatform)
+        }
+    }
 }
 
 fn validate_target_input_against_host_snapshot(
@@ -1005,16 +1021,6 @@ mod platform {
             );
         }
         sample_host_target_observations(&MacOsHostTargetSnapshotProvider)
-    }
-
-    pub(super) fn live_host_target_snapshot(
-    ) -> Result<HostTargetSnapshot, super::TargetInputGuardFailure> {
-        if !crate::daemon::plugins::remote_desktop::screencapturekit_capture::screen_capture_permission_granted() {
-            return Err(super::TargetInputGuardFailure::SnapshotFailed);
-        }
-        MacOsHostTargetSnapshotProvider
-            .snapshot()
-            .map_err(|_| super::TargetInputGuardFailure::SnapshotFailed)
     }
 
     impl HostTargetSnapshotProvider for MacOsHostTargetSnapshotProvider {
@@ -2743,7 +2749,7 @@ mod platform {
 
     use super::{
         sample_host_target_observations, HostTargetSnapshot, HostTargetSnapshotProvider,
-        ObservedWindow, PlatformTargetObservationSample, TargetInputGuardFailure,
+        ObservedWindow, PlatformTargetObservationSample,
     };
     use crate::daemon::plugins::remote_desktop::target::TargetGeometry;
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetVisibilityState;
@@ -2752,13 +2758,6 @@ mod platform {
 
     pub(super) fn sample_platform_target_observations() -> PlatformTargetObservationSample {
         sample_host_target_observations(&XcapHostTargetSnapshotProvider)
-    }
-
-    pub(super) fn live_host_target_snapshot() -> Result<HostTargetSnapshot, TargetInputGuardFailure>
-    {
-        XcapHostTargetSnapshotProvider
-            .snapshot()
-            .map_err(|_| TargetInputGuardFailure::SnapshotFailed)
     }
 
     impl HostTargetSnapshotProvider for XcapHostTargetSnapshotProvider {
@@ -2816,14 +2815,9 @@ mod platform {
 
 #[cfg(all(not(target_os = "macos"), not(feature = "native-media")))]
 mod platform {
-    use super::{HostTargetSnapshot, PlatformTargetObservationSample, TargetInputGuardFailure};
+    use super::PlatformTargetObservationSample;
 
     pub(super) fn sample_platform_target_observations() -> PlatformTargetObservationSample {
         PlatformTargetObservationSample::unsupported_platform()
-    }
-
-    pub(super) fn live_host_target_snapshot() -> Result<HostTargetSnapshot, TargetInputGuardFailure>
-    {
-        Err(TargetInputGuardFailure::UnsupportedPlatform)
     }
 }

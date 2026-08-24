@@ -36,9 +36,9 @@ use crate::daemon::plugins::remote_desktop::session::{now_ms, TargetMediaSourceL
 use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-use crate::daemon::plugins::remote_desktop::target_observer::{
-    observe_bound_session_target_once, sample_platform_target_observations,
-    PlatformTargetObservationSample,
+use crate::daemon::plugins::remote_desktop::target_observer::observe_bound_session_target_once;
+use crate::daemon::plugins::remote_desktop::target_snapshot::{
+    TargetObservationSampler, TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
 use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;
@@ -85,70 +85,6 @@ struct TargetMonitorGeneration {
     failure_detail: Option<String>,
 }
 
-pub(in crate::daemon::plugins::remote_desktop) trait TargetObservationSampler:
-    Send + Sync
-{
-    fn sample(&self) -> PlatformTargetObservationSample;
-}
-
-struct PlatformTargetObservationSampler;
-
-impl TargetObservationSampler for PlatformTargetObservationSampler {
-    fn sample(&self) -> PlatformTargetObservationSample {
-        sample_platform_target_observations()
-    }
-}
-
-struct TargetSnapshotDeadlineExecutor {
-    sampler: Arc<dyn TargetObservationSampler>,
-    in_flight: Mutex<Option<InFlightTargetSnapshot>>,
-    request_sequence: AtomicU64,
-}
-
-struct InFlightTargetSnapshot {
-    request_id: u64,
-    owner_generation: u64,
-    result_rx: Receiver<PlatformTargetObservationSample>,
-    _join: JoinHandle<()>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TargetSnapshotDeadlineError {
-    DeadlineExceeded {
-        request_id: u64,
-        owner_generation: u64,
-    },
-    SpawnFailed(String),
-    WorkerFailed {
-        request_id: u64,
-        owner_generation: u64,
-    },
-}
-
-impl std::fmt::Display for TargetSnapshotDeadlineError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DeadlineExceeded {
-                request_id,
-                owner_generation,
-            } => write!(
-                formatter,
-                "host target snapshot request {request_id} owned by generation {owner_generation} exceeded deadline"
-            ),
-            Self::SpawnFailed(detail) => {
-                write!(formatter, "host target snapshot worker spawn failed: {detail}")
-            }
-            Self::WorkerFailed {
-                request_id,
-                owner_generation,
-            } => write!(
-                formatter,
-                "host target snapshot request {request_id} owned by generation {owner_generation} failed"
-            ),
-        }
-    }
-}
-
 trait TargetMediaSourceStopper {
     fn stop_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool;
 }
@@ -159,111 +95,29 @@ impl TargetMediaSourceStopper for RemoteDesktopTransportManager {
     }
 }
 
-impl TargetSnapshotDeadlineExecutor {
-    fn new(sampler: Arc<dyn TargetObservationSampler>) -> Self {
-        Self {
-            sampler,
-            in_flight: Mutex::new(None),
-            request_sequence: AtomicU64::new(0),
-        }
-    }
-
-    fn sample_for_generation(
-        &self,
-        generation: u64,
-        timeout: Duration,
-    ) -> Result<PlatformTargetObservationSample, TargetSnapshotDeadlineError> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let mut in_flight = match self.in_flight.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if in_flight.is_none() {
-                *in_flight = Some(self.spawn_request(generation)?);
-            }
-            let request = in_flight
-                .as_mut()
-                .expect("target snapshot request exists after spawn");
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(TargetSnapshotDeadlineError::DeadlineExceeded {
-                    request_id: request.request_id,
-                    owner_generation: request.owner_generation,
-                });
-            }
-            match request.result_rx.recv_timeout(remaining) {
-                Ok(sample) => {
-                    let completed = in_flight
-                        .take()
-                        .expect("completed target snapshot request exists");
-                    if completed.owner_generation != generation {
-                        continue;
-                    }
-                    return Ok(sample);
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(TargetSnapshotDeadlineError::DeadlineExceeded {
-                        request_id: request.request_id,
-                        owner_generation: request.owner_generation,
-                    });
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    let failed = in_flight
-                        .take()
-                        .expect("failed target snapshot request exists");
-                    if failed.owner_generation != generation {
-                        continue;
-                    }
-                    return Err(TargetSnapshotDeadlineError::WorkerFailed {
-                        request_id: failed.request_id,
-                        owner_generation: failed.owner_generation,
-                    });
-                }
-            }
-        }
-    }
-
-    fn spawn_request(
-        &self,
-        generation: u64,
-    ) -> Result<InFlightTargetSnapshot, TargetSnapshotDeadlineError> {
-        let request_id = self.request_sequence.fetch_add(1, Ordering::AcqRel) + 1;
-        let sampler = Arc::clone(&self.sampler);
-        let (result_tx, result_rx) = mpsc::channel();
-        let join = thread::Builder::new()
-            .name(format!("easynet-rd-target-snapshot-{request_id}"))
-            .spawn(move || {
-                let sample = sampler.sample();
-                let _ = result_tx.send(sample);
-            })
-            .map_err(|error| TargetSnapshotDeadlineError::SpawnFailed(error.to_string()))?;
-        Ok(InFlightTargetSnapshot {
-            request_id,
-            owner_generation: generation,
-            result_rx,
-            _join: join,
-        })
-    }
-}
-
 impl RemoteDesktopTargetMonitor {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
         Self::with_sampler(
-            Arc::new(PlatformTargetObservationSampler),
+            Arc::new(TargetSnapshotDeadlineExecutor::platform()),
             TARGET_MONITOR_PROVIDER_DEADLINE,
         )
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn snapshot_executor(
+        &self,
+    ) -> Arc<TargetSnapshotDeadlineExecutor> {
+        Arc::clone(&self.snapshot_executor)
+    }
+
     fn with_sampler(
-        sampler: Arc<dyn TargetObservationSampler>,
+        snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
         provider_deadline: Duration,
     ) -> Self {
         Self {
             worker: Mutex::new(LifecycleWorker::new()),
             desired: Mutex::new(HashSet::new()),
             generation: Arc::new(AtomicU64::new(0)),
-            snapshot_executor: Arc::new(TargetSnapshotDeadlineExecutor::new(sampler)),
+            snapshot_executor,
             provider_deadline,
         }
     }
@@ -273,7 +127,10 @@ impl RemoteDesktopTargetMonitor {
         sampler: Arc<dyn TargetObservationSampler>,
         provider_deadline: Duration,
     ) -> Self {
-        Self::with_sampler(sampler, provider_deadline)
+        Self::with_sampler(
+            Arc::new(TargetSnapshotDeadlineExecutor::new(sampler)),
+            provider_deadline,
+        )
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn track(
@@ -863,11 +720,14 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target_monitor::{
         apply_generation_command, stop_lost_media_source, target_monitor_retry_after,
         RemoteDesktopTargetMonitor, TargetMediaSourceStopper, TargetMonitorCommand,
-        TargetObservationSampler, TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
         TARGET_MONITOR_RETRY_MAX,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
         sample_platform_target_observations, PlatformTargetObservationSample,
+    };
+    use crate::daemon::plugins::remote_desktop::target_snapshot::{
+        TargetObservationSampler, TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
+        TargetSnapshotOwner,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
         test_runtime_limits, test_session_init, TestRemoteAppTargetBindingVerifier,
@@ -1051,7 +911,7 @@ mod tests {
         assert!(matches!(
             first,
             Err(TargetSnapshotDeadlineError::DeadlineExceeded {
-                owner_generation: 1,
+                owner: TargetSnapshotOwner::MonitorGeneration(1),
                 ..
             })
         ));
@@ -1076,6 +936,43 @@ mod tests {
             sampler.calls(),
             2,
             "the late generation-1 sample must be discarded before one fresh generation-2 call"
+        );
+    }
+
+    #[test]
+    fn input_deadline_shares_monitor_single_flight_and_fences_monitor_result() {
+        let sampler = Arc::new(BlockingFirstTargetSampler::new());
+        let sampler_trait: Arc<dyn TargetObservationSampler> = sampler.clone();
+        let executor = TargetSnapshotDeadlineExecutor::new(sampler_trait);
+
+        assert!(matches!(
+            executor.sample_for_generation(7, Duration::from_millis(20)),
+            Err(TargetSnapshotDeadlineError::DeadlineExceeded {
+                owner: TargetSnapshotOwner::MonitorGeneration(7),
+                ..
+            })
+        ));
+        assert!(matches!(
+            executor.sample_for_input(Duration::from_millis(20)),
+            Err(TargetSnapshotDeadlineError::DeadlineExceeded {
+                owner: TargetSnapshotOwner::MonitorGeneration(7),
+                ..
+            })
+        ));
+        assert_eq!(
+            sampler.calls(),
+            1,
+            "input timeout must not create a second native call behind a hung monitor sample"
+        );
+
+        sampler.release();
+        executor
+            .sample_for_input(Duration::from_secs(1))
+            .expect("fresh input-owned sample succeeds after stale monitor result is fenced");
+        assert_eq!(
+            sampler.calls(),
+            2,
+            "the completed monitor-owned sample must be discarded before input validation"
         );
     }
 

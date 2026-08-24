@@ -69,8 +69,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
     let options = capture_options_from_video_constraints(&video)?;
     let target_bitrate_kbps = bitrate_kbps_from_video_constraints(&video);
     let max_frame_queue_depth = frame_queue_depth_from_video_constraints(&video);
-    let input_policy =
-        EffectiveRemoteDesktopInputPolicy::for_binding(&input_policy, &target_binding);
+    let input_policy = EffectiveRemoteDesktopInputPolicy::for_binding(
+        &input_policy,
+        &target_binding,
+        request.plugin.target_snapshot_executor(),
+    );
     let epoch = request.plugin.transport_manager().allocate_epoch();
     request
         .plugin

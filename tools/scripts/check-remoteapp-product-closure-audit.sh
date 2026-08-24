@@ -50,6 +50,7 @@ END_SESSION_HANDLER="$ROOT/plugins/remote-desktop/src/handlers/end_session.rs"
 REMOTE_DESKTOP_SCHEMA="$ROOT/plugins/remote-desktop/src/schema.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
+TARGET_SNAPSHOT="$ROOT/plugins/remote-desktop/src/target_snapshot.rs"
 INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
 REMOTE_DESKTOP_PLUGIN_MANIFEST="$ROOT/plugins/remote-desktop/plugin.toml"
 REMOTE_DESKTOP_REGISTRATION="$ROOT/plugins/remote-desktop/src/registration.rs"
@@ -125,6 +126,7 @@ reject() {
 [[ -f "$REMOTE_DESKTOP_SCHEMA" ]] || fail "missing RemoteApp ability schemas"
 [[ -f "$EVENT_LOG" ]] || fail "missing RemoteApp event log"
 [[ -f "$TARGET_MONITOR" ]] || fail "missing RemoteApp target monitor"
+[[ -f "$TARGET_SNAPSHOT" ]] || fail "missing RemoteApp target snapshot executor"
 [[ -f "$INPUT" ]] || fail "missing RemoteApp input execution plane"
 [[ -f "$REMOTE_DESKTOP_PLUGIN_MANIFEST" ]] || fail "missing RemoteApp plugin manifest"
 [[ -f "$REMOTE_DESKTOP_REGISTRATION" ]] || fail "missing RemoteApp compiled registration"
@@ -1515,12 +1517,18 @@ require 'initial_tracked: HashSet<String>' "$TARGET_MONITOR" \
   'RemoteApp target monitor worker restarts must be seeded from desired tracking state'
 require 'desired_sessions_for_test' "$TARGET_MONITOR" \
   'RemoteApp target monitor must expose test evidence for desired tracking state'
-require 'struct TargetSnapshotDeadlineExecutor' "$TARGET_MONITOR" \
+require 'struct TargetSnapshotDeadlineExecutor' "$TARGET_SNAPSHOT" \
   'RemoteApp target monitor must own a single-flight native snapshot deadline boundary'
 require 'snapshot_deadline_fences_late_result_and_bounds_native_call_count' "$TARGET_MONITOR" \
   'RemoteApp target monitor must prove late native results cannot cross generation authority'
 require 'provider_hang_exhausts_budget_without_spawning_unbounded_native_calls' "$TARGET_MONITOR" \
   'RemoteApp target monitor must prove provider hangs are bounded and fail safe'
+require 'TargetSnapshotOwner::InputRequest' "$TARGET_SNAPSHOT" \
+  'RemoteApp input and monitor target snapshots must share one plugin-owned native failure domain'
+require 'target_local_input_provider_hang_rejects_with_bounded_deadline' "$ROOT/plugins/remote-desktop/src/input.rs" \
+  'RemoteApp target-local input must prove host snapshot hangs reject within a bounded deadline'
+require '50 ms monotonic deadline' "$SPEC" \
+  'RemoteApp product contract must publish its bounded target-local input snapshot deadline'
 require 'SESSION_REHYDRATED' "$SESSION" \
   'RemoteApp session aggregate must emit SESSION_REHYDRATED for non-terminal startup recovery'
 require 'session_events::session_rehydrated' "$SESSION" \

@@ -556,6 +556,7 @@ mod tests {
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
+    use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
 
     #[derive(Debug)]
     struct CountingScreenBackend {
@@ -858,8 +859,11 @@ mod tests {
             )
             .expect("interactive display binding resolves with input consent");
         let requested_policy = RemoteDesktopInputPolicy::new(true, true);
-        let input_policy =
-            EffectiveRemoteDesktopInputPolicy::for_binding(&requested_policy, &target_binding);
+        let input_policy = EffectiveRemoteDesktopInputPolicy::for_binding(
+            &requested_policy,
+            &target_binding,
+            RemoteDesktopTargetMonitor::new().snapshot_executor(),
+        );
         assert_eq!(input_policy.input_scope().as_str(), "display_global");
 
         let session_store = Arc::new(RemoteDesktopSessionStore::new());

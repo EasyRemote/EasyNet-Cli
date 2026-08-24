@@ -48,6 +48,7 @@ reject_multiline() {
 TARGET_TRACKING="$REMOTE_ROOT/target_tracking.rs"
 TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
 TARGET_MONITOR="$REMOTE_ROOT/target_monitor.rs"
+TARGET_SNAPSHOT="$REMOTE_ROOT/target_snapshot.rs"
 LEASE_MONITOR="$REMOTE_ROOT/lease_monitor.rs"
 LIFECYCLE_WORKER="$REMOTE_ROOT/lifecycle_worker.rs"
 SESSION="$REMOTE_ROOT/session.rs"
@@ -81,7 +82,7 @@ WEBRTC_NATIVE="$REMOTE_ROOT/transport/webrtc_native_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$LIFECYCLE_WORKER" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$NETWORK" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$TARGET_SNAPSHOT" "$LEASE_MONITOR" "$LIFECYCLE_WORKER" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$NETWORK" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -242,20 +243,38 @@ require 'TargetMonitorCommand::Shutdown => false' "$TARGET_MONITOR" \
   'target monitor command state machine must handle Shutdown as the terminal command'
 require 'target_monitor_command_state_machine_tracks_cancels_and_shuts_down' "$TARGET_MONITOR" \
   'target monitor must test track/cancel/shutdown command semantics'
-require 'struct TargetSnapshotDeadlineExecutor' "$TARGET_MONITOR" \
+require 'struct TargetSnapshotDeadlineExecutor' "$TARGET_SNAPSHOT" \
   'target monitor must isolate host snapshots behind one plugin-owned deadline executor'
-require 'fn sample_for_generation\(' "$TARGET_MONITOR" \
+require 'fn sample_for_generation\(' "$TARGET_SNAPSHOT" \
   'target snapshot acquisition must be explicitly fenced by monitor generation'
-require 'recv_timeout\(remaining\)' "$TARGET_MONITOR" \
+require 'recv_timeout\(remaining\)' "$TARGET_SNAPSHOT" \
   'target monitor generations must use a monotonic bounded wait for native provider results'
-require 'completed\.owner_generation != generation' "$TARGET_MONITOR" \
-  'a replacement generation must discard a late result owned by an obsolete generation'
+require 'completed\.owner != owner' "$TARGET_SNAPSHOT" \
+  'a replacement monitor or input authority must discard a late result owned by another request'
 require 'snapshot_deadline_fences_late_result_and_bounds_native_call_count' "$TARGET_MONITOR" \
   'target monitor tests must prove stale-result fencing and single-flight native sampling'
 require 'provider_hang_exhausts_budget_without_spawning_unbounded_native_calls' "$TARGET_MONITOR" \
   'target monitor tests must prove a permanent provider hang fails safe without unbounded native calls'
 require 'plugin shutdown must not join the blocked native provider call' "$TARGET_MONITOR" \
   'target monitor tests must prove plugin shutdown remains bounded while a native call is blocked'
+require 'TargetSnapshotOwner::InputRequest' "$TARGET_SNAPSHOT" \
+  'input target guards must share the plugin-owned snapshot executor with monitor generations'
+require 'fn sample_for_input\(' "$TARGET_SNAPSHOT" \
+  'target snapshot executor must expose a bounded input-owned sample path'
+require 'TARGET_INPUT_GUARD_PROVIDER_DEADLINE' "$INPUT" \
+  'target-local input validation must have an explicit short provider deadline'
+require 'target_input_guard_deadline_exceeded' "$INPUT" \
+  'input provider timeout must project a stable fail-closed rejection reason'
+require 'target_local_input_provider_hang_rejects_with_bounded_deadline' "$INPUT" \
+  'input tests must prove a hung host target provider cannot block the data channel indefinitely'
+require '50 ms monotonic deadline' "$SPEC" \
+  'RemoteApp SPEC must publish the bounded target-local input snapshot contract'
+require 'input_deadline_shares_monitor_single_flight_and_fences_monitor_result' "$TARGET_MONITOR" \
+  'target monitor tests must prove monitor and input requests share one fenced native failure domain'
+reject 'validate_live_target_input' "$INPUT" \
+  'input policy must not call an unbounded live host snapshot helper directly'
+reject 'live_host_target_snapshot' "$TARGET_OBSERVER" \
+  'target observer must not retain an unbounded host snapshot bypass outside the shared executor'
 require 'fn push_target_tracking_event\(' "$SESSION" \
   'session aggregate must own target-event transport epoch projection'
 require 'payload\["transport_epoch"\]' "$SESSION" \
@@ -999,13 +1018,13 @@ require 'TargetScopedInputGuarded' "$TARGET" \
   'target binding must distinguish guarded target-local input from global input'
 require 'target_scoped_input_guarded' "$TARGET" \
   'target binding must publish the stable guarded target-local scope reason'
-require 'validate_live_target_input' "$TARGET_OBSERVER" \
-  'target observer must expose fresh host validation for input execution'
-require 'validate_live_target_pointer_input' "$TARGET_OBSERVER" \
-  'target observer must expose fresh host surface and occlusion validation for pointer execution'
+require 'validate_target_input_observation' "$TARGET_OBSERVER" \
+  'target observer must expose deadline-acquired host validation for input execution'
+require 'validate_target_pointer_input_observation' "$TARGET_OBSERVER" \
+  'target observer must expose deadline-acquired host surface and occlusion validation for pointer execution'
 require 'target_input_guard_validation' "$INPUT" \
   'input execution must invoke the target-local host guard'
-require 'validate_live_target_pointer_input\(binding, snapshot, point\.x, point\.y\)' "$INPUT" \
+require_multiline 'm/validate_target_pointer_input_observation\(\s*sample\.observation\(\),\s*binding,\s*snapshot,\s*point\.x,\s*point\.y,/s' "$INPUT" \
   'target-local pointer execution must validate the mapped host point before OS injection'
 require 'PointerOutsideTargetSurface' "$TARGET_OBSERVER" \
   'application canvas gaps must fail closed instead of targeting host desktop content'

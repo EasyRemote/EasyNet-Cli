@@ -63,6 +63,11 @@ macOS window/application targets may project `target_local` only when the grant
 contains input control and every pointer/key event passes a fresh host target
 guard. Without that grant they remain `view_only` with
 `input_consent_required`; non-macOS target-local input remains unsupported.
+The fresh guard shares the target monitor's plugin-owned single-flight native
+snapshot executor and has a 50 ms monotonic input deadline. A stuck host window
+provider therefore rejects the frame as `target_input_guard_deadline_exceeded`
+without spawning replacement native calls or indefinitely blocking the input
+channel.
 The main-crate implementation test gate,
 `tools/scripts/check-remoteapp-main-crate-implementation-tests.sh`, proves that
 RemoteApp app/window target observation, non-macOS app/window fail-closed

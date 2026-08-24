@@ -44,6 +44,7 @@ use crate::daemon::plugins::remote_desktop::session_recovery::{
 };
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
+use crate::daemon::plugins::remote_desktop::target_snapshot::TargetSnapshotDeadlineExecutor;
 use crate::daemon::plugins::remote_desktop::transport::{
     DirectWebRtcEndpoint, RemoteDesktopTransportManager,
 };
@@ -173,6 +174,12 @@ impl RemoteDesktopPlugin {
         &self,
     ) -> Arc<RemoteDesktopSessionStore> {
         Arc::clone(&self.sessions)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_snapshot_executor(
+        &self,
+    ) -> Arc<TargetSnapshotDeadlineExecutor> {
+        self.target_monitor.snapshot_executor()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn consent_registry(

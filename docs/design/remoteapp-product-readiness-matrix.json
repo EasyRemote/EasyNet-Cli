@@ -79,6 +79,7 @@
         "frontend session details separately surface input scope and pointer/keyboard enablement from daemon input_readiness",
         "display interactive sessions require an explicit input-control consent ticket before resolving display_global input scope",
         "window/application sessions with explicit input-control consent resolve target_local scope only behind the fresh per-event target guard",
+        "periodic target observation and per-event input guards share one plugin-owned single-flight host snapshot executor; input rejects as target_input_guard_deadline_exceeded after a 50 ms monotonic wait instead of hanging the data channel",
         "Windows input has a User32 SendInput baseline with virtual-desktop coordinate mapping, bounded wheel deltas, keyboard mapping, and partial-application rejection",
         "Linux X11 input has a dynamically loaded serialized XTest baseline with bounded wheel expansion and deterministic keyboard mapping",
         "Linux Wayland input fails closed until xdg-desktop-portal RemoteDesktop session identity is bound to the selected Resource",
