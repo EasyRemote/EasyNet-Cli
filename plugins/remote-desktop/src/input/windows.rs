@@ -98,6 +98,13 @@ pub(super) fn apply_pointer_frame(
     send_inputs(&inputs)
 }
 
+pub(super) fn release_pointer_button(button: u8) -> InputApplyOutcome {
+    let Some(flag) = button_flag("up", button) else {
+        return InputApplyOutcome::rejected("unsupported_pointer_button");
+    };
+    send_inputs(&[mouse_input(0, 0, 0, flag)])
+}
+
 pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
     let Some(key) = windows_key(frame) else {
         return InputApplyOutcome::rejected("unsupported_key");
@@ -127,6 +134,10 @@ pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
         },
     };
     send_inputs(&[input])
+}
+
+pub(super) fn release_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
+    apply_key_frame(frame)
 }
 
 fn send_inputs(inputs: &[INPUT]) -> InputApplyOutcome {

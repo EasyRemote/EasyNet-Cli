@@ -225,20 +225,22 @@ require 'syncTerminalSession: true' "$STORE" \
   'frontend permission-revoked recovery must request daemon terminal session synchronization'
 require 'terminal sync failed' "$STORE" \
   'frontend terminal recovery sync failures must remain visible to the operator'
-require 'resumeRemoteDesktopSessionAfterOffline' "$STORE" \
-  'frontend must own RemoteApp offline resume as an explicit session lifecycle path'
-require 'remoteDesktopResumeIdentity' "$STORE" \
-  'frontend RemoteApp offline resume must deduplicate concurrent resume attempts'
+require 'retryRemoteDesktopSessionTransport' "$STORE" \
+  'frontend must own RemoteApp transport retry as an explicit same-session lifecycle path'
+require 'remoteDesktopRetryIdentity' "$STORE" \
+  'frontend RemoteApp transport retry must deduplicate concurrent attempts for one session/token identity'
+require 'remoteDesktopRetryGeneration' "$STORE" \
+  'frontend RemoteApp transport retry must fence stale asynchronous retry completions'
 require_multiline 'm/const suspendEntryForOffline = \(key: string, reason: string\) => \{[\s\S]*if \(entry\.channel === '\''remoteDesktop'\''\) \{[\s\S]*remote desktop session preserved for reconnect/s' "$STORE" \
   'frontend device-offline suspend must preserve non-terminal RemoteApp sessions for reconnect'
 reject_multiline 'm/const suspendEntryForOffline = \(key: string, reason: string\) => \{(?:(?!\n  const resumeEntryFromOffline).)*if \(entry\.channel === '\''remoteDesktop'\''\) \{(?:(?!\n  const resumeEntryFromOffline).)*session:\s*null/s' "$STORE" \
   'frontend device-offline suspend must not clear RemoteApp session state'
-require_multiline 'm/const resumeEntryFromOffline = \(key: string\) => \{[\s\S]*entry\.channel === '\''remoteDesktop'\''[\s\S]*remoteDesktopSessionTerminal\(session\)[\s\S]*resumeRemoteDesktopSessionAfterOffline\(key, session\)/s' "$STORE" \
-  'frontend device-online resume must rebind only preserved non-terminal RemoteApp sessions'
-require_multiline 'm/const resumeRemoteDesktopSessionAfterOffline[\s\S]*invokeMediaUnary\('\''remote_desktop\.show_session'\''[\s\S]*subjectURA: session\.subjectUra[\s\S]*args: \{ session_id: session\.sessionId, session_token: session\.sessionToken \}/s' "$STORE" \
-  'frontend RemoteApp offline resume must validate the daemon session with remote_desktop.show_session before WebRTC rebind'
-require_multiline 'm/startWebRtc\(key, view, \{ endSessionOnTransportFailure: false \}\)/s' "$STORE" \
-  'frontend RemoteApp offline resume must preserve the daemon session when a rebind transport attempt fails'
+require_multiline 'm/const resumeEntryFromOffline = \(key: string\) => \{[\s\S]*entry\.channel === '\''remoteDesktop'\''[\s\S]*remoteDesktopSessionTerminal\(session\)[\s\S]*retryRemoteDesktopSessionTransport\(key, session, '\''device_resume'\''\)/s' "$STORE" \
+  'frontend device-online resume must retry transport only for a preserved non-terminal RemoteApp session'
+require_multiline 'm/const retryRemoteDesktopSessionTransport[\s\S]*invokeMediaUnary\('\''remote_desktop\.show_session'\''[\s\S]*subjectURA: session\.subjectUra[\s\S]*args: \{ session_id: session\.sessionId, session_token: session\.sessionToken \}/s' "$STORE" \
+  'frontend transport retry must validate the same daemon session and token with remote_desktop.show_session before WebRTC rebind'
+require_multiline 'm/startWebRtc\(key, view, \{[\s\S]*endSessionOnTransportFailure: false,[\s\S]*isCurrent: retryIsCurrent,[\s\S]*\}\)/s' "$STORE" \
+  'frontend transport retry must preserve the daemon session on transport failure and fence stale retry completion'
 require 'remote desktop transport failed; session preserved for reconnect' "$STORE" \
   'frontend failed resume transport must surface that the daemon session remains reusable'
 require 'REMOTE_DESKTOP_INPUT_MAX_BUFFERED_BYTES' "$STORE" \
@@ -282,6 +284,24 @@ require 'targetGeometryRevision = entry\.session\?\.targetTracking\?\.targetGeom
   'frontend pointer input frames must bind to the session target geometry revision when available'
 require 'target_geometry_revision: targetGeometryRevision' "$ACCESS" \
   'frontend pointer input frames must carry target_geometry_revision for daemon stale-transform rejection'
+require 'type RemoteDesktopInputFrame =' "$PROTOCOL" \
+  'frontend RemoteApp input must use one closed pointer/key wire union'
+require 'frame: RemoteDesktopInputFrame' "$STORE" \
+  'frontend input sender must accept only the closed RemoteApp input wire union'
+reject 'buttons: event\.buttons' "$ACCESS" \
+  'DOM-only buttons state must not cross the strict RemoteApp input JSON boundary'
+reject 'pointer_type: event\.pointerType' "$ACCESS" \
+  'DOM-only pointer_type must not cross the strict RemoteApp input JSON boundary'
+require 'onPointerCancel=\{inputHandlers\.onPointerCancel\}' "$ACCESS" \
+  'frontend input surface must release pressed pointer state on pointer cancellation'
+require 'onBlur=\{inputHandlers\.onBlur\}' "$ACCESS" \
+  'frontend input surface must release pressed input state on focus loss'
+require 'releasePressedInputs' "$ACCESS" \
+  'frontend input lifecycle must centralize prompt key/button release'
+require "not\.toHaveProperty\('buttons'\)" "$ACCESS_TEST" \
+  'frontend tests must prove pointer frames omit parser-unknown DOM buttons state'
+require "not\.toHaveProperty\('pointer_type'\)" "$ACCESS_TEST" \
+  'frontend tests must prove pointer frames omit parser-unknown pointer_type state'
 require 'remoteDesktopInputReadinessLabel\(session\)' "$ACCESS" \
   'frontend session details must render daemon input_readiness instead of only requested input policy'
 require 'const readiness = view\.inputReadiness' "$ACCESS" \
@@ -399,8 +419,10 @@ require 'checks RemoteApp host permissions without target-scoped subject' "$STOR
   'frontend store tests must prove permission_status preflight stays host-local'
 require 'expect\(entry\.error\)\.toBeUndefined\(\)' "$STORE_TEST" \
   'frontend store tests must prove denied permission_status preflight stays in picker state'
-require 'preserves and rebinds remote desktop sessions across device offline resume' "$STORE_TEST" \
-  'frontend store tests must prove RemoteApp offline resume preserves and rebinds daemon sessions'
+require 'preserves one remote desktop session across device resume and explicit retry' "$STORE_TEST" \
+  'frontend store tests must prove device resume and explicit retry reuse one daemon session identity'
+require 'fences a stale transport retry when the device goes offline during session lookup' "$STORE_TEST" \
+  'frontend store tests must prove an offline transition fences an in-flight transport retry'
 require 'transport_epoch: 3' "$STORE_TEST" \
   'frontend resume tests must prove the resumed PeerConnection sends ICE with its new epoch'
 require 'target_permission_revoked' "$STORE_TEST" \

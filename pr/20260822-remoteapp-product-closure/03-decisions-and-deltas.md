@@ -1,5 +1,48 @@
 # Decisions and Deltas — RemoteApp Product Closure
 
+## 2026-08-25 — Input frames and pressed state require one lifecycle contract
+
+Decision:
+
+- The browser may send only fields accepted by the plugin's strict input-frame
+  parser. DOM-only facts such as `buttons` and `pointer_type` do not belong on
+  the RemoteApp wire when no host behavior consumes them.
+- A successfully injected key/button down becomes transport-owned pressed
+  state. Its matching release is a reducing operation and must not be blocked
+  by a later focus/geometry change.
+- Browser blur/pointer cancellation releases known local presses promptly;
+  device-side channel termination remains the authoritative cleanup for
+  disconnects where the browser cannot deliver a final frame.
+
+Implemented product effect:
+
+- Real pointer frames reach policy, coordinate mapping, and OS injection
+  instead of failing JSON deserialization on unknown frontend fields.
+- Focus loss, transport retry, and abrupt disconnect cannot intentionally leave
+  a tracked modifier or mouse button held on the host.
+
+Verification completed on 2026-08-25:
+
+- EasyNet frontend contract tests prove exact pointer serialization plus
+  blur/pointer-cancel release behavior; the full frontend suite passed with
+  81 files and 689 tests.
+- Frontend typecheck, focused lint, and production build passed.
+- Plugin input state-machine tests passed with 37 focused tests, covering
+  bounded tracking, reducing releases, and terminal cleanup.
+- RemoteApp platform-input, frontend-invocation, lifecycle-input, and product
+  closure static gates passed.
+- The main-crate implementation gate passes from an isolated worktree at this
+  commit. The original shared checkout remains temporarily non-compilable due
+  to concurrent, unrelated bidi/file-transfer changes (`BidiInputFrame`
+  call-site drift and a missing `PTY_CONTROL_STREAM_ID`), which were excluded
+  from this delta.
+- A Windows GNU cross-build reached the OpenH264/Nokhwa native archive stage
+  without a Rust type error, then stopped because the host volume ran out of
+  space. Windows/Linux cross-builds therefore remain unverified rather than
+  being counted as passed.
+- Real cross-device macOS/Windows/Linux OS-input E2E remains required before
+  the RemoteApp product can be called complete.
+
 ## 2026-08-22 — Session terminal facts must be explicit
 
 Decision:

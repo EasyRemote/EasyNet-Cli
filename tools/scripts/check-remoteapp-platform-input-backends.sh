@@ -44,8 +44,22 @@ require '#\[path = "input/linux.rs"\]' "$INPUT" \
   'Linux input backend must remain independently bounded'
 require 'input_injection_unavailable_reason\(\)' "$INPUT" \
   'session activation must preserve typed platform input failure reasons'
-require 'validate_live_target_input' "$INPUT" \
-  'platform injection must remain downstream of the fresh target guard'
+require 'validate_target_input_observation' "$INPUT" \
+  'keyboard injection must remain downstream of the fresh target guard'
+require 'validate_target_pointer_input_observation' "$INPUT" \
+  'pointer injection must remain downstream of fresh target and occlusion guards'
+require 'struct AppliedInputState' "$INPUT" \
+  'device input channel must own successfully applied pressed-state lifecycle'
+require 'MAX_TRACKED_PRESSED_KEYS' "$INPUT" \
+  'device pressed-key state must remain hard-bounded'
+require 'MAX_TRACKED_PRESSED_BUTTONS' "$INPUT" \
+  'device pressed-button state must remain hard-bounded'
+require 'fn tracked_release\(' "$INPUT" \
+  'matching key/button releases must be recognized as reducing operations'
+require 'impl Drop for AppliedInputState' "$INPUT" \
+  'input task cancellation must retain a terminal pressed-state cleanup guard'
+require 'terminal_input_release' "$INPUT" \
+  'input channel close diagnostics must expose terminal release outcomes'
 
 require 'SendInput' "$WINDOWS" \
   'Windows input must execute through User32 SendInput'
@@ -61,6 +75,10 @@ require 'applied as usize == inputs\.len\(\)' "$WINDOWS" \
   'Windows input must reject partial SendInput application'
 require 'windows_send_input_denied' "$WINDOWS" \
   'Windows UIPI/SendInput denial must have a stable reason'
+require 'release_pointer_button' "$WINDOWS" \
+  'Windows channel cleanup must release mouse buttons without target movement'
+require 'release_key_frame' "$WINDOWS" \
+  'Windows channel cleanup must release tracked keys'
 require 'virtual_desktop_absolute_mapping_clamps_multi_monitor_coordinates' "$WINDOWS" \
   'Windows virtual-desktop normalization must retain an executable unit contract'
 require 'windows_wheel_delta_is_bounded_per_frame' "$WINDOWS" \
@@ -90,6 +108,10 @@ require 'linux_wheel_expansion_is_bounded' "$LINUX" \
   'Linux wheel expansion must retain an executable unit contract'
 require 'linux_dom_key_mapping_is_deterministic' "$LINUX" \
   'Linux DOM-key translation must retain an executable unit contract'
+require 'release_pointer_button' "$LINUX" \
+  'Linux channel cleanup must release tracked XTest mouse buttons'
+require 'release_key_frame' "$LINUX" \
+  'Linux channel cleanup must release tracked XTest keys'
 reject 'Command::new|xdotool|ydotool' "$LINUX" \
   'Linux input must not shell out to an ungoverned automation process'
 

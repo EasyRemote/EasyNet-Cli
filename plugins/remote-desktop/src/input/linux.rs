@@ -77,6 +77,24 @@ pub(super) fn apply_pointer_frame(
     }
 }
 
+pub(super) fn release_pointer_button(button: u8) -> InputApplyOutcome {
+    let Some(button) = button_number(button) else {
+        return InputApplyOutcome::rejected("unsupported_pointer_button");
+    };
+    let backend = match backend() {
+        Ok(backend) => backend,
+        Err(reason) => return InputApplyOutcome::rejected(reason),
+    };
+    let Ok(backend) = backend.lock() else {
+        return InputApplyOutcome::rejected("linux_xtest_backend_poisoned");
+    };
+    if backend.button(button, false) && backend.flush() {
+        InputApplyOutcome::applied()
+    } else {
+        InputApplyOutcome::rejected(LINUX_XTEST_DENIED)
+    }
+}
+
 pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
     let key_down = match frame.action.as_str() {
         "down" => true,
@@ -100,6 +118,10 @@ pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
     } else {
         InputApplyOutcome::applied()
     }
+}
+
+pub(super) fn release_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
+    apply_key_frame(frame)
 }
 
 fn backend() -> Result<&'static Mutex<X11InputBackend>, &'static str> {

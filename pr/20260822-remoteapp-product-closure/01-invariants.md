@@ -29,3 +29,10 @@
     serialize through one store lock. Startup derives its row ceiling from the
     same active/terminal retention formula and also caps total bytes and every
     directory entry before JSON decode.
+14. Browser input frames and the plugin parser share one closed field set.
+    Frontend-only pointer metadata must never cross the data channel, because
+    the host parser rejects unknown fields before admission and OS injection.
+    Every successfully applied key/button press is session-transport state:
+    its matching release is allowed to reduce input state even after target
+    focus changes, and channel termination attempts a bounded release of every
+    still-pressed key/button before the input plane closes.

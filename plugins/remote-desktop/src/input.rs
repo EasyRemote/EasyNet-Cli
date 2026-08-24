@@ -38,6 +38,8 @@ const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
 const MAX_CLIENT_SEQUENCE: u64 = 9_007_199_254_740_991;
 const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
 const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;
+const MAX_TRACKED_PRESSED_KEYS: usize = 256;
+const MAX_TRACKED_PRESSED_BUTTONS: usize = 8;
 const TARGET_INPUT_GUARD_PROVIDER_DEADLINE: Duration = Duration::from_millis(50);
 pub(in crate::daemon::plugins::remote_desktop) const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] =
     &["clipboard", "file_drop"];
@@ -226,6 +228,185 @@ impl InputApplyOutcome {
             self.target_guard_validation = validation;
         }
         self
+    }
+}
+
+/// Device-authoritative ledger of input presses that reached the OS.
+///
+/// The browser can disappear without delivering `keyup`/`pointerup`, so the
+/// data channel owns the matching release lifecycle. A tracked release is a
+/// reducing operation: it may bypass a later target-focus/geometry rejection,
+/// but an untracked release still follows the normal policy path.
+#[derive(Debug, Default)]
+struct AppliedInputState {
+    keys: BTreeMap<String, TrackedKeyPress>,
+    pointer_buttons: BTreeMap<u8, InputFrameTargetContext>,
+}
+
+#[derive(Debug, Clone)]
+struct TrackedKeyPress {
+    frame: KeyInputFrame,
+    context: InputFrameTargetContext,
+}
+
+#[derive(Debug, Clone)]
+enum TrackedInputRelease {
+    Key(TrackedKeyPress),
+    Pointer {
+        button: u8,
+        context: InputFrameTargetContext,
+    },
+}
+
+impl TrackedInputRelease {
+    fn context(&self) -> InputFrameTargetContext {
+        match self {
+            Self::Key(press) => press.context,
+            Self::Pointer { context, .. } => *context,
+        }
+    }
+
+    fn apply(&self) -> InputApplyOutcome {
+        match self {
+            Self::Key(press) => {
+                let mut release = press.frame.clone();
+                release.action = "up".to_string();
+                release.repeat = false;
+                platform::release_key_frame(&release)
+            }
+            Self::Pointer { button, .. } => platform::release_pointer_button(*button),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct InputReleaseSummary {
+    attempted: usize,
+    applied: usize,
+    failed_by_reason: BTreeMap<&'static str, usize>,
+}
+
+impl InputReleaseSummary {
+    fn to_value(&self) -> Value {
+        json!({
+            "attempted": self.attempted,
+            "applied": self.applied,
+            "failed": self.attempted.saturating_sub(self.applied),
+            "failed_by_reason": self.failed_by_reason,
+        })
+    }
+}
+
+impl AppliedInputState {
+    fn press_reject_reason(&self, frame: &RemoteDesktopInputFrame) -> Option<&'static str> {
+        match frame {
+            RemoteDesktopInputFrame::Key(frame) if frame.action == "down" => {
+                let identity = key_frame_identity(frame);
+                (!self.keys.contains_key(&identity) && self.keys.len() >= MAX_TRACKED_PRESSED_KEYS)
+                    .then_some("pressed_key_state_capacity_exceeded")
+            }
+            RemoteDesktopInputFrame::Pointer(frame) if frame.action == "down" => {
+                let button = frame.button.unwrap_or(0);
+                (!self.pointer_buttons.contains_key(&button)
+                    && self.pointer_buttons.len() >= MAX_TRACKED_PRESSED_BUTTONS)
+                    .then_some("pressed_pointer_state_capacity_exceeded")
+            }
+            _ => None,
+        }
+    }
+
+    fn tracked_release(&self, frame: &RemoteDesktopInputFrame) -> Option<TrackedInputRelease> {
+        match frame {
+            RemoteDesktopInputFrame::Key(frame) if frame.action == "up" => self
+                .keys
+                .get(&key_frame_identity(frame))
+                .cloned()
+                .map(TrackedInputRelease::Key),
+            RemoteDesktopInputFrame::Pointer(frame) if frame.action == "up" => {
+                let button = frame.button.unwrap_or(0);
+                self.pointer_buttons
+                    .get(&button)
+                    .copied()
+                    .map(|context| TrackedInputRelease::Pointer { button, context })
+            }
+            _ => None,
+        }
+    }
+
+    fn observe_applied(
+        &mut self,
+        frame: &RemoteDesktopInputFrame,
+        context: InputFrameTargetContext,
+    ) {
+        match frame {
+            RemoteDesktopInputFrame::Key(frame) if frame.action == "down" => {
+                self.keys.insert(
+                    key_frame_identity(frame),
+                    TrackedKeyPress {
+                        frame: frame.clone(),
+                        context,
+                    },
+                );
+            }
+            RemoteDesktopInputFrame::Key(frame) if frame.action == "up" => {
+                self.keys.remove(&key_frame_identity(frame));
+            }
+            RemoteDesktopInputFrame::Pointer(frame) if frame.action == "down" => {
+                self.pointer_buttons
+                    .insert(frame.button.unwrap_or(0), context);
+            }
+            RemoteDesktopInputFrame::Pointer(frame) if frame.action == "up" => {
+                self.pointer_buttons.remove(&frame.button.unwrap_or(0));
+            }
+            _ => {}
+        }
+    }
+
+    fn take_releases(&mut self) -> Vec<TrackedInputRelease> {
+        let mut releases = Vec::with_capacity(self.keys.len() + self.pointer_buttons.len());
+        releases.extend(
+            std::mem::take(&mut self.keys)
+                .into_values()
+                .map(TrackedInputRelease::Key),
+        );
+        releases.extend(
+            std::mem::take(&mut self.pointer_buttons)
+                .into_iter()
+                .map(|(button, context)| TrackedInputRelease::Pointer { button, context }),
+        );
+        releases
+    }
+
+    fn release_all(&mut self) -> InputReleaseSummary {
+        let mut summary = InputReleaseSummary::default();
+        for release in self.take_releases() {
+            summary.attempted = summary.attempted.saturating_add(1);
+            let outcome = release.apply();
+            if outcome.applied {
+                summary.applied = summary.applied.saturating_add(1);
+            } else {
+                let reason = outcome.reason.unwrap_or("input_release_failed");
+                *summary.failed_by_reason.entry(reason).or_default() += 1;
+            }
+        }
+        summary
+    }
+}
+
+impl Drop for AppliedInputState {
+    fn drop(&mut self) {
+        // Cancellation can drop the channel future before it observes an
+        // explicit close event. Releases are idempotent at the OS input layer,
+        // and this destructor is the final fail-safe for that path.
+        let _ = self.release_all();
+    }
+}
+
+fn key_frame_identity(frame: &KeyInputFrame) -> String {
+    if frame.code.trim().is_empty() {
+        format!("key:{}", frame.key)
+    } else {
+        format!("code:{}", frame.code)
     }
 }
 
@@ -685,6 +866,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
     let mut sequence_gate = InputSequenceGate::default();
     let mut reject_diagnostics = InputRejectCoalescer::default();
     let mut applied_diagnostics = InputAppliedDiagnosticGate::default();
+    let mut applied_input_state = AppliedInputState::default();
     while let Some(event) = data_channel.poll().await {
         match event {
             DataChannelEvent::OnOpen => {
@@ -705,6 +887,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
             }
             DataChannelEvent::OnClose | DataChannelEvent::OnClosing => {
                 flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
+                let release_summary = applied_input_state.release_all();
                 record_input_channel_event(
                     &sessions,
                     &session_id,
@@ -713,6 +896,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     json!({
                         "accepted_count": accepted_count,
                         "rejected_count": rejected_count,
+                        "terminal_input_release": release_summary.to_value(),
                     }),
                 );
                 break;
@@ -784,29 +968,57 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     );
                     continue;
                 }
-                let Some(effective_input_policy) = current_session_effective_input_policy(
-                    &sessions,
-                    &session_id,
-                    InputTransportGuard::DirectWebRtc(epoch),
-                    &input_policy,
-                ) else {
+                if let Some(reason) = applied_input_state.press_reject_reason(&frame) {
                     rejected_count = rejected_count.saturating_add(1);
                     record_input_rejection(
                         &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        InputRejectSample::new("target_input_not_ready", rejected_count)
+                        InputRejectSample::new(reason, rejected_count)
                             .kind(kind)
                             .action(frame.action())
                             .timing(timing)
                             .client_sequence(client_sequence),
                     );
                     continue;
+                }
+                let tracked_release = applied_input_state.tracked_release(&frame);
+                let (outcome, input_context, safety_release) = if let Some(release) =
+                    tracked_release
+                {
+                    let context = release.context();
+                    (release.apply(), context, true)
+                } else {
+                    let Some(effective_input_policy) = current_session_effective_input_policy(
+                        &sessions,
+                        &session_id,
+                        InputTransportGuard::DirectWebRtc(epoch),
+                        &input_policy,
+                    ) else {
+                        rejected_count = rejected_count.saturating_add(1);
+                        record_input_rejection(
+                            &mut reject_diagnostics,
+                            &sessions,
+                            &session_id,
+                            epoch,
+                            InputRejectSample::new("target_input_not_ready", rejected_count)
+                                .kind(kind)
+                                .action(frame.action())
+                                .timing(timing)
+                                .client_sequence(client_sequence),
+                        );
+                        continue;
+                    };
+                    let input_context = effective_input_policy.accepted_input_context();
+                    (
+                        apply_input_frame_with_effective_policy(&effective_input_policy, &frame),
+                        input_context,
+                        false,
+                    )
                 };
-                let outcome =
-                    apply_input_frame_with_effective_policy(&effective_input_policy, &frame);
                 if outcome.applied {
+                    applied_input_state.observe_applied(&frame, input_context);
                     accepted_count = accepted_count.saturating_add(1);
                     sessions.mark_input_frame_applied(&session_id, epoch);
                     if applied_diagnostics.should_emit(kind, accepted_count) {
@@ -831,8 +1043,9 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                                 timing,
                                 now_ms(),
                                 client_sequence,
-                                effective_input_policy.accepted_input_context(),
+                                input_context,
                                 outcome.target_guard_validation.as_ref(),
+                                safety_release,
                             ),
                         );
                     }
@@ -859,6 +1072,16 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
         }
     }
     flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
+    let release_summary = applied_input_state.release_all();
+    if release_summary.attempted > 0 {
+        record_input_channel_event(
+            &sessions,
+            &session_id,
+            epoch,
+            "INPUT_CHANNEL_EOF_RELEASED",
+            json!({ "terminal_input_release": release_summary.to_value() }),
+        );
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1214,6 +1437,7 @@ fn input_frame_applied_payload(
     client_sequence: Option<u64>,
     input_context: InputFrameTargetContext,
     target_guard_validation: Option<&TargetInputGuardProof>,
+    safety_release: bool,
 ) -> Value {
     let mut payload = Map::new();
     payload.insert(
@@ -1238,6 +1462,7 @@ fn input_frame_applied_payload(
     insert_latency_ms(&mut payload, timing.latency_ms_at(host_applied_at_ms));
     insert_client_sequence(&mut payload, client_sequence);
     input_context.insert_into(&mut payload);
+    payload.insert("safety_release".to_string(), json!(safety_release));
     if let Some(validation) = target_guard_validation {
         payload.insert(
             "target_guard_validation".to_string(),
@@ -1721,6 +1946,8 @@ mod platform {
             mouse_cursor_position: CGPoint,
             mouse_button: u32,
         ) -> CGEventRef;
+        fn CGEventCreate(source: CGEventSourceRef) -> CGEventRef;
+        fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
         fn CGEventCreateKeyboardEvent(
             source: CGEventSourceRef,
             virtual_key: u16,
@@ -1793,11 +2020,49 @@ mod platform {
         InputApplyOutcome::applied()
     }
 
+    pub(super) fn release_pointer_button(button: u8) -> InputApplyOutcome {
+        if !input_injection_available() {
+            return InputApplyOutcome::rejected(ACCESSIBILITY_DENIED_REASON);
+        }
+        let (event_type, button) = match button {
+            0 => (K_CG_EVENT_LEFT_MOUSE_UP, K_CG_MOUSE_BUTTON_LEFT),
+            1 => (K_CG_EVENT_CENTER_MOUSE_UP, K_CG_MOUSE_BUTTON_CENTER),
+            2 => (K_CG_EVENT_RIGHT_MOUSE_UP, K_CG_MOUSE_BUTTON_RIGHT),
+            _ => (K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_CENTER),
+        };
+        unsafe {
+            let probe = CGEventCreate(std::ptr::null_mut());
+            if probe.is_null() {
+                return InputApplyOutcome::rejected("cg_event_create_failed");
+            }
+            let point = CGEventGetLocation(probe);
+            CFRelease(probe.cast_const());
+            let event = CGEventCreateMouseEvent(std::ptr::null_mut(), event_type, point, button);
+            if event.is_null() {
+                return InputApplyOutcome::rejected("cg_event_create_failed");
+            }
+            CGEventPost(K_CG_HID_EVENT_TAP, event);
+            CFRelease(event.cast_const());
+        }
+        InputApplyOutcome::applied()
+    }
+
     pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
         if !input_injection_available() {
             request_accessibility_prompt();
             return InputApplyOutcome::rejected(ACCESSIBILITY_DENIED_REASON);
         }
+        post_key_frame(frame)
+    }
+
+    pub(super) fn release_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
+        if !input_injection_available() {
+            return InputApplyOutcome::rejected(ACCESSIBILITY_DENIED_REASON);
+        }
+        post_key_frame(frame)
+    }
+
+    fn post_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
         let Some(keycode) =
             keycode_from_dom_code(&frame.code).or_else(|| keycode_from_key(&frame.key))
         else {
@@ -1991,6 +2256,14 @@ mod platform {
     pub(super) fn apply_key_frame(_frame: &KeyInputFrame) -> InputApplyOutcome {
         InputApplyOutcome::rejected("platform_input_injection_unavailable")
     }
+
+    pub(super) fn release_pointer_button(_button: u8) -> InputApplyOutcome {
+        InputApplyOutcome::rejected("platform_input_injection_unavailable")
+    }
+
+    pub(super) fn release_key_frame(_frame: &KeyInputFrame) -> InputApplyOutcome {
+        InputApplyOutcome::rejected("platform_input_injection_unavailable")
+    }
 }
 
 #[cfg(test)]
@@ -2086,6 +2359,85 @@ mod tests {
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Pointer);
         assert_eq!(frame.client_sent_at_ms(), Some(1_787_331_000_123));
         assert_eq!(frame.client_sequence(), Some(42));
+    }
+
+    fn key_frame(action: &str, code: &str, focus_epoch: u64) -> RemoteDesktopInputFrame {
+        RemoteDesktopInputFrame::Key(KeyInputFrame {
+            action: action.to_string(),
+            key: code.to_string(),
+            code: code.to_string(),
+            repeat: false,
+            target_focus_epoch: Some(focus_epoch),
+            sent_at_ms: None,
+            client_sequence: None,
+        })
+    }
+
+    fn pointer_button_frame(action: &str, button: u8) -> RemoteDesktopInputFrame {
+        RemoteDesktopInputFrame::Pointer(PointerInputFrame {
+            action: action.to_string(),
+            x: 10.0,
+            y: 20.0,
+            normalized_x: Some(0.5),
+            normalized_y: Some(0.5),
+            target_width: Some(100.0),
+            target_height: Some(100.0),
+            target_geometry_revision: Some(7),
+            target_focus_epoch: Some(9),
+            button: Some(button),
+            delta_x: None,
+            delta_y: None,
+            sent_at_ms: None,
+            client_sequence: None,
+        })
+    }
+
+    #[test]
+    fn applied_input_state_allows_only_matching_reducing_release() {
+        let mut state = AppliedInputState::default();
+        let press_context = InputFrameTargetContext {
+            target_geometry_revision: Some(7),
+            target_focus_epoch: Some(9),
+        };
+        let down = key_frame("down", "ShiftLeft", 9);
+        state.observe_applied(&down, press_context);
+
+        let stale_focus_release = key_frame("up", "ShiftLeft", 10);
+        let tracked = state
+            .tracked_release(&stale_focus_release)
+            .expect("matching applied press remains releasable after focus drift");
+        assert_eq!(tracked.context(), press_context);
+        assert!(state
+            .tracked_release(&key_frame("up", "ControlLeft", 10))
+            .is_none());
+
+        state.observe_applied(&stale_focus_release, tracked.context());
+        assert!(state.tracked_release(&stale_focus_release).is_none());
+        assert!(state.take_releases().is_empty());
+    }
+
+    #[test]
+    fn applied_input_state_terminal_cleanup_is_complete_and_bounded() {
+        let mut state = AppliedInputState::default();
+        let context = InputFrameTargetContext::default();
+        state.observe_applied(&key_frame("down", "KeyA", 1), context);
+        state.observe_applied(&key_frame("down", "ShiftLeft", 1), context);
+        state.observe_applied(&pointer_button_frame("down", 0), context);
+
+        let releases = state.take_releases();
+        assert_eq!(releases.len(), 3);
+        assert!(state.keys.is_empty());
+        assert!(state.pointer_buttons.is_empty());
+
+        for index in 0..MAX_TRACKED_PRESSED_KEYS {
+            state.observe_applied(&key_frame("down", &format!("Synthetic{index}"), 1), context);
+        }
+        assert_eq!(state.keys.len(), MAX_TRACKED_PRESSED_KEYS);
+        assert_eq!(
+            state.press_reject_reason(&key_frame("down", "Overflow", 1)),
+            Some("pressed_key_state_capacity_exceeded")
+        );
+        let _ = state.take_releases();
     }
 
     #[test]
@@ -2185,6 +2537,7 @@ mod tests {
                 target_focus_epoch: Some(5),
             },
             None,
+            false,
         );
 
         assert!(payload["input_event_id"]
@@ -2220,6 +2573,7 @@ mod tests {
                 target_focus_epoch: Some(9),
             },
             None,
+            false,
         );
 
         assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_500_u64));
@@ -2248,6 +2602,7 @@ mod tests {
             Some(9),
             input_context,
             None,
+            false,
         );
         let same = input_frame_applied_payload(
             "rd-input-event-stable",
@@ -2261,6 +2616,7 @@ mod tests {
             Some(9),
             input_context,
             None,
+            false,
         );
         let different_session = input_frame_applied_payload(
             "rd-input-event-other",
@@ -2274,6 +2630,7 @@ mod tests {
             Some(9),
             input_context,
             None,
+            false,
         );
         let different_epoch = input_frame_applied_payload(
             "rd-input-event-stable",
@@ -2287,6 +2644,7 @@ mod tests {
             Some(9),
             input_context,
             None,
+            false,
         );
 
         assert_eq!(
@@ -2481,7 +2839,7 @@ mod tests {
     fn rejects_schema_incomplete_input_frames() {
         for (raw, expected) in [
             (
-                r#"{"type":"pointer","action":"move","x":10,"y":20,"legacy":true}"#,
+                r#"{"type":"pointer","action":"move","x":10,"y":20,"buttons":1,"pointer_type":"mouse"}"#,
                 "unknown field",
             ),
             (
