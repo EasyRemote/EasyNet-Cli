@@ -4,7 +4,7 @@
 // File: plugins/remote-desktop/src/session_lifecycle.rs
 // Description: Lease, liveness, terminal cleanup, and transport teardown.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -145,7 +145,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn prune_inactive_sessions(
     plugin: &RemoteDesktopPlugin,
     sessions: &mut HashMap<String, RemoteDesktopSession>,
     now: u64,
-) -> Vec<RemoteDesktopRecoverySnapshot> {
+) -> RemoteDesktopSessionPrune {
     let mut recovery_snapshots = Vec::new();
     let expired: Vec<String> = sessions
         .iter()
@@ -162,8 +162,20 @@ pub(in crate::daemon::plugins::remote_desktop) fn prune_inactive_sessions(
         }
     }
 
-    let _ = RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
-    recovery_snapshots
+    let removed_session_ids =
+        RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
+    let removed: HashSet<&str> = removed_session_ids.iter().map(String::as_str).collect();
+    recovery_snapshots.retain(|snapshot| !removed.contains(snapshot.session_id()));
+    RemoteDesktopSessionPrune {
+        recovery_snapshots,
+        removed_session_ids,
+    }
+}
+
+pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionPrune {
+    pub(in crate::daemon::plugins::remote_desktop) recovery_snapshots:
+        Vec<RemoteDesktopRecoverySnapshot>,
+    pub(in crate::daemon::plugins::remote_desktop) removed_session_ids: Vec<String>,
 }
 
 #[cfg(test)]

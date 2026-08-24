@@ -266,7 +266,9 @@
         "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row",
         "frontend retry_session handling now preserves the daemon session id, token, consent, selected Resource URA, and event history while replacing only the WebRTC transport with a strictly newer epoch",
         "frontend source gates reject the retired end_session-plus-create_session retry flow and require same-session device-resume and explicit-retry coverage",
-        "frontend retry uses a monotonic generation fence and PeerConnection ownership checks so offline/end/reset cannot be overwritten by stale show_session or set_description continuations"
+        "frontend retry uses a monotonic generation fence and PeerConnection ownership checks so offline/end/reset cannot be overwritten by stale show_session or set_description continuations",
+        "recovery snapshots have a 4 MiB read/write bound enforced before JSON decode and during serialization, and one store-global lock serializes commit/load/delete",
+        "terminal rows pruned from the in-memory session aggregate are now deleted from the recovery store instead of being re-persisted as unbounded disk tombstones"
       ],
       "required_evidence_before_product_complete": [
         "long-outage and network transport reconnect handoff E2E",
@@ -289,6 +291,7 @@
         "the browser transport-resume verifier self-test does not prove a live network disconnect/reconnect",
         "the crash/restart recovery verifier self-test does not prove live process recovery",
         "same-session frontend retry tests do not prove that a browser reconnects after a real daemon process crash",
+        "per-snapshot byte bounds and durable tombstone deletion do not yet bound the number of legacy recovery files enumerated during startup",
         "Stage 1 startup rehydration, startup expiry settlement, target monitor re-registration, and new media epoch admission do not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
       ]
     },

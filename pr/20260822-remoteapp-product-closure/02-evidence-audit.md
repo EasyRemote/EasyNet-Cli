@@ -576,6 +576,14 @@ Current frontend lifecycle evidence:
   public `show_session`, `watch_events`, `end_session`, and a newer media epoch
   against the recovered aggregate. This is Stage 1 source evidence; it does not
   satisfy the live crash/restart verifier.
+- Recovery persistence now enforces a 4 MiB per-snapshot bound while reading
+  before JSON decode and while serializing before atomic write. Commit, load,
+  and delete share one store-global process lock. Session pruning returns the
+  exact removed terminal ids, excludes those rows from subsequent persistence,
+  and deletes their durable snapshots; regression coverage proves a successor
+  session cannot leave the pruned tombstone on disk. Startup still enumerates
+  an unbounded count of legacy files, so recovery-store cardinality remains an
+  explicit product-completion gap.
 - The frontend Retry session action previously translated daemon
   `retry_session` into `end_session` followed by `create_session`, contradicting
   the daemon recovery contract and minting a new session/consent path. It now

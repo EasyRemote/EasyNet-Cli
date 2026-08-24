@@ -142,7 +142,7 @@ impl RemoteDesktopSessionStore {
     /// terminal-row selection.
     pub(in crate::daemon::plugins::remote_desktop) fn prune_terminal_rows_to_active_bound_locked(
         sessions: &mut HashMap<String, RemoteDesktopSession>,
-    ) -> usize {
+    ) -> Vec<String> {
         let active_count = sessions
             .values()
             .filter(|session| !session.is_terminal())
@@ -154,7 +154,7 @@ impl RemoteDesktopSessionStore {
             .map(|(session_id, session)| (session_id.clone(), session.updated_at_ms()))
             .collect();
         if terminal_rows.len() <= terminal_limit {
-            return 0;
+            return Vec::new();
         }
 
         let excess = terminal_rows.len() - terminal_limit;
@@ -163,10 +163,15 @@ impl RemoteDesktopSessionStore {
                 .cmp(right_updated_at)
                 .then_with(|| left_id.cmp(right_id))
         });
-        for (session_id, _) in terminal_rows.into_iter().take(excess) {
-            sessions.remove(&session_id);
+        let removed: Vec<String> = terminal_rows
+            .into_iter()
+            .take(excess)
+            .map(|(session_id, _)| session_id)
+            .collect();
+        for session_id in &removed {
+            sessions.remove(session_id);
         }
-        excess
+        removed
     }
 
     /// Mark a direct WebRTC media plane ready for one non-terminal session.
@@ -575,7 +580,7 @@ mod tests {
 
             let removed =
                 RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
-            assert_eq!(removed, 2);
+            assert_eq!(removed.len(), 2);
 
             let active_count = sessions
                 .values()
@@ -610,7 +615,7 @@ mod tests {
 
             let removed =
                 RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
-            assert_eq!(removed, 3);
+            assert_eq!(removed.len(), 3);
             assert!(sessions.is_empty());
         });
     }

@@ -12,7 +12,9 @@ use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteDesktopSessionCreationWorkflow;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
+use crate::daemon::plugins::remote_desktop::session_lifecycle::{
+    prune_inactive_sessions, RemoteDesktopSessionPrune,
+};
 use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
 
@@ -39,31 +41,26 @@ fn insert_created_session(
     let session = RemoteDesktopSession::new(workflow.into_session_init()?);
     let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)?;
     let now = now_ms();
-    let (
-        pruned_recovery_snapshots,
-        watchdog_session_id,
-        tracker_session_id,
-        lease_expires_at_ms,
-        view,
-    ) = plugin
-        .session_store()
-        .with_sessions(|sessions| -> anyhow::Result<_> {
-            let pruned_recovery_snapshots = prune_inactive_sessions(&plugin, sessions, now);
-            ensure_session_insertable(plugin.config().max_sessions(), sessions, &session_id)?;
-            let watchdog_session_id = session_id.clone();
-            let tracker_session_id = session_id.clone();
-            let lease_expires_at_ms = session.lease_expires_at_ms();
-            let view = serialize_session_with_token(&session);
-            sessions.insert(session_id, session);
-            Ok((
-                pruned_recovery_snapshots,
-                watchdog_session_id,
-                tracker_session_id,
-                lease_expires_at_ms,
-                view,
-            ))
-        })?;
-    if let Err(err) = persist_recovery_snapshots(&plugin, &pruned_recovery_snapshots) {
+    let (recovery_prune, watchdog_session_id, tracker_session_id, lease_expires_at_ms, view) =
+        plugin
+            .session_store()
+            .with_sessions(|sessions| -> anyhow::Result<_> {
+                let recovery_prune = prune_inactive_sessions(&plugin, sessions, now);
+                ensure_session_insertable(plugin.config().max_sessions(), sessions, &session_id)?;
+                let watchdog_session_id = session_id.clone();
+                let tracker_session_id = session_id.clone();
+                let lease_expires_at_ms = session.lease_expires_at_ms();
+                let view = serialize_session_with_token(&session);
+                sessions.insert(session_id, session);
+                Ok((
+                    recovery_prune,
+                    watchdog_session_id,
+                    tracker_session_id,
+                    lease_expires_at_ms,
+                    view,
+                ))
+            })?;
+    if let Err(err) = apply_recovery_prune(&plugin, &recovery_prune) {
         remove_inserted_session(&plugin, &tracker_session_id);
         return Err(err);
     }
@@ -90,12 +87,15 @@ fn insert_created_session(
     Ok(view)
 }
 
-fn persist_recovery_snapshots(
+fn apply_recovery_prune(
     plugin: &RemoteDesktopPlugin,
-    snapshots: &[RemoteDesktopRecoverySnapshot],
+    prune: &RemoteDesktopSessionPrune,
 ) -> anyhow::Result<()> {
-    for snapshot in snapshots {
+    for snapshot in &prune.recovery_snapshots {
         plugin.persist_recovery_snapshot(snapshot)?;
+    }
+    for session_id in &prune.removed_session_ids {
+        plugin.recovery_store().delete(session_id)?;
     }
     Ok(())
 }
@@ -111,13 +111,13 @@ fn preflight_session_insert(
     session_id: &str,
 ) -> anyhow::Result<()> {
     let now = now_ms();
-    let (recovery_snapshots, insertable) = plugin.session_store().with_sessions(|sessions| {
-        let recovery_snapshots = prune_inactive_sessions(plugin, sessions, now);
+    let (recovery_prune, insertable) = plugin.session_store().with_sessions(|sessions| {
+        let recovery_prune = prune_inactive_sessions(plugin, sessions, now);
         let insertable =
             ensure_session_insertable(plugin.config().max_sessions(), sessions, session_id);
-        (recovery_snapshots, insertable)
+        (recovery_prune, insertable)
     });
-    persist_recovery_snapshots(plugin, &recovery_snapshots)?;
+    apply_recovery_prune(plugin, &recovery_prune)?;
     insertable
 }
 
@@ -280,6 +280,61 @@ mod tests {
         assert_eq!(snapshot["selected_resource_ura"], json!(ura));
         assert_eq!(snapshot["lifecycle_state"], json!("negotiating"));
         assert_eq!(snapshot["terminal_receipt"], Value::Null);
+    }
+
+    #[test]
+    fn create_session_deletes_terminal_recovery_rows_pruned_from_memory() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-recovery-prune-display");
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+
+        handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            with_consent_ticket(
+                &plugin,
+                &env,
+                json!({"session_id": "rd-recovery-pruned", "mode": "view_only"}),
+            ),
+        )
+        .expect("first session creates");
+        let terminal = plugin.session_store().with_sessions(|sessions| {
+            let session = sessions
+                .get_mut("rd-recovery-pruned")
+                .expect("first session exists");
+            session.close("test_terminal");
+            RemoteDesktopRecoverySnapshot::from_session(session).expect("terminal snapshot derives")
+        });
+        plugin
+            .persist_recovery_snapshot(&terminal)
+            .expect("terminal snapshot persists");
+
+        handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            with_consent_ticket(
+                &plugin,
+                &env,
+                json!({"session_id": "rd-recovery-successor", "mode": "view_only"}),
+            ),
+        )
+        .expect("successor session creates after pruning terminal row");
+
+        assert!(plugin
+            .recovery_store()
+            .load("rd-recovery-pruned")
+            .expect("pruned recovery lookup succeeds")
+            .is_none());
+        assert!(plugin
+            .recovery_store()
+            .load("rd-recovery-successor")
+            .expect("successor recovery lookup succeeds")
+            .is_some());
     }
 
     #[test]

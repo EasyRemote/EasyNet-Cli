@@ -23,3 +23,8 @@
     mint a new session or consent grant. Every asynchronous retry continuation is
     fenced by a monotonic client generation so offline, end, reset, or a newer
     retry cannot be overwritten by stale session lookup or WebRTC negotiation.
+13. Recovery persistence shares the session aggregate's terminal-row retention
+    decision. A row removed from memory is deleted durably, snapshot reads and
+    writes are capped before decode/allocation growth, and commit/load/delete
+    serialize through one store lock. Startup batch cardinality must also be
+    bounded before recovery can be called product-complete.

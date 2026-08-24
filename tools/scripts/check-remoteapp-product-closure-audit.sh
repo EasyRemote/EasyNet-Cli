@@ -1536,7 +1536,17 @@ require 'atomic_write_with_permissions' "$SESSION_RECOVERY" \
 require 'WritePermissions::OwnerReadWrite' "$SESSION_RECOVERY" \
   'session recovery staging and final files must be owner-only because snapshots include session tokens'
 require 'ExclusiveFileLock::acquire_for_data_path' "$SESSION_RECOVERY" \
-  'session recovery commits must serialize per session across daemon processes'
+  'session recovery commits and deletes must serialize through one store lock across daemon processes'
+require 'MAX_RECOVERY_SNAPSHOT_BYTES' "$SESSION_RECOVERY" \
+  'session recovery snapshots must have an explicit hard byte bound'
+require 'take\(MAX_RECOVERY_SNAPSHOT_BYTES \+ 1\)' "$SESSION_RECOVERY" \
+  'session recovery reads must enforce the byte bound before JSON decode'
+require 'serialize_snapshot_bounded' "$SESSION_RECOVERY" \
+  'session recovery writes must enforce the byte bound during serialization'
+require 'fn delete' "$SESSION_RECOVERY" \
+  'session recovery store must expose durable deletion for pruned tombstones'
+require 'create_session_deletes_terminal_recovery_rows_pruned_from_memory' "$CREATE_SESSION_HANDLER" \
+  'session retention tests must prove memory pruning also deletes durable snapshots'
 require 'recovery_snapshot_should_replace' "$SESSION_RECOVERY" \
   'session recovery commits must reject stale active snapshots after terminal publication'
 require 'session_token' "$SESSION_RECOVERY" \

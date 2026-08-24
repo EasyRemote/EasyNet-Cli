@@ -1342,3 +1342,34 @@ Product effect:
 - Component/store tests are not live crash/restart evidence; the real recovery
   runner must still prove post-restart media frames and input on the same
   session.
+
+## 2026-08-24 — recovery retention is one memory-and-disk decision
+
+Decision:
+
+- A terminal RemoteApp row pruned from the canonical in-memory session store
+  must be deleted from daemon-local recovery persistence in the same maintenance
+  operation. A separate disk-retention policy would create two session truths.
+- Snapshot IO is bounded to 4 MiB per row. Reads stop before JSON decode and
+  writes stop during serialization, rather than allocating an arbitrary body
+  and checking only afterward.
+- Commit, load, and delete use one recovery-store lock. Per-session lock files
+  would themselves accumulate after tombstone deletion.
+
+Implementation delta:
+
+- `prune_terminal_rows_to_active_bound_locked` now returns the exact removed
+  session ids instead of a count.
+- `RemoteDesktopSessionPrune` carries retained expiry snapshots and removed ids;
+  create-session maintenance persists the first set and deletes the second.
+- `RemoteDesktopRecoveryStore::delete` is idempotent, and bounded reader/writer
+  adapters reject oversized snapshots before decode or atomic write.
+- Tests cover bounded read/write, idempotent delete, terminal absorption,
+  concurrent commit convergence, and durable removal of a pruned terminal row.
+
+Product effect:
+
+- Normal long-running use no longer grows one durable JSON snapshot per
+  historical RemoteApp session after the memory aggregate has discarded it.
+- This does not yet bound startup enumeration of pre-existing legacy files;
+  that cardinality gate remains open and product completion is still false.

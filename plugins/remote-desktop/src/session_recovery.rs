@@ -27,8 +27,8 @@
 
 #![allow(dead_code)]
 
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 #[cfg(unix)]
@@ -42,6 +42,7 @@ use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const MAX_RECOVERY_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnapshot {
@@ -359,11 +360,8 @@ impl RemoteDesktopRecoveryStore {
         snapshot: &RemoteDesktopRecoverySnapshot,
     ) -> anyhow::Result<PathBuf> {
         snapshot.validate()?;
-        let root = self.root();
-        fs::create_dir_all(&root)?;
-        harden_recovery_dir(&root)?;
         let path = self.snapshot_path(snapshot.session_id())?;
-        let _lock = ExclusiveFileLock::acquire_for_data_path(&path)?;
+        let _lock = self.lock_store()?;
         match load_snapshot_path(&path) {
             Ok(existing) if !recovery_snapshot_should_replace(&existing, snapshot)? => {
                 return Ok(path);
@@ -380,7 +378,7 @@ impl RemoteDesktopRecoveryStore {
                 ));
             }
         }
-        let body = serde_json::to_vec_pretty(snapshot)?;
+        let body = serialize_snapshot_bounded(snapshot)?;
         config::atomic_write_with_permissions(&path, &body, WritePermissions::OwnerReadWrite)?;
         Ok(path)
     }
@@ -390,14 +388,30 @@ impl RemoteDesktopRecoveryStore {
         session_id: &str,
     ) -> anyhow::Result<Option<RemoteDesktopRecoverySnapshot>> {
         let path = self.snapshot_path(session_id)?;
-        match fs::read(&path) {
-            Ok(body) => {
-                let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_slice(&body)?;
-                snapshot.validate()?;
-                Ok(Some(snapshot))
+        let _lock = self.lock_store()?;
+        match load_snapshot_path(&path) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(err)
+                if err
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
+            {
+                Ok(None)
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err.into()),
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn delete(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<()> {
+        let path = self.snapshot_path(session_id)?;
+        let _lock = self.lock_store()?;
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -405,6 +419,7 @@ impl RemoteDesktopRecoveryStore {
         &self,
     ) -> anyhow::Result<RemoteDesktopRecoveryLoadReport> {
         let root = self.root();
+        let _lock = self.lock_store()?;
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -443,9 +458,20 @@ impl RemoteDesktopRecoveryStore {
             .clone()
             .unwrap_or_else(|| config::state_dir().join("remote-desktop").join("sessions"))
     }
+
+    fn store_lock_path(&self) -> PathBuf {
+        self.root().join(".recovery-store")
+    }
+
+    fn lock_store(&self) -> anyhow::Result<ExclusiveFileLock> {
+        let root = self.root();
+        fs::create_dir_all(&root)?;
+        harden_recovery_dir(&root)?;
+        ExclusiveFileLock::acquire_for_data_path(&self.store_lock_path())
+    }
 }
 
-/// Decide a per-session durable commit while the snapshot lock is held.
+/// Decide a per-session durable commit while the recovery-store lock is held.
 ///
 /// Terminal state is absorbing: once published, no delayed active snapshot
 /// may revive the session. Within the same terminal class, event sequence is
@@ -496,10 +522,50 @@ fn recovery_snapshot_should_replace(
 }
 
 fn load_snapshot_path(path: &PathBuf) -> anyhow::Result<RemoteDesktopRecoverySnapshot> {
-    let body = fs::read(path)?;
+    let file = File::open(path)?;
+    let mut body = Vec::new();
+    file.take(MAX_RECOVERY_SNAPSHOT_BYTES + 1)
+        .read_to_end(&mut body)?;
+    if body.len() as u64 > MAX_RECOVERY_SNAPSHOT_BYTES {
+        anyhow::bail!(
+            "RemoteApp recovery snapshot exceeds {} byte limit",
+            MAX_RECOVERY_SNAPSHOT_BYTES
+        );
+    }
     let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_slice(&body)?;
     snapshot.validate()?;
     Ok(snapshot)
+}
+
+fn serialize_snapshot_bounded(snapshot: &RemoteDesktopRecoverySnapshot) -> anyhow::Result<Vec<u8>> {
+    let mut writer = RecoverySnapshotWriter::default();
+    serde_json::to_writer_pretty(&mut writer, snapshot)?;
+    Ok(writer.body)
+}
+
+#[derive(Default)]
+struct RecoverySnapshotWriter {
+    body: Vec<u8>,
+}
+
+impl Write for RecoverySnapshotWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.body.len().saturating_add(bytes.len()) > MAX_RECOVERY_SNAPSHOT_BYTES as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "RemoteApp recovery snapshot exceeds {} byte limit",
+                    MAX_RECOVERY_SNAPSHOT_BYTES
+                ),
+            ));
+        }
+        self.body.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -552,7 +618,9 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore};
+    use super::{
+        RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore, MAX_RECOVERY_SNAPSHOT_BYTES,
+    };
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -618,6 +686,62 @@ mod tests {
             .expect("load snapshot")
             .expect("snapshot exists");
         assert_eq!(loaded, snapshot);
+    }
+
+    #[test]
+    fn recovery_store_delete_is_idempotent_and_removes_the_snapshot() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let snapshot = snapshot();
+        store.save(&snapshot).expect("save snapshot");
+
+        store
+            .delete(snapshot.session_id())
+            .expect("first delete succeeds");
+        store
+            .delete(snapshot.session_id())
+            .expect("missing snapshot delete is idempotent");
+
+        assert!(store
+            .load(snapshot.session_id())
+            .expect("load after delete succeeds")
+            .is_none());
+    }
+
+    #[test]
+    fn recovery_store_rejects_oversized_snapshot_before_json_decode() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("rd-oversized.json");
+        std::fs::write(&path, vec![b' '; MAX_RECOVERY_SNAPSHOT_BYTES as usize + 1])
+            .expect("write oversized snapshot");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+
+        let error = store
+            .load("rd-oversized")
+            .expect_err("oversized snapshot must fail before decode");
+
+        assert!(
+            error.to_string().contains("exceeds 4194304 byte limit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn recovery_store_rejects_oversized_snapshot_before_atomic_write() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let mut snapshot = snapshot();
+        snapshot.subject_display_name = "x".repeat(MAX_RECOVERY_SNAPSHOT_BYTES as usize);
+
+        let error = store
+            .save(&snapshot)
+            .expect_err("oversized snapshot must not be written");
+
+        assert!(
+            error.to_string().contains("exceeds 4194304 byte limit"),
+            "{error}"
+        );
+        assert!(!temp.path().join("rd-recovery-test.json").exists());
     }
 
     #[test]
