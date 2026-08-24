@@ -581,9 +581,11 @@ Current frontend lifecycle evidence:
   and delete share one store-global process lock. Session pruning returns the
   exact removed terminal ids, excludes those rows from subsequent persistence,
   and deletes their durable snapshots; regression coverage proves a successor
-  session cannot leave the pruned tombstone on disk. Startup still enumerates
-  an unbounded count of legacy files, so recovery-store cardinality remains an
-  explicit product-completion gap.
+  session cannot leave the pruned tombstone on disk. Startup derives its row
+  ceiling from active capacity plus the canonical four-terminal-per-active
+  policy (640 rows for the default 128 sessions), caps all directory entries
+  including sidecars, and rejects aggregate snapshot bodies above 64 MiB before
+  JSON decode. Tests cover row, directory-entry, and byte storms.
 - The frontend Retry session action previously translated daemon
   `retry_session` into `end_session` followed by `create_session`, contradicting
   the daemon recovery contract and minting a new session/consent path. It now

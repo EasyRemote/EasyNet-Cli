@@ -42,6 +42,7 @@ use crate::daemon::plugins::remote_desktop::session_creation::{
 use crate::daemon::plugins::remote_desktop::session_recovery::{
     RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore,
 };
+use crate::daemon::plugins::remote_desktop::session_store::max_session_rows_for_active_limit;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
 use crate::daemon::plugins::remote_desktop::target_snapshot::TargetSnapshotDeadlineExecutor;
@@ -275,7 +276,10 @@ impl RemoteDesktopPlugin {
     }
 
     fn rehydrate_recovery_snapshots(plugin: &Arc<Self>) -> anyhow::Result<()> {
-        let report = plugin.recovery.load_all()?;
+        let max_snapshot_rows =
+            max_session_rows_for_active_limit(plugin.config().max_sessions())
+                .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery row bound overflow"))?;
+        let report = plugin.recovery.load_all(max_snapshot_rows)?;
         for rejected in report.rejected() {
             eprintln!(
                 "[remote-desktop] ignored recovery snapshot {}: {}",

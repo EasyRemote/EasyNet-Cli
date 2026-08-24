@@ -32,6 +32,12 @@ use crate::daemon::plugins::remote_desktop::target_tracking::{
 pub(in crate::daemon::plugins::remote_desktop) const MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION: usize =
     4;
 
+pub(in crate::daemon::plugins::remote_desktop) const fn max_session_rows_for_active_limit(
+    max_active_sessions: usize,
+) -> Option<usize> {
+    max_active_sessions.checked_mul(1 + MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION)
+}
+
 pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationInputs {
     pub(in crate::daemon::plugins::remote_desktop) binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) snapshot: TargetTrackerSnapshot,
@@ -596,6 +602,13 @@ mod tests {
                 active_count.saturating_mul(MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION)
             );
         });
+    }
+
+    #[test]
+    fn recovery_row_bound_includes_active_and_terminal_capacity() {
+        assert_eq!(max_session_rows_for_active_limit(128), Some(640));
+        assert_eq!(max_session_rows_for_active_limit(0), Some(0));
+        assert_eq!(max_session_rows_for_active_limit(usize::MAX), None);
     }
 
     #[test]

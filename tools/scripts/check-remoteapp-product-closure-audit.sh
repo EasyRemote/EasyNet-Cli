@@ -1543,6 +1543,18 @@ require 'take\(MAX_RECOVERY_SNAPSHOT_BYTES \+ 1\)' "$SESSION_RECOVERY" \
   'session recovery reads must enforce the byte bound before JSON decode'
 require 'serialize_snapshot_bounded' "$SESSION_RECOVERY" \
   'session recovery writes must enforce the byte bound during serialization'
+require 'MAX_RECOVERY_BATCH_BYTES' "$SESSION_RECOVERY" \
+  'session recovery startup must have an explicit aggregate byte bound'
+require 'max_directory_entries' "$SESSION_RECOVERY" \
+  'session recovery startup must bound all directory entries, including non-snapshot files'
+require 'max_session_rows_for_active_limit' "$RUNTIME" \
+  'session recovery startup row capacity must derive from the canonical session retention policy'
+require 'recovery_store_rejects_snapshot_count_above_session_retention_bound' "$SESSION_RECOVERY" \
+  'session recovery tests must reject snapshot cardinality above the session retention bound'
+require 'recovery_store_rejects_unbounded_non_snapshot_directory_entries' "$SESSION_RECOVERY" \
+  'session recovery tests must reject a non-snapshot directory-entry storm'
+require 'recovery_store_rejects_batch_bytes_before_json_decode' "$SESSION_RECOVERY" \
+  'session recovery tests must reject oversized recovery batches before JSON decode'
 require 'fn delete' "$SESSION_RECOVERY" \
   'session recovery store must expose durable deletion for pruned tombstones'
 require 'create_session_deletes_terminal_recovery_rows_pruned_from_memory' "$CREATE_SESSION_HANDLER" \

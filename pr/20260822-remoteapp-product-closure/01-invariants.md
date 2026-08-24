@@ -26,5 +26,6 @@
 13. Recovery persistence shares the session aggregate's terminal-row retention
     decision. A row removed from memory is deleted durably, snapshot reads and
     writes are capped before decode/allocation growth, and commit/load/delete
-    serialize through one store lock. Startup batch cardinality must also be
-    bounded before recovery can be called product-complete.
+    serialize through one store lock. Startup derives its row ceiling from the
+    same active/terminal retention formula and also caps total bytes and every
+    directory entry before JSON decode.

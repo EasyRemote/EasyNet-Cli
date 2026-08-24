@@ -1364,6 +1364,9 @@ Implementation delta:
   create-session maintenance persists the first set and deletes the second.
 - `RemoteDesktopRecoveryStore::delete` is idempotent, and bounded reader/writer
   adapters reject oversized snapshots before decode or atomic write.
+- Startup derives maximum snapshot rows from the canonical active-plus-terminal
+  session retention formula, caps every directory entry (including sidecars),
+  and enforces a 64 MiB aggregate batch bound before decode.
 - Tests cover bounded read/write, idempotent delete, terminal absorption,
   concurrent commit convergence, and durable removal of a pruned terminal row.
 
@@ -1371,5 +1374,8 @@ Product effect:
 
 - Normal long-running use no longer grows one durable JSON snapshot per
   historical RemoteApp session after the memory aggregate has discarded it.
-- This does not yet bound startup enumeration of pre-existing legacy files;
-  that cardinality gate remains open and product completion is still false.
+- Legacy or corrupt stores above row, directory, or byte bounds now fail closed
+  with a typed startup error instead of consuming unbounded time or memory.
+- Recovery-store bounds do not replace the still-missing live daemon-crash,
+  media-reattachment, rendered-frame, and input-after-restart evidence;
+  product completion remains false.

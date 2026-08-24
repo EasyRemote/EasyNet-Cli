@@ -43,6 +43,8 @@ use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const MAX_RECOVERY_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_RECOVERY_BATCH_BYTES: u64 = 64 * 1024 * 1024;
+const RECOVERY_DIRECTORY_ENTRY_HEADROOM: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnapshot {
@@ -417,7 +419,15 @@ impl RemoteDesktopRecoveryStore {
 
     pub(in crate::daemon::plugins::remote_desktop) fn load_all(
         &self,
+        max_snapshot_rows: usize,
     ) -> anyhow::Result<RemoteDesktopRecoveryLoadReport> {
+        if max_snapshot_rows == 0 {
+            anyhow::bail!("RemoteApp recovery snapshot row limit must be positive");
+        }
+        let max_directory_entries = max_snapshot_rows
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(RECOVERY_DIRECTORY_ENTRY_HEADROOM))
+            .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery directory entry bound overflow"))?;
         let root = self.root();
         let _lock = self.lock_store()?;
         let entries = match fs::read_dir(&root) {
@@ -427,14 +437,50 @@ impl RemoteDesktopRecoveryStore {
             }
             Err(err) => return Err(err.into()),
         };
-        let mut snapshots = Vec::new();
-        let mut rejected = Vec::new();
+        let mut candidates = Vec::new();
+        let mut directory_entry_count = 0usize;
+        let mut snapshot_bytes = 0u64;
         for entry in entries {
+            directory_entry_count += 1;
+            if directory_entry_count > max_directory_entries {
+                anyhow::bail!(
+                    "RemoteApp recovery directory exceeds {} entry limit",
+                    max_directory_entries
+                );
+            }
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
+            if candidates.len() >= max_snapshot_rows {
+                anyhow::bail!(
+                    "RemoteApp recovery store exceeds {} snapshot row limit",
+                    max_snapshot_rows
+                );
+            }
+            let file_type = entry.file_type()?;
+            if !file_type.is_file() {
+                anyhow::bail!(
+                    "RemoteApp recovery snapshot is not a regular file: {}",
+                    path.display()
+                );
+            }
+            let bytes = entry.metadata()?.len();
+            snapshot_bytes = snapshot_bytes.checked_add(bytes).ok_or_else(|| {
+                anyhow::anyhow!("RemoteApp recovery snapshot byte total overflow")
+            })?;
+            if snapshot_bytes > MAX_RECOVERY_BATCH_BYTES {
+                anyhow::bail!(
+                    "RemoteApp recovery store exceeds {} byte batch limit",
+                    MAX_RECOVERY_BATCH_BYTES
+                );
+            }
+            candidates.push(path);
+        }
+        let mut snapshots = Vec::new();
+        let mut rejected = Vec::new();
+        for path in candidates {
             match load_snapshot_path(&path) {
                 Ok(snapshot) => snapshots.push(snapshot),
                 Err(err) => rejected.push(RemoteDesktopRecoveryLoadRejection::new(
@@ -932,7 +978,7 @@ mod tests {
         std::fs::write(temp.path().join("rd-corrupt.json"), b"{not json")
             .expect("write corrupt snapshot");
 
-        let report = store.load_all().expect("load batch recovery report");
+        let report = store.load_all(5).expect("load batch recovery report");
         assert_eq!(report.rejected().len(), 1);
         assert!(report.rejected()[0].path().ends_with("rd-corrupt.json"));
         assert!(
@@ -941,6 +987,68 @@ mod tests {
         );
         let snapshots = report.into_snapshots();
         assert_eq!(snapshots, vec![snapshot]);
+    }
+
+    #[test]
+    fn recovery_store_rejects_snapshot_count_above_session_retention_bound() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let first = snapshot();
+        let mut second = snapshot();
+        second.session_id = "rd-recovery-second".to_string();
+        store.save(&first).expect("save first snapshot");
+        store.save(&second).expect("save second snapshot");
+
+        let error = store
+            .load_all(1)
+            .expect_err("batch must reject rows above the configured retention bound");
+
+        assert!(
+            error.to_string().contains("exceeds 1 snapshot row limit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn recovery_store_rejects_unbounded_non_snapshot_directory_entries() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for index in 0..18 {
+            std::fs::write(temp.path().join(format!("junk-{index}.tmp")), b"junk")
+                .expect("write bounded junk entry");
+        }
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+
+        let error = store
+            .load_all(1)
+            .expect_err("directory entry storm must fail before unbounded scan");
+
+        assert!(
+            error.to_string().contains("exceeds 18 entry limit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn recovery_store_rejects_batch_bytes_before_json_decode() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for index in 0..17 {
+            let file = std::fs::File::create(temp.path().join(format!("rd-large-{index}.json")))
+                .expect("create sparse recovery row");
+            file.set_len(MAX_RECOVERY_SNAPSHOT_BYTES)
+                .expect("size sparse recovery row");
+        }
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+
+        let error = store
+            .load_all(20)
+            .expect_err("batch byte limit must fail before JSON decode");
+
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds 67108864 byte batch limit"),
+            "{error}"
+        );
     }
 
     #[cfg(unix)]
