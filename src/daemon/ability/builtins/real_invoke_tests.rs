@@ -2533,6 +2533,101 @@ fn real_http_request_hits_a_localhost_listener() {
     assert_eq!(String::from_utf8(body).unwrap(), "{\"echo\":\"hi\"}");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_net_tunnel_round_trips_bytes_through_dispatcher() {
+    use base64::Engine as _;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind tunnel peer");
+    let port = listener.local_addr().expect("peer address").port();
+    let peer = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept tunnel");
+        let mut request = [0_u8; 4];
+        stream
+            .read_exact(&mut request)
+            .await
+            .expect("read tunnel request");
+        assert_eq!(&request, b"ping");
+        stream
+            .write_all(b"pong")
+            .await
+            .expect("write tunnel response");
+        stream.shutdown().await.expect("half-close tunnel peer");
+    });
+
+    let dispatcher = dispatcher_for(
+        build_registry_for_test_execution().expect("build executable test registry"),
+    );
+    let mut request = target(
+        "net.tunnel",
+        json!({
+            "mode": "connect",
+            "host": "127.0.0.1",
+            "port": port,
+            "idle_timeout_ms": 5_000,
+        }),
+    );
+    request.call_mode = CallMode::Bidi;
+    let bidi = dispatcher
+        .execute_bidi(request)
+        .expect("net.tunnel bidi dispatch");
+    let mut output = bidi.from_client;
+
+    let connected = tokio::time::timeout(std::time::Duration::from_secs(2), output.recv())
+        .await
+        .expect("connected frame timeout")
+        .expect("connected frame")
+        .into_json_value()
+        .expect("connected JSON");
+    assert_eq!(connected["type"], "connected", "{connected}");
+    let connection_id = connected["connection_id"]
+        .as_str()
+        .expect("connection id")
+        .to_string();
+
+    bidi.to_client
+        .send(json!({
+            "type": "data",
+            "connection_id": connection_id,
+            "data": base64::engine::general_purpose::STANDARD.encode(b"ping"),
+        }))
+        .await
+        .expect("send tunnel data");
+    bidi.to_client
+        .send(json!({
+            "type": "half_close",
+            "connection_id": connection_id,
+            "direction": "write",
+        }))
+        .await
+        .expect("half-close tunnel write");
+
+    let mut response = Vec::new();
+    loop {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), output.recv())
+            .await
+            .expect("tunnel output timeout")
+            .expect("tunnel output")
+            .into_json_value()
+            .expect("tunnel JSON");
+        match frame["type"].as_str().expect("tunnel frame type") {
+            "data" => response.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(frame["data"].as_str().expect("tunnel base64 payload"))
+                    .expect("decode tunnel payload"),
+            ),
+            "half_close" => {}
+            "complete" => break,
+            "error" => panic!("net.tunnel returned error: {frame}"),
+            other => panic!("unexpected net.tunnel frame {other}: {frame}"),
+        }
+    }
+    assert_eq!(response, b"pong");
+    peer.await.expect("join tunnel peer");
+}
+
 #[test]
 fn real_mcp_client_list_routes_with_no_upstream_configured() {
     // No ~/.easynet/mcp_clients.json under temp HOME → empty

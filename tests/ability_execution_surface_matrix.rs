@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const EXPECTED_DESCRIPTOR_COUNT: usize = 207;
+const EXPECTED_DESCRIPTOR_COUNT: usize = 208;
 const NAMED_SURFACES: &[&str] = &[
     "browser",
     "file_transfer",
@@ -10,6 +10,7 @@ const NAMED_SURFACES: &[&str] = &[
     "pages",
     "remote_desktop",
     "terminal",
+    "tunnel",
     "voice",
 ];
 
@@ -155,6 +156,7 @@ fn every_descriptor_has_one_honest_execution_surface() {
     for name in ["speaker.publish", "voice.subscribe", "voice.transcribe"] {
         assert_capability_state(&contracts, name, "unsupported");
     }
+    assert_contract(&contracts, "net.tunnel", "operator", "tunnel");
     for (name, contract) in &contracts {
         if name.starts_with("browser.") {
             assert_contract(&contracts, name, "operator", "browser");

@@ -137,6 +137,9 @@ pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKi
     {
         return Some(AbilityBidiWireKind::FileTransfer);
     }
+    if ability == crate::daemon::ability::builtins::device_control::net_tunnel::ABILITY_NET_TUNNEL {
+        return Some(AbilityBidiWireKind::JsonFrames);
+    }
     None
 }
 
@@ -166,6 +169,12 @@ mod tests {
                 crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
             ),
             Some(AbilityBidiWireKind::FileTransfer)
+        );
+        assert_eq!(
+            registry.bidi_wire_kind_for(
+                crate::daemon::ability::builtins::device_control::net_tunnel::ABILITY_NET_TUNNEL
+            ),
+            Some(AbilityBidiWireKind::JsonFrames)
         );
     }
 

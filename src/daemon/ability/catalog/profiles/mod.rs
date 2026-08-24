@@ -13,7 +13,7 @@
 //!              lifecycle/governance/introspection bridges, and compatibility
 //!              surfaces awaiting SystemAgent migration.
 //!   system-agent:locomotion — fs.*, process.exec, shell.run, http.request,
-//!              and fs.transfer advertised by the device-sponsored locomotion
+//!              fs.transfer, and net.tunnel advertised by the device-sponsored locomotion
 //!              SystemAgent.
 //!   system-agent:terminal — terminal.* PTY lifecycle and I/O abilities
 //!              advertised by the device-sponsored terminal SystemAgent.

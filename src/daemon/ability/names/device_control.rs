@@ -6,6 +6,7 @@ pub const FS_EDIT: &str = "fs.edit";
 pub const FS_TRANSFER: &str = "fs.transfer";
 
 pub const HTTP_REQUEST: &str = "http.request";
+pub const NET_TUNNEL: &str = "net.tunnel";
 pub const PROCESS_EXEC: &str = "process.exec";
 pub const SHELL_RUN: &str = "shell.run";
 

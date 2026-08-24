@@ -25,8 +25,8 @@ use crate::daemon::ability::builtins::{
     device_control::{
         ability_management::{ops as device_ops_ability, publish as ability_publish_ability},
         file_edit as fs_edit_ability, file_transfer as file_transfer_ability, files as fs_ability,
-        http as http_request_ability, process as process_exec_ability, session as session_ability,
-        shell as shell_run_ability,
+        http as http_request_ability, net_tunnel as net_tunnel_ability,
+        process as process_exec_ability, session as session_ability, shell as shell_run_ability,
         terminal::{
             attach as terminal_attach_ability, io as terminal_io_ability,
             lifecycle as terminal_lifecycle_ability,
@@ -629,6 +629,7 @@ pub fn description_for(name: &str) -> &'static str {
         device_names::PROCESS_EXEC => process_exec_ability::description(),
         device_names::SHELL_RUN => shell_run_ability::description(),
         device_names::HTTP_REQUEST => http_request_ability::description(),
+        device_names::NET_TUNNEL => net_tunnel_ability::description(),
         governance_names::INVOCATION_HISTORY_LIST => {
             invocation_history_ability::list_history_description()
         }
@@ -961,6 +962,7 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         device_names::PROCESS_EXEC => process_exec_ability::input_schema(),
         device_names::SHELL_RUN => shell_run_ability::input_schema(),
         device_names::HTTP_REQUEST => http_request_ability::input_schema(),
+        device_names::NET_TUNNEL => net_tunnel_ability::input_schema(),
         governance_names::INVOCATION_HISTORY_LIST => {
             invocation_history_ability::list_history_input_schema()
         }
@@ -1493,6 +1495,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | device_names::PROCESS_EXEC
         | device_names::SHELL_RUN
         | device_names::HTTP_REQUEST
+        | device_names::NET_TUNNEL
         | device_names::FS_TRANSFER
         // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
         // Operational by intent: each one drives an external

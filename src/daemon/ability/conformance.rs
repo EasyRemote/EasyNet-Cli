@@ -413,6 +413,7 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("shell.run", SystemAgent),
     local_rpc!("http.request", SystemAgent),
     local_bidi!("fs.transfer", SystemAgent),
+    local_bidi!("net.tunnel", SystemAgent),
     local_rpc!("terminal.create", SystemAgent),
     local_rpc!("terminal.list", SystemAgent),
     local_bidi!("terminal.attach", SystemAgent),
