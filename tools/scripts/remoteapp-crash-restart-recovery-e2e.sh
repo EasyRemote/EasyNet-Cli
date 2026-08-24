@@ -329,9 +329,13 @@ for scenario_name in sorted(required_scenarios):
             before = {}
         if not isinstance(after, dict):
             after = {}
-        for key in ("session_id", "selected_resource_ura", "descriptor_version", "target_binding_epoch", "transport_epoch"):
+        for key in ("session_id", "selected_resource_ura", "descriptor_version", "target_binding_epoch"):
             require(before.get(key) == after.get(key),
                     f"{prefix}: {key} must remain stable across restart")
+        require(integer(before.get("transport_epoch")) > 0,
+                f"{prefix}: before_restart.transport_epoch must be positive")
+        require(integer(after.get("transport_epoch")) > integer(before.get("transport_epoch")),
+                f"{prefix}: after_restart.transport_epoch must increase to reject stale transport callbacks")
         require(after.get("session_state") == "active",
                 f"{prefix}: after_restart.session_state must be active")
         require(after.get("show_session_public") is True,
@@ -370,7 +374,11 @@ for scenario_name in sorted(required_scenarios):
                 and before.get("selected_resource_ura") == after.get("selected_resource_ura") == subject_ura
                 and before.get("descriptor_version") == after.get("descriptor_version")
                 and before.get("target_binding_epoch") == after.get("target_binding_epoch")
-                and before.get("transport_epoch") == after.get("transport_epoch")
+            ),
+            "transport_epoch_increased": (
+                isinstance(before, dict)
+                and isinstance(after, dict)
+                and integer(after.get("transport_epoch")) > integer(before.get("transport_epoch"))
             ),
             "session_state_after_restart": after.get("session_state") if isinstance(after, dict) else None,
             "watch_events_reattached": after.get("watch_events_reattached") if isinstance(after, dict) else None,
@@ -623,7 +631,7 @@ daemon["after_restart"] = {
     "selected_resource_ura": subject,
     "descriptor_version": "1.0.0",
     "target_binding_epoch": 7,
-    "transport_epoch": 3,
+    "transport_epoch": 4,
     "session_state": "active",
     "show_session_public": True,
     "show_session_observed_at_ms": 1787333003000,

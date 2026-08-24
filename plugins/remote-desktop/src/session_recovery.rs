@@ -28,18 +28,17 @@
 #![allow(dead_code)]
 
 use std::fs;
-use std::fs::OpenOptions;
 use std::io;
-use std::io::Write as _;
 use std::path::PathBuf;
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::daemon::persistence::config;
+use crate::daemon::persistence::config::{self, WritePermissions};
+use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -53,6 +52,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnaps
     selected_resource_ura: String,
     subject_display_name: String,
     target_binding: Value,
+    #[serde(default)]
+    target_tracking: Option<Value>,
     consent: Value,
     mode: String,
     transport_preferences: Vec<String>,
@@ -72,7 +73,7 @@ impl RemoteDesktopRecoverySnapshot {
     pub(in crate::daemon::plugins::remote_desktop) fn from_session(
         session: &RemoteDesktopSession,
     ) -> anyhow::Result<Self> {
-        Self::new(
+        let mut snapshot = Self::new(
             session.session_id().to_string(),
             session.session_token_for_recovery_snapshot().to_string(),
             session.creator_caller_ura().to_string(),
@@ -97,7 +98,10 @@ impl RemoteDesktopRecoverySnapshot {
             },
             session.terminal_receipt(),
             session.events(),
-        )
+        )?;
+        snapshot.target_tracking = Some(session.target_tracking_recovery_value());
+        snapshot.validate()?;
+        Ok(snapshot)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -129,6 +133,7 @@ impl RemoteDesktopRecoverySnapshot {
             selected_resource_ura,
             subject_display_name,
             target_binding,
+            target_tracking: None,
             consent,
             mode,
             transport_preferences,
@@ -160,6 +165,9 @@ impl RemoteDesktopRecoverySnapshot {
         require_ura("selected_resource_ura", &self.selected_resource_ura)?;
         require_non_empty("subject_display_name", &self.subject_display_name)?;
         require_object("target_binding", &self.target_binding)?;
+        if let Some(target_tracking) = &self.target_tracking {
+            require_object("target_tracking", target_tracking)?;
+        }
         require_object("consent", &self.consent)?;
         require_non_empty("mode", &self.mode)?;
         require_non_empty("lifecycle_state", &self.lifecycle_state)?;
@@ -202,6 +210,10 @@ impl RemoteDesktopRecoverySnapshot {
 
     pub(in crate::daemon::plugins::remote_desktop) fn target_binding(&self) -> &Value {
         &self.target_binding
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_tracking(&self) -> Option<&Value> {
+        self.target_tracking.as_ref()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn consent(&self) -> &Value {
@@ -252,6 +264,19 @@ impl RemoteDesktopRecoverySnapshot {
 
     pub(in crate::daemon::plugins::remote_desktop) fn events(&self) -> Vec<Value> {
         self.events.clone()
+    }
+
+    fn terminal(&self) -> bool {
+        self.terminal_receipt.is_some()
+            || matches!(self.lifecycle_state.as_str(), "closed" | "failed")
+    }
+
+    fn last_event_sequence(&self) -> u64 {
+        self.events
+            .iter()
+            .filter_map(|event| event.get("sequence").and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -328,11 +353,25 @@ impl RemoteDesktopRecoveryStore {
         fs::create_dir_all(&root)?;
         harden_recovery_dir(&root)?;
         let path = self.snapshot_path(snapshot.session_id())?;
-        let tmp_path = path.with_extension("json.tmp");
+        let _lock = ExclusiveFileLock::acquire_for_data_path(&path)?;
+        match load_snapshot_path(&path) {
+            Ok(existing) if !recovery_snapshot_should_replace(&existing, snapshot)? => {
+                return Ok(path);
+            }
+            Ok(_) => {}
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) => {}
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "refusing to overwrite unreadable RemoteApp recovery snapshot {}: {error}",
+                    path.display()
+                ));
+            }
+        }
         let body = serde_json::to_vec_pretty(snapshot)?;
-        write_private_file(&tmp_path, &body)?;
-        fs::rename(&tmp_path, &path)?;
-        harden_recovery_file(&path)?;
+        config::atomic_write_with_permissions(&path, &body, WritePermissions::OwnerReadWrite)?;
         Ok(path)
     }
 
@@ -396,25 +435,61 @@ impl RemoteDesktopRecoveryStore {
     }
 }
 
+/// Decide a per-session durable commit while the snapshot lock is held.
+///
+/// Terminal state is absorbing: once published, no delayed active snapshot
+/// may revive the session. Within the same terminal class, event sequence is
+/// the aggregate revision and `updated_at_ms` breaks ties for lease-only
+/// mutations. Equal revisions with different bodies fail closed because they
+/// reveal a mutation path that did not advance either ordering signal.
+fn recovery_snapshot_should_replace(
+    existing: &RemoteDesktopRecoverySnapshot,
+    incoming: &RemoteDesktopRecoverySnapshot,
+) -> anyhow::Result<bool> {
+    if existing.session_id != incoming.session_id {
+        anyhow::bail!("RemoteApp recovery snapshot commit compared different session ids");
+    }
+    if existing.session_token != incoming.session_token {
+        if incoming.created_at_ms < existing.created_at_ms {
+            return Ok(false);
+        }
+        if incoming.created_at_ms > existing.created_at_ms {
+            return Ok(true);
+        }
+        anyhow::bail!(
+            "conflicting RemoteApp session incarnations share session_id={} created_at_ms={}",
+            incoming.session_id,
+            incoming.created_at_ms
+        );
+    }
+    match (existing.terminal(), incoming.terminal()) {
+        (true, false) => return Ok(false),
+        (false, true) => return Ok(true),
+        _ => {}
+    }
+    let existing_order = (existing.last_event_sequence(), existing.updated_at_ms);
+    let incoming_order = (incoming.last_event_sequence(), incoming.updated_at_ms);
+    if incoming_order < existing_order {
+        return Ok(false);
+    }
+    if incoming_order > existing_order {
+        return Ok(true);
+    }
+    if existing == incoming {
+        return Ok(false);
+    }
+    anyhow::bail!(
+        "conflicting RemoteApp recovery snapshots share session revision sequence={} updated_at_ms={}",
+        incoming_order.0,
+        incoming_order.1
+    )
+}
+
 fn load_snapshot_path(path: &PathBuf) -> anyhow::Result<RemoteDesktopRecoverySnapshot> {
     let body = fs::read(path)?;
     let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_slice(&body)?;
     snapshot.validate()?;
     Ok(snapshot)
-}
-
-fn write_private_file(path: &PathBuf, body: &[u8]) -> anyhow::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(body)?;
-    file.sync_all()?;
-    harden_recovery_file(path)?;
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -425,17 +500,6 @@ fn harden_recovery_dir(path: &PathBuf) -> anyhow::Result<()> {
 
 #[cfg(not(unix))]
 fn harden_recovery_dir(_path: &PathBuf) -> anyhow::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn harden_recovery_file(path: &PathBuf) -> anyhow::Result<()> {
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn harden_recovery_file(_path: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -474,6 +538,8 @@ fn require_object(field: &'static str, value: &Value) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Barrier};
+
     use serde_json::json;
 
     use super::{RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore};
@@ -511,6 +577,23 @@ mod tests {
         .expect("valid snapshot")
     }
 
+    fn terminal_snapshot() -> RemoteDesktopRecoverySnapshot {
+        let mut snapshot = snapshot();
+        snapshot.updated_at_ms = 140;
+        snapshot.lifecycle_state = "closed".to_string();
+        snapshot.terminal_receipt = Some(json!({
+            "receipt_type": "remoteapp.session.terminal.v1",
+            "session_id": snapshot.session_id,
+            "terminal": true,
+        }));
+        snapshot.events.push(json!({
+            "event_type": "SESSION_CLOSED",
+            "sequence": 2,
+            "terminal": true,
+        }));
+        snapshot
+    }
+
     #[test]
     fn recovery_store_round_trips_valid_snapshot() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -525,6 +608,94 @@ mod tests {
             .expect("load snapshot")
             .expect("snapshot exists");
         assert_eq!(loaded, snapshot);
+    }
+
+    #[test]
+    fn recovery_store_terminal_snapshot_is_absorbing_against_delayed_active_write() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let active = snapshot();
+        let terminal = terminal_snapshot();
+
+        store.save(&terminal).expect("terminal snapshot saves");
+        store
+            .save(&active)
+            .expect("delayed active snapshot is safely ignored");
+
+        let loaded = store
+            .load(active.session_id())
+            .expect("load terminal snapshot")
+            .expect("terminal snapshot exists");
+        assert_eq!(loaded, terminal);
+    }
+
+    #[test]
+    fn recovery_store_concurrent_terminal_and_active_commits_converge_to_terminal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
+        let barrier = Arc::new(Barrier::new(3));
+        let active = snapshot();
+        let terminal = terminal_snapshot();
+
+        let active_writer = {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            let active = active.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                store.save(&active)
+            })
+        };
+        let terminal_writer = {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            let terminal = terminal.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                store.save(&terminal)
+            })
+        };
+        barrier.wait();
+        active_writer
+            .join()
+            .expect("active writer joins")
+            .expect("active commit completes");
+        terminal_writer
+            .join()
+            .expect("terminal writer joins")
+            .expect("terminal commit completes");
+
+        let loaded = store
+            .load(active.session_id())
+            .expect("load converged snapshot")
+            .expect("snapshot exists");
+        assert_eq!(loaded, terminal);
+    }
+
+    #[test]
+    fn recovery_store_allows_newer_session_incarnation_after_terminal_row() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let terminal = terminal_snapshot();
+        let mut next = snapshot();
+        next.session_token = "next-session-token".to_string();
+        next.created_at_ms = 1_000;
+        next.updated_at_ms = 1_020;
+        next.lease_expires_at_ms = 61_000;
+
+        store.save(&terminal).expect("old terminal snapshot saves");
+        store
+            .save(&next)
+            .expect("new incarnation replaces old terminal");
+        store
+            .save(&terminal)
+            .expect("delayed old-incarnation terminal is ignored");
+
+        let loaded = store
+            .load(next.session_id())
+            .expect("load new incarnation")
+            .expect("new incarnation exists");
+        assert_eq!(loaded, next);
     }
 
     #[test]
@@ -590,6 +761,31 @@ mod tests {
             err.to_string()
                 .contains("unsupported RemoteApp recovery snapshot schema"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn recovery_store_refuses_to_overwrite_corrupt_existing_snapshot() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("rd-recovery-test.json");
+        let corrupt = b"{not json";
+        std::fs::write(&path, corrupt).expect("write corrupt snapshot");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+
+        let error = store
+            .save(&snapshot())
+            .expect_err("corrupt existing state must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to overwrite unreadable RemoteApp recovery snapshot"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read(path).expect("read unchanged corrupt row"),
+            corrupt,
+            "a failed validation must not replace the existing durable row"
         );
     }
 

@@ -605,6 +605,29 @@ pub(in crate::daemon::plugins::remote_desktop) fn media_source_lost(
     )
 }
 
+/// Build the safety event emitted for the first debounced target miss.
+///
+/// Media remains active until target-loss debounce is confirmed, but input is
+/// disabled immediately. Publishing this transition prevents a security-
+/// relevant aggregate mutation from being invisible to durability and UI
+/// projections merely because `TARGET_LOST` has not yet been committed.
+pub(in crate::daemon::plugins::remote_desktop) fn target_loss_pending(
+    reason: TargetResolutionError,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "TARGET_LOSS_PENDING",
+        json!({
+            "reason": reason.as_str(),
+            "reason_code": "target_loss_pending",
+            "recoverability": "debounce_pending",
+            "failure_domain": "target",
+            "frontend_action": Value::Null,
+            "input_enabled": false,
+            "media_transport_ready": true,
+        }),
+    )
+}
+
 /// Build a WebRTC failure payload with typed domain context.
 pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
     event_kind: WebRtcFailureEventKind,

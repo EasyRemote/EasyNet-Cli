@@ -167,7 +167,10 @@ impl RemoteDesktopSession {
                     RemoteDesktopConsentState::active(consent_grant, consent_epoch)
                 });
         let mut session = Self {
-            target: RemoteAppTargetBindingStateMachine::from_binding(target_binding),
+            target: RemoteAppTargetBindingStateMachine::rehydrate(
+                target_binding,
+                snapshot.target_tracking(),
+            )?,
             consent,
             profile,
             lifecycle,
@@ -283,6 +286,12 @@ impl RemoteDesktopSession {
 
     pub(in crate::daemon::plugins::remote_desktop) fn target_tracking_state(&self) -> Value {
         self.target.snapshot().to_value()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_tracking_recovery_value(
+        &self,
+    ) -> Value {
+        self.target.snapshot().to_recovery_value()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn latest_target_diagnostic(&self) -> Value {
@@ -458,6 +467,10 @@ impl RemoteDesktopSession {
         self.event_log.events()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn latest_event_sequence(&self) -> u64 {
+        self.event_log.latest_sequence()
+    }
+
     /// Bounded replay projection for `remote_desktop.watch_events`.
     pub(in crate::daemon::plugins::remote_desktop) fn replay_events_from(
         &self,
@@ -549,6 +562,9 @@ impl RemoteDesktopSession {
         }
         let target_loss_reason = match &observation {
             TargetObservation::Lost { reason, .. } => Some(*reason),
+            TargetObservation::MonitorUnavailable { .. } => {
+                Some(TargetResolutionError::CaptureBackendUnavailable)
+            }
             TargetObservation::VisibilityChanged {
                 visibility_state: TargetVisibilityState::Lost,
                 ..
@@ -573,6 +589,9 @@ impl RemoteDesktopSession {
             if input_was_enabled && !self.target.snapshot().input_enabled() {
                 self.lifecycle.deactivate_input_for_target_block();
                 self.touch();
+                if let Some(reason) = target_loss_reason {
+                    self.push_projected_event(session_events::target_loss_pending(reason));
+                }
             }
             return None;
         };
@@ -1293,7 +1312,7 @@ mod tests {
         direct_webrtc_endpoint_ura, REASON_SESSION_EXPIRED, REASON_TARGET_PERMISSION_REVOKED,
     };
     use crate::daemon::plugins::remote_desktop::session::{
-        RemoteDesktopSession, RemoteDesktopState,
+        RemoteDesktopSession, RemoteDesktopState, TargetMediaSourceLost,
     };
     use crate::daemon::plugins::remote_desktop::session_consent_state::RemoteDesktopConsentPhase;
     use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
@@ -2496,6 +2515,74 @@ mod tests {
                 .into_iter()
                 .all(|event| event["event_type"] != json!("TARGET_LOST")),
             "pending loss must not emit committed TARGET_LOST before debounce"
+        );
+        let pending = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("TARGET_LOSS_PENDING"))
+            .expect("pending target loss is an observable safety transition");
+        assert_eq!(
+            pending["payload"]["reason_code"],
+            json!("target_loss_pending")
+        );
+        assert_eq!(pending["payload"]["input_enabled"], json!(false));
+
+        let snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)
+            .expect("pending target-loss snapshot derives");
+        let recovered = RemoteDesktopSession::rehydrate(&snapshot)
+            .expect("pending target-loss safety state rehydrates");
+        assert_eq!(
+            recovered.target_tracking_state()["input_blocked_reason"],
+            json!("target_loss_pending")
+        );
+    }
+
+    #[test]
+    fn monitor_unavailable_bypasses_target_loss_debounce_and_stops_media() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-monitor-unavailable",
+            "easynet:///r/acme/resource/window.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(29);
+
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-monitor-unavailable"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+
+        let media_loss = session.record_target_observation(TargetObservation::MonitorUnavailable {
+            detail: "target monitor restart budget exhausted".into(),
+            observed_at_ms: 300,
+        });
+
+        assert_eq!(
+            media_loss,
+            Some(TargetMediaSourceLost {
+                transport_epoch: epoch,
+                reason: TargetResolutionError::CaptureBackendUnavailable,
+            })
+        );
+        assert_eq!(session.target_tracking_state()["status"], json!("lost"));
+        assert!(!session.media_transport_ready());
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+        assert!(session.events().into_iter().any(|event| {
+            event["event_type"] == json!("TARGET_LOST")
+                && event["payload"]["reason_code"] == json!("capture_backend_unavailable")
+        }));
+
+        let snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)
+            .expect("monitor-unavailable session snapshot derives");
+        let recovered = RemoteDesktopSession::rehydrate(&snapshot)
+            .expect("monitor-unavailable target state rehydrates");
+        assert_eq!(recovered.target_tracking_state()["status"], json!("lost"));
+        assert_eq!(
+            recovered.target_tracking_state()["input_enabled"],
+            json!(false)
         );
     }
 

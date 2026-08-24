@@ -114,6 +114,10 @@ impl RemoteDesktopEventLog {
             .collect()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn latest_sequence(&self) -> u64 {
+        self.next_sequence.saturating_sub(1)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn replay_from(
         &self,
         session_id: &str,
@@ -280,6 +284,7 @@ const TARGET_CHANGED_EVENT_TYPES: &[&str] = &[
     "TARGET_VISIBLE",
     "TARGET_MINIMIZED",
     "TARGET_RESTORED",
+    "TARGET_LOSS_PENDING",
     "TARGET_LOST",
     "TARGET_REBIND_ATTEMPTED",
     "TARGET_REBOUND",
@@ -460,6 +465,7 @@ mod tests {
             "TARGET_VISIBLE",
             "TARGET_MINIMIZED",
             "TARGET_RESTORED",
+            "TARGET_LOSS_PENDING",
             "TARGET_LOST",
             "TARGET_REBIND_ATTEMPTED",
             "TARGET_REBOUND",

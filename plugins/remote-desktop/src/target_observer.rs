@@ -36,6 +36,7 @@ pub(in crate::daemon::plugins::remote_desktop) trait TargetObservationProvider {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationPollResult {
     pub(in crate::daemon::plugins::remote_desktop) keep_tracking: bool,
+    pub(in crate::daemon::plugins::remote_desktop) state_changed: bool,
     pub(in crate::daemon::plugins::remote_desktop) media_source_lost: Option<TargetMediaSourceLost>,
 }
 
@@ -43,6 +44,7 @@ impl TargetObservationPollResult {
     fn keep_tracking() -> Self {
         Self {
             keep_tracking: true,
+            state_changed: false,
             media_source_lost: None,
         }
     }
@@ -50,6 +52,7 @@ impl TargetObservationPollResult {
     fn stop_tracking() -> Self {
         Self {
             keep_tracking: false,
+            state_changed: false,
             media_source_lost: None,
         }
     }
@@ -57,6 +60,7 @@ impl TargetObservationPollResult {
     fn rebind_deadline_expired(media_source_lost: Option<TargetMediaSourceLost>) -> Self {
         Self {
             keep_tracking: true,
+            state_changed: true,
             media_source_lost,
         }
     }
@@ -563,7 +567,7 @@ where
     let Some(observation) = provider.observe(&inputs.binding, &inputs.snapshot) else {
         return TargetObservationPollResult::keep_tracking();
     };
-    let media_source_lost = sessions.record_target_observation_for_session(
+    let commit = sessions.commit_target_observation_for_session(
         session_id,
         &inputs.binding_id,
         inputs.binding_epoch,
@@ -571,7 +575,8 @@ where
     );
     TargetObservationPollResult {
         keep_tracking: true,
-        media_source_lost,
+        state_changed: commit.as_ref().is_some_and(|commit| commit.state_changed),
+        media_source_lost: commit.and_then(|commit| commit.media_source_lost),
     }
 }
 
@@ -1882,13 +1887,15 @@ mod tests {
             sessions.insert("rd-provider-observation".to_string(), session);
         });
 
+        let result = observe_bound_session_target_once(
+            &store,
+            "rd-provider-observation",
+            &FakeGeometryProvider,
+        );
+        assert!(result.keep_tracking);
         assert!(
-            observe_bound_session_target_once(
-                &store,
-                "rd-provider-observation",
-                &FakeGeometryProvider,
-            )
-            .keep_tracking
+            result.state_changed,
+            "committed target events must request a durable recovery snapshot"
         );
 
         store.with_sessions(|sessions| {
@@ -1952,6 +1959,7 @@ mod tests {
             "missing sessions must stop target monitor tracking"
         );
         assert!(missing.media_source_lost.is_none());
+        assert!(!missing.state_changed);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,
@@ -1975,6 +1983,7 @@ mod tests {
             "terminal sessions must stop target monitor tracking"
         );
         assert!(terminal.media_source_lost.is_none());
+        assert!(!terminal.state_changed);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,
@@ -2195,7 +2204,7 @@ mod tests {
             .target_observation_inputs_for_session(session_id)
             .expect("target observation inputs");
         let rebind_observed_at_ms = super::now_ms().saturating_sub(31_000);
-        store.record_target_observation_for_session(
+        store.commit_target_observation_for_session(
             session_id,
             &inputs.binding_id,
             inputs.binding_epoch,
@@ -2205,7 +2214,7 @@ mod tests {
                 observed_at_ms: rebind_observed_at_ms.saturating_sub(1_200),
             },
         );
-        store.record_target_observation_for_session(
+        store.commit_target_observation_for_session(
             session_id,
             &inputs.binding_id,
             inputs.binding_epoch,
@@ -2215,7 +2224,7 @@ mod tests {
                 observed_at_ms: rebind_observed_at_ms.saturating_sub(100),
             },
         );
-        store.record_target_observation_for_session(
+        store.commit_target_observation_for_session(
             session_id,
             &inputs.binding_id,
             inputs.binding_epoch,
@@ -2283,7 +2292,7 @@ mod tests {
             .expect("target observation inputs");
         let rebind_observed_at_ms = super::now_ms().saturating_sub(31_000);
         assert!(store
-            .record_target_observation_for_session(
+            .commit_target_observation_for_session(
                 session_id,
                 &inputs.binding_id,
                 inputs.binding_epoch,
@@ -2306,6 +2315,7 @@ mod tests {
                     observed_at_ms: rebind_observed_at_ms,
                 },
             )
+            .and_then(|commit| commit.media_source_lost)
             .is_none());
 
         let calls = Arc::new(AtomicUsize::new(0));

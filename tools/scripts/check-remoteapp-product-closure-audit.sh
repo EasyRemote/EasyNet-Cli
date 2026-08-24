@@ -1465,8 +1465,14 @@ require 'RemoteDesktopRecoveryLoadRejection' "$SESSION_RECOVERY" \
   'session recovery batch loading must identify corrupt or mismatched snapshots without poisoning valid rows'
 require 'harden_recovery_dir' "$SESSION_RECOVERY" \
   'session recovery store must harden daemon-local recovery directories because snapshots include session tokens'
-require 'harden_recovery_file' "$SESSION_RECOVERY" \
-  'session recovery store must harden daemon-local recovery files because snapshots include session tokens'
+require 'atomic_write_with_permissions' "$SESSION_RECOVERY" \
+  'session recovery store must use the shared unique-temp fsync and atomic-rename writer'
+require 'WritePermissions::OwnerReadWrite' "$SESSION_RECOVERY" \
+  'session recovery staging and final files must be owner-only because snapshots include session tokens'
+require 'ExclusiveFileLock::acquire_for_data_path' "$SESSION_RECOVERY" \
+  'session recovery commits must serialize per session across daemon processes'
+require 'recovery_snapshot_should_replace' "$SESSION_RECOVERY" \
+  'session recovery commits must reject stale active snapshots after terminal publication'
 require 'session_token' "$SESSION_RECOVERY" \
   'session recovery snapshot must preserve daemon-local session token for post-restart control access'
 require 'schema_version' "$SESSION_RECOVERY" \

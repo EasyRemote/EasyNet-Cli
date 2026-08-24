@@ -39,6 +39,11 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationInputs {
     pub(in crate::daemon::plugins::remote_desktop) binding_epoch: u64,
 }
 
+pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationCommit {
+    pub(in crate::daemon::plugins::remote_desktop) state_changed: bool,
+    pub(in crate::daemon::plugins::remote_desktop) media_source_lost: Option<TargetMediaSourceLost>,
+}
+
 thread_local! {
     static SESSION_STORE_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
@@ -243,13 +248,13 @@ impl RemoteDesktopSessionStore {
         })
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation_for_session(
+    pub(in crate::daemon::plugins::remote_desktop) fn commit_target_observation_for_session(
         &self,
         session_id: &str,
         binding_id: &str,
         binding_epoch: u64,
         observation: TargetObservation,
-    ) -> Option<TargetMediaSourceLost> {
+    ) -> Option<TargetObservationCommit> {
         let mut sessions = self.lock();
         let session = sessions.get_mut(session_id)?;
         let binding = session.target_binding();
@@ -259,7 +264,14 @@ impl RemoteDesktopSessionStore {
         {
             return None;
         }
-        session.record_target_observation(observation)
+        let previous_target_snapshot = session.target_snapshot().clone();
+        let previous_sequence = session.latest_event_sequence();
+        let media_source_lost = session.record_target_observation(observation);
+        Some(TargetObservationCommit {
+            state_changed: session.target_snapshot() != &previous_target_snapshot
+                || session.latest_event_sequence() != previous_sequence,
+            media_source_lost,
+        })
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn expire_target_rebind_deadline_for_session(
@@ -864,7 +876,7 @@ mod tests {
             .expect("target observation inputs");
 
         assert!(store
-            .record_target_observation_for_session(
+            .commit_target_observation_for_session(
                 "rd-rebind-deadline",
                 &inputs.binding_id,
                 inputs.binding_epoch,
@@ -874,8 +886,9 @@ mod tests {
                     observed_at_ms: 100,
                 },
             )
+            .and_then(|commit| commit.media_source_lost)
             .is_none());
-        store.record_target_observation_for_session(
+        store.commit_target_observation_for_session(
             "rd-rebind-deadline",
             &inputs.binding_id,
             inputs.binding_epoch,
@@ -885,7 +898,7 @@ mod tests {
                 observed_at_ms: 1_200,
             },
         );
-        store.record_target_observation_for_session(
+        store.commit_target_observation_for_session(
             "rd-rebind-deadline",
             &inputs.binding_id,
             inputs.binding_epoch,

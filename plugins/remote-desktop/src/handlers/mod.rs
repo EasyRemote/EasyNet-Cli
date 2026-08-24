@@ -272,7 +272,7 @@ mod tests {
             .expect("created session exposes target observation inputs");
         plugin
             .session_store()
-            .record_target_observation_for_session(
+            .commit_target_observation_for_session(
                 "rd-target-events",
                 &inputs.binding_id,
                 inputs.binding_epoch,

@@ -168,7 +168,7 @@ require 'loose base policy reopen view-only keyboard input' "$INPUT" \
   'input policy tests must prove loose base policies cannot reopen view-only keyboard input'
 require 'observe_bound_session_target_once' "$TARGET_OBSERVER" \
   'target observer must expose the bound-session observation boundary'
-require 'record_target_observation_for_session' "$TARGET_OBSERVER" \
+require 'commit_target_observation_for_session' "$TARGET_OBSERVER" \
   'target observer must commit through the session store boundary'
 require 'return TargetObservationPollResult::stop_tracking\(\);' "$TARGET_OBSERVER" \
   'target observer must return stop_tracking when the session is missing or terminal'
@@ -226,8 +226,12 @@ require 'join\.thread\(\)\.id\(\) == thread::current\(\)\.id\(\)' "$LIFECYCLE_WO
   'lifecycle worker must not join itself when the final owner drops on the worker thread'
 require 'shutdown_from_worker_detaches_instead_of_self_joining' "$LIFECYCLE_WORKER" \
   'lifecycle worker must test worker-thread destruction without self-join panic'
-require 'fn apply_command\(command: TargetMonitorCommand, tracked: &mut HashSet<String>\) -> bool' "$TARGET_MONITOR" \
-  'target monitor must centralize command state transitions'
+require 'fn apply_supervisor_command\(' "$TARGET_MONITOR" \
+  'target monitor supervisor must own desired-session command state transitions'
+require 'fn apply_generation_command\(' "$TARGET_MONITOR" \
+  'replaceable target monitor generations must own their local command projection'
+require 'fn spawn_target_monitor_generation\(' "$TARGET_MONITOR" \
+  'target monitor must rebuild a failed poll generation without a new public track request'
 require 'TargetMonitorCommand::Track \{ session_id \}' "$TARGET_MONITOR" \
   'target monitor command state machine must handle Track explicitly'
 require 'TargetMonitorCommand::Cancel \{ session_id \}' "$TARGET_MONITOR" \
@@ -576,12 +580,12 @@ require 'mark_active_media_source_lost' "$SESSION" \
   'target loss and rebind expiry must share the session-owned media loss transition'
 require 'rebind_deadline_expired' "$TARGET_OBSERVER" \
   'target observer expiry results must carry the typed media-source stop effect to the monitor'
-require 'fail_pending_media_rebind_for_session' "$SESSION_STORE" \
-  'session store must expose a target-lifecycle failure projection for native pending media rebind failures'
-require 'pending_media_rebind_failure_rejects_session_rebinding' "$SESSION" \
-  'session aggregate must reject Rebinding when pending media source rebuild fails'
-require 'native_media_rebind_failure_projects_typed_target_lifecycle' "$WEBRTC_NATIVE" \
-  'native WebRTC media path must test target-lifecycle projection for pending media rebind failures'
+require 'supersede_pending_media_rebind_for_session' "$SESSION_STORE" \
+  'session store must expose the aggregate-owned supersession path for rejected native rebind candidates'
+require 'pending_media_rebind_candidate_failure_restores_active_session' "$SESSION" \
+  'session aggregate must preserve the committed media generation when a pending candidate fails'
+require 'native_media_rebind_candidate_failure_preserves_active_generation' "$WEBRTC_NATIVE" \
+  'native WebRTC media path must test rejected candidate supersession without degrading active media'
 require 'AppWindowSetProof::new' "$TARGET_OBSERVER" \
   'application observer must rederive the current global app window-set proof'
 require 'AppSurfaceLayoutProof::from_front_to_back_geometries' "$TARGET_OBSERVER" \

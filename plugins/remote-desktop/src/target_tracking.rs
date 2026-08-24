@@ -100,7 +100,7 @@ const LOST_DEBOUNCE_MS: u64 = 1_000;
 const AUTOMATIC_REBIND_WINDOW_MS: u64 = 30_000;
 const TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerSnapshot {
     binding_id: String,
     binding_epoch: u64,
@@ -157,6 +157,139 @@ impl TargetTrackerSnapshot {
             "geometry": self.geometry.to_value(),
             "input_enabled": self.input_enabled(),
         })
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn to_recovery_value(&self) -> Value {
+        let mut value = self.to_value();
+        value["input_blocked_reason_override"] = json!(self.input_blocked_reason_override);
+        value["diagnostic"] = self.diagnostic.clone();
+        value
+    }
+
+    fn from_recovery_value(
+        binding: &RemoteAppTargetBinding,
+        value: &Value,
+    ) -> anyhow::Result<Self> {
+        let required_u64 = |name: &str| {
+            value
+                .get(name)
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("target tracking recovery field {name} must be u64"))
+        };
+        let required_str = |name: &str| {
+            value.get(name).and_then(Value::as_str).ok_or_else(|| {
+                anyhow::anyhow!("target tracking recovery field {name} must be string")
+            })
+        };
+        let binding_id = required_str("binding_id")?.to_string();
+        let binding_epoch = required_u64("binding_epoch")?;
+        if binding_id != binding.binding_id() || binding_epoch != binding.binding_epoch() {
+            anyhow::bail!("target tracking recovery identity does not match target binding");
+        }
+        let status = match required_str("status")? {
+            "unresolved" => TargetBindingPhase::Unresolved,
+            "resolved" => TargetBindingPhase::Resolved,
+            "stale" => TargetBindingPhase::Stale,
+            "lost" => TargetBindingPhase::Lost,
+            "rebinding" => TargetBindingPhase::Rebinding,
+            "invalidated" => TargetBindingPhase::Invalidated,
+            other => anyhow::bail!("unsupported target tracking recovery status {other}"),
+        };
+        let visibility_state = match required_str("visibility_state")? {
+            "visible" => TargetVisibilityState::Visible,
+            "hidden" => TargetVisibilityState::Hidden,
+            "minimized" => TargetVisibilityState::Minimized,
+            "lost" => TargetVisibilityState::Lost,
+            other => anyhow::bail!("unsupported target tracking recovery visibility {other}"),
+        };
+        let persisted_input_blocked_reason = match value.get("input_blocked_reason") {
+            Some(Value::Null) => None,
+            Some(Value::String(reason)) => Some(reason.as_str()),
+            Some(_) => {
+                anyhow::bail!("target tracking recovery input blocker must be string or null")
+            }
+            None => anyhow::bail!("target tracking recovery input blocker is required"),
+        };
+        let input_blocked_reason_override = match value.get("input_blocked_reason_override") {
+            Some(Value::Null) => None,
+            Some(Value::String(reason)) => match reason.as_str() {
+                "target_loss_pending" => Some("target_loss_pending"),
+                "target_display_unavailable" => Some("target_display_unavailable"),
+                other => anyhow::bail!(
+                    "unsupported target tracking recovery input blocker override {other}"
+                ),
+            },
+            Some(_) => anyhow::bail!(
+                "target tracking recovery input blocker override must be string or null"
+            ),
+            None => match persisted_input_blocked_reason {
+                Some("target_loss_pending") => Some("target_loss_pending"),
+                Some("target_display_unavailable") => Some("target_display_unavailable"),
+                _ => None,
+            },
+        };
+        let available_display_ids = value
+            .get("available_display_ids")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("target tracking recovery display ids must be array"))?
+            .iter()
+            .map(|id| {
+                id.as_u64().ok_or_else(|| {
+                    anyhow::anyhow!("target tracking recovery display id must be u64")
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let focused = match value.get("focused") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(value.as_bool().ok_or_else(|| {
+                anyhow::anyhow!("target tracking recovery focused must be bool or null")
+            })?),
+        };
+        let title = match value.get("title") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("target tracking recovery title must be string or null")
+                    })?
+                    .to_string(),
+            ),
+        };
+        let snapshot = Self {
+            binding_id,
+            binding_epoch,
+            target_identity_epoch: required_u64("target_identity_epoch")?,
+            target_geometry_revision: required_u64("target_geometry_revision")?,
+            target_focus_epoch: required_u64("target_focus_epoch")?,
+            media_source_epoch: required_u64("media_source_epoch")?,
+            status,
+            visibility_state,
+            title,
+            focused,
+            input_blocked_reason_override,
+            available_display_ids,
+            geometry: TargetGeometry::from_recovery_value(value.get("geometry").ok_or_else(
+                || anyhow::anyhow!("target tracking recovery geometry is required"),
+            )?)?,
+            diagnostic: value
+                .get("diagnostic")
+                .cloned()
+                .unwrap_or_else(|| binding.latest_target_diagnostic_value()),
+        };
+        if snapshot.input_blocked_reason() != persisted_input_blocked_reason {
+            anyhow::bail!("target tracking recovery input blocker contradicts target state");
+        }
+        let persisted_input_enabled = value
+            .get("input_enabled")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                anyhow::anyhow!("target tracking recovery input_enabled must be bool")
+            })?;
+        if snapshot.input_enabled() != persisted_input_enabled {
+            anyhow::bail!("target tracking recovery input_enabled contradicts target state");
+        }
+        Ok(snapshot)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn latest_diagnostic(&self) -> Value {
@@ -292,6 +425,13 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetObservation {
     #[allow(dead_code)]
     Lost {
         reason: TargetResolutionError,
+        detail: String,
+        observed_at_ms: u64,
+    },
+    /// The plugin-owned monitor exhausted its restart budget. Unlike an
+    /// ordinary host observation miss, this is already a confirmed loss of
+    /// observation authority and therefore must not enter target debounce.
+    MonitorUnavailable {
         detail: String,
         observed_at_ms: u64,
     },
@@ -441,6 +581,34 @@ impl RemoteAppTargetBindingStateMachine {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        binding: RemoteAppTargetBinding,
+        snapshot: Option<&Value>,
+    ) -> anyhow::Result<Self> {
+        let Some(snapshot) = snapshot else {
+            return Ok(Self::from_binding(binding));
+        };
+        let snapshot = TargetTrackerSnapshot::from_recovery_value(&binding, snapshot)?;
+        let pending_lost = (snapshot.input_blocked_reason_override == Some("target_loss_pending"))
+            .then(|| PendingLostObservation {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "rehydrated pending target loss".to_string(),
+                first_observed_at_ms: 0,
+                latest_observed_at_ms: 0,
+                consecutive_misses: 1,
+            });
+        Ok(Self {
+            binding,
+            snapshot,
+            pending_media_rebind: None,
+            pending_lost,
+            latest_loss_observed_at_ms: None,
+            rebind_started_at_ms: None,
+            rebind_failure_emitted: false,
+            lifecycle_event_coalescer: TargetLifecycleEventCoalescer::default(),
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn binding(&self) -> &RemoteAppTargetBinding {
         &self.binding
     }
@@ -536,6 +704,10 @@ impl RemoteAppTargetBindingStateMachine {
                 detail,
                 observed_at_ms,
             } => self.commit_lost(reason, detail, observed_at_ms),
+            TargetObservation::MonitorUnavailable {
+                detail,
+                observed_at_ms,
+            } => self.commit_monitor_unavailable(detail, observed_at_ms),
         }
     }
 
@@ -1329,6 +1501,39 @@ impl RemoteAppTargetBindingStateMachine {
             .pending_lost
             .take()
             .expect("pending lost exists after debounce gate");
+        self.commit_confirmed_lost(pending, observed_at_ms)
+    }
+
+    fn commit_monitor_unavailable(
+        &mut self,
+        detail: String,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        if self.snapshot.status == TargetBindingPhase::Lost {
+            self.latest_loss_observed_at_ms = Some(
+                self.latest_loss_observed_at_ms
+                    .map_or(observed_at_ms, |latest| latest.max(observed_at_ms)),
+            );
+            return None;
+        }
+        self.pending_lost = None;
+        self.commit_confirmed_lost(
+            PendingLostObservation {
+                reason: TargetResolutionError::CaptureBackendUnavailable,
+                detail,
+                first_observed_at_ms: observed_at_ms,
+                latest_observed_at_ms: observed_at_ms,
+                consecutive_misses: 0,
+            },
+            observed_at_ms,
+        )
+    }
+
+    fn commit_confirmed_lost(
+        &mut self,
+        pending: PendingLostObservation,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
         let previous = self.snapshot.target_geometry_revision;
         self.snapshot.status = TargetBindingPhase::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
@@ -1688,7 +1893,8 @@ mod tests {
         TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
-        RemoteAppTargetBindingStateMachine, TargetObservation, TargetVisibilityState,
+        RemoteAppTargetBindingStateMachine, TargetObservation, TargetTrackerSnapshot,
+        TargetVisibilityState,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
         live_remote_target_metadata, test_application_target_binding,
@@ -1763,6 +1969,33 @@ mod tests {
         assert_eq!(snapshot["target_focus_epoch"], json!(1));
         assert_eq!(snapshot["status"], json!("resolved"));
         assert_eq!(snapshot["visibility_state"], json!("visible"));
+    }
+
+    #[test]
+    fn target_tracking_recovery_rejects_fail_open_input_blocker_conflicts() {
+        let binding = window_binding();
+        let tracker = RemoteAppTargetBindingStateMachine::from_binding(binding.clone());
+        let mut contradictory = tracker.snapshot().to_recovery_value();
+        contradictory["input_blocked_reason"] = json!("target_lost");
+        contradictory["input_enabled"] = json!(false);
+
+        let error = TargetTrackerSnapshot::from_recovery_value(&binding, &contradictory)
+            .expect_err("contradictory blocker must fail closed");
+        assert!(
+            error.to_string().contains("input blocker contradicts"),
+            "{error}"
+        );
+
+        let mut unknown_override = tracker.snapshot().to_recovery_value();
+        unknown_override["input_blocked_reason_override"] = json!("unknown_blocker");
+        let error = TargetTrackerSnapshot::from_recovery_value(&binding, &unknown_override)
+            .expect_err("unknown blocker override must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported target tracking recovery input blocker override"),
+            "{error}"
+        );
     }
 
     #[test]

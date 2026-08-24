@@ -217,6 +217,28 @@ impl RemoteDesktopPlugin {
         self.target_monitor.desired_sessions_for_test()
     }
 
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn track_target_for_test(
+        plugin: &Arc<Self>,
+        session_id: impl Into<String>,
+    ) -> anyhow::Result<()> {
+        plugin.target_monitor.track(plugin, session_id.into())
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn crash_target_monitor_generation_for_test(
+        &self,
+    ) -> anyhow::Result<()> {
+        self.target_monitor.crash_generation_for_test()
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn target_monitor_generation_for_test(
+        &self,
+    ) -> u64 {
+        self.target_monitor.generation_for_test()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn persist_recovery_snapshot(
         &self,
         snapshot: &RemoteDesktopRecoverySnapshot,
@@ -240,7 +262,16 @@ impl RemoteDesktopPlugin {
         let mut restored = Vec::new();
         let recovery_now_ms = now_ms();
         for snapshot in snapshots {
-            let mut session = RemoteDesktopSession::rehydrate(&snapshot)?;
+            let mut session = match RemoteDesktopSession::rehydrate(&snapshot) {
+                Ok(session) => session,
+                Err(error) => {
+                    eprintln!(
+                        "[remote-desktop] ignored recovery snapshot for session {}: {error}",
+                        snapshot.session_id()
+                    );
+                    continue;
+                }
+            };
             let session_id = session.session_id().to_string();
             let lease_expires_at_ms = session.lease_expires_at_ms();
             let mut terminal = session.is_terminal();
@@ -376,6 +407,14 @@ mod tests {
         )
         .expect("snapshot with runtime input block reason stays valid");
         recovery.save(&snapshot).expect("snapshot saves");
+        let mut malformed = serde_json::to_value(&snapshot).expect("snapshot serializes");
+        malformed["session_id"] = json!("aa-malformed-target-tracking");
+        malformed["target_tracking"] = json!({});
+        std::fs::write(
+            temp.path().join("aa-malformed-target-tracking.json"),
+            serde_json::to_vec_pretty(&malformed).expect("malformed fixture serializes"),
+        )
+        .expect("write semantically malformed target tracking fixture");
         std::fs::write(temp.path().join("rd-corrupt.json"), b"{not json")
             .expect("write corrupt snapshot fixture");
 

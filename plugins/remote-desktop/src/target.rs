@@ -517,7 +517,9 @@ impl TargetGeometry {
         })
     }
 
-    fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
+    pub(in crate::daemon::plugins::remote_desktop) fn from_recovery_value(
+        value: &Value,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             x: optional_f64(value, "x")?,
             y: optional_f64(value, "y")?,

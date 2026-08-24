@@ -1443,6 +1443,10 @@ def validate_crash_restart_recovery_scenarios(item_id, check, report):
                 message = f"{prefix}: frames_rendered_after_restart must be positive"
                 check["errors"].append(message)
                 add_error(item_id, message)
+            if scenario.get("transport_epoch_increased") is not True:
+                message = f"{prefix}: transport_epoch_increased must be true"
+                check["errors"].append(message)
+                add_error(item_id, message)
 
         if scenario_name == "plugin_worker_restart":
             if scenario.get("same_public_session") is not True:
@@ -2555,6 +2559,7 @@ if item_id == "crash_restart_recovery":
             "watch_events_reattached": True,
             "media_reattached": True,
             "frames_rendered_after_restart": 24,
+            "transport_epoch_increased": True,
             "terminal_receipt_visible": True,
         },
         {

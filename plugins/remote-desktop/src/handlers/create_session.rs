@@ -335,6 +335,9 @@ mod tests {
             );
             assert_eq!(response["input_readiness"]["blocked_reason"], Value::Null);
         } else {
+            let expected_blocker =
+                crate::daemon::plugins::remote_desktop::input::input_injection_unavailable_reason()
+                    .expect("unavailable input injection must expose a typed blocker");
             assert_eq!(
                 response["input_readiness"]["effective_mode"],
                 json!("view_only")
@@ -345,7 +348,7 @@ mod tests {
             );
             assert_eq!(
                 response["input_readiness"]["blocked_reason"],
-                json!("input_injection_unavailable")
+                json!(expected_blocker)
             );
         }
     }
