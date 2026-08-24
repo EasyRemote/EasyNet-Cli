@@ -55,7 +55,13 @@ impl NativeAdaptiveBitrate {
         }
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn update(
+    /// Observe one feedback sample and propose a new bitrate.
+    ///
+    /// The proposal does not mutate `current_kbps`: the media strategy must
+    /// first apply it to the encoder and call [`Self::commit_applied`]. This
+    /// keeps product telemetry aligned with the encoder when VideoToolbox
+    /// rejects a live property update.
+    pub(in crate::daemon::plugins::remote_desktop) fn propose(
         &mut self,
         input_dropped: u64,
         output_dropped: u64,
@@ -80,8 +86,11 @@ impl NativeAdaptiveBitrate {
         if next.abs_diff(self.current_kbps) < NATIVE_BITRATE_STEP_KBPS {
             return None;
         }
-        self.current_kbps = next;
         Some(next)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn commit_applied(&mut self, bitrate_kbps: u32) {
+        self.current_kbps = bitrate_kbps.clamp(self.min_kbps, self.target_kbps);
     }
 }
 
@@ -567,6 +576,24 @@ mod tests {
         assert_eq!(dropped, 2);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].pts_ms, 3);
+    }
+
+    #[test]
+    fn adaptive_bitrate_commits_only_after_encoder_accepts_proposal() {
+        let mut controller = NativeAdaptiveBitrate::new(6_000);
+
+        let proposed = controller
+            .propose(1, 0, 0, 0, None)
+            .expect("drop pressure must propose a downshift");
+
+        assert_eq!(proposed, 4_800);
+        assert_eq!(
+            controller.current_kbps, 6_000,
+            "an unapplied proposal must not become product state"
+        );
+
+        controller.commit_applied(proposed);
+        assert_eq!(controller.current_kbps, 4_800);
     }
 
     #[test]

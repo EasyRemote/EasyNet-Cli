@@ -650,7 +650,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 webrtc_stats_snapshot(peer_connection).await;
             let sampled_at_ms = now_ms();
             let previous_bitrate_kbps = bitrate_controller.current_kbps;
-            if let Some(next_bitrate) = bitrate_controller.update(
+            let applied_bitrate = if let Some(next_bitrate) = bitrate_controller.propose(
                 stats.input_dropped_frames,
                 stats
                     .output_dropped_units
@@ -660,15 +660,25 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 stats.in_flight_frames,
                 available_outgoing_bitrate_bps,
             ) {
-                adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
-                if let Err(err) = encoder.set_bitrate_kbps(next_bitrate) {
-                    crate::op_event!(
-                        component = remote_desktop,
-                        kind = native_bitrate_adaptation_failed,
-                        reason = err.to_string(),
-                    );
+                match encoder.set_bitrate_kbps(next_bitrate) {
+                    Ok(()) => {
+                        bitrate_controller.commit_applied(next_bitrate);
+                        Some(next_bitrate)
+                    }
+                    Err(err) => {
+                        crate::op_event!(
+                            component = remote_desktop,
+                            kind = native_bitrate_adaptation_failed,
+                            requested_bitrate_kbps = next_bitrate,
+                            active_bitrate_kbps = bitrate_controller.current_kbps,
+                            reason = err.to_string(),
+                        );
+                        None
+                    }
                 }
-            }
+            } else {
+                None
+            };
             let drop_counters = NativeMediaDropCounters {
                 input_dropped_frames: stats.input_dropped_frames,
                 output_dropped_units: stats.output_dropped_units,
@@ -681,10 +691,11 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             let backpressure_delta =
                 rtp_sender_backpressure_drops.saturating_sub(last_reported_backpressure_drops);
             let mut adaptation_events = Vec::new();
-            if bitrate_controller.current_kbps != previous_bitrate_kbps {
+            if let Some(next_bitrate_kbps) = applied_bitrate {
+                adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
                 adaptation_events.push(native_media_adaptation_event(
                     adaptation_event_sequence,
-                    if bitrate_controller.current_kbps < previous_bitrate_kbps {
+                    if next_bitrate_kbps < previous_bitrate_kbps {
                         "bitrate_downshift"
                     } else {
                         "bitrate_upshift"
@@ -698,7 +709,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     json!({
                         "algorithm": "native_encoder_feedback",
                         "previous_bitrate_kbps": previous_bitrate_kbps,
-                        "next_bitrate_kbps": bitrate_controller.current_kbps,
+                        "next_bitrate_kbps": next_bitrate_kbps,
                         "available_outgoing_bitrate_bps": available_outgoing_bitrate_bps,
                     }),
                 ));
