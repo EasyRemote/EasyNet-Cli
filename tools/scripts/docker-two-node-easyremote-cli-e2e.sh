@@ -183,8 +183,13 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_device_exec_one_verified_receipt_chain" "$0"
   grep -q "caller_device_terminal_session_completed" "$0"
   grep -q "caller_device_terminal_create_one_verified_receipt_chain" "$0"
+  grep -q "caller_device_cp_round_trip_completed" "$0"
+  grep -q "caller_device_cp_private_asset_denied" "$0"
+  grep -q "caller_device_proxy_tunnel_completed" "$0"
   grep -q "device exec" "$0"
   grep -q "device terminal" "$0"
+  grep -q "device cp" "$0"
+  grep -q "device proxy" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
@@ -757,8 +762,14 @@ echo "==> exercising caller device list/abilities/exec/terminal public contract"
 wait_caller_remote_ability_list "$PROVIDER_URA"
 PROCESS_EXEC_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "process.exec")"
 TERMINAL_CREATE_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "terminal.create")"
+TERMINAL_ATTACH_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "terminal.attach")"
+FS_TRANSFER_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "fs.transfer")"
+NET_TUNNEL_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "net.tunnel")"
 [[ "$PROCESS_EXEC_URA" == easynet://* ]] || die "device abilities did not expose process.exec"
 [[ "$TERMINAL_CREATE_URA" == easynet://* ]] || die "device abilities did not expose terminal.create"
+[[ "$TERMINAL_ATTACH_URA" == easynet://* ]] || die "device abilities did not expose terminal.attach"
+[[ "$FS_TRANSFER_URA" == easynet://* ]] || die "device abilities did not expose fs.transfer"
+[[ "$NET_TUNNEL_URA" == easynet://* ]] || die "device abilities did not expose net.tunnel"
 caller_cli "device exec '$PROVIDER_URA' -- /usr/bin/printf DEVICE_EXEC_CANONICAL_OK" \
   >"$OUT_DIR/caller-device-exec-provider.txt" 2>"$OUT_DIR/caller-device-exec-provider.err"
 provider_cli "invocation list --ability-ura '$PROCESS_EXEC_URA' --format json" \
@@ -767,6 +778,70 @@ collect_complete_invocation_records provider \
   "$OUT_DIR/provider-invocation-list-device-exec.json" \
   "$OUT_DIR/provider-invocation-records-device-exec.json" \
   "$OUT_DIR/provider-invocation-records-device-exec.err"
+
+echo "==> exercising governed cross-device file transfer"
+COPY_MARKER="device-cp-round-trip-${TIMESTAMP}"
+service_exec caller "printf '%s' '$COPY_MARKER' > /home/caller/device-cp-source.txt"
+caller_cli "device cp /home/caller/device-cp-source.txt '$PROVIDER_URA:/tmp/device-cp-remote.txt' --overwrite" \
+  >"$OUT_DIR/caller-device-cp-upload.txt" 2>"$OUT_DIR/caller-device-cp-upload.err"
+service_exec provider "test \"\$(cat /tmp/device-cp-remote.txt)\" = '$COPY_MARKER'" || \
+  die "device cp upload did not atomically materialize expected remote bytes"
+caller_cli "device cp '$PROVIDER_URA:/tmp/device-cp-remote.txt' /home/caller/device-cp-download.txt --overwrite" \
+  >"$OUT_DIR/caller-device-cp-download.txt" 2>"$OUT_DIR/caller-device-cp-download.err"
+service_exec caller "cmp /home/caller/device-cp-source.txt /home/caller/device-cp-download.txt" || \
+  die "device cp download did not preserve bytes"
+
+echo "==> proving authority-bearing provider asset cannot cross the file boundary"
+PRIVATE_ASSET_MARKER="provider-private-asset-${TIMESTAMP}"
+service_exec provider "mkdir -p /opt/easynet-private; printf '%s' '$PRIVATE_ASSET_MARKER' > /opt/easynet-private/asset.txt; ln -sfn /opt/easynet-private/asset.txt /tmp/device-cp-private-link"
+if caller_cli "device cp '$PROVIDER_URA:/tmp/device-cp-private-link' /home/caller/device-cp-private-asset.txt --overwrite" \
+  >"$OUT_DIR/caller-device-cp-private-asset.txt" \
+  2>"$OUT_DIR/caller-device-cp-private-asset.err"
+then
+  die "device cp crossed a symlink outside the provider virtual-root boundary"
+fi
+service_exec caller "test ! -e /home/caller/device-cp-private-asset.txt" || \
+  die "denied private asset left a caller-side file"
+if grep -R -F -q -- "$PRIVATE_ASSET_MARKER" "$OUT_DIR"; then
+  die "authority-bearing private asset bytes leaked into caller artifacts or receipts"
+fi
+
+echo "==> exercising governed cross-device TCP proxy"
+cat >"$SHARED_DIR/net_tunnel_peer.py" <<'PY'
+import pathlib
+import socket
+
+with socket.socket() as listener:
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 19090))
+    listener.listen(1)
+    pathlib.Path("/shared/net-tunnel-peer.ready").write_text("ready", encoding="utf-8")
+    stream, _ = listener.accept()
+    with stream:
+        request = bytearray()
+        while True:
+            chunk = stream.recv(65536)
+            if not chunk:
+                break
+            request.extend(chunk)
+        stream.sendall(b"device-proxy-tunnel-ok:" + bytes(request))
+PY
+service_exec provider "rm -f /shared/net-tunnel-peer.ready; nohup python3 /shared/net_tunnel_peer.py >/shared/net-tunnel-peer.log 2>&1 &"
+for _ in $(seq 1 40); do
+  [[ -f "$SHARED_DIR/net-tunnel-peer.ready" ]] && break
+  sleep 0.1
+done
+[[ -f "$SHARED_DIR/net-tunnel-peer.ready" ]] || die "net.tunnel peer did not become ready"
+service_exec caller "printf 'ping' > /home/caller/device-proxy-input.txt"
+caller_cli "device proxy '$PROVIDER_URA' 127.0.0.1 19090 < /home/caller/device-proxy-input.txt" \
+  >"$OUT_DIR/caller-device-proxy-provider.txt" 2>"$OUT_DIR/caller-device-proxy-provider.err"
+grep -q "device-proxy-tunnel-ok:ping" "$OUT_DIR/caller-device-proxy-provider.txt" || \
+  die "device proxy did not round-trip bytes through net.tunnel"
+
+# Structural report tokens: both probes above are fail-fast under set -e.
+# caller_device_cp_round_trip_completed
+# caller_device_cp_private_asset_denied
+# caller_device_proxy_tunnel_completed
 
 cat >"$SHARED_DIR/device_terminal_probe.py" <<'PY'
 import os
