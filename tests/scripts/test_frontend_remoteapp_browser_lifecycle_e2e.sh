@@ -61,11 +61,64 @@ for step in evidence["steps"]:
             "target_geometry_revision": 23,
         },
     })
+for step in evidence["steps"]:
+    if step["name"] != "input_control_after_resume":
+        continue
+    step.clear()
+    step.update({
+        "name": "input_control_after_resume",
+        "status": "passed",
+        "evidence_source": "browser_automation",
+        "component_snapshot_only": False,
+        "observed_at_ms": 1787332000170,
+        "result": "input_applied",
+        "visible_status": "input interactive ready",
+        "client_sequence": 8,
+        "target_focus_epoch": 12,
+        "target_geometry_revision": 24,
+        "latency_ms": 18,
+        "submitted_frame": {
+            "type": "key",
+            "action": "down",
+            "code": "KeyB",
+            "client_sequence": 8,
+            "sent_at_ms": 1787332000160,
+            "target_focus_epoch": 12,
+            "target_geometry_revision": 24,
+        },
+        "applied_event": {
+            "event_type": "INPUT_FRAME_APPLIED",
+            "session_id": session_id,
+            "client_sequence": 8,
+            "target_focus_epoch": 12,
+            "target_geometry_revision": 24,
+        },
+    })
+evidence["transport_resume"]["input_result_before"] = "input_applied"
+evidence["transport_resume"]["input_result_after"] = "input_applied"
 json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
 PY
 "$SCRIPT" --run --evidence-json "$OUT_DIR/input-applied.json" --out-dir "$OUT_DIR/input-applied" >/dev/null
 grep -q '"status": "passed"' "$OUT_DIR/input-applied/report.json" || \
   fail "input_applied evidence with focus epoch must pass"
+
+python3 - "$OUT_DIR/input-applied.json" "$OUT_DIR/stale-resume-input.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+for step in evidence["steps"]:
+    if step["name"] == "input_control_after_resume":
+        step["client_sequence"] = 7
+        step["submitted_frame"]["client_sequence"] = 7
+        step["applied_event"]["client_sequence"] = 7
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/stale-resume-input.json" --out-dir "$OUT_DIR/stale-resume-input" >/tmp/frontend-remoteapp-browser-lifecycle-stale-resume-input.out 2>&1; then
+  fail "verifier accepted post-resume input without sequence advancement"
+fi
+grep -q "post-resume input client_sequence must advance" /tmp/frontend-remoteapp-browser-lifecycle-stale-resume-input.out || \
+  fail "stale post-resume input failure was not explicit"
 
 python3 - "$OUT_DIR/input-applied.json" "$OUT_DIR/missing-submitted-focus.json" <<'PY'
 import json

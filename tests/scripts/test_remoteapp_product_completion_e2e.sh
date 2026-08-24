@@ -15,6 +15,14 @@ grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON"
   fail "completion gate must require frontend product-flow report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require Browser/Tauri lifecycle report"
+grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_TRANSPORT_RESUME_REPORT_JSON" "$SCRIPT" || \
+  fail "completion gate must require real browser transport-resume report"
+grep -q "requires_transport_resume_summary" "$SCRIPT" || \
+  fail "completion gate must require transport-resume summaries"
+grep -q "real_browser_transport_resume" "$SCRIPT" || \
+  fail "completion gate must reject lease survival as transport resume"
+grep -q "self-test accepted browser transport resume without a new PeerConnection" "$SCRIPT" || \
+  fail "completion gate self-test must reject fake PeerConnection resume"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require cross-device smoke report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON" "$SCRIPT" || \
@@ -206,7 +214,7 @@ import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["status"] == "failed"
 assert report["product_complete_claim"] is False
-assert report["required_evidence_count"] == 18
+assert report["required_evidence_count"] == 19
 assert any("missing required report env" in error for error in report["errors"])
 PY
 

@@ -401,6 +401,14 @@ require 'host-remoteapp-session-resume-e2e\.sh' "$AUDIT" \
   'audit must record the host session resume E2E harness'
 require 'lease refresh' "$AUDIT" \
   'audit must describe session resume as lease refresh evidence'
+require 'lease refresh survival' "$AUDIT" \
+  'audit must distinguish lease survival from browser transport resume'
+require 'Browser transport resume is a' "$AUDIT" \
+  'audit must require real browser transport-resume evidence'
+require 'old PeerConnection' "$AUDIT" \
+  'audit must require retirement of the prior browser transport generation'
+require 'newer daemon-issued transport epoch' "$AUDIT" \
+  'audit must bind browser resume to Runtime-issued transport generations'
 require 'remoteapp-crash-restart-recovery-e2e\.sh' "$AUDIT" \
   'audit must record the crash/restart recovery evidence verifier'
 require 'session_not_found' "$AUDIT" \
@@ -422,6 +430,12 @@ require 'host-remoteapp-session-resume-e2e\.sh' "$PLAN" \
   'plan evidence audit must record the host session resume E2E harness'
 require 'waits past the original lease' "$PLAN" \
   'plan evidence audit must record session resume original-lease survival evidence'
+require 'Browser transport resume is now an independent product-gate domain' "$PLAN" \
+  'plan evidence audit must separate browser transport recovery from lease refresh'
+require 'newly connected PeerConnection' "$PLAN" \
+  'plan evidence audit must require a replacement browser transport generation'
+require 'live Browser/Tauri run with a real network' "$PLAN" \
+  'plan evidence audit must preserve missing live transport-resume evidence'
 require 'Crash/restart recovery E2E' "$PLAN" \
   'plan evidence audit must list missing live crash/restart recovery evidence'
 require 'remoteapp-crash-restart-recovery-e2e\.sh' "$PLAN" \
@@ -444,6 +458,12 @@ require 'platform_support' "$MATRIX" \
   'product readiness matrix must record platform support projection evidence'
 require 'input_control_support' "$MATRIX" \
   'product readiness matrix must record input control support projection evidence'
+require 'lease-refresh survival evidence only' "$MATRIX" \
+  'product readiness matrix must not equate lease survival with browser transport resume'
+require 'opt-in real browser transport-resume path' "$MATRIX" \
+  'product readiness matrix must record the executable browser transport-resume contract'
+require 'new PeerConnection, newer daemon transport epoch, watch_events reattachment, decoded frames, and input after resume' "$MATRIX" \
+  'product readiness matrix must preserve the missing live browser transport-resume artifact'
 require 'labels Windows/Linux exact-target capture baseline_ready rather than production_ready' "$MATRIX" \
   'product readiness matrix must record executable but uncertified Windows/Linux capture state'
 require 'Windows/Linux capture or explicit product unsupported state' "$PLAN" \
@@ -545,6 +565,8 @@ require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON'
   'product-completion gate must require frontend product-flow evidence'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON' "$PRODUCT_COMPLETION" \
   'product-completion gate must require Browser/Tauri lifecycle evidence'
+require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_TRANSPORT_RESUME_REPORT_JSON' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require real browser transport-resume evidence separately from lease survival'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON' "$PRODUCT_COMPLETION" \
   'product-completion gate must require cross-device smoke evidence'
 require 'EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON' "$PRODUCT_COMPLETION" \
@@ -585,6 +607,14 @@ require 'requires_evidence_json' "$PRODUCT_COMPLETION" \
   'product-completion gate must require live evidence_json artifacts from domain verifiers'
 require 'requires_frontend_flow_summary' "$PRODUCT_COMPLETION" \
   'product-completion gate must require frontend product-flow summaries'
+require 'requires_transport_resume_summary' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require a real browser transport-resume summary'
+require 'real_browser_transport_resume' "$PRODUCT_COMPLETION" \
+  'product-completion gate must reject lease-refresh evidence as browser transport resume'
+require 'transport_resume_summary.transport_epoch must exceed prior_transport_epoch' "$PRODUCT_COMPLETION" \
+  'product-completion gate must require a newer daemon-issued transport generation'
+require 'self-test accepted browser transport resume without a new PeerConnection' "$PRODUCT_COMPLETION" \
+  'product-completion gate self-test must reject transport resume without PeerConnection replacement'
 require 'frontend_flow_summary must be an object' "$PRODUCT_COMPLETION" \
   'product-completion gate must reject frontend product-flow reports without summaries'
 require 'self-test accepted frontend product-flow report without summary' "$PRODUCT_COMPLETION" \
@@ -711,6 +741,22 @@ require 'application_view_only_input_checked' "$FRONTEND_PRODUCT_FLOW" \
   'frontend product-flow verifier must summarize application input policy coverage'
 require 'end_session_lifecycle_verified' "$FRONTEND_PRODUCT_FLOW" \
   'frontend product-flow verifier must summarize end-session lifecycle coverage'
+require 'transport_resume_summary' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'browser lifecycle verifier must project verified transport-resume evidence for product aggregation'
+require 'real_browser_transport_resume' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'browser lifecycle verifier must distinguish real transport resume from lease survival'
+require 'self-test accepted resume without a new PeerConnection' "$FRONTEND_BROWSER_LIFECYCLE" \
+  'browser lifecycle verifier self-test must reject fake reconnect evidence'
+for resume_step in \
+  transport_disconnected \
+  session_preserved_for_reconnect \
+  transport_reconnected \
+  watch_events_reestablished \
+  media_presented_after_resume \
+  input_control_after_resume; do
+  require "$resume_step" "$FRONTEND_BROWSER_LIFECYCLE" \
+    "browser lifecycle verifier must require $resume_step evidence"
+done
 require 'real_remoteapp_cross_device_session' "$CROSS_DEVICE_REMOTEAPP" \
   'cross-device RemoteApp verifier must require real RemoteApp cross-device proof mode'
 require 'remoteapp_summary' "$CROSS_DEVICE_REMOTEAPP" \

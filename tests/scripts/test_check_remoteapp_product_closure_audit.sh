@@ -61,6 +61,7 @@ cp "$REPO_ROOT/plugins/remote-desktop/src/session_events.rs" "$SB/plugins/remote
 cp "$REPO_ROOT/plugins/remote-desktop/src/target.rs" "$SB/plugins/remote-desktop/src/target.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/target_tracking.rs" "$SB/plugins/remote-desktop/src/target_tracking.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/target_monitor.rs" "$SB/plugins/remote-desktop/src/target_monitor.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/target_snapshot.rs" "$SB/plugins/remote-desktop/src/target_snapshot.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SB/plugins/remote-desktop/src/input.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/plugin.toml" "$SB/plugins/remote-desktop/plugin.toml"
 cp "$REPO_ROOT/plugins/remote-desktop/src/registration.rs" "$SB/plugins/remote-desktop/src/registration.rs"

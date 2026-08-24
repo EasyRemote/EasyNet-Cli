@@ -93,6 +93,14 @@ def lifecycle_required(item_prefix, env_prefix, expected_script):
 
 required = [
     {
+        "id": "browser_transport_resume",
+        "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_TRANSPORT_RESUME_REPORT_JSON",
+        "expected_script": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
+        "coverage_keys": [],
+        "requires_evidence_json": True,
+        "requires_transport_resume_summary": True,
+    },
+    {
         "id": "frontend_product_flow",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON",
         "expected_script": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
@@ -385,6 +393,62 @@ def validate_frontend_flow_summary(item_id, check, report, required_steps):
             check["errors"].append(message)
             add_error(item_id, message)
     check["frontend_flow_summary"] = summary
+
+def validate_transport_resume_summary(item_id, check, report):
+    summary = report.get("transport_resume_summary")
+    check["required_transport_resume_summary"] = True
+    if not isinstance(summary, dict):
+        message = "transport_resume_summary must be an object"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return
+    check["transport_resume_summary"] = summary
+    if summary.get("proof_mode") != "real_browser_transport_resume":
+        message = "transport_resume_summary.proof_mode must be real_browser_transport_resume"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if not isinstance(summary.get("session_id"), str) or not summary.get("session_id"):
+        message = "transport_resume_summary.session_id must be set"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if not isinstance(summary.get("subject_ura"), str) or not summary["subject_ura"].startswith("easynet:///"):
+        message = "transport_resume_summary.subject_ura must be canonical"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    for field in (
+        "same_public_session",
+        "old_peer_retired",
+        "new_peer_connection",
+        "transport_epoch_increased",
+        "watch_events_reestablished",
+        "input_authority_preserved",
+    ):
+        if summary.get(field) is not True:
+            message = f"transport_resume_summary.{field} must be true"
+            check["errors"].append(message)
+            add_error(item_id, message)
+    prior_epoch = int_value(summary.get("prior_transport_epoch"))
+    resumed_epoch = int_value(summary.get("transport_epoch"))
+    if prior_epoch <= 0:
+        message = "transport_resume_summary.prior_transport_epoch must be positive"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if resumed_epoch <= prior_epoch:
+        message = "transport_resume_summary.transport_epoch must exceed prior_transport_epoch"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if not positive_int(summary.get("frames_presented_after_resume")):
+        message = "transport_resume_summary.frames_presented_after_resume must be positive"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if summary.get("input_result_before") not in {"input_applied", "policy_blocked"}:
+        message = "transport_resume_summary.input_result_before must be explicit"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if summary.get("input_result_after") != summary.get("input_result_before"):
+        message = "transport_resume_summary must preserve input authority"
+        check["errors"].append(message)
+        add_error(item_id, message)
 
 def validate_media_scenarios(item_id, check, report):
     required_scenarios = {"baseline", "degraded_network", "backpressure"}
@@ -1688,6 +1752,8 @@ for item in required:
             add_error(item_id, message)
     if item.get("requires_frontend_flow_summary"):
         validate_frontend_flow_summary(item_id, check, report, item.get("required_steps", []))
+    if item.get("requires_transport_resume_summary"):
+        validate_transport_resume_summary(item_id, check, report)
     if item.get("requires_network_route_scenarios"):
         validate_network_route_scenarios(item_id, check, report)
     if item.get("requires_media_scenarios"):
@@ -2072,6 +2138,7 @@ coverage_by_id = {
     },
 }
 script_by_id = {
+    "browser_transport_resume": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
     "frontend_product_flow": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
     "browser_lifecycle": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
     "cross_device_smoke": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
@@ -2092,6 +2159,7 @@ script_by_id = {
     "crash_restart_recovery": "tools/scripts/remoteapp-crash-restart-recovery-e2e.sh",
 }
 evidence_json_ids = {
+    "browser_transport_resume",
     "browser_lifecycle",
     "cross_device_remoteapp",
     "cross_platform_capture",
@@ -2125,6 +2193,25 @@ report = {
     "product_complete_claim": False,
     "coverage": coverage_by_id.get(item_id, {}),
 }
+if item_id == "browser_transport_resume":
+    report["session_id"] = "rd-product-browser-transport-resume"
+    report["selected_resource_ura"] = "easynet:///r/localhost/resource/device.synthetic/window.browser-resume"
+    report["transport_resume_summary"] = {
+        "proof_mode": "real_browser_transport_resume",
+        "session_id": report["session_id"],
+        "subject_ura": report["selected_resource_ura"],
+        "same_public_session": True,
+        "old_peer_retired": True,
+        "new_peer_connection": True,
+        "prior_transport_epoch": 2,
+        "transport_epoch": 3,
+        "transport_epoch_increased": True,
+        "watch_events_reestablished": True,
+        "frames_presented_after_resume": 4,
+        "input_result_before": "policy_blocked",
+        "input_result_after": "policy_blocked",
+        "input_authority_preserved": True,
+    }
 if item_id == "frontend_product_flow":
     report["target_kind"] = "both"
     report["evidence_contract"] = [
@@ -2729,6 +2816,7 @@ run_self_test() {
   trap 'if [[ -n "${self_test_tmp:-}" ]]; then rm -rf "$self_test_tmp"; fi' EXIT
   local tmp="$self_test_tmp"
   local ids=(
+    browser_transport_resume
     frontend_product_flow
     browser_lifecycle
     cross_device_smoke
@@ -2760,6 +2848,7 @@ run_self_test() {
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_WINDOW_REPORT_JSON="$tmp/session_resume_window.json"
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_JSON="$tmp/session_resume_application.json"
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON="$tmp/cross_device_remoteapp.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_TRANSPORT_RESUME_REPORT_JSON="$tmp/browser_transport_resume.json"
 
   env \
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
@@ -2773,6 +2862,32 @@ run_self_test() {
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
     "$0" --check --out-dir "$tmp/pass" >/dev/null
   grep -q '"product_complete_claim": true' "$tmp/pass/report.json"
+
+  python3 - "$tmp/browser_transport_resume.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["transport_resume_summary"]["new_peer_connection"] = False
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if env \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
+    EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
+    "$0" --check --out-dir "$tmp/fake-browser-transport-resume" >/dev/null 2>&1; then
+    echo "self-test accepted browser transport resume without a new PeerConnection" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/browser_transport_resume.json" browser_transport_resume
 
   python3 - "$tmp/session_timeout_application.json" <<'PY'
 import json

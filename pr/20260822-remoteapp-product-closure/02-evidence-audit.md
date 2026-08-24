@@ -524,6 +524,16 @@ Current frontend lifecycle evidence:
   This proves daemon/session lease refresh survival; browser/WebRTC rebind,
   long-outage reconnect, crash/restart recovery, and cross-device resume remain
   missing.
+- Browser transport resume is now an independent product-gate domain rather
+  than an alias for lease refresh. The Browser lifecycle runner accepts paired
+  external disconnect/reconnect commands and requires the same public session,
+  retirement of the old PeerConnection, a strictly newer daemon-issued
+  transport epoch, a newly connected PeerConnection, `watch_events`
+  reattachment, a decoded frame after resume, and preserved input authority.
+  The aggregate product gate rejects reports without this summary and its
+  self-test proves that reusing the old PeerConnection is rejected. This is an
+  executable evidence contract; a live Browser/Tauri run with a real network
+  fixture is still required.
 - Latest bounded local lifecycle live evidence on 2026-08-23 passed for both
   window and application targets using catalog-resolved full Ability URAs and
   the session approval receipt as scalar causal context:

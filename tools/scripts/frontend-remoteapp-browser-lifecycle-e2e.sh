@@ -58,12 +58,26 @@ Evidence contract:
   either applied input telemetry or an explicit policy block. If the input step
   claims input_applied, it must include the submitted data-channel frame and the
   daemon applied event with matching client_sequence and target_focus_epoch.
+  Product transport-resume evidence additionally requires:
+  transport_disconnected -> session_preserved_for_reconnect ->
+  transport_reconnected -> watch_events_reestablished ->
+  media_presented_after_resume -> input_control_after_resume. The runner must
+  prove a retired old PeerConnection, a new daemon-issued transport epoch, a
+  new PeerConnection, decoded frames, and unchanged input authority.
+
+Runner environment for the bundled browser runner:
+  EASYNET_REMOTEAPP_BROWSER_RESUME_DISCONNECT_COMMAND
+  EASYNET_REMOTEAPP_BROWSER_RESUME_RECONNECT_COMMAND
+                        Both must be set to exercise real transport resume.
+                        The disconnect command must make the selected device
+                        offline from the Hub/frontend perspective; the reconnect
+                        command must restore that same device Runtime.
 
 Non-claims:
   A skipped report or self-test does not prove frontend product readiness.
-  This harness verifies one Browser/Tauri lifecycle artifact; cross-device,
-  OS input injection, codec soak, and network fallback still require their own
-  evidence.
+  Without the paired resume commands, this harness does not emit a transport
+  resume summary. Cross-device, OS input injection, codec soak, and network
+  fallback still require their own evidence.
 USAGE
 }
 
@@ -441,6 +455,137 @@ if input_step.get("result") == "input_applied":
         if input_step.get("target_geometry_revision") is not None:
             require(int_field(applied_event, "target_geometry_revision") == int_field(input_step, "target_geometry_revision"),
                     "applied_event target_geometry_revision must match input_applied target_geometry_revision")
+
+transport_resume = evidence.get("transport_resume")
+if transport_resume is not None:
+    require(isinstance(transport_resume, dict),
+            "transport_resume must be an object when present")
+    if isinstance(transport_resume, dict):
+        resume_steps = [
+            "transport_disconnected",
+            "session_preserved_for_reconnect",
+            "transport_reconnected",
+            "watch_events_reestablished",
+            "media_presented_after_resume",
+            "input_control_after_resume",
+        ]
+        resume_cursor = step_names.index("input_control_attempted_or_policy_blocked")
+        for resume_step in resume_steps:
+            try:
+                resume_index = step_names.index(resume_step)
+            except ValueError:
+                errors.append(f"missing transport resume step: {resume_step}")
+                continue
+            require(resume_index > resume_cursor,
+                    f"transport resume step order is wrong at {resume_step}")
+            resume_cursor = resume_index
+
+        prior_epoch = int_field(transport_resume, "prior_transport_epoch")
+        resumed_epoch = int_field(transport_resume, "transport_epoch")
+        require(transport_resume.get("proof_mode") == "real_browser_transport_resume",
+                "transport_resume.proof_mode must be real_browser_transport_resume")
+        require(transport_resume.get("session_id") == session_id,
+                "transport_resume must preserve the created session id")
+        require(transport_resume.get("subject_ura") == subject_ura,
+                "transport_resume must remain bound to the selected Resource URA")
+        for field in (
+            "same_public_session",
+            "old_peer_retired",
+            "new_peer_connection",
+            "transport_epoch_increased",
+            "watch_events_reestablished",
+            "input_authority_preserved",
+        ):
+            require(transport_resume.get(field) is True,
+                    f"transport_resume.{field} must be true")
+        require(prior_epoch > 0, "transport_resume.prior_transport_epoch must be positive")
+        require(resumed_epoch > prior_epoch,
+                "transport_resume.transport_epoch must exceed prior_transport_epoch")
+        require(int_field(transport_resume, "frames_presented_after_resume") > 0,
+                "transport_resume.frames_presented_after_resume must be positive")
+        require(transport_resume.get("input_result_before") in {"input_applied", "policy_blocked"},
+                "transport_resume.input_result_before must be explicit")
+        require(transport_resume.get("input_result_before") == input_step.get("result"),
+                "transport_resume.input_result_before must match initial input evidence")
+        require(transport_resume.get("input_result_after") == transport_resume.get("input_result_before"),
+                "transport_resume must preserve input authority across reconnect")
+
+        disconnected_step = step_by_name.get("transport_disconnected", {})
+        preserved_step = step_by_name.get("session_preserved_for_reconnect", {})
+        reconnected_step = step_by_name.get("transport_reconnected", {})
+        watch_resume_step = step_by_name.get("watch_events_reestablished", {})
+        media_resume_step = step_by_name.get("media_presented_after_resume", {})
+        input_resume_step = step_by_name.get("input_control_after_resume", {})
+        require(disconnected_step.get("old_peer_retired") is True,
+                "transport_disconnected must prove the old PeerConnection retired")
+        require(disconnected_step.get("transport_epoch") == prior_epoch,
+                "transport_disconnected must bind the prior transport epoch")
+        require(preserved_step.get("same_session") is True and preserved_step.get("terminal") is False,
+                "session_preserved_for_reconnect must prove the same non-terminal session")
+        require(reconnected_step.get("same_session") is True,
+                "transport_reconnected must preserve the public session")
+        require(reconnected_step.get("new_peer_connection") is True,
+                "transport_reconnected must prove a new PeerConnection")
+        require(int_field(reconnected_step, "prior_transport_epoch") == prior_epoch,
+                "transport_reconnected prior epoch must match the resume summary")
+        require(int_field(reconnected_step, "transport_epoch") == resumed_epoch,
+                "transport_reconnected epoch must match the resume summary")
+        require(reconnected_step.get("transport_epoch_increased") is True,
+                "transport_reconnected must prove transport epoch advancement")
+        require(reconnected_step.get("rtc_connection_state") == "connected",
+                "transport_reconnected RTC state must be connected")
+        require(reconnected_step.get("ice_connection_state") in {"connected", "completed"},
+                "transport_reconnected ICE state must be connected or completed")
+        require(int_field(watch_resume_step, "subscription_count")
+                > int_field(watch_resume_step, "prior_subscription_count"),
+                "watch_events_reestablished must prove a new subscription")
+        require(int_field(media_resume_step, "transport_epoch") == resumed_epoch,
+                "media_presented_after_resume must bind the new transport epoch")
+        require(int_field(media_resume_step, "frames_presented") > 0,
+                "media_presented_after_resume must prove decoded frames")
+        require(input_resume_step.get("result") == transport_resume.get("input_result_after"),
+                "input_control_after_resume must match the resume input summary")
+        if input_resume_step.get("result") == "input_applied":
+            resumed_sequence = int_field(input_resume_step, "client_sequence")
+            require(resumed_sequence > int_field(input_step, "client_sequence"),
+                    "post-resume input client_sequence must advance")
+            resumed_submitted = input_resume_step.get("submitted_frame")
+            resumed_applied = input_resume_step.get("applied_event")
+            require(isinstance(resumed_submitted, dict),
+                    "post-resume input must include submitted_frame")
+            require(isinstance(resumed_applied, dict),
+                    "post-resume input must include applied_event")
+            if isinstance(resumed_submitted, dict):
+                require(int_field(resumed_submitted, "client_sequence") == resumed_sequence,
+                        "post-resume submitted_frame sequence must match")
+                require(int_field(resumed_submitted, "target_focus_epoch")
+                        == int_field(input_resume_step, "target_focus_epoch"),
+                        "post-resume submitted_frame focus epoch must match")
+            if isinstance(resumed_applied, dict):
+                require(resumed_applied.get("session_id") == session_id,
+                        "post-resume applied_event must preserve the session id")
+                require(int_field(resumed_applied, "client_sequence") == resumed_sequence,
+                        "post-resume applied_event sequence must match")
+                require(int_field(resumed_applied, "target_focus_epoch")
+                        == int_field(input_resume_step, "target_focus_epoch"),
+                        "post-resume applied_event focus epoch must match")
+        if input_resume_step.get("result") == "policy_blocked":
+            require(input_resume_step.get("blocked_reason") == input_step.get("blocked_reason"),
+                    "post-resume input policy block must remain stable")
+
+        snapshots = evidence.get("transport_snapshots")
+        require(isinstance(snapshots, list),
+                "transport resume evidence must include transport_snapshots")
+        if isinstance(snapshots, list):
+            matching_epochs = {
+                int_field(snapshot, "transport_epoch")
+                for snapshot in snapshots
+                if isinstance(snapshot, dict)
+                and snapshot.get("session_id") == session_id
+                and snapshot.get("subject_ura") == subject_ura
+            }
+            require(prior_epoch in matching_epochs and resumed_epoch in matching_epochs,
+                    "transport_snapshots must contain both daemon-issued epochs")
 require(terminal.get("reason_code") in {"user_cancelled", "caller_ended", "resume_e2e_cleanup"},
         "terminal_receipt_visible must expose a known end reason")
 require(terminal.get("terminal") is True,
@@ -457,6 +602,8 @@ report = {
     "session_id": session_id,
     "selected_resource_ura": subject_ura,
     "evidence_json": evidence_path,
+    **({"transport_resume_summary": transport_resume}
+       if isinstance(transport_resume, dict) else {}),
     "product_complete_claim": False,
 }
 pathlib.Path(report_path).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -552,8 +699,14 @@ steps = [
             "geometry_revision": 1,
         },
     },
-    observed({"name": "session_ended", "status": "passed", "ability": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id}, 120),
-    observed({"name": "terminal_receipt_visible", "status": "passed", "terminal": True, "reason_code": "user_cancelled", "session_id": session_id}, 130),
+    observed({"name": "transport_disconnected", "status": "passed", "subject_ura": subject, "session_id": session_id, "transport_epoch": 2, "old_peer_retired": True, "peer_states": [{"connection": "closed", "ice": "closed"}]}, 120),
+    observed({"name": "session_preserved_for_reconnect", "status": "passed", "subject_ura": subject, "session_id": session_id, "same_session": True, "terminal": False, "transport_status": "session preserved for reconnect"}, 130),
+    observed({"name": "transport_reconnected", "status": "passed", "ability": "remote_desktop.set_description", "subject_ura": subject, "session_id": session_id, "same_session": True, "prior_transport_epoch": 2, "transport_epoch": 3, "transport_epoch_increased": True, "new_peer_connection": True, "rtc_connection_state": "connected", "ice_connection_state": "connected"}, 140),
+    observed({"name": "watch_events_reestablished", "status": "passed", "ability": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id, "prior_subscription_count": 1, "subscription_count": 2}, 150),
+    observed({"name": "media_presented_after_resume", "status": "passed", "session_id": session_id, "transport_epoch": 3, "frame_presented": True, "media_element_visible": True, "frames_presented": 4, "frame_width": 1280, "frame_height": 720}, 160),
+    observed({"name": "input_control_after_resume", "status": "passed", "result": "policy_blocked", "blocked_reason": "view_only", "visible_status": "input scope view_only · no controls"}, 170),
+    observed({"name": "session_ended", "status": "passed", "ability": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id}, 180),
+    observed({"name": "terminal_receipt_visible", "status": "passed", "terminal": True, "reason_code": "user_cancelled", "session_id": session_id}, 190),
 ]
 steps[6] = observed(steps[6], 70)
 steps[8] = observed(steps[8], 90)
@@ -570,10 +723,47 @@ evidence = {
     "device_ura": "easynet:///r/localhost/device/mac-1",
     "selected_resource_ura": subject,
     "session_id": session_id,
+    "transport_resume": {
+        "proof_mode": "real_browser_transport_resume",
+        "session_id": session_id,
+        "subject_ura": subject,
+        "same_public_session": True,
+        "old_peer_retired": True,
+        "new_peer_connection": True,
+        "prior_transport_epoch": 2,
+        "transport_epoch": 3,
+        "transport_epoch_increased": True,
+        "watch_events_reestablished": True,
+        "frames_presented_after_resume": 4,
+        "input_result_before": "policy_blocked",
+        "input_result_after": "policy_blocked",
+        "input_authority_preserved": True,
+    },
+    "transport_snapshots": [
+        {"session_id": session_id, "subject_ura": subject, "transport_epoch": 2},
+        {"session_id": session_id, "subject_ura": subject, "transport_epoch": 3},
+    ],
     "steps": steps,
 }
 pathlib.Path(sys.argv[1]).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+  validate_evidence
+  cp "$EVIDENCE_JSON" "$OUT_DIR/valid-resume-evidence.json"
+  python3 - "$EVIDENCE_JSON" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+evidence = json.loads(path.read_text(encoding="utf-8"))
+evidence["transport_resume"]["new_peer_connection"] = False
+path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+PY
+  if validate_evidence >/dev/null 2>&1; then
+    echo "frontend browser lifecycle self-test accepted resume without a new PeerConnection" >&2
+    exit 1
+  fi
+  cp "$OUT_DIR/valid-resume-evidence.json" "$EVIDENCE_JSON"
   validate_evidence
   echo "frontend-remoteapp-browser-lifecycle-e2e self-test ok"
   exit 0

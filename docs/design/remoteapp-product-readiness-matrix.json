@@ -235,6 +235,8 @@
         "host-remoteapp-session-cancel-e2e.sh creates a live-target session through the CLI, invokes public remote_desktop.end_session with user_cancelled, observes the closed state through public show_session, and verifies repeated end_session preserves the original cancel terminal receipt",
         "host-remoteapp-permission-revoke-e2e.sh creates a live-target session and waits for real platform permission revoke evidence before accepting public show_session projection of target_permission_revoked, revoked consent, ordered TARGET_PERMISSION_REVOKED/MEDIA_SOURCE_LOST/SESSION_CLOSED events, and terminal receipt binding",
         "host-remoteapp-session-resume-e2e.sh creates a short-lease session, invokes public remote_desktop.refresh_lease, waits past the original lease, validates the same non-terminal session through public show_session, and closes it with resume_e2e_cleanup",
+        "host-remoteapp-session-resume-e2e.sh is lease-refresh survival evidence only and cannot satisfy browser transport resume",
+        "frontend-remoteapp-browser-lifecycle-e2e.sh has an opt-in real browser transport-resume path requiring external disconnect/reconnect commands and same-session survival, old PeerConnection retirement, a newer daemon-issued transport epoch, a new connected PeerConnection, watch_events reattachment, decoded media after resume, and unchanged input authority",
         "2026-08-23 local macOS window lifecycle live artifacts passed: target/e2e/host-remoteapp-session-timeout/20260823-live-window-causal-222646-11519/report.md, target/e2e/host-remoteapp-session-cancel/20260823-live-window-causal-222700-12564/report.md, target/e2e/host-remoteapp-session-resume/20260823-live-window-stable-222830-19233/report.md",
         "2026-08-23 local macOS application lifecycle live artifacts passed: target/e2e/host-remoteapp-session-timeout/20260823-live-application-causal-222846-20408/report.md, target/e2e/host-remoteapp-session-cancel/20260823-live-application-causal-222859-21255/report.md, target/e2e/host-remoteapp-session-resume/20260823-live-application-stable-222859-21261/report.md",
         "frontend retains closed end_session views with terminal_receipt while clearing session tokens",
@@ -259,7 +261,7 @@
       ],
       "required_evidence_before_product_complete": [
         "long-outage and network transport reconnect handoff E2E",
-        "browser/WebRTC rebind E2E after daemon-session lease refresh",
+        "live Browser/Tauri transport-resume artifact using real disconnect/reconnect commands and proving new PeerConnection, newer daemon transport epoch, watch_events reattachment, decoded frames, and input after resume",
         "live consent revoke termination E2E pass report from a real host permission revoke",
         "canonical Axon cancel/timeout receipt-chain evidence for RemoteApp abilities",
         "live remoteapp-crash-restart-recovery-e2e.sh artifact",
@@ -274,6 +276,8 @@
       ],
       "non_claims": [
         "taxonomy and unit coverage do not prove recovery product behavior",
+        "lease refresh and same-session show_session survival do not prove WebRTC media or input transport recovery",
+        "the browser transport-resume verifier self-test does not prove a live network disconnect/reconnect",
         "the crash/restart recovery verifier self-test does not prove live process recovery",
         "Stage 1 startup rehydration, startup expiry settlement, target monitor re-registration, and new media epoch admission do not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
       ]
