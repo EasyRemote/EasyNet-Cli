@@ -1,7 +1,7 @@
 schema_version = "3"
 name = "fs.transfer"
 descriptor_version = "1.0.0"
-description = "Bidirectional file transfer between the operator and this device's filesystem through a revalidated RFC-005 filesystem ResourceRef. mode=\"upload\" requires write capability and streams client→file with atomic rename + SHA-256; mode=\"download\" requires read capability and streams file→client with on-the-fly hashing. Per-call byte cap 1 GiB."
+description = "Bidirectional file transfer between the operator and this device's filesystem through a revalidated RFC-005 filesystem ResourceRef. mode=\"upload\" requires write capability and streams client→file with atomic commit, explicit overwrite, and expected size/SHA-256 verification; mode=\"download\" requires read capability and streams file→client with on-the-fly hashing. Per-call byte cap 1 GiB."
 exposure = "task"
 dedicated_surface = "file_transfer"
 subject_contract_kind = "dedicated-surface"
@@ -23,9 +23,25 @@ type = "object"
 required = ["mode", "resource_ref"]
 additionalProperties = false
 
+[input_schema.properties.expected_bytes]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.expected_sha256]
+type = "string"
+pattern = "^[0-9a-fA-F]{64}$"
+
+[input_schema.properties.max_bytes]
+type = "integer"
+minimum = 1
+maximum = 1073741824
+
 [input_schema.properties.mode]
 type = "string"
 enum = ["upload", "download"]
+
+[input_schema.properties.overwrite]
+type = "boolean"
 
 [input_schema.properties.resource_ref]
 type = "object"

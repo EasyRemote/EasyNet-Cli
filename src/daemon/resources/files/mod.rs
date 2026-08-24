@@ -215,6 +215,34 @@ pub(crate) fn resource_ref_for_target_tmp_relative_path(
         .resource_ref_for_target_tmp_relative_path(relative_path, capability)
 }
 
+/// Mint a target-owned filesystem ResourceRef from the stable absolute
+/// virtual-path grammar used by operator copy commands.
+///
+/// `/workspace`, `/tmp`, and `/home` are capability roots, not ambient raw
+/// host paths. The target daemon re-resolves the selected root locally and
+/// rejects traversal or owner mismatch before touching bytes.
+pub(crate) fn resource_ref_for_target_absolute_virtual_path(
+    absolute_path: &str,
+    capability: FilesystemResourceCapability,
+    owner_ura: &str,
+) -> Result<Value> {
+    let path = absolute_path.trim();
+    let (virtual_root, relative_path) = [
+        (VIRTUAL_ROOT_WORKSPACE, "/workspace/"),
+        (VIRTUAL_ROOT_TMP, "/tmp/"),
+        (VIRTUAL_ROOT_HOME, "/home/"),
+    ]
+    .into_iter()
+    .find_map(|(root, prefix)| path.strip_prefix(prefix).map(|relative| (root, relative)))
+    .ok_or_else(|| anyhow!("remote path {path:?} must be under /workspace, /tmp, or /home"))?;
+    validate_relative_path(relative_path)?;
+    FilesystemResourceProvider::for_device(owner_ura.to_string())?.resource_ref_for_virtual_path(
+        virtual_root,
+        relative_path,
+        capability,
+    )
+}
+
 fn resolve_filesystem_path_for_owner(
     args: &Value,
     requested_capability: FilesystemResourceCapability,
@@ -962,6 +990,34 @@ mod tests {
         .expect_err("target tmp ResourceRef must reject traversal");
 
         assert!(err.to_string().contains("traversal"), "{err}");
+    }
+
+    #[test]
+    fn absolute_virtual_path_projects_without_exposing_raw_host_root() {
+        let owner = crate::core::ura::device_ura("acme", "remote-dev");
+        let reference = resource_ref_for_target_absolute_virtual_path(
+            "/home/docs/report.txt",
+            FilesystemResourceCapability::Write,
+            &owner,
+        )
+        .unwrap();
+        assert_eq!(reference["owner_ura"], owner);
+        assert_eq!(reference["display_path"], "home/docs/report.txt");
+        assert!(reference["resource_ura"]
+            .as_str()
+            .unwrap()
+            .ends_with("/resource/device.remote-dev/fs/home/docs/report.txt"));
+    }
+
+    #[test]
+    fn absolute_virtual_path_rejects_ambient_host_paths() {
+        let error = resource_ref_for_target_absolute_virtual_path(
+            "/etc/passwd",
+            FilesystemResourceCapability::Read,
+            &crate::core::ura::device_ura("acme", "remote-dev"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("/workspace, /tmp, or /home"));
     }
 
     #[cfg(unix)]

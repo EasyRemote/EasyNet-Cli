@@ -145,8 +145,16 @@ fn open_handler_with_provider(
         mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
 
     match parsed.mode {
-        Mode::Upload => spawn_upload(parsed.target, xport_to_handler_rx, xport_from_handler_tx),
-        Mode::Download => spawn_download(parsed.target, xport_from_handler_tx),
+        Mode::Upload => spawn_upload(
+            parsed.target,
+            parsed.overwrite,
+            parsed.max_bytes,
+            parsed.expected_sha256,
+            parsed.expected_bytes,
+            xport_to_handler_rx,
+            xport_from_handler_tx,
+        ),
+        Mode::Download => spawn_download(parsed.target, parsed.max_bytes, xport_from_handler_tx),
     }
 
     Ok(BidiSource {
@@ -165,6 +173,10 @@ enum Mode {
 struct ParsedArgs {
     mode: Mode,
     target: TransferTarget,
+    overwrite: bool,
+    max_bytes: u64,
+    expected_sha256: Option<String>,
+    expected_bytes: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -205,8 +217,61 @@ impl ParsedArgs {
         let target = filesystem
             .resolve_filesystem_path_without_existing_target(args, capability)
             .map(TransferTarget::from_resolved)?;
-        Ok(Self { mode, target })
+        let overwrite = optional_bool(args, "overwrite")?.unwrap_or(false);
+        let max_bytes = optional_u64(args, "max_bytes")?.unwrap_or(FILE_TRANSFER_BYTE_CAP);
+        if max_bytes == 0 || max_bytes > FILE_TRANSFER_BYTE_CAP {
+            anyhow::bail!("`max_bytes` must be between 1 and {FILE_TRANSFER_BYTE_CAP}");
+        }
+        let expected_sha256 = args
+            .get("expected_sha256")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| {
+                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                    .map(str::to_ascii_lowercase)
+                    .ok_or_else(|| anyhow::anyhow!("`expected_sha256` must be 64 hex characters"))
+            })
+            .transpose()?;
+        let expected_bytes = optional_u64(args, "expected_bytes")?;
+        if mode == Mode::Download
+            && (overwrite || expected_sha256.is_some() || expected_bytes.is_some())
+        {
+            anyhow::bail!(
+                "download mode does not accept overwrite, expected_sha256, or expected_bytes"
+            );
+        }
+        Ok(Self {
+            mode,
+            target,
+            overwrite,
+            max_bytes,
+            expected_sha256,
+            expected_bytes,
+        })
     }
+}
+
+fn optional_bool(args: &Value, field: &str) -> anyhow::Result<Option<bool>> {
+    args.get(field)
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| anyhow::anyhow!("`{field}` must be a boolean"))
+        })
+        .transpose()
+}
+
+fn optional_u64(args: &Value, field: &str) -> anyhow::Result<Option<u64>> {
+    args.get(field)
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("`{field}` must be an unsigned integer"))
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -234,6 +299,10 @@ fn test_filesystem() -> filesystem::FilesystemResourceProvider {
 /// `{type:"complete"}`. On error, emit `{type:"error"}` and bail.
 fn spawn_upload(
     target: TransferTarget,
+    overwrite: bool,
+    max_bytes: u64,
+    expected_sha256: Option<String>,
+    expected_bytes: Option<u64>,
     mut from_client: mpsc::Receiver<Value>,
     to_client: mpsc::Sender<BidiOutputFrame>,
 ) {
@@ -308,11 +377,11 @@ fn spawn_upload(
             match UploadClientFrame::parse(frame) {
                 Ok(UploadClientFrame::Chunk(bytes)) => {
                     total = total.saturating_add(bytes.len() as u64);
-                    if total > FILE_TRANSFER_BYTE_CAP {
+                    if total > max_bytes {
                         emit_error(
                             &to_client,
                             "byte_cap_exceeded",
-                            &format!("upload exceeds {} byte cap", FILE_TRANSFER_BYTE_CAP),
+                            &format!("upload exceeds {max_bytes} byte limit"),
                         )
                         .await;
                         let _ = std::fs::remove_file(&staging);
@@ -349,13 +418,47 @@ fn spawn_upload(
         }
         drop(file);
 
-        if let Err(e) = std::fs::rename(&staging, &path) {
-            emit_error(&to_client, "io_error", &format!("atomic rename: {e}")).await;
+        let sha = hex_lower(&hasher.finalize());
+        if expected_bytes.is_some_and(|expected| expected != total) {
+            emit_error(
+                &to_client,
+                "size_mismatch",
+                &format!("expected {expected_bytes:?} bytes, received {total}"),
+            )
+            .await;
+            let _ = std::fs::remove_file(&staging);
+            return;
+        }
+        if expected_sha256
+            .as_deref()
+            .is_some_and(|expected| expected != sha)
+        {
+            emit_error(
+                &to_client,
+                "hash_mismatch",
+                &format!("expected sha256 {expected_sha256:?}, received {sha}"),
+            )
+            .await;
             let _ = std::fs::remove_file(&staging);
             return;
         }
 
-        let sha = hex_lower(&hasher.finalize());
+        let commit = if overwrite {
+            std::fs::rename(&staging, &path)
+        } else {
+            std::fs::hard_link(&staging, &path).and_then(|()| std::fs::remove_file(&staging))
+        };
+        if let Err(e) = commit {
+            let code = if !overwrite && e.kind() == std::io::ErrorKind::AlreadyExists {
+                "destination_exists"
+            } else {
+                "atomic_commit_failed"
+            };
+            emit_error(&to_client, code, &format!("atomic commit: {e}")).await;
+            let _ = std::fs::remove_file(&staging);
+            return;
+        }
+
         let _ = to_client
             .send(BidiOutputFrame::terminal_json(json!({
                 "type": "complete",
@@ -432,7 +535,11 @@ fn reject_unknown_upload_frame_fields(
 /// Download pump: open the file, stream chunks, hash on the fly.
 /// On EOF emit `{type:"complete"}`. On error emit
 /// `{type:"error"}` and bail.
-fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFrame>) {
+fn spawn_download(
+    target: TransferTarget,
+    max_bytes: u64,
+    to_client: mpsc::Sender<BidiOutputFrame>,
+) {
     tokio::spawn(async move {
         let display_path = target.display_path;
         let path = target.path;
@@ -471,14 +578,14 @@ fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFram
             .await;
             return;
         }
-        if metadata.len() > FILE_TRANSFER_BYTE_CAP {
+        if metadata.len() > max_bytes {
             emit_target_error(
                 &to_client,
                 "byte_cap_exceeded",
                 &format!(
                     "file size {} exceeds {} byte cap",
                     metadata.len(),
-                    FILE_TRANSFER_BYTE_CAP
+                    max_bytes
                 ),
                 &display_path,
             )
@@ -635,6 +742,14 @@ pub fn input_schema() -> Value {
         "properties": {
             "mode": {"type": "string", "enum": ["upload", "download"]},
             "resource_ref": crate::daemon::resources::files::resource_ref_schema(),
+            "overwrite": {"type": "boolean"},
+            "max_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": FILE_TRANSFER_BYTE_CAP,
+            },
+            "expected_sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+            "expected_bytes": {"type": "integer", "minimum": 0},
         },
     })
 }
@@ -643,7 +758,7 @@ pub fn description() -> &'static str {
     "Bidirectional file transfer between the operator and this \
      device's filesystem through a revalidated RFC-005 filesystem \
      ResourceRef. mode=\"upload\" requires write capability and \
-     streams client→file with atomic rename + SHA-256; \
+     streams client→file with atomic commit, explicit overwrite, and expected size/SHA-256 verification; \
      mode=\"download\" requires read capability and streams \
      file→client with on-the-fly hashing. Per-call byte cap 1 GiB."
 }
@@ -818,6 +933,83 @@ mod tests {
         let _ = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
         assert!(path.exists(), "target must exist after eof + complete");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_requires_explicit_overwrite_and_preserves_existing_destination() {
+        let path = temp_path("existing.bin");
+        std::fs::write(&path, b"original").unwrap();
+        let source = open_handler(json!({
+            "mode": "upload",
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
+        }))
+        .unwrap();
+        let to_handler = source.to_client;
+        let mut from_handler = source.from_client;
+        to_handler
+            .send(json!({
+                "type": "chunk",
+                "data": base64::engine::general_purpose::STANDARD.encode(b"replacement"),
+            }))
+            .await
+            .unwrap();
+        to_handler.send(json!({"type": "eof"})).await.unwrap();
+        let frames = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
+        assert!(frames
+            .iter()
+            .any(|frame| frame["code"] == "destination_exists"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_hash_mismatch_never_commits_staging_file() {
+        let path = temp_path("hash-mismatch.bin");
+        let source = open_handler(json!({
+            "mode": "upload",
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
+            "expected_bytes": 3,
+            "expected_sha256": "00".repeat(32),
+        }))
+        .unwrap();
+        let to_handler = source.to_client;
+        let mut from_handler = source.from_client;
+        to_handler
+            .send(json!({
+                "type": "chunk",
+                "data": base64::engine::general_purpose::STANDARD.encode(b"abc"),
+            }))
+            .await
+            .unwrap();
+        to_handler.send(json!({"type": "eof"})).await.unwrap();
+        let frames = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
+        assert!(frames.iter().any(|frame| frame["code"] == "hash_mismatch"));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_honors_caller_narrowed_max_bytes() {
+        let path = temp_path("narrow-limit.bin");
+        let source = open_handler(json!({
+            "mode": "upload",
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
+            "max_bytes": 2,
+        }))
+        .unwrap();
+        let to_handler = source.to_client;
+        let mut from_handler = source.from_client;
+        to_handler
+            .send(json!({
+                "type": "chunk",
+                "data": base64::engine::general_purpose::STANDARD.encode(b"abc"),
+            }))
+            .await
+            .unwrap();
+        let frames = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
+        assert!(frames
+            .iter()
+            .any(|frame| frame["code"] == "byte_cap_exceeded"));
+        assert!(!path.exists());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
