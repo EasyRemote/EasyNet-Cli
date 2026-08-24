@@ -312,7 +312,7 @@ impl RemoteDesktopSessionStore {
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(in crate::daemon::plugins::remote_desktop) fn fail_pending_media_rebind_for_session(
+    pub(in crate::daemon::plugins::remote_desktop) fn supersede_pending_media_rebind_for_session(
         &self,
         session_id: &str,
         epoch: TransportEpoch,
@@ -323,7 +323,7 @@ impl RemoteDesktopSessionStore {
         let Some(session) = sessions.get_mut(session_id) else {
             return false;
         };
-        session.fail_pending_media_rebind(epoch, reason, detail)
+        session.supersede_pending_media_rebind(epoch, reason, detail)
     }
 
     /// Mark a direct WebRTC endpoint failed for one non-terminal session.

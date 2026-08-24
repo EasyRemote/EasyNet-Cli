@@ -370,6 +370,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
     Ok(target)
 }
 
+/// Resolve a replacement application generation from a non-atomic host
+/// observation. The observer proposes the exact application/window identity;
+/// ScreenCaptureKit owns the layout proof that is committed with capture.
+pub(in crate::daemon::plugins::remote_desktop) fn target_for_pending_application_rebind(
+    ability: &'static str,
+    binding: &RemoteAppTargetBinding,
+) -> Result<ScreenCaptureKitTarget, RemoteAppTargetError> {
+    if binding.target_kind() != RemoteDesktopTargetKind::Application {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::UnsupportedCaptureScope,
+            "pending ScreenCaptureKit media rebind is application-scoped",
+        ));
+    }
+    let target = resolve_target_for_binding(ability, binding)?;
+    binding.validate_pending_media_rebind_capture_proof(ability, target.capture_proof())?;
+    Ok(target)
+}
+
 pub(in crate::daemon::plugins::remote_desktop) fn capture_jpeg_for_binding(
     ability: &'static str,
     binding: &RemoteAppTargetBinding,

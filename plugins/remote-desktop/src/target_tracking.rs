@@ -1000,6 +1000,65 @@ impl RemoteAppTargetBindingStateMachine {
         Some(TargetTrackingEmission::single("TARGET_REBOUND", payload))
     }
 
+    /// Reject a stale replacement candidate without invalidating the capture
+    /// generation that is still committed and sending media. Application
+    /// observations and ScreenCaptureKit preparation are non-atomic; a failed
+    /// candidate is not evidence that the active target disappeared.
+    pub(in crate::daemon::plugins::remote_desktop) fn supersede_pending_media_rebind(
+        &mut self,
+        candidate_rejection_reason: TargetResolutionError,
+        detail: String,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        if self.snapshot.status != TargetBindingPhase::Rebinding {
+            return None;
+        }
+        let pending = self.pending_media_rebind.take()?;
+        let rebind_started_at_ms = self
+            .rebind_started_at_ms
+            .take()
+            .or(Some(pending.observed_at_ms));
+        self.snapshot.status = TargetBindingPhase::Resolved;
+        self.rebind_failure_emitted = false;
+        self.snapshot.diagnostic = self.diagnostic_projection(
+            "resolved",
+            Value::Null,
+            "target_rebind_candidate_superseded",
+            observed_at_ms,
+        );
+        let payload = self.with_event_target_context(json!({
+            "subject_ura": self.binding.subject_ura(),
+            "binding_id": self.snapshot.binding_id,
+            "binding_epoch": self.snapshot.binding_epoch,
+            "previous_binding_epoch": pending.previous_binding_epoch,
+            "pending_binding_epoch": pending.binding.binding_epoch(),
+            "target_identity_epoch": self.snapshot.target_identity_epoch,
+            "previous_target_identity_epoch": pending.previous_target_identity_epoch,
+            "pending_target_identity_epoch": pending.binding.target_identity_epoch(),
+            "target_geometry_revision": self.snapshot.target_geometry_revision,
+            "previous_target_geometry_revision": pending.previous_target_geometry_revision,
+            "pending_target_geometry_revision": pending.binding.target_geometry_revision(),
+            "media_source_epoch": self.snapshot.media_source_epoch,
+            "previous_media_source_epoch": pending.previous_media_source_epoch,
+            "pending_media_source_epoch": pending.binding.media_source_epoch(),
+            "visibility_state": self.snapshot.visibility_state.as_str(),
+            "target_status": TargetBindingPhase::Resolved.as_str(),
+            "reason_code": "target_rebind_candidate_superseded",
+            "candidate_rejection_reason": candidate_rejection_reason.as_str(),
+            "detail": detail,
+            "recoverability": "continue",
+            "frontend_action": Value::Null,
+            "observed_at_ms": observed_at_ms,
+            "rebind_started_at_ms": rebind_started_at_ms,
+            "geometry": self.snapshot.geometry.to_value(),
+            "pending_geometry": pending.binding.geometry().to_value(),
+        }));
+        Some(TargetTrackingEmission::single(
+            "TARGET_REBIND_SUPERSEDED",
+            payload,
+        ))
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind_failed(
         &mut self,
         reason: TargetResolutionError,

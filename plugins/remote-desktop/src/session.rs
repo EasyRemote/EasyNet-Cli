@@ -628,7 +628,7 @@ impl RemoteDesktopSession {
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(in crate::daemon::plugins::remote_desktop) fn fail_pending_media_rebind(
+    pub(in crate::daemon::plugins::remote_desktop) fn supersede_pending_media_rebind(
         &mut self,
         epoch: TransportEpoch,
         reason: TargetResolutionError,
@@ -639,11 +639,13 @@ impl RemoteDesktopSession {
         }
         let Some(event) = self
             .target
-            .commit_pending_media_rebind_failed(reason, detail, now_ms())
+            .supersede_pending_media_rebind(reason, detail, now_ms())
         else {
             return false;
         };
         self.lifecycle.reject_rebinding();
+        self.lifecycle.start_media();
+        self.reconcile_lifecycle();
         self.touch();
         self.push_target_tracking_event(event);
         true
@@ -3019,7 +3021,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_media_rebind_failure_rejects_session_rebinding() {
+    fn pending_media_rebind_candidate_failure_restores_active_session() {
         let mut session = RemoteDesktopSession::new(test_application_session_init(
             "rd-media-rebind-filter-failed",
             vec!["webrtc".into()],
@@ -3080,7 +3082,7 @@ mod tests {
             RemoteDesktopSessionPhase::Rebinding
         );
 
-        assert!(session.fail_pending_media_rebind(
+        assert!(session.supersede_pending_media_rebind(
             epoch,
             TargetResolutionError::ScreenCaptureKitFilterFailed,
             "native content filter rejected pending application window set".to_string(),
@@ -3088,69 +3090,74 @@ mod tests {
 
         assert_eq!(
             session.lifecycle_phase(),
-            RemoteDesktopSessionPhase::Suspended
+            RemoteDesktopSessionPhase::MediaActive
         );
-        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(session.state(), RemoteDesktopState::Negotiating);
         assert_eq!(
             session.target_tracking_state()["status"],
-            json!("lost"),
-            "target projection must terminate rebind instead of remaining stuck in rebinding"
+            json!("resolved"),
+            "a stale candidate must restore the still-committed target"
         );
         assert!(session.pending_media_rebind_binding().is_none());
         let events = session.events();
-        let rebind_failed = events
+        let rebind_superseded = events
             .iter()
-            .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
-            .expect("pending media rebind failure emits target lifecycle failure");
+            .find(|event| event["event_type"] == json!("TARGET_REBIND_SUPERSEDED"))
+            .expect("stale candidate emits a non-terminal lifecycle event");
         assert_eq!(
-            rebind_failed["reason_code"],
+            rebind_superseded["reason_code"],
+            json!("target_rebind_candidate_superseded")
+        );
+        assert_eq!(
+            rebind_superseded["payload"]["candidate_rejection_reason"],
             json!("screencapturekit_filter_failed")
         );
-        assert_eq!(rebind_failed["payload"]["failure_domain"], json!("target"));
         assert_eq!(
-            rebind_failed["payload"]["frontend_action"],
-            json!("show_unsupported")
+            rebind_superseded["payload"]["recoverability"],
+            json!("continue")
         );
-        assert_eq!(rebind_failed["payload"]["target_status"], json!("lost"));
-        assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+        assert!(rebind_superseded["payload"]["frontend_action"].is_null());
         assert_eq!(
-            rebind_failed["binding_epoch"],
+            rebind_superseded["binding_epoch"],
             json!(original_binding_epoch)
         );
         assert_eq!(
-            rebind_failed["target_identity_epoch"],
+            rebind_superseded["target_identity_epoch"],
             json!(original_identity_epoch)
         );
         assert_eq!(
-            rebind_failed["media_source_epoch"],
+            rebind_superseded["media_source_epoch"],
             json!(original_media_source_epoch)
         );
         assert_eq!(
-            rebind_failed["payload"]["pending_binding_epoch"],
+            rebind_superseded["payload"]["pending_binding_epoch"],
             json!(pending.binding_epoch())
         );
         assert_eq!(
-            rebind_failed["payload"]["pending_target_identity_epoch"],
+            rebind_superseded["payload"]["pending_target_identity_epoch"],
             json!(pending.target_identity_epoch())
         );
         assert_eq!(
-            rebind_failed["payload"]["pending_media_source_epoch"],
+            rebind_superseded["payload"]["pending_media_source_epoch"],
             json!(pending.media_source_epoch())
         );
-        assert_target_tracking_payload_context(rebind_failed, &session);
+        assert_target_tracking_payload_context(rebind_superseded, &session);
         assert_eq!(
-            rebind_failed["payload"]["target_binding"]["binding_epoch"],
+            rebind_superseded["payload"]["target_binding"]["binding_epoch"],
             json!(original_binding_epoch),
             "current binding context must not be overwritten by pending rebind evidence"
         );
         assert_eq!(
-            rebind_failed["payload"]["target_binding"]["media_source_epoch"],
+            rebind_superseded["payload"]["target_binding"]["media_source_epoch"],
             json!(original_media_source_epoch),
-            "failed pending media rebind keeps the committed media source context"
+            "superseded media rebind keeps the committed media source context"
         );
         assert_eq!(
-            rebind_failed["event_type_proto"],
+            rebind_superseded["event_type_proto"],
             json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
         );
+        assert!(events
+            .iter()
+            .all(|event| event["event_type"] != json!("MEDIA_SOURCE_LOST")));
     }
 }

@@ -29,7 +29,8 @@ use crate::daemon::plugins::remote_desktop::screencapturekit_audio::{
     REMOTEAPP_AUDIO_SAMPLE_RATE_HZ,
 };
 use crate::daemon::plugins::remote_desktop::screencapturekit_capture::{
-    target_for_binding, CapturedFrame, ScreenCaptureKitSinks, ScreenCaptureKitStream,
+    target_for_binding, target_for_pending_application_rebind, CapturedFrame,
+    ScreenCaptureKitSinks, ScreenCaptureKitStream,
 };
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -879,11 +880,22 @@ fn apply_pending_media_rebind(
     ) else {
         return Ok(active_media_source_epoch);
     };
-    let next_target = target_for_binding(ABILITY_SET_DESCRIPTION, &next_binding)
-        .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
-    let prepared = capture
-        .prepare_content_filter_update(ABILITY_SET_DESCRIPTION, next_target)
-        .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
+    let next_target =
+        match target_for_pending_application_rebind(ABILITY_SET_DESCRIPTION, &next_binding) {
+            Ok(target) => target,
+            Err(err) => {
+                supersede_pending_media_rebind(sessions, session_id, epoch, &err);
+                return Ok(active_media_source_epoch);
+            }
+        };
+    let prepared = match capture.prepare_content_filter_update(ABILITY_SET_DESCRIPTION, next_target)
+    {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            supersede_pending_media_rebind(sessions, session_id, epoch, &err);
+            return Ok(active_media_source_epoch);
+        }
+    };
     if capture.commit_prepared_content_filter_update(prepared, |capture_proof| {
         sessions.commit_pending_media_rebind_for_session(
             session_id,
@@ -899,19 +911,18 @@ fn apply_pending_media_rebind(
     }
 }
 
-fn fail_pending_media_rebind(
+fn supersede_pending_media_rebind(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
     epoch: TransportEpoch,
     err: &RemoteAppTargetError,
-) -> RemoteAppTargetError {
-    sessions.fail_pending_media_rebind_for_session(
+) {
+    sessions.supersede_pending_media_rebind_for_session(
         session_id,
         epoch,
         err.reason(),
         err.to_string(),
     );
-    err.clone()
 }
 
 #[cfg(test)]
@@ -932,7 +943,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_application_session_init;
 
     #[test]
-    fn native_media_rebind_failure_projects_typed_target_lifecycle() {
+    fn native_media_rebind_candidate_failure_preserves_active_generation() {
         let store = RemoteDesktopSessionStore::new();
         let session_id = "rd-native-media-rebind-filter-failed";
         let epoch = TransportEpoch::new(31);
@@ -987,34 +998,40 @@ mod tests {
             TargetResolutionError::ScreenCaptureKitFilterFailed,
             "native content filter rejected pending application window set",
         );
-        let returned = fail_pending_media_rebind(&store, session_id, epoch, &err);
+        supersede_pending_media_rebind(&store, session_id, epoch, &err);
 
-        assert_eq!(
-            returned.reason(),
-            TargetResolutionError::ScreenCaptureKitFilterFailed
-        );
         store.with_sessions(|sessions| {
             let session = sessions.get(session_id).expect("session stored");
-            assert_eq!(session.target_tracking_state()["status"], json!("lost"));
+            assert_eq!(session.target_tracking_state()["status"], json!("resolved"));
+            assert_eq!(
+                session.target_binding().media_source_epoch(),
+                pending.media_source_epoch() - 1,
+                "the committed media generation remains active"
+            );
             assert!(session.pending_media_rebind_binding().is_none());
             let event = session
                 .events()
                 .into_iter()
-                .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
-                .expect("target rebind failure event");
+                .find(|event| event["event_type"] == json!("TARGET_REBIND_SUPERSEDED"))
+                .expect("target rebind superseded event");
             assert_eq!(
                 event["reason_code"],
+                json!("target_rebind_candidate_superseded")
+            );
+            assert_eq!(
+                event["payload"]["candidate_rejection_reason"],
                 json!("screencapturekit_filter_failed")
             );
-            assert_eq!(event["payload"]["failure_domain"], json!("target"));
-            assert_eq!(
-                event["payload"]["frontend_action"],
-                json!("show_unsupported")
-            );
+            assert_eq!(event["payload"]["recoverability"], json!("continue"));
+            assert!(event["payload"]["frontend_action"].is_null());
             assert_eq!(
                 event["payload"]["pending_media_source_epoch"],
                 json!(pending.media_source_epoch())
             );
+            assert!(session
+                .events()
+                .iter()
+                .all(|event| event["event_type"] != json!("MEDIA_SOURCE_LOST")));
         });
     }
 

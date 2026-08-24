@@ -1103,7 +1103,8 @@ impl ResolvedCaptureTargetProof {
                 };
             match phase {
                 CaptureProofValidationPhase::InitialCommit => {}
-                CaptureProofValidationPhase::ReverifyCommitted => {
+                CaptureProofValidationPhase::PendingMediaRebind
+                | CaptureProofValidationPhase::ReverifyCommitted => {
                     let expected = binding.app_window_set.as_ref().ok_or_else(|| {
                         RemoteAppTargetError::new(
                             ability,
@@ -1122,7 +1123,9 @@ impl ResolvedCaptureTargetProof {
                             ),
                         ));
                     }
-                    if actual_surface_layout != binding.app_surface_layout.as_ref() {
+                    if phase == CaptureProofValidationPhase::ReverifyCommitted
+                        && actual_surface_layout != binding.app_surface_layout.as_ref()
+                    {
                         return Err(RemoteAppTargetError::new(
                             ability,
                             TargetResolutionError::TargetIdentityChanged,
@@ -1170,6 +1173,8 @@ impl ResolvedCaptureTargetProof {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureProofValidationPhase {
     InitialCommit,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    PendingMediaRebind,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     ReverifyCommitted,
 }
@@ -1797,6 +1802,23 @@ impl RemoteAppTargetBinding {
             ));
         }
         Ok(())
+    }
+
+    /// Validate a replacement application generation without treating the
+    /// observer's surface geometry snapshot as capture-provider authority.
+    /// Application identity and the exact window-id set stay closed; the
+    /// ScreenCaptureKit layout proof is committed with the prepared generation.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(in crate::daemon::plugins::remote_desktop) fn validate_pending_media_rebind_capture_proof(
+        &self,
+        ability: &'static str,
+        proof: &ResolvedCaptureTargetProof,
+    ) -> Result<(), RemoteAppTargetError> {
+        proof.validate_for_binding(
+            ability,
+            self,
+            CaptureProofValidationPhase::PendingMediaRebind,
+        )
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn supports_xcap_adapter(&self) -> bool {
@@ -3577,6 +3599,95 @@ mod tests {
         let err = binding
             .validate_reverified_capture_proof("remote_desktop.set_description", &drifted_proof)
             .expect_err("application media proof must fail when the live window set drifts");
+        assert_eq!(err.reason(), TargetResolutionError::TargetIdentityChanged);
+    }
+
+    #[test]
+    fn pending_application_rebind_accepts_provider_layout_for_exact_window_set() {
+        let resolver = ResourceEntryTargetResolver;
+        let expected_window_set = AppWindowSetProof::new(
+            42,
+            Some("com.example.Editor".to_string()),
+            Some(9001),
+            vec![10, 11],
+        );
+        let binding = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    live_metadata(json!({
+                        "display_id": 42,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11],
+                        "window_set_epoch": expected_window_set.window_set_epoch,
+                        "target_identity_epoch": expected_window_set.window_set_epoch,
+                    })),
+                ),
+                "view_only",
+                1,
+            )
+            .expect("application binding");
+
+        let provider_geometries = [
+            (
+                10,
+                TargetGeometry {
+                    x: Some(0.0),
+                    y: Some(0.0),
+                    width: Some(800.0),
+                    height: Some(600.0),
+                },
+            ),
+            (
+                11,
+                TargetGeometry {
+                    x: Some(120.0),
+                    y: Some(80.0),
+                    width: Some(640.0),
+                    height: Some(480.0),
+                },
+            ),
+        ];
+        let provider_layout = AppSurfaceLayoutProof::from_front_to_back_geometries(
+            provider_geometries
+                .iter()
+                .map(|(window_id, geometry)| (*window_id, geometry)),
+        )
+        .expect("provider layout");
+        let proof = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Application,
+        )
+        .with_native_identity(
+            Some(42),
+            None,
+            Some(9001),
+            Some("com.example.Editor".to_string()),
+            Some("com.example.Editor".to_string()),
+        )
+        .with_native_dimensions(Some((1440, 900)))
+        .with_app_window_set(expected_window_set.clone())
+        .with_app_surface_layout(provider_layout);
+
+        binding
+            .validate_pending_media_rebind_capture_proof("remote_desktop.set_description", &proof)
+            .expect("provider layout is authoritative while exact window identity remains closed");
+
+        let wrong_window_set = proof.clone().with_app_window_set(AppWindowSetProof::new(
+            42,
+            Some("com.example.Editor".to_string()),
+            Some(9001),
+            vec![10, 12],
+        ));
+        let err = binding
+            .validate_pending_media_rebind_capture_proof(
+                "remote_desktop.set_description",
+                &wrong_window_set,
+            )
+            .expect_err("different window ids remain identity drift");
         assert_eq!(err.reason(), TargetResolutionError::TargetIdentityChanged);
     }
 
