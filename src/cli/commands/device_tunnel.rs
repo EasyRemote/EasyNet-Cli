@@ -18,11 +18,13 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use anyhow::Context;
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
+
+use crate::support::platform::tunnel_codec::{decode_multiplexed_data, encode_multiplexed_data};
 
 const TUNNEL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TCP_CHUNK_BYTES: usize = 64 * 1024;
+const REVERSE_WRITE_QUEUE_BOUND: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ForwardSpec {
@@ -235,6 +237,9 @@ impl TunnelClient {
             .recv()
             .await?
             .ok_or_else(|| anyhow::anyhow!("TUNNEL_INTERRUPTED: missing connected frame"))?;
+        let TunnelFrame::Control(first) = first else {
+            anyhow::bail!("TUNNEL_PROTOCOL_ERROR: expected connected control frame");
+        };
         match first["type"].as_str() {
             Some("connected") => {
                 let connection_id = required_frame_string(&first, "connection_id")?.to_string();
@@ -261,6 +266,12 @@ struct TunnelReceiver {
 }
 
 #[cfg(feature = "axon-pb")]
+enum TunnelFrame {
+    Control(Value),
+    Data(Vec<u8>),
+}
+
+#[cfg(feature = "axon-pb")]
 impl TunnelSession {
     fn new(session: crate::support::platform::bidi_session::DaemonBidiSession) -> Self {
         let (sender, receiver) = session.split();
@@ -271,23 +282,36 @@ impl TunnelSession {
     }
 
     async fn send(&mut self, value: Value) -> anyhow::Result<()> {
-        self.sender.send_json(&value).await
+        self.sender.send_control_json(&value).await
     }
 
-    async fn recv(&mut self) -> anyhow::Result<Option<Value>> {
+    async fn send_multiplexed_data(
+        &mut self,
+        connection_id: &str,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        self.sender
+            .send_binary(encode_multiplexed_data(connection_id, data)?)
+            .await
+    }
+
+    async fn recv(&mut self) -> anyhow::Result<Option<TunnelFrame>> {
         self.receiver.recv().await
     }
 }
 
 #[cfg(feature = "axon-pb")]
 impl TunnelReceiver {
-    async fn recv(&mut self) -> anyhow::Result<Option<Value>> {
+    async fn recv(&mut self) -> anyhow::Result<Option<TunnelFrame>> {
         loop {
             let Some(frame) = self.inner.recv().await? else {
                 return Ok(None);
             };
+            if let Some(binary) = frame.binary {
+                return Ok(Some(TunnelFrame::Data(binary.data)));
+            }
             if let Some(payload) = project_tunnel_frame(frame.payload, frame.terminal)? {
-                return Ok(Some(payload));
+                return Ok(Some(TunnelFrame::Control(payload)));
             }
         }
     }
@@ -382,7 +406,7 @@ async fn bridge_connected_stream(
             let read = local_reader.read(&mut buffer).await?;
             if read == 0 {
                 sender
-                    .send_json(&json!({
+                    .send_control_json(&json!({
                         "type": "half_close",
                         "connection_id": upstream_connection_id,
                         "direction": "write",
@@ -390,25 +414,19 @@ async fn bridge_connected_stream(
                     .await?;
                 return Ok::<_, anyhow::Error>(());
             }
-            sender
-                .send_json(&json!({
-                    "type": "data",
-                    "connection_id": upstream_connection_id,
-                    "data": BASE64_STANDARD.encode(&buffer[..read]),
-                }))
-                .await?;
+            sender.send_binary(buffer[..read].to_vec()).await?;
         }
     });
 
     while let Some(frame) = receiver.recv().await? {
-        match frame["type"].as_str() {
-            Some("data") => {
-                local_writer.write_all(&decode_data_frame(&frame)?).await?;
-            }
-            Some("half_close") => local_writer.shutdown().await?,
-            Some("complete") => break,
-            Some("error") => return Err(tunnel_error(&frame)),
-            other => anyhow::bail!("TUNNEL_PROTOCOL_ERROR: unexpected frame {other:?}"),
+        match frame {
+            TunnelFrame::Data(data) => local_writer.write_all(&data).await?,
+            TunnelFrame::Control(frame) => match frame["type"].as_str() {
+                Some("half_close") => local_writer.shutdown().await?,
+                Some("complete") => break,
+                Some("error") => return Err(tunnel_error(&frame)),
+                other => anyhow::bail!("TUNNEL_PROTOCOL_ERROR: unexpected frame {other:?}"),
+            },
         }
     }
     upstream.abort();
@@ -462,14 +480,10 @@ async fn run_stdio_tunnel(client: TunnelClient, host: &str, port: u16) -> anyhow
         tokio::select! {
             bytes = stdin_rx.recv(), if stdin_open => {
                 match bytes {
-                    Some(bytes) => sender.send_json(&json!({
-                        "type": "data",
-                        "connection_id": connection_id,
-                        "data": BASE64_STANDARD.encode(bytes),
-                    })).await?,
+                    Some(bytes) => sender.send_binary(bytes).await?,
                     None => {
                         stdin_open = false;
-                        sender.send_json(&json!({
+                        sender.send_control_json(&json!({
                             "type": "half_close",
                             "connection_id": connection_id,
                             "direction": "write",
@@ -479,21 +493,23 @@ async fn run_stdio_tunnel(client: TunnelClient, host: &str, port: u16) -> anyhow
             }
             frame = receiver.recv() => {
                 let Some(frame) = frame? else { break; };
-                match frame["type"].as_str() {
-                    Some("data") => stdout_tx
+                match frame {
+                    TunnelFrame::Data(data) => stdout_tx
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("TUNNEL_PROTOCOL_ERROR: data after remote half-close"))?
-                        .send(decode_data_frame(&frame)?)
+                        .send(data)
                         .map_err(|_| anyhow::anyhow!("OpenSSH proxy stdout closed"))?,
-                    Some("half_close") => {
-                        // Propagate remote TCP FIN to OpenSSH without ending the
-                        // tunnel Invocation. Its stdin half may still drain;
-                        // `complete` remains the receipt-backed terminal frame.
-                        stdout_tx.take();
-                    }
-                    Some("complete") => break,
-                    Some("error") => return Err(tunnel_error(&frame)),
-                    other => anyhow::bail!("TUNNEL_PROTOCOL_ERROR: unexpected frame {other:?}"),
+                    TunnelFrame::Control(frame) => match frame["type"].as_str() {
+                        Some("half_close") => {
+                            // Propagate remote TCP FIN to OpenSSH without ending the
+                            // tunnel Invocation. Its stdin half may still drain;
+                            // `complete` remains the receipt-backed terminal frame.
+                            stdout_tx.take();
+                        }
+                        Some("complete") => break,
+                        Some("error") => return Err(tunnel_error(&frame)),
+                        other => anyhow::bail!("TUNNEL_PROTOCOL_ERROR: unexpected frame {other:?}"),
+                    },
                 }
             }
         }
@@ -521,9 +537,13 @@ enum ReverseCommand {
 }
 
 #[cfg(feature = "axon-pb")]
-async fn run_remote_forward(client: TunnelClient, spec: ForwardSpec) -> anyhow::Result<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+enum ReverseWriterCommand {
+    Data(Vec<u8>),
+    HalfClose,
+}
 
+#[cfg(feature = "axon-pb")]
+async fn run_remote_forward(client: TunnelClient, spec: ForwardSpec) -> anyhow::Result<()> {
     let local_destination =
         resolve_loopback_destination(&spec.destination_host, spec.destination_port).await?;
     let mut tunnel = client
@@ -537,6 +557,9 @@ async fn run_remote_forward(client: TunnelClient, spec: ForwardSpec) -> anyhow::
         .recv()
         .await?
         .ok_or_else(|| anyhow::anyhow!("TUNNEL_INTERRUPTED: missing listener_ready frame"))?;
+    let TunnelFrame::Control(ready) = ready else {
+        anyhow::bail!("TUNNEL_PROTOCOL_ERROR: expected listener_ready control frame");
+    };
     if ready["type"] == "error" {
         return Err(tunnel_error(&ready));
     }
@@ -551,59 +574,40 @@ async fn run_remote_forward(client: TunnelClient, spec: ForwardSpec) -> anyhow::
     );
 
     let (commands_tx, mut commands_rx) = tokio::sync::mpsc::channel(64);
-    let mut writers = std::collections::HashMap::new();
+    let mut writers =
+        std::collections::HashMap::<String, tokio::sync::mpsc::Sender<ReverseWriterCommand>>::new();
     loop {
         tokio::select! {
             frame = tunnel.recv() => {
                 let Some(frame) = frame? else { return Ok(()); };
-                match frame["type"].as_str() {
-                    Some("accepted") => {
-                        let connection_id = required_frame_string(&frame, "connection_id")?.to_string();
-                        match tokio::net::TcpStream::connect(local_destination).await {
-                            Ok(stream) => {
-                                let (mut reader, writer) = stream.into_split();
-                                writers.insert(connection_id.clone(), writer);
-                                let commands = commands_tx.clone();
-                                tokio::spawn(async move {
-                                    let mut buffer = vec![0_u8; TCP_CHUNK_BYTES];
-                                    loop {
-                                        match reader.read(&mut buffer).await {
-                                            Ok(0) => {
-                                                let _ = commands.send(ReverseCommand::HalfClose { connection_id }).await;
-                                                break;
-                                            }
-                                            Ok(read) => {
-                                                if commands.send(ReverseCommand::Data {
-                                                    connection_id: connection_id.clone(),
-                                                    data: buffer[..read].to_vec(),
-                                                }).await.is_err() { break; }
-                                            }
-                                            Err(_) => {
-                                                let _ = commands.send(ReverseCommand::Failed { connection_id }).await;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                            Err(error) => {
-                                eprintln!("reverse destination {local_destination} rejected: {error}");
+                match frame {
+                    TunnelFrame::Data(data) => {
+                        let (connection_id, payload) = decode_multiplexed_data(data)?;
+                        if let Some(writer) = writers.get(&connection_id) {
+                            if writer.try_send(ReverseWriterCommand::Data(payload)).is_err() {
+                                writers.remove(&connection_id);
                                 tunnel.send(json!({"type": "close", "connection_id": connection_id})).await?;
                             }
                         }
                     }
-                    Some("data") => {
-                        let connection_id = required_frame_string(&frame, "connection_id")?;
-                        if let Some(writer) = writers.get_mut(connection_id) {
-                            if writer.write_all(&decode_data_frame(&frame)?).await.is_err() {
-                                writers.remove(connection_id);
-                            }
-                        }
+                    TunnelFrame::Control(frame) => match frame["type"].as_str() {
+                    Some("accepted") => {
+                        let connection_id = required_frame_string(&frame, "connection_id")?.to_string();
+                        let (writer, commands) = tokio::sync::mpsc::channel(REVERSE_WRITE_QUEUE_BOUND);
+                        writers.insert(connection_id.clone(), writer);
+                        spawn_reverse_local_connection(
+                            connection_id,
+                            local_destination,
+                            commands,
+                            commands_tx.clone(),
+                        );
                     }
                     Some("half_close") => {
                         let connection_id = required_frame_string(&frame, "connection_id")?;
-                        if let Some(writer) = writers.get_mut(connection_id) {
-                            let _ = writer.shutdown().await;
+                        if let Some(writer) = writers.get(connection_id) {
+                            if writer.try_send(ReverseWriterCommand::HalfClose).is_err() {
+                                writers.remove(connection_id);
+                            }
                         }
                     }
                     Some("error") => {
@@ -616,17 +620,14 @@ async fn run_remote_forward(client: TunnelClient, spec: ForwardSpec) -> anyhow::
                     }
                     Some("complete") => return Ok(()),
                     other => anyhow::bail!("TUNNEL_PROTOCOL_ERROR: unexpected frame {other:?}"),
+                    },
                 }
             }
             command = commands_rx.recv() => {
                 let Some(command) = command else { continue; };
                 match command {
                     ReverseCommand::Data { connection_id, data } => {
-                        tunnel.send(json!({
-                            "type": "data",
-                            "connection_id": connection_id,
-                            "data": BASE64_STANDARD.encode(data),
-                        })).await?;
+                        tunnel.send_multiplexed_data(&connection_id, &data).await?;
                     }
                     ReverseCommand::HalfClose { connection_id } => {
                         tunnel.send(json!({
@@ -647,6 +648,81 @@ async fn run_remote_forward(client: TunnelClient, spec: ForwardSpec) -> anyhow::
             }
         }
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn spawn_reverse_local_connection(
+    connection_id: String,
+    destination: SocketAddr,
+    mut writer_commands: tokio::sync::mpsc::Receiver<ReverseWriterCommand>,
+    tunnel_commands: tokio::sync::mpsc::Sender<ReverseCommand>,
+) {
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let stream = match tokio::net::TcpStream::connect(destination).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!("reverse destination {destination} rejected: {error}");
+                let _ = tunnel_commands
+                    .send(ReverseCommand::Failed { connection_id })
+                    .await;
+                return;
+            }
+        };
+        let (mut reader, mut writer) = stream.into_split();
+        let mut buffer = vec![0_u8; TCP_CHUNK_BYTES];
+        let mut read_open = true;
+        let mut write_open = true;
+        loop {
+            tokio::select! {
+                read = reader.read(&mut buffer), if read_open => match read {
+                    Ok(0) => {
+                        read_open = false;
+                        if tunnel_commands.send(ReverseCommand::HalfClose {
+                            connection_id: connection_id.clone(),
+                        }).await.is_err() { break; }
+                    }
+                    Ok(read) => {
+                        if tunnel_commands.send(ReverseCommand::Data {
+                            connection_id: connection_id.clone(),
+                            data: buffer[..read].to_vec(),
+                        }).await.is_err() { break; }
+                    }
+                    Err(_) => {
+                        let _ = tunnel_commands.send(ReverseCommand::Failed {
+                            connection_id: connection_id.clone(),
+                        }).await;
+                        break;
+                    }
+                },
+                command = writer_commands.recv() => match command {
+                    Some(ReverseWriterCommand::Data(data)) if write_open => {
+                        if writer.write_all(&data).await.is_err() {
+                            let _ = tunnel_commands.send(ReverseCommand::Failed {
+                                connection_id: connection_id.clone(),
+                            }).await;
+                            break;
+                        }
+                    }
+                    Some(ReverseWriterCommand::HalfClose) if write_open => {
+                        write_open = false;
+                        if writer.shutdown().await.is_err() {
+                            let _ = tunnel_commands.send(ReverseCommand::Failed {
+                                connection_id: connection_id.clone(),
+                            }).await;
+                            break;
+                        }
+                    }
+                    Some(ReverseWriterCommand::Data(_)) | Some(ReverseWriterCommand::HalfClose) => {}
+                    None => break,
+                },
+            }
+            if !read_open && !write_open {
+                break;
+            }
+        }
+    });
 }
 
 #[cfg(feature = "axon-pb")]
@@ -761,12 +837,6 @@ fn required_frame_string<'a>(frame: &'a Value, field: &str) -> anyhow::Result<&'
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("TUNNEL_PROTOCOL_ERROR: frame omitted {field}"))
-}
-
-fn decode_data_frame(frame: &Value) -> anyhow::Result<Vec<u8>> {
-    BASE64_STANDARD
-        .decode(required_frame_string(frame, "data")?)
-        .context("TUNNEL_PROTOCOL_ERROR: invalid base64 data")
 }
 
 fn tunnel_error(frame: &Value) -> anyhow::Error {

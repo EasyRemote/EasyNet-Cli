@@ -15,3 +15,4 @@ pub(crate) mod remote_device;
 pub(crate) mod shutdown;
 pub(crate) mod sysinfo;
 pub(crate) mod timeouts;
+pub(crate) mod tunnel_codec;

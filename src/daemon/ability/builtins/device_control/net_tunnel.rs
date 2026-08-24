@@ -19,15 +19,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use base64::Engine;
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::daemon::ability::dispatch::{
-    AxonAbilityCatalog, BidiOutputFrame, BidiSource, OwnerKind, BIDI_CHANNEL_BOUND,
+    bidi_input_channel, AxonAbilityCatalog, BidiInputFrame, BidiOutputFrame, BidiSource, OwnerKind,
+    BIDI_CHANNEL_BOUND,
+};
+use crate::support::platform::tunnel_codec::{
+    decode_multiplexed_data, encode_multiplexed_data, TUNNEL_DATA_CONTENT_TYPE,
 };
 
 pub const ABILITY_NET_TUNNEL: &str = crate::daemon::ability::names::device_control::NET_TUNNEL;
@@ -38,6 +42,9 @@ const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_RATE_BYTES_PER_SECOND: u64 = 128 * 1024 * 1024;
+/// A slow socket may retain at most one MiB of queued payload (16 × 64 KiB).
+/// Saturation closes only that connection, preserving listener-wide fairness.
+const CONNECTION_WRITE_QUEUE_BOUND: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 struct TunnelPolicy {
@@ -191,7 +198,7 @@ pub fn register(registry: &mut AxonAbilityCatalog) {
 
 fn open(args: Value, policy: TunnelPolicy) -> anyhow::Result<BidiSource> {
     let request = TunnelOpen::parse(args, policy)?;
-    let (to_handler, from_transport) = mpsc::channel(BIDI_CHANNEL_BOUND);
+    let (to_handler, from_transport) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (to_transport, from_handler) = mpsc::channel(BIDI_CHANNEL_BOUND);
     match request {
         TunnelOpen::Connect {
@@ -224,7 +231,7 @@ fn spawn_connect(
     port: u16,
     connect_timeout: Duration,
     idle_timeout: Duration,
-    mut incoming: mpsc::Receiver<Value>,
+    mut incoming: mpsc::Receiver<BidiInputFrame>,
     outgoing: mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
@@ -268,7 +275,7 @@ fn spawn_connect(
         loop {
             enum Event {
                 Network(std::io::Result<usize>),
-                Client(Option<Value>),
+                Client(Option<BidiInputFrame>),
             }
             let event = tokio::time::timeout(idle_timeout, async {
                 tokio::select! {
@@ -304,11 +311,14 @@ fn spawn_connect(
                         emit_fatal_error(&outgoing, Some(&connection_id), code.to_string()).await;
                         return;
                     }
-                    if outgoing.send(BidiOutputFrame::json(json!({
-                        "type": "data",
-                        "connection_id": connection_id,
-                        "data": base64::engine::general_purpose::STANDARD.encode(&buffer[..read]),
-                    }))).await.is_err() {
+                    if outgoing
+                        .send(BidiOutputFrame::binary(
+                            buffer[..read].to_vec(),
+                            TUNNEL_DATA_CONTENT_TYPE,
+                        ))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -381,11 +391,17 @@ fn spawn_connect(
 }
 
 struct ListenerConnection {
-    writer: OwnedWriteHalf,
+    writer: mpsc::Sender<WriterCommand>,
+    cancel: CancellationToken,
     transferred: Arc<AtomicU64>,
     rate: Arc<Mutex<RateBudget>>,
     read_open: bool,
     write_open: bool,
+}
+
+enum WriterCommand {
+    Data(Vec<u8>),
+    HalfClose,
 }
 
 enum ReaderEvent {
@@ -393,11 +409,20 @@ enum ReaderEvent {
     Failed(String),
 }
 
+fn remove_listener_connection(
+    connections: &mut HashMap<String, ListenerConnection>,
+    connection_id: &str,
+) {
+    if let Some(connection) = connections.remove(connection_id) {
+        connection.cancel.cancel();
+    }
+}
+
 fn spawn_listener(
     policy: TunnelPolicy,
     bind: SocketAddr,
     idle_timeout: Duration,
-    mut incoming: mpsc::Receiver<Value>,
+    mut incoming: mpsc::Receiver<BidiInputFrame>,
     outgoing: mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
@@ -429,7 +454,7 @@ fn spawn_listener(
         }
 
         let (reader_event_tx, mut reader_events) = mpsc::channel(BIDI_CHANNEL_BOUND);
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let session_cancel = CancellationToken::new();
         let mut connections: HashMap<String, ListenerConnection> = HashMap::new();
         let mut last_activity = tokio::time::Instant::now();
         let mut idle_tick = tokio::time::interval(Duration::from_secs(1));
@@ -450,10 +475,13 @@ fn spawn_listener(
                     }
                     let connection_id = uuid::Uuid::new_v4().to_string();
                     let (reader, writer) = stream.into_split();
+                    let (writer_tx, writer_rx) = mpsc::channel(CONNECTION_WRITE_QUEUE_BOUND);
                     let transferred = Arc::new(AtomicU64::new(0));
                     let rate = Arc::new(Mutex::new(RateBudget::new()));
+                    let connection_cancel = session_cancel.child_token();
                     connections.insert(connection_id.clone(), ListenerConnection {
-                        writer,
+                        writer: writer_tx,
+                        cancel: connection_cancel.clone(),
                         transferred: Arc::clone(&transferred),
                         rate: Arc::clone(&rate),
                         read_open: true,
@@ -465,7 +493,15 @@ fn spawn_listener(
                         transferred,
                         rate,
                         policy,
-                        cancel_rx.clone(),
+                        connection_cancel.clone(),
+                        outgoing.clone(),
+                        reader_event_tx.clone(),
+                    );
+                    spawn_listener_writer(
+                        connection_id.clone(),
+                        writer,
+                        writer_rx,
+                        connection_cancel,
                         outgoing.clone(),
                         reader_event_tx.clone(),
                     );
@@ -479,15 +515,11 @@ fn spawn_listener(
                 }
                 frame = incoming.recv() => {
                     let Some(frame) = frame else { break; };
-                    let object = match frame.as_object() {
-                        Some(object) => object,
-                        None => {
-                            emit_fatal_error(&outgoing, None, "FRAME_SEQUENCE_ERROR: frame must be an object".to_string()).await;
-                            return;
-                        }
-                    };
-                    let connection_id = match required_string(object, "connection_id") {
-                        Ok(value) => value.to_string(),
+                    let (connection_id, parsed) = match ClientFrame::parse_multiplexed(
+                        frame,
+                        policy.max_frame_bytes,
+                    ) {
+                        Ok(value) => value,
                         Err(error) => {
                             emit_fatal_error(&outgoing, None, error.to_string()).await;
                             return;
@@ -497,11 +529,11 @@ fn spawn_listener(
                         emit_connection_error(&outgoing, Some(&connection_id), "FRAME_SEQUENCE_ERROR: unknown connection_id".to_string()).await;
                         continue;
                     };
-                    match ClientFrame::parse(frame, &connection_id, policy.max_frame_bytes) {
-                        Ok(ClientFrame::Data(data)) => {
+                    match parsed {
+                        ClientFrame::Data(data) => {
                             if !connection.write_open {
                                 emit_connection_error(&outgoing, Some(&connection_id), "FRAME_SEQUENCE_ERROR: data after write half-close".to_string()).await;
-                                connections.remove(&connection_id);
+                                remove_listener_connection(&mut connections, &connection_id);
                                 continue;
                             }
                             if let Err(code) = charge_connection(
@@ -511,25 +543,38 @@ fn spawn_listener(
                                 policy,
                             ) {
                                 emit_connection_error(&outgoing, Some(&connection_id), code.to_string()).await;
-                                connections.remove(&connection_id);
+                                remove_listener_connection(&mut connections, &connection_id);
                                 continue;
                             }
-                            if let Err(error) = connection.writer.write_all(&data).await {
-                                emit_connection_error(&outgoing, Some(&connection_id), format!("TUNNEL_IO_ERROR: {error}")).await;
-                                connections.remove(&connection_id);
+                            if let Err(error) = connection.writer.try_send(WriterCommand::Data(data)) {
+                                let code = match error {
+                                    mpsc::error::TrySendError::Full(_) => "CONNECTION_BACKPRESSURE: bounded writer queue is full",
+                                    mpsc::error::TrySendError::Closed(_) => "TUNNEL_IO_ERROR: connection writer is closed",
+                                };
+                                emit_connection_error(&outgoing, Some(&connection_id), code.to_string()).await;
+                                remove_listener_connection(&mut connections, &connection_id);
                             }
                         }
-                        Ok(ClientFrame::HalfClose) => {
+                        ClientFrame::HalfClose => {
                             if connection.write_open {
                                 connection.write_open = false;
-                                let _ = connection.writer.shutdown().await;
+                                if let Err(error) = connection.writer.try_send(WriterCommand::HalfClose) {
+                                    let code = match error {
+                                        mpsc::error::TrySendError::Full(_) => "CONNECTION_BACKPRESSURE: bounded writer queue is full",
+                                        mpsc::error::TrySendError::Closed(_) => "TUNNEL_IO_ERROR: connection writer is closed",
+                                    };
+                                    emit_connection_error(&outgoing, Some(&connection_id), code.to_string()).await;
+                                    remove_listener_connection(&mut connections, &connection_id);
+                                    continue;
+                                }
                             }
                             if !connection.read_open {
-                                connections.remove(&connection_id);
+                                remove_listener_connection(&mut connections, &connection_id);
                             }
                         }
-                        Ok(ClientFrame::Close) => { connections.remove(&connection_id); }
-                        Err(error) => emit_connection_error(&outgoing, Some(&connection_id), error.to_string()).await,
+                        ClientFrame::Close => {
+                            remove_listener_connection(&mut connections, &connection_id);
+                        }
                     }
                     last_activity = tokio::time::Instant::now();
                 }
@@ -539,13 +584,13 @@ fn spawn_listener(
                             if let Some(connection) = connections.get_mut(&connection_id) {
                                 connection.read_open = false;
                                 if !connection.write_open {
-                                    connections.remove(&connection_id);
+                                    remove_listener_connection(&mut connections, &connection_id);
                                 }
                             }
                             last_activity = tokio::time::Instant::now();
                         }
                         Some(ReaderEvent::Failed(connection_id)) => {
-                            connections.remove(&connection_id);
+                            remove_listener_connection(&mut connections, &connection_id);
                             last_activity = tokio::time::Instant::now();
                         }
                         None => {}
@@ -559,7 +604,7 @@ fn spawn_listener(
                 }
             }
         }
-        let _ = cancel_tx.send(true);
+        session_cancel.cancel();
         connections.clear();
         let _ = outgoing
             .send(BidiOutputFrame::terminal_json(json!({
@@ -570,13 +615,49 @@ fn spawn_listener(
     });
 }
 
+fn spawn_listener_writer(
+    connection_id: String,
+    mut writer: OwnedWriteHalf,
+    mut commands: mpsc::Receiver<WriterCommand>,
+    cancel: CancellationToken,
+    outgoing: mpsc::Sender<BidiOutputFrame>,
+    events: mpsc::Sender<ReaderEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            let command = tokio::select! {
+                command = commands.recv() => command,
+                _ = cancel.cancelled() => None,
+            };
+            let Some(command) = command else {
+                break;
+            };
+            let result = match command {
+                WriterCommand::Data(data) => writer.write_all(&data).await,
+                WriterCommand::HalfClose => writer.shutdown().await,
+            };
+            if let Err(error) = result {
+                cancel.cancel();
+                emit_connection_error(
+                    &outgoing,
+                    Some(&connection_id),
+                    format!("TUNNEL_IO_ERROR: {error}"),
+                )
+                .await;
+                let _ = events.send(ReaderEvent::Failed(connection_id)).await;
+                break;
+            }
+        }
+    });
+}
+
 fn spawn_listener_reader(
     connection_id: String,
     mut reader: OwnedReadHalf,
     transferred: Arc<AtomicU64>,
     rate: Arc<Mutex<RateBudget>>,
     policy: TunnelPolicy,
-    mut cancel: tokio::sync::watch::Receiver<bool>,
+    cancel: CancellationToken,
     outgoing: mpsc::Sender<BidiOutputFrame>,
     events: mpsc::Sender<ReaderEvent>,
 ) {
@@ -596,25 +677,37 @@ fn spawn_listener_reader(
                     }
                     Ok(read) => {
                         if let Err(code) = charge_connection(&transferred, &rate, read, policy) {
+                            cancel.cancel();
                             emit_connection_error(&outgoing, Some(&connection_id), code.to_string()).await;
                             let _ = events.send(ReaderEvent::Failed(connection_id)).await;
                             break;
                         }
-                        if outgoing.send(BidiOutputFrame::json(json!({
-                            "type": "data",
-                            "connection_id": connection_id,
-                            "data": base64::engine::general_purpose::STANDARD.encode(&buffer[..read]),
-                        }))).await.is_err() { break; }
+                        let data = match encode_multiplexed_data(&connection_id, &buffer[..read]) {
+                            Ok(data) => data,
+                            Err(error) => {
+                                cancel.cancel();
+                                emit_connection_error(&outgoing, Some(&connection_id), error.to_string()).await;
+                                let _ = events.send(ReaderEvent::Failed(connection_id)).await;
+                                break;
+                            }
+                        };
+                        if outgoing
+                            .send(BidiOutputFrame::binary(data, TUNNEL_DATA_CONTENT_TYPE))
+                            .await
+                            .is_err()
+                        {
+                            cancel.cancel();
+                            break;
+                        }
                     }
                     Err(error) => {
+                        cancel.cancel();
                         emit_connection_error(&outgoing, Some(&connection_id), format!("TUNNEL_IO_ERROR: {error}")).await;
                         let _ = events.send(ReaderEvent::Failed(connection_id)).await;
                         break;
                     }
                 },
-                changed = cancel.changed() => {
-                    if changed.is_err() || *cancel.borrow() { break; }
-                }
+                _ = cancel.cancelled() => break,
             }
         }
     });
@@ -678,10 +771,17 @@ enum ClientFrame {
 
 impl ClientFrame {
     fn parse(
-        value: Value,
+        frame: BidiInputFrame,
         expected_connection_id: &str,
         max_frame_bytes: usize,
     ) -> anyhow::Result<Self> {
+        if frame.content_type == TUNNEL_DATA_CONTENT_TYPE {
+            if frame.payload.len() > max_frame_bytes {
+                anyhow::bail!("FRAME_SIZE_EXCEEDED: data exceeds policy maximum");
+            }
+            return Ok(Self::Data(frame.payload));
+        }
+        let value = decode_tunnel_control(frame)?;
         let object = value
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("FRAME_SEQUENCE_ERROR: frame must be an object"))?;
@@ -691,19 +791,6 @@ impl ClientFrame {
             anyhow::bail!("FRAME_SEQUENCE_ERROR: connection_id does not match active connection");
         }
         match frame_type {
-            "data" => {
-                reject_unknown(object, &["type", "connection_id", "data"])?;
-                let data = required_string(object, "data")?;
-                let decoded = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|error| {
-                        anyhow::anyhow!("FRAME_SEQUENCE_ERROR: invalid base64: {error}")
-                    })?;
-                if decoded.len() > max_frame_bytes {
-                    anyhow::bail!("FRAME_SIZE_EXCEEDED: decoded data exceeds policy maximum");
-                }
-                Ok(Self::Data(decoded))
-            }
             "half_close" => {
                 reject_unknown(object, &["type", "connection_id", "direction"])?;
                 if required_string(object, "direction")? != "write" {
@@ -718,6 +805,41 @@ impl ClientFrame {
             other => anyhow::bail!("FRAME_SEQUENCE_ERROR: unsupported frame type {other:?}"),
         }
     }
+
+    fn parse_multiplexed(
+        frame: BidiInputFrame,
+        max_frame_bytes: usize,
+    ) -> anyhow::Result<(String, Self)> {
+        if frame.content_type == TUNNEL_DATA_CONTENT_TYPE {
+            let (connection_id, payload) = decode_multiplexed_data(frame.payload)?;
+            if payload.len() > max_frame_bytes {
+                anyhow::bail!("FRAME_SIZE_EXCEEDED: data exceeds policy maximum");
+            }
+            return Ok((connection_id, Self::Data(payload)));
+        }
+        let value = decode_tunnel_control(frame)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("FRAME_SEQUENCE_ERROR: frame must be an object"))?;
+        let connection_id = required_string(object, "connection_id")?.to_string();
+        let parsed = Self::parse(
+            BidiInputFrame::new(serde_json::to_vec(&value)?).with_content_type("application/json"),
+            &connection_id,
+            max_frame_bytes,
+        )?;
+        Ok((connection_id, parsed))
+    }
+}
+
+fn decode_tunnel_control(frame: BidiInputFrame) -> anyhow::Result<Value> {
+    if frame.content_type != "application/json" {
+        anyhow::bail!(
+            "FRAME_SEQUENCE_ERROR: unsupported tunnel frame content type {:?}",
+            frame.content_type
+        );
+    }
+    serde_json::from_slice(&frame.payload)
+        .map_err(|error| anyhow::anyhow!("FRAME_SEQUENCE_ERROR: invalid control JSON: {error}"))
 }
 
 async fn emit_fatal_error(
@@ -892,11 +1014,9 @@ mod tests {
         let connection_id = connected["connection_id"].as_str().unwrap().to_string();
 
         bidi.to_client
-            .send(json!({
-                "type": "data",
-                "connection_id": connection_id,
-                "data": base64::engine::general_purpose::STANDARD.encode(b"ping"),
-            }))
+            .send_frame(
+                BidiInputFrame::new(b"ping".to_vec()).with_content_type(TUNNEL_DATA_CONTENT_TYPE),
+            )
             .await
             .unwrap();
         bidi.to_client
@@ -913,15 +1033,13 @@ mod tests {
             let frame = tokio::time::timeout(Duration::from_secs(2), output.recv())
                 .await
                 .unwrap()
-                .unwrap()
-                .into_json_value()
                 .unwrap();
+            if frame.content_type == TUNNEL_DATA_CONTENT_TYPE {
+                response.extend(frame.payload);
+                continue;
+            }
+            let frame = frame.into_json_value().unwrap();
             match frame["type"].as_str().unwrap() {
-                "data" => response.extend(
-                    base64::engine::general_purpose::STANDARD
-                        .decode(frame["data"].as_str().unwrap())
-                        .unwrap(),
-                ),
                 "half_close" => {}
                 "complete" => break,
                 other => panic!("unexpected tunnel frame {other}: {frame}"),
@@ -1023,10 +1141,14 @@ mod tests {
     #[test]
     fn client_frame_requires_exact_connection_id() {
         let error = ClientFrame::parse(
-            json!({
-                "type": "close",
-                "connection_id": "wrong",
-            }),
+            BidiInputFrame::new(
+                serde_json::to_vec(&json!({
+                    "type": "close",
+                    "connection_id": "wrong",
+                }))
+                .unwrap(),
+            )
+            .with_content_type("application/json"),
             "right",
             READ_CHUNK_BYTES,
         )
@@ -1049,11 +1171,7 @@ mod tests {
     #[test]
     fn client_frame_rejects_decoded_payload_above_policy_limit() {
         let error = ClientFrame::parse(
-            json!({
-                "type": "data",
-                "connection_id": "connection",
-                "data": base64::engine::general_purpose::STANDARD.encode(b"too-large"),
-            }),
+            BidiInputFrame::new(b"too-large".to_vec()).with_content_type(TUNNEL_DATA_CONTENT_TYPE),
             "connection",
             4,
         )
@@ -1075,5 +1193,35 @@ mod tests {
             charge_connection(&transferred, &rate, 2, policy),
             Err("RATE_LIMITED")
         );
+    }
+
+    #[test]
+    fn listener_writer_queue_is_hard_bounded_and_removal_cancels_io() {
+        let (writer, _commands) = mpsc::channel(CONNECTION_WRITE_QUEUE_BOUND);
+        for _ in 0..CONNECTION_WRITE_QUEUE_BOUND {
+            writer
+                .try_send(WriterCommand::Data(Vec::new()))
+                .expect("queue admits its declared bound");
+        }
+        assert!(matches!(
+            writer.try_send(WriterCommand::Data(Vec::new())),
+            Err(mpsc::error::TrySendError::Full(_))
+        ));
+
+        let cancel = CancellationToken::new();
+        let mut connections = HashMap::from([(
+            "connection".to_string(),
+            ListenerConnection {
+                writer,
+                cancel: cancel.clone(),
+                transferred: Arc::new(AtomicU64::new(0)),
+                rate: Arc::new(Mutex::new(RateBudget::new())),
+                read_open: true,
+                write_open: true,
+            },
+        )]);
+        remove_listener_connection(&mut connections, "connection");
+        assert!(connections.is_empty());
+        assert!(cancel.is_cancelled());
     }
 }
