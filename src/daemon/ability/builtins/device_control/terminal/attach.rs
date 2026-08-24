@@ -13,13 +13,13 @@
 //     { "session_id": "...", "attachment_id": "...", "expected_epoch": n }
 //
 //   Client → handler (SendBidi.frame):
-//     { "type": "stdin",  "data": "<base64 bytes>" }
+//     application/octet-stream containing raw stdin bytes
 //     { "type": "resize", "cols": u16, "rows": u16 }
 //     { "type": "detach" }
 //
 //   Handler → client (RecvBidi.frame):
 //     { "type": "attached", "session_id": "...", "attachment_id": "...", "epoch": n }
-//     { "type": "stdout", "data": "<base64 bytes>" }
+//     application/octet-stream containing raw stdout/stderr bytes
 //     { "type": "output_gap", "dropped_bytes": n }
 //     { "type": "detached", "session_id": "...", "attachment_id": "...", "epoch": n }
 //     { "type": "exit",   "status": <u32|null> }
@@ -35,7 +35,6 @@
 
 use std::sync::Arc;
 
-use base64::Engine;
 use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::builtins::device_control::terminal::io::{
@@ -43,7 +42,8 @@ use crate::daemon::ability::builtins::device_control::terminal::io::{
 };
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{
-    AxonAbilityCatalog, BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND,
+    bidi_input_channel, AxonAbilityCatalog, BidiInputFrame, BidiOutputFrame, BidiSource,
+    BIDI_CHANNEL_BOUND,
 };
 use crate::daemon::execution::pty::{PtyService, PtySessionId};
 
@@ -56,7 +56,7 @@ pub const ABILITY_TERMINAL_ATTACH: &str =
 pub fn description() -> &'static str {
     "Attach to an existing PTY session over InvokeBidi: pump \
      stdin from the wire to the PTY master, stream stdout / \
-     stderr back as base64-encoded `stdout` frames, report bounded-buffer loss as OUTPUT_GAP, \
+     stderr back as raw binary frames, report bounded-buffer loss as OUTPUT_GAP, \
      detach with an incremented epoch for later reattach, and surface child exit. Pair with \
      terminal.create (open the session) and \
      terminal.close (terminate it). Part of the \
@@ -65,8 +65,7 @@ pub fn description() -> &'static str {
 
 /// JSON Schema for the attach input. The InvokeBidi initial
 /// frame carries `session_id`; subsequent inbound frames are
-/// `{type:\"stdin\", data: <base64>}` and `{type:\"resize\", \
-/// cols, rows}` — those are stream-payload schemas, not
+/// raw stdin bytes and `{type:\"resize\", cols, rows}` control frames — these are not
 /// initial-args schemas, so they sit in the
 /// daemon/execution/pty module's docs rather than here.
 pub fn input_schema() -> Value {
@@ -225,8 +224,7 @@ fn attach_session(
     //   xport_from_handler_tx — handler writes here;
     //                           IPC reads via xport_from_handler_rx
     //                           and emits RecvBidi
-    let (xport_to_handler_tx, xport_to_handler_rx) =
-        tokio::sync::mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_to_handler_tx, xport_to_handler_rx) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (xport_from_handler_tx, xport_from_handler_rx) =
         tokio::sync::mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
 
@@ -264,7 +262,7 @@ fn attach_session(
 }
 
 /// T1: PTY master → wire. Blocking read on a dedicated thread
-/// pool, send each chunk as a `stdout` base64 frame.
+/// pool, send each chunk as a raw binary frame.
 fn spawn_pty_output_pump(
     pty: Arc<PtyService>,
     io: PtyIoService,
@@ -313,11 +311,13 @@ fn spawn_pty_output_pump(
             {
                 break;
             }
-            if !outcome.data.is_empty() {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&outcome.data);
+            let closed = outcome.closed;
+            let had_data = !outcome.data.is_empty();
+            if had_data {
                 if to_client
-                    .send(BidiOutputFrame::json(
-                        json!({"type": "stdout", "data": encoded}),
+                    .send(BidiOutputFrame::binary(
+                        outcome.data,
+                        "application/octet-stream",
                     ))
                     .await
                     .is_err()
@@ -325,7 +325,7 @@ fn spawn_pty_output_pump(
                     break;
                 }
             }
-            if outcome.closed && outcome.data.is_empty() {
+            if closed && !had_data {
                 let status = child_exit_status(&pty, &id);
                 let _ = to_client
                     .send(BidiOutputFrame::json(
@@ -354,7 +354,7 @@ fn spawn_pty_writer(
     io: PtyIoService,
     id: PtySessionId,
     lease: PtyAttachmentLease,
-    mut from_client: tokio::sync::mpsc::Receiver<Value>,
+    mut from_client: tokio::sync::mpsc::Receiver<BidiInputFrame>,
     cancel: tokio::sync::watch::Sender<bool>,
     to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
 ) {
@@ -427,20 +427,21 @@ enum TerminalAttachClientFrame {
 }
 
 impl TerminalAttachClientFrame {
-    fn parse(frame: Value) -> anyhow::Result<Self> {
+    fn parse(frame: BidiInputFrame) -> anyhow::Result<Self> {
+        if frame.content_type == "application/octet-stream" {
+            return Ok(Self::Stdin(frame.payload));
+        }
+        if frame.content_type != "application/json" {
+            anyhow::bail!(
+                "terminal control frame must use application/json, got {:?}",
+                frame.content_type
+            );
+        }
+        let frame: Value = serde_json::from_slice(&frame.payload)
+            .map_err(|error| anyhow::anyhow!("terminal control frame is not JSON: {error}"))?;
         let object = terminal_attach_client_frame_object(&frame)?;
         let frame_type = terminal_attach_required_frame_type(object)?;
         match frame_type {
-            "stdin" => {
-                terminal_attach_reject_unknown_frame_fields(object, &["type", "data"])?;
-                let data = terminal_attach_required_frame_string(object, "data")?;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|error| {
-                        anyhow::anyhow!("stdin `data` base64 decode failed: {error}")
-                    })?;
-                Ok(Self::Stdin(bytes))
-            }
             "resize" => {
                 terminal_attach_reject_unknown_frame_fields(object, &["type", "cols", "rows"])?;
                 let cols = terminal_attach_required_frame_u16(object, "cols")?;
@@ -554,9 +555,9 @@ pub fn attach_input_schema() -> Value {
 pub fn attach_description() -> &'static str {
     "Attach an InvokeBidi session to a previously-opened PTY \
      (created via terminal.create). Client→handler frames: \
-     {type:\"stdin\",data:b64}, {type:\"resize\",cols,rows}, \
+     application/octet-stream stdin, {type:\"resize\",cols,rows}, \
      {type:\"detach\"}, or {type:\"close_input\"}. Handler→client \
-     frames include attached, stdout, detached, error, and exit."
+     frames include raw stdout, attached, detached, error, and exit."
 }
 
 #[cfg(test)]
@@ -584,6 +585,20 @@ mod tests {
 
     fn metadata_test_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    async fn send_stdin(sender: &crate::daemon::ability::dispatch::BidiInputSender, bytes: &[u8]) {
+        sender
+            .send_frame(
+                BidiInputFrame::new(bytes.to_vec()).with_content_type("application/octet-stream"),
+            )
+            .await
+            .expect("send raw PTY stdin");
+    }
+
+    fn json_input(value: Value) -> BidiInputFrame {
+        BidiInputFrame::new(serde_json::to_vec(&value).expect("serialize control"))
+            .with_content_type("application/json")
     }
 
     fn shell_command() -> String {
@@ -626,7 +641,11 @@ mod tests {
             };
             match tokio::time::timeout(rem, rx.recv()).await {
                 Ok(Some(f)) => {
-                    let f = f.into_json_value().expect("pty emits JSON frames");
+                    let f = if f.content_type == "application/octet-stream" {
+                        json!({"type": "stdout", "data": f.payload})
+                    } else {
+                        f.into_json_value().expect("PTY control JSON frame")
+                    };
                     let is_exit = f.get("type").and_then(Value::as_str) == Some("exit");
                     out.push(f);
                     if is_exit {
@@ -763,15 +782,9 @@ mod tests {
         let io = PtyIoService::new();
         let source = attach_handler(&svc, &io, attach_args(id.as_str())).expect("attach");
 
-        // Send one stdin frame: `echo hi\n`. Base64-encoded.
-        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo hi\n");
-        source
-            .to_client
-            .send(json!({"type": "stdin", "data": data_b64}))
-            .await
-            .expect("send stdin frame");
+        send_stdin(&source.to_client, b"echo hi\n").await;
 
-        // Drain frames; concatenate every base64-decoded `stdout`
+        // Drain frames; concatenate every raw `stdout`
         // payload. A real shell may emit a prompt + the typed line
         // echo + the command output + the next prompt, so we just
         // assert "hi" appears somewhere in the cumulative bytes.
@@ -781,11 +794,8 @@ mod tests {
             drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
         for f in &frames {
             if f.get("type").and_then(Value::as_str) == Some("stdout") {
-                if let Some(b64) = f.get("data").and_then(Value::as_str) {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .unwrap_or_default();
-                    accum.extend_from_slice(&bytes);
+                if let Some(bytes) = f.get("data").and_then(Value::as_array) {
+                    accum.extend(bytes.iter().map(|value| value.as_u64().unwrap() as u8));
                 }
             }
         }
@@ -820,12 +830,7 @@ mod tests {
             .send(json!({"type": "resize", "cols": 200, "rows": 60}))
             .await
             .expect("send resize");
-        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo postresize\n");
-        source
-            .to_client
-            .send(json!({"type": "stdin", "data": data_b64}))
-            .await
-            .expect("send stdin");
+        send_stdin(&source.to_client, b"echo postresize\n").await;
 
         let mut from_handler = source.from_client;
         let mut accum = Vec::new();
@@ -833,11 +838,8 @@ mod tests {
             drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
         for f in &frames {
             if f.get("type").and_then(Value::as_str) == Some("stdout") {
-                if let Some(b64) = f.get("data").and_then(Value::as_str) {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .unwrap_or_default();
-                    accum.extend_from_slice(&bytes);
+                if let Some(bytes) = f.get("data").and_then(Value::as_array) {
+                    accum.extend(bytes.iter().map(|value| value.as_u64().unwrap() as u8));
                 }
             }
         }
@@ -890,26 +892,15 @@ mod tests {
 
         let second = attach_handler(&svc, &io, attach_args_at(id.as_str(), "attachment-b", 2))
             .expect("reattach");
-        second
-            .to_client
-            .send(json!({
-                "type": "stdin",
-                "data": base64::engine::general_purpose::STANDARD.encode(b"echo reattached\n"),
-            }))
-            .await
-            .expect("write after reattach");
+        send_stdin(&second.to_client, b"echo reattached\n").await;
         let mut second_output = second.from_client;
         let frames =
             drain_handler_emit(&mut second_output, 32, std::time::Duration::from_secs(3)).await;
         let mut output = Vec::new();
         for frame in frames {
             if frame.get("type").and_then(Value::as_str) == Some("stdout") {
-                if let Some(data) = frame.get("data").and_then(Value::as_str) {
-                    output.extend(
-                        base64::engine::general_purpose::STANDARD
-                            .decode(data)
-                            .unwrap_or_default(),
-                    );
+                if let Some(data) = frame.get("data").and_then(Value::as_array) {
+                    output.extend(data.iter().map(|value| value.as_u64().unwrap() as u8));
                 }
             }
         }
@@ -985,9 +976,11 @@ mod tests {
             "unknown client frames must produce a visible protocol error; got {frames:?}"
         );
 
-        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo afterjunk\n");
         if to_handler
-            .send(json!({"type": "stdin", "data": data_b64}))
+            .send_frame(
+                BidiInputFrame::new(b"echo afterjunk\n".to_vec())
+                    .with_content_type("application/octet-stream"),
+            )
             .await
             .is_ok()
         {
@@ -997,11 +990,8 @@ mod tests {
             let mut accum = Vec::new();
             for frame in &frames {
                 if frame.get("type").and_then(Value::as_str) == Some("stdout") {
-                    if let Some(b64) = frame.get("data").and_then(Value::as_str) {
-                        let bytes = base64::engine::general_purpose::STANDARD
-                            .decode(b64)
-                            .unwrap_or_default();
-                        accum.extend_from_slice(&bytes);
+                    if let Some(bytes) = frame.get("data").and_then(Value::as_array) {
+                        accum.extend(bytes.iter().map(|value| value.as_u64().unwrap() as u8));
                     }
                 }
             }
@@ -1017,7 +1007,7 @@ mod tests {
 
     #[test]
     fn client_frame_parser_rejects_non_object_frames() {
-        let err = TerminalAttachClientFrame::parse(Value::Null).unwrap_err();
+        let err = TerminalAttachClientFrame::parse(json_input(Value::Null)).unwrap_err();
         assert!(
             format!("{err}").contains("frame must be a JSON object"),
             "unexpected error: {err}"
@@ -1025,26 +1015,22 @@ mod tests {
     }
 
     #[test]
-    fn client_frame_parser_rejects_unknown_stdin_fields() {
-        let err = TerminalAttachClientFrame::parse(json!({
-            "type": "stdin",
-            "data": "aGk=",
-            "legacy_mode": true
-        }))
-        .unwrap_err();
-        assert!(
-            format!("{err}").contains("unsupported frame field(s): legacy_mode"),
-            "unexpected error: {err}"
-        );
+    fn client_frame_parser_preserves_all_raw_stdin_bytes() {
+        let bytes = (0_u8..=u8::MAX).collect::<Vec<_>>();
+        let parsed = TerminalAttachClientFrame::parse(
+            BidiInputFrame::new(bytes.clone()).with_content_type("application/octet-stream"),
+        )
+        .expect("raw stdin frame");
+        assert_eq!(parsed, TerminalAttachClientFrame::Stdin(bytes));
     }
 
     #[test]
     fn client_frame_parser_rejects_bad_resize_dimensions() {
-        let err = TerminalAttachClientFrame::parse(json!({
+        let err = TerminalAttachClientFrame::parse(json_input(json!({
             "type": "resize",
             "cols": 0,
             "rows": 24
-        }))
+        })))
         .unwrap_err();
         assert!(
             format!("{err}").contains("must be > 0"),

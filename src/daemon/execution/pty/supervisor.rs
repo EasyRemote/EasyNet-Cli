@@ -16,24 +16,41 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use base64::Engine as _;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 
 use super::{PtyCloseOutcome, PtyCreateSpec, PtySessionId, PtySessionSnapshot};
 
-const SOCKET_FILE: &str = "session-supervisor.sock";
-const JOURNAL_FILE: &str = "terminal-sessions.json";
+// Version the endpoint with the framing contract. A process from an older
+// release may still own its socket; a new daemon must never speak a new binary
+// protocol to that process or race it for the same journal.
+const SOCKET_FILE: &str = "session-supervisor-v2.sock";
+const JOURNAL_FILE: &str = "terminal-sessions-v2.json";
 const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024;
 const OUTPUT_BUFFER_CAP_BYTES: usize = 4 * 1024 * 1024;
 const READ_CHUNK_BYTES: usize = 64 * 1024;
+const MAX_SESSIONS: usize = 32;
+const CLIENT_CONNECTION_LANES: usize = 16;
+const SERVER_WORKERS: usize = 32;
+const ACCEPT_QUEUE_BOUND: usize = 64;
+
+#[derive(Debug)]
+struct SupervisorRejected(String);
+
+impl std::fmt::Display for SupervisorRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SupervisorRejected {}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -54,7 +71,6 @@ enum Request {
     },
     Write {
         session_id: String,
-        data: String,
     },
     Read {
         session_id: String,
@@ -122,6 +138,27 @@ pub struct SupervisorReadOutcome {
 pub struct SupervisorClient {
     socket_path: PathBuf,
     controller_id: String,
+    #[cfg(unix)]
+    connections: Arc<SupervisorConnectionPool>,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct SupervisorConnectionPool {
+    lanes: Vec<Mutex<Option<std::os::unix::net::UnixStream>>>,
+    next: AtomicUsize,
+}
+
+#[cfg(unix)]
+impl SupervisorConnectionPool {
+    fn new() -> Self {
+        Self {
+            lanes: (0..CLIENT_CONNECTION_LANES)
+                .map(|_| Mutex::new(None))
+                .collect(),
+            next: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl SupervisorClient {
@@ -129,28 +166,41 @@ impl SupervisorClient {
         Self {
             socket_path: socket_path(),
             controller_id: process_controller_id().to_string(),
+            #[cfg(unix)]
+            connections: Arc::new(SupervisorConnectionPool::new()),
         }
     }
 
     fn call(&self, request: Request) -> anyhow::Result<serde_json::Value> {
-        self.exchange(&Request::Reconcile {
-            controller_id: self.controller_id.clone(),
-        })?;
-        self.exchange(&request)
+        self.call_with_body(request, &[]).map(|(value, _)| value)
     }
 
-    fn exchange(&self, request: &Request) -> anyhow::Result<serde_json::Value> {
-        match self.call_once(request) {
+    #[cfg(unix)]
+    fn call_with_body(
+        &self,
+        request: Request,
+        body: &[u8],
+    ) -> anyhow::Result<(serde_json::Value, Vec<u8>)> {
+        let lane =
+            self.connections.next.fetch_add(1, Ordering::Relaxed) % self.connections.lanes.len();
+        let mut connection = self.connections.lanes[lane]
+            .lock()
+            .expect("supervisor connection lane lock");
+        match self.call_once(&mut connection, &request, body) {
             Ok(value) => Ok(value),
+            Err(error) if error.is::<SupervisorRejected>() => Err(error),
             Err(first_error) => {
+                *connection = None;
                 self.start().with_context(|| {
                     format!("start PTY session supervisor after {first_error:#}")
                 })?;
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
                 loop {
-                    match self.call_once(request) {
+                    match self.call_once(&mut connection, &request, body) {
                         Ok(value) => return Ok(value),
+                        Err(error) if error.is::<SupervisorRejected>() => return Err(error),
                         Err(error) if std::time::Instant::now() < deadline => {
+                            *connection = None;
                             std::thread::sleep(Duration::from_millis(25));
                             let _ = error;
                         }
@@ -164,34 +214,41 @@ impl SupervisorClient {
     }
 
     #[cfg(unix)]
-    fn call_once(&self, request: &Request) -> anyhow::Result<serde_json::Value> {
+    fn call_once(
+        &self,
+        connection: &mut Option<std::os::unix::net::UnixStream>,
+        request: &Request,
+        body: &[u8],
+    ) -> anyhow::Result<(serde_json::Value, Vec<u8>)> {
         use std::os::unix::net::UnixStream;
 
-        let mut stream = UnixStream::connect(&self.socket_path)?;
-        stream.set_read_timeout(Some(Duration::from_secs(65)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-        serde_json::to_writer(&mut stream, request)?;
-        stream.write_all(b"\n")?;
-        stream.flush()?;
-        let mut line = String::new();
-        BufReader::new(stream)
-            .take(MAX_REQUEST_BYTES)
-            .read_line(&mut line)?;
-        let response: Response =
-            serde_json::from_str(&line).context("decode PTY session supervisor response")?;
-        if !response.ok {
-            anyhow::bail!(
-                "{}",
-                response
-                    .error
-                    .unwrap_or_else(|| "session supervisor rejected request".to_string())
-            );
+        if connection.is_none() {
+            let stream = UnixStream::connect(&self.socket_path)?;
+            stream.set_read_timeout(Some(Duration::from_secs(65)))?;
+            stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+            *connection = Some(stream);
+            let reconcile = Request::Reconcile {
+                controller_id: self.controller_id.clone(),
+            };
+            exchange_frame(
+                connection.as_mut().expect("connected supervisor lane"),
+                &reconcile,
+                &[],
+            )?;
         }
-        Ok(response.value.unwrap_or(serde_json::Value::Null))
+        exchange_frame(
+            connection.as_mut().expect("connected supervisor lane"),
+            request,
+            body,
+        )
     }
 
     #[cfg(not(unix))]
-    fn call_once(&self, _request: &Request) -> anyhow::Result<serde_json::Value> {
+    fn call_with_body(
+        &self,
+        _request: Request,
+        _body: &[u8],
+    ) -> anyhow::Result<(serde_json::Value, Vec<u8>)> {
         anyhow::bail!("PTY session supervisor transport is unsupported on this platform")
     }
 
@@ -239,10 +296,16 @@ impl SupervisorClient {
     }
 
     pub fn write(&self, id: &PtySessionId, data: &[u8]) -> anyhow::Result<bool> {
-        let value = self.call(Request::Write {
-            session_id: id.as_str().to_string(),
-            data: base64::engine::general_purpose::STANDARD.encode(data),
-        })?;
+        let (value, response_body) = self.call_with_body(
+            Request::Write {
+                session_id: id.as_str().to_string(),
+            },
+            data,
+        )?;
+        anyhow::ensure!(
+            response_body.is_empty(),
+            "supervisor write returned an unexpected body"
+        );
         required_bool(&value, "open")
     }
 
@@ -252,14 +315,16 @@ impl SupervisorClient {
         timeout: Duration,
         max_bytes: usize,
     ) -> anyhow::Result<SupervisorReadOutcome> {
-        let value = self.call(Request::Read {
-            session_id: id.as_str().to_string(),
-            timeout_ms: timeout.as_millis().min(u64::MAX as u128) as u64,
-            max_bytes,
-        })?;
+        let (value, data) = self.call_with_body(
+            Request::Read {
+                session_id: id.as_str().to_string(),
+                timeout_ms: timeout.as_millis().min(u64::MAX as u128) as u64,
+                max_bytes,
+            },
+            &[],
+        )?;
         Ok(SupervisorReadOutcome {
-            data: base64::engine::general_purpose::STANDARD
-                .decode(required_string(&value, "data")?)?,
+            data,
             closed: required_bool(&value, "closed")?,
             dropped_bytes: required_u64(&value, "dropped_bytes")?,
         })
@@ -336,6 +401,59 @@ impl SupervisorClient {
             _ => anyhow::bail!("session supervisor exit status must be integer or null"),
         }
     }
+}
+
+#[cfg(unix)]
+fn exchange_frame(
+    stream: &mut std::os::unix::net::UnixStream,
+    request: &Request,
+    body: &[u8],
+) -> anyhow::Result<(serde_json::Value, Vec<u8>)> {
+    let header = serde_json::to_vec(request)?;
+    write_wire_frame(stream, &header, body)?;
+    let (header, body) = read_wire_frame(stream)?;
+    let response: Response =
+        serde_json::from_slice(&header).context("decode PTY session supervisor response")?;
+    if !response.ok {
+        return Err(SupervisorRejected(
+            response
+                .error
+                .unwrap_or_else(|| "session supervisor rejected request".to_string()),
+        )
+        .into());
+    }
+    Ok((response.value.unwrap_or(serde_json::Value::Null), body))
+}
+
+fn write_wire_frame(writer: &mut impl Write, header: &[u8], body: &[u8]) -> anyhow::Result<()> {
+    let header_len = u32::try_from(header.len()).context("supervisor header too large")?;
+    let body_len = u32::try_from(body.len()).context("supervisor body too large")?;
+    anyhow::ensure!(
+        u64::from(header_len) + u64::from(body_len) <= MAX_REQUEST_BYTES,
+        "supervisor frame exceeds {MAX_REQUEST_BYTES} bytes"
+    );
+    writer.write_all(&header_len.to_be_bytes())?;
+    writer.write_all(&body_len.to_be_bytes())?;
+    writer.write_all(header)?;
+    writer.write_all(body)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn read_wire_frame(reader: &mut impl Read) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+    let mut lengths = [0_u8; 8];
+    reader.read_exact(&mut lengths)?;
+    let header_len = u32::from_be_bytes(lengths[..4].try_into().expect("four-byte header length"));
+    let body_len = u32::from_be_bytes(lengths[4..].try_into().expect("four-byte body length"));
+    anyhow::ensure!(
+        u64::from(header_len) + u64::from(body_len) <= MAX_REQUEST_BYTES,
+        "supervisor frame exceeds {MAX_REQUEST_BYTES} bytes"
+    );
+    let mut header = vec![0_u8; header_len as usize];
+    let mut body = vec![0_u8; body_len as usize];
+    reader.read_exact(&mut header)?;
+    reader.read_exact(&mut body)?;
+    Ok((header, body))
 }
 
 fn required_string<'a>(value: &'a serde_json::Value, field: &str) -> anyhow::Result<&'a str> {
@@ -416,6 +534,7 @@ struct SupervisedSession {
 
 struct SupervisorState {
     sessions: Mutex<HashMap<PtySessionId, Arc<SupervisedSession>>>,
+    session_count: AtomicUsize,
     controller_id: Mutex<Option<String>>,
     journal: PathBuf,
 }
@@ -424,6 +543,7 @@ impl SupervisorState {
     fn new(journal: PathBuf) -> anyhow::Result<Self> {
         let state = Self {
             sessions: Mutex::new(HashMap::new()),
+            session_count: AtomicUsize::new(0),
             controller_id: Mutex::new(None),
             journal,
         };
@@ -434,9 +554,15 @@ impl SupervisorState {
     }
 
     fn persist(&self) -> anyhow::Result<()> {
-        let sessions = self.sessions.lock().expect("supervisor sessions lock");
-        let mut rows = sessions
+        let sessions = self
+            .sessions
+            .lock()
+            .expect("supervisor sessions lock")
             .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut rows = sessions
+            .iter()
             .map(|session| {
                 let attachment = session.attachment.lock().expect("attachment lock");
                 serde_json::json!({
@@ -464,8 +590,21 @@ impl SupervisorState {
         Ok(())
     }
 
-    fn handle(&self, request: Request) -> anyhow::Result<serde_json::Value> {
-        match request {
+    fn handle(
+        &self,
+        request: Request,
+        request_body: Vec<u8>,
+    ) -> anyhow::Result<(serde_json::Value, Vec<u8>)> {
+        let request_body_allowed = matches!(&request, Request::Write { .. });
+        anyhow::ensure!(
+            request_body.is_empty() || request_body_allowed,
+            "request body is not permitted for this operation"
+        );
+        anyhow::ensure!(
+            !request_body_allowed || request_body.len() <= 256 * 1024,
+            "PTY write body exceeds 262144 bytes"
+        );
+        let value = match request {
             Request::Ping => Ok(serde_json::json!({"pid": std::process::id()})),
             Request::Reconcile { controller_id } => self.reconcile(controller_id),
             Request::Create { spec } => self.create(spec),
@@ -477,19 +616,21 @@ impl SupervisorState {
                     .expect("supervisor sessions lock")
                     .contains_key(&PtySessionId::new(session_id)),
             )),
-            Request::Write { session_id, data } => {
-                let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-                self.write(PtySessionId::new(session_id), &bytes)
+            Request::Write { session_id } => {
+                self.write(PtySessionId::new(session_id), &request_body)
             }
             Request::Read {
                 session_id,
                 timeout_ms,
                 max_bytes,
-            } => self.read(
-                PtySessionId::new(session_id),
-                Duration::from_millis(timeout_ms.min(60_000)),
-                max_bytes.min(256 * 1024),
-            ),
+            } => {
+                anyhow::ensure!(request_body.is_empty(), "read request body must be empty");
+                return self.read(
+                    PtySessionId::new(session_id),
+                    Duration::from_millis(timeout_ms.min(60_000)),
+                    max_bytes.min(256 * 1024),
+                );
+            }
             Request::Resize {
                 session_id,
                 cols,
@@ -507,7 +648,8 @@ impl SupervisorState {
             } => self.release(PtySessionId::new(session_id), attachment_id, attached_epoch),
             Request::Attachment { session_id } => self.attachment(PtySessionId::new(session_id)),
             Request::ExitStatus { session_id } => self.exit_status(PtySessionId::new(session_id)),
-        }
+        }?;
+        Ok((value, Vec::new()))
     }
 
     fn reconcile(&self, controller_id: String) -> anyhow::Result<serde_json::Value> {
@@ -546,6 +688,21 @@ impl SupervisorState {
     }
 
     fn create(&self, spec: PtyCreateSpec) -> anyhow::Result<serde_json::Value> {
+        self.session_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < MAX_SESSIONS).then_some(current + 1)
+            })
+            .map_err(|_| anyhow::anyhow!("SESSION_LIMIT: maximum {MAX_SESSIONS} PTYs reached"))?;
+        match self.create_reserved(spec) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.session_count.fetch_sub(1, Ordering::AcqRel);
+                Err(error)
+            }
+        }
+    }
+
+    fn create_reserved(&self, spec: PtyCreateSpec) -> anyhow::Result<serde_json::Value> {
         let pair = native_pty_system().openpty(PtySize {
             cols: spec.cols,
             rows: spec.rows,
@@ -612,7 +769,17 @@ impl SupervisorState {
             .lock()
             .expect("supervisor sessions lock")
             .insert(id.clone(), session);
-        self.persist()?;
+        if let Err(error) = self.persist() {
+            if let Some(session) = self
+                .sessions
+                .lock()
+                .expect("supervisor sessions lock")
+                .remove(&id)
+            {
+                Self::terminate_session(&session);
+            }
+            return Err(error).context("persist newly created PTY session");
+        }
         Ok(serde_json::json!({"session_id": id.as_str()}))
     }
 
@@ -638,9 +805,19 @@ impl SupervisorState {
                 exit_status: None,
             })?);
         };
+        self.session_count.fetch_sub(1, Ordering::AcqRel);
+        let exit_status = Self::terminate_session(&session);
+        self.persist()?;
+        Ok(serde_json::to_value(PtyCloseOutcome {
+            ack: true,
+            exit_status,
+        })?)
+    }
+
+    fn terminate_session(session: &SupervisedSession) -> Option<u32> {
         session.dropped.store(true, Ordering::Release);
         let mut child = session.child.lock().expect("supervisor child lock");
-        let exit_status = if let Some(mut child) = child.take() {
+        if let Some(mut child) = child.take() {
             let _ = child.kill();
             child
                 .try_wait()
@@ -649,12 +826,7 @@ impl SupervisorState {
                 .map(|status| status.exit_code())
         } else {
             None
-        };
-        self.persist()?;
-        Ok(serde_json::to_value(PtyCloseOutcome {
-            ack: true,
-            exit_status,
-        })?)
+        }
     }
 
     fn write(&self, id: PtySessionId, bytes: &[u8]) -> anyhow::Result<serde_json::Value> {
@@ -672,7 +844,7 @@ impl SupervisorState {
         id: PtySessionId,
         timeout: Duration,
         max_bytes: usize,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<(serde_json::Value, Vec<u8>)> {
         let session = self.session(&id)?;
         let (lock, ready) = &*session.output;
         let mut output = lock.lock().expect("supervisor output lock");
@@ -693,11 +865,13 @@ impl SupervisorState {
         let take = output.bytes.len().min(max_bytes);
         let data = output.bytes.drain(..take).collect::<Vec<_>>();
         let dropped_bytes = std::mem::take(&mut output.dropped_bytes);
-        Ok(serde_json::json!({
-            "data": base64::engine::general_purpose::STANDARD.encode(data),
-            "closed": output.closed,
-            "dropped_bytes": dropped_bytes,
-        }))
+        Ok((
+            serde_json::json!({
+                "closed": output.closed,
+                "dropped_bytes": dropped_bytes,
+            }),
+            data,
+        ))
     }
 
     fn resize(&self, id: PtySessionId, cols: u16, rows: u16) -> anyhow::Result<serde_json::Value> {
@@ -841,12 +1015,29 @@ pub fn run() -> anyhow::Result<()> {
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
     let state = Arc::new(SupervisorState::new(journal_path())?);
-    for accepted in listener.incoming() {
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::sync_channel(ACCEPT_QUEUE_BOUND);
+    let accepted_rx = Arc::new(Mutex::new(accepted_rx));
+    for worker in 0..SERVER_WORKERS {
         let state = Arc::clone(&state);
+        let accepted_rx = Arc::clone(&accepted_rx);
+        std::thread::Builder::new()
+            .name(format!("easynet-pty-supervisor-{worker}"))
+            .spawn(move || loop {
+                let stream = accepted_rx
+                    .lock()
+                    .expect("supervisor accept queue lock")
+                    .recv();
+                match stream {
+                    Ok(stream) => handle_connection(stream, Arc::clone(&state)),
+                    Err(_) => break,
+                }
+            })?;
+    }
+    for accepted in listener.incoming() {
         match accepted {
-            Ok(stream) => {
-                std::thread::spawn(move || handle_connection(stream, state));
-            }
+            Ok(stream) => accepted_tx
+                .send(stream)
+                .map_err(|_| anyhow::anyhow!("PTY supervisor worker queue closed"))?,
             Err(error) => return Err(error.into()),
         }
     }
@@ -855,20 +1046,28 @@ pub fn run() -> anyhow::Result<()> {
 
 #[cfg(unix)]
 fn handle_connection(mut stream: std::os::unix::net::UnixStream, state: Arc<SupervisorState>) {
-    let request = (|| -> anyhow::Result<Request> {
-        let mut line = String::new();
-        BufReader::new(stream.try_clone()?)
-            .take(MAX_REQUEST_BYTES)
-            .read_line(&mut line)?;
-        Ok(serde_json::from_str(&line)?)
-    })();
-    let response = match request.and_then(|request| state.handle(request)) {
-        Ok(value) => Response::value(value),
-        Err(error) => Response::error(error.to_string()),
-    };
-    let _ = serde_json::to_writer(&mut stream, &response);
-    let _ = stream.write_all(b"\n");
-    let _ = stream.flush();
+    if stream
+        .set_read_timeout(Some(Duration::from_secs(70)))
+        .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(10))))
+        .is_err()
+    {
+        return;
+    }
+    while let Ok((request_header, request_body)) = read_wire_frame(&mut stream) {
+        let handled = serde_json::from_slice::<Request>(&request_header)
+            .context("decode supervisor request")
+            .and_then(|request| state.handle(request, request_body));
+        let (response, response_body) = match handled {
+            Ok((value, body)) => (Response::value(value), body),
+            Err(error) => (Response::error(error.to_string()), Vec::new()),
+        };
+        let Ok(response_header) = serde_json::to_vec(&response) else {
+            break;
+        };
+        if write_wire_frame(&mut stream, &response_header, &response_body).is_err() {
+            break;
+        }
+    }
 }
 
 #[cfg(not(unix))]
@@ -883,5 +1082,24 @@ mod tests {
     #[test]
     fn supervisor_binary_has_stable_product_name() {
         assert!(supervisor_executable_name().starts_with("easynet-session-supervisor"));
+    }
+
+    #[test]
+    fn wire_frame_preserves_every_byte_without_text_encoding() {
+        let header = br#"{"op":"write","session_id":"test"}"#;
+        let body = (0_u8..=u8::MAX).collect::<Vec<_>>();
+        let mut wire = std::io::Cursor::new(Vec::new());
+        write_wire_frame(&mut wire, header, &body).expect("encode wire frame");
+        assert_eq!(wire.get_ref().len(), 8 + header.len() + body.len());
+
+        wire.set_position(0);
+        let (decoded_header, decoded_body) = read_wire_frame(&mut wire).expect("decode wire frame");
+        assert_eq!(decoded_header, header);
+        assert_eq!(decoded_body, body);
+    }
+
+    #[test]
+    fn aggregate_output_memory_has_a_hard_product_bound() {
+        assert_eq!(MAX_SESSIONS * OUTPUT_BUFFER_CAP_BYTES, 128 * 1024 * 1024);
     }
 }

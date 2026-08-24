@@ -33,7 +33,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 
 use anyhow::Context;
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 #[cfg(feature = "axon-pb")]
 use futures::StreamExt;
@@ -65,6 +64,10 @@ const TERMINAL_INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(feature = "axon-pb")]
 const TERMINAL_BIDI_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TERMINAL_INPUT_BATCH_BYTES: usize = 16 * 1024;
+/// Coalesce human key events without adding perceptible interactive latency.
+const TERMINAL_INPUT_BATCH_DELAY: Duration = Duration::from_millis(2);
+const TERMINAL_OUTPUT_FLUSH_BYTES: usize = 16 * 1024;
+const TERMINAL_OUTPUT_FLUSH_DELAY: Duration = Duration::from_millis(2);
 const TERMINAL_SESSION_ALLOWED_ACTIONS: [&str; 2] = ["stream", "manage"];
 
 pub(crate) fn run(raw_target: &str) -> anyhow::Result<()> {
@@ -574,32 +577,40 @@ impl TerminalSession {
         let mut input_events = TerminalEventPump::spawn();
         let mut input_closed = false;
         let mut pending_input = Vec::with_capacity(TERMINAL_INPUT_BATCH_BYTES);
+        let mut input_flush_deadline: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
+        let mut pending_output_bytes = 0_usize;
+        let mut output_flush_deadline: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
         loop {
             tokio::select! {
                 frame = downstream.recv() => {
                     let Some(frame) = frame? else {
+                        if pending_output_bytes > 0 {
+                            stdout.flush()?;
+                        }
                         anyhow::bail!("terminal.attach transport ended without exit or detached frame");
                     };
+                    if let Some(binary) = frame.binary {
+                        stdout.write_all(&binary.data)?;
+                        let was_clean = pending_output_bytes == 0;
+                        pending_output_bytes = pending_output_bytes.saturating_add(binary.data.len());
+                        if pending_output_bytes >= TERMINAL_OUTPUT_FLUSH_BYTES {
+                            stdout.flush()?;
+                            pending_output_bytes = 0;
+                            output_flush_deadline = None;
+                        } else if was_clean {
+                            output_flush_deadline = Some(Box::pin(tokio::time::sleep(TERMINAL_OUTPUT_FLUSH_DELAY)));
+                        }
+                        continue;
+                    }
+                    if pending_output_bytes > 0 {
+                        stdout.flush()?;
+                        pending_output_bytes = 0;
+                        output_flush_deadline = None;
+                    }
                     match frame.payload.get("type").and_then(Value::as_str) {
                         Some("attached") => {
                             self.epoch = frame.payload.get("epoch").and_then(Value::as_u64)
                                 .ok_or_else(|| anyhow::anyhow!("terminal.attach attached frame omitted epoch"))?;
-                        }
-                        Some("binary") => {
-                            let encoded = frame.payload.get("data_b64").and_then(Value::as_str)
-                                .ok_or_else(|| anyhow::anyhow!("terminal.attach binary frame omitted data_b64"))?;
-                            let bytes = BASE64_STANDARD.decode(encoded)
-                                .context("terminal.attach returned invalid base64 binary output")?;
-                            stdout.write_all(&bytes)?;
-                            stdout.flush()?;
-                        }
-                        Some("stdout") => {
-                            let encoded = frame.payload.get("data").and_then(Value::as_str)
-                                .ok_or_else(|| anyhow::anyhow!("terminal.attach stdout frame omitted data"))?;
-                            let bytes = BASE64_STANDARD.decode(encoded)
-                                .context("terminal.attach returned invalid base64 stdout")?;
-                            stdout.write_all(&bytes)?;
-                            stdout.flush()?;
                         }
                         Some("exit") => return Ok(TerminalInteractiveOutcome::Exited),
                         Some("detached") => {
@@ -634,28 +645,58 @@ impl TerminalSession {
                         Some(Event::Key(key)) if key.kind != KeyEventKind::Release => {
                             if is_terminal_detach_key(key) {
                                 flush_terminal_input(&mut upstream, &mut pending_input).await?;
+                                input_flush_deadline = None;
                                 upstream.send_pty_control_json(&json!({"type": "detach"})).await?;
                             } else if let Some(bytes) = key_event_bytes(key) {
+                                let was_empty = pending_input.is_empty();
                                 buffer_terminal_input(&mut upstream, &mut pending_input, &bytes).await?;
-                                flush_terminal_input(&mut upstream, &mut pending_input).await?;
+                                if pending_input.is_empty() {
+                                    input_flush_deadline = None;
+                                } else if was_empty {
+                                    input_flush_deadline = Some(Box::pin(tokio::time::sleep(TERMINAL_INPUT_BATCH_DELAY)));
+                                }
                             }
                         }
                         Some(Event::Paste(text)) => {
+                            let was_empty = pending_input.is_empty();
                             buffer_terminal_input(&mut upstream, &mut pending_input, text.as_bytes()).await?;
-                            flush_terminal_input(&mut upstream, &mut pending_input).await?;
+                            if pending_input.is_empty() {
+                                input_flush_deadline = None;
+                            } else if was_empty {
+                                input_flush_deadline = Some(Box::pin(tokio::time::sleep(TERMINAL_INPUT_BATCH_DELAY)));
+                            }
                         }
                         Some(Event::Resize(cols, rows)) => {
                             flush_terminal_input(&mut upstream, &mut pending_input).await?;
+                            input_flush_deadline = None;
                             upstream.send_pty_resize(u32::from(cols.max(1)), u32::from(rows.max(1))).await?;
                         }
                         Some(_) => {}
                         None => {
                             flush_terminal_input(&mut upstream, &mut pending_input).await?;
+                            input_flush_deadline = None;
                             upstream.send_pty_control_json(&json!({"type": "close_input"})).await?;
                             upstream.send_eof().await?;
                             input_closed = true;
                         }
                     }
+                }
+                _ = async {
+                    if let Some(deadline) = input_flush_deadline.as_mut() {
+                        deadline.as_mut().await;
+                    }
+                }, if input_flush_deadline.is_some() => {
+                    flush_terminal_input(&mut upstream, &mut pending_input).await?;
+                    input_flush_deadline = None;
+                }
+                _ = async {
+                    if let Some(deadline) = output_flush_deadline.as_mut() {
+                        deadline.as_mut().await;
+                    }
+                }, if output_flush_deadline.is_some() => {
+                    stdout.flush()?;
+                    pending_output_bytes = 0;
+                    output_flush_deadline = None;
                 }
             }
         }
