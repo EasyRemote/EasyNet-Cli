@@ -14,6 +14,7 @@ CAPTURE_MATRIX="$ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh"
 INPUT_INJECTION="$ROOT/tools/scripts/remoteapp-input-injection-e2e.sh"
 TARGET_INPUT_RUNNER="$ROOT/tools/scripts/host-remoteapp-target-input-e2e.sh"
 MEDIA_ADAPTATION="$ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+MEDIA_ADAPTATION_RUNNER="$ROOT/tools/scripts/host-remoteapp-media-adaptation-e2e.sh"
 MULTI_WINDOW_TRACKING="$ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 NETWORK_FALLBACK="$ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh"
 FRONTEND_PRODUCT_FLOW="$ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
@@ -88,6 +89,7 @@ reject() {
 [[ -f "$CAPTURE_MATRIX" ]] || fail "missing RemoteApp cross-platform capture verifier"
 [[ -f "$INPUT_INJECTION" ]] || fail "missing RemoteApp input injection verifier"
 [[ -x "$TARGET_INPUT_RUNNER" ]] || fail "missing executable RemoteApp target-local input host runner"
+[[ -x "$MEDIA_ADAPTATION_RUNNER" ]] || fail "missing executable RemoteApp media adaptation host runner"
 [[ -f "$MEDIA_ADAPTATION" ]] || fail "missing RemoteApp media adaptation evidence verifier"
 [[ -f "$MULTI_WINDOW_TRACKING" ]] || fail "missing RemoteApp multi-window tracking evidence verifier"
 [[ -f "$NETWORK_FALLBACK" ]] || fail "missing RemoteApp network fallback evidence verifier"
@@ -281,6 +283,8 @@ require 'Audio/video codec, frame rate, bitrate adaptation' "$AUDIT" \
   'audit must cover media codec/adaptation'
 require 'remoteapp-media-adaptation-e2e\.sh' "$AUDIT" \
   'audit must record the media adaptation evidence verifier'
+require 'host-remoteapp-media-adaptation-e2e\.sh' "$AUDIT" \
+  'audit must record the executable media adaptation host runner'
 require 'Multi-window/multi-application independent tracking' "$AUDIT" \
   'audit must cover multi-window/application tracking as execution effect'
 require 'remoteapp-multi-window-tracking-e2e\.sh' "$AUDIT" \
@@ -329,6 +333,16 @@ require 'audio/video scope' "$AUDIT" \
   'audit must record conditional audio/video media pipeline scope'
 require 'missing media-adaptation E2E as a product blocker' "$AUDIT" \
   'audit must record missing media-adaptation E2E as a product blocker'
+require 'EASYNET_REMOTEAPP_MEDIA_DEGRADED_NETWORK_APPLY_COMMAND' "$MEDIA_ADAPTATION_RUNNER" \
+  'media adaptation host runner must require an explicit degraded-network fixture'
+require 'EASYNET_REMOTEAPP_MEDIA_BASELINE_RESET_COMMAND' "$MEDIA_ADAPTATION_RUNNER" \
+  'media adaptation host runner must require an explicit baseline reset'
+require 'EASYNET_REMOTEAPP_MEDIA_BACKPRESSURE_RESET_COMMAND' "$MEDIA_ADAPTATION_RUNNER" \
+  'media adaptation host runner must require an explicit backpressure reset'
+require 'trap reset_active_fixture EXIT' "$MEDIA_ADAPTATION_RUNNER" \
+  'media adaptation host runner must reset active fixture state on every exit'
+require 'aggregate-remoteapp-media-adaptation-evidence\.py' "$MEDIA_ADAPTATION_RUNNER" \
+  'media adaptation host runner must use the canonical evidence aggregator'
 require 'media_pipeline_support' "$MATRIX" \
   'matrix must record media pipeline support projection evidence'
 require 'media_pipeline_support' "$PLAN" \

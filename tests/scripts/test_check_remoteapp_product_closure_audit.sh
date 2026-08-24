@@ -31,6 +31,7 @@ cp "$REPO_ROOT/tools/scripts/remoteapp-cross-platform-capture-e2e.sh" "$SB/tools
 cp "$REPO_ROOT/tools/scripts/remoteapp-input-injection-e2e.sh" "$SB/tools/scripts/remoteapp-input-injection-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/host-remoteapp-target-input-e2e.sh" "$SB/tools/scripts/host-remoteapp-target-input-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/remoteapp-media-adaptation-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/host-remoteapp-media-adaptation-e2e.sh" "$SB/tools/scripts/host-remoteapp-media-adaptation-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-multi-window-tracking-e2e.sh" "$SB/tools/scripts/remoteapp-multi-window-tracking-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/remoteapp-network-fallback-e2e.sh" "$SB/tools/scripts/remoteapp-network-fallback-e2e.sh"
 cp "$REPO_ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
