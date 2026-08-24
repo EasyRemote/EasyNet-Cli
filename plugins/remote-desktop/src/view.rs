@@ -7,7 +7,8 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, EffectiveRemoteDesktopInputPolicy, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, input_injection_unavailable_reason,
+    EffectiveRemoteDesktopInputPolicy, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -113,14 +114,14 @@ fn input_readiness_view(
     let any_input_enabled = pointer_enabled || keyboard_enabled;
     let blocked_reason = if !requested_interactive {
         Value::Null
-    } else if !session.target_snapshot().input_enabled() {
-        json!("target_input_not_ready")
+    } else if let Some(reason) = session.target_snapshot().input_blocked_reason() {
+        json!(reason)
     } else if input_policy.input_scope().as_str() == "view_only" {
         json!(session.target_binding().input_scope_reason())
     } else if let Some(reason) = session.input_runtime_block_reason() {
         json!(reason)
-    } else if !input_injection_available() {
-        json!("input_injection_unavailable")
+    } else if let Some(reason) = input_injection_unavailable_reason() {
+        json!(reason)
     } else if !any_input_enabled {
         json!("input_policy_denied")
     } else {
@@ -434,7 +435,7 @@ mod tests {
         assert_eq!(view["target_tracking"]["input_enabled"], json!(false));
         assert_eq!(
             view["input_readiness"]["blocked_reason"],
-            json!("target_input_not_ready")
+            json!("target_lost")
         );
         assert_eq!(
             view["input_readiness"]["effective_mode"],

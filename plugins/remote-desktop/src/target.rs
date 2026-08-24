@@ -212,6 +212,7 @@ impl InputScopeDecision {
 pub(in crate::daemon::plugins::remote_desktop) enum FrontendAction {
     RefreshTargets,
     RequestPermission,
+    FocusTargetLocally,
     RetrySession,
     DowngradeViewOnly,
     ShowUnsupported,
@@ -224,6 +225,7 @@ impl FrontendAction {
         match self {
             Self::RefreshTargets => "refresh_targets",
             Self::RequestPermission => "request_permission",
+            Self::FocusTargetLocally => "focus_target_locally",
             Self::RetrySession => "retry_session",
             Self::DowngradeViewOnly => "downgrade_view_only",
             Self::ShowUnsupported => "show_unsupported",
@@ -235,6 +237,7 @@ impl FrontendAction {
 const ALL_FRONTEND_ACTIONS: &[FrontendAction] = &[
     FrontendAction::RefreshTargets,
     FrontendAction::RequestPermission,
+    FrontendAction::FocusTargetLocally,
     FrontendAction::RetrySession,
     FrontendAction::DowngradeViewOnly,
     FrontendAction::ShowUnsupported,

@@ -326,13 +326,48 @@ input_status = input_step.get("visible_status")
 require(isinstance(input_status, str) and input_status,
         "input control step must expose visible_status")
 if input_step.get("result") == "policy_blocked":
-    require(input_step.get("blocked_reason") in {
+    blocked_reason = input_step.get("blocked_reason")
+    require(blocked_reason in {
         "view_only",
         "input_scope_unsupported",
         "input_permission_blocked",
         "target_input_not_ready",
+        "target_blurred",
+        "target_focus_unobserved",
+        "target_hidden",
+        "target_minimized",
+        "target_lost",
+        "target_stale",
+        "target_unresolved",
+        "target_rebinding",
+        "target_invalidated",
+        "accessibility_permission_denied",
+        "windows_send_input_denied",
+        "linux_xtest_injection_denied",
+        "platform_input_injection_unavailable",
+        "input_injection_unavailable",
         "input_control_consent_missing",
     }, "policy_blocked input must expose a known blocked_reason")
+    target_tracking = input_step.get("target_tracking")
+    require(isinstance(target_tracking, dict),
+            "policy_blocked input must include target_tracking evidence")
+    if isinstance(target_tracking, dict):
+        require(isinstance(target_tracking.get("status"), str) and target_tracking["status"],
+                "policy_blocked target_tracking.status must be present")
+        require(isinstance(target_tracking.get("visibility"), str) and target_tracking["visibility"],
+                "policy_blocked target_tracking.visibility must be present")
+        require(isinstance(target_tracking.get("input_enabled"), bool),
+                "policy_blocked target_tracking.input_enabled must be boolean")
+        if evidence.get("selected_target_kind") in {"window", "application"}:
+            require(int_field(target_tracking, "focus_epoch") > 0,
+                    "window/application policy block must include a positive target focus epoch")
+            require(int_field(target_tracking, "geometry_revision") > 0,
+                    "window/application policy block must include a positive target geometry revision")
+        if isinstance(blocked_reason, str) and blocked_reason.startswith("target_"):
+            require(target_tracking.get("input_enabled") is False,
+                    "target lifecycle policy block must prove target input_enabled=false")
+            require(target_tracking.get("input_blocked_reason") == blocked_reason,
+                    "target lifecycle blocker must match target_tracking.input_blocked_reason")
 if input_step.get("result") == "input_applied":
     client_sequence = int_field(input_step, "client_sequence")
     target_focus_epoch = int_field(input_step, "target_focus_epoch")
@@ -473,6 +508,15 @@ steps = [
         "result": "policy_blocked",
         "blocked_reason": "view_only",
         "visible_status": "input scope view_only · no controls",
+        "target_tracking": {
+            "status": "resolved",
+            "visibility": "visible",
+            "focused": None,
+            "input_enabled": True,
+            "input_blocked_reason": "",
+            "focus_epoch": 1,
+            "geometry_revision": 1,
+        },
     },
     observed({"name": "session_ended", "status": "passed", "ability": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id}, 120),
     observed({"name": "terminal_receipt_visible", "status": "passed", "terminal": True, "reason_code": "user_cancelled", "session_id": session_id}, 130),

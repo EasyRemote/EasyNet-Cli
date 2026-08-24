@@ -709,7 +709,7 @@ impl RemoteAppTargetBindingStateMachine {
         } else {
             "target_blurred"
         };
-        let target_action = (!focused).then_some(FrontendAction::RetrySession);
+        let target_action = (!focused).then_some(FrontendAction::FocusTargetLocally);
         let diagnostic = self.diagnostic_projection(
             self.snapshot.status.as_str(),
             Value::Null,
@@ -2682,7 +2682,10 @@ mod tests {
         assert_eq!(blurred.event_type(), "TARGET_BLURRED");
         assert_eq!(blurred.payload()["reason_code"], json!("target_blurred"));
         assert_eq!(blurred.payload()["failure_domain"], json!("target"));
-        assert_eq!(blurred.payload()["frontend_action"], json!("retry_session"));
+        assert_eq!(
+            blurred.payload()["frontend_action"],
+            json!("focus_target_locally")
+        );
         assert_eq!(blurred.payload()["input_enabled"], json!(false));
         assert_eq!(
             blurred.payload()["input_blocked_reason"],
@@ -2704,7 +2707,7 @@ mod tests {
         );
         assert_eq!(
             tracker.snapshot().latest_diagnostic()["frontend_action"],
-            json!("retry_session")
+            json!("focus_target_locally")
         );
         assert!(tracker.snapshot().pointer_target_value().is_none());
 
