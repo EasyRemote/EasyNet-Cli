@@ -623,6 +623,14 @@ Missing or insufficient product evidence:
   depth, drop policy, isolated-writer state, and drop/error counters. This is
   executable source and contract evidence, not a live second-device host-audio
   or degraded-network artifact.
+  Verification on 2026-08-24 passed the focused native-media tests (5/5), the
+  full RemoteApp module suite (396/396), media-adaptation verifier self-test,
+  product-closure audit, focused frontend protocol/panel tests (16/16), and the
+  frontend production build. A subsequent live-environment probe could not
+  start the real matrix: Hub `:8080` and frontend `:3000` were unreachable,
+  the daemon reported `DEGRADED/T09_OPEN_SELF_SESSION` with no admitted Hub
+  session, and `docker ps` did not return before it was interrupted. Therefore
+  no baseline/degraded-network/backpressure product artifact was produced.
 - Multi-window tracking E2E using
   `remoteapp-multi-window-tracking-e2e.sh` with a live artifact proving
   independent concurrent window streams, non-interleaved frames, move/resize
