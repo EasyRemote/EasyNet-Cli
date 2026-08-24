@@ -66,6 +66,29 @@ pub fn user_realm_from_ura(ura: &str) -> Option<String> {
     (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
 
+/// Mint an ephemeral Resource URA owned by a canonical Device.
+///
+/// Product adapters use this for invocation-scoped subjects such as governed
+/// tunnels. Keeping the owner-token projection here avoids constructing URA
+/// strings in CLI command modules.
+pub fn device_ephemeral_resource_ura(
+    device_ura: &str,
+    category: &str,
+    resource_id: &str,
+) -> Option<String> {
+    let device = parse_ura(device_ura).ok()?;
+    if device.kind != URAKind::Device || category.trim().is_empty() || resource_id.trim().is_empty()
+    {
+        return None;
+    }
+    let owner_id = format!("device.{}", device.device_id()?);
+    Some(resource_dot_ura(
+        &device.realm,
+        &owner_id,
+        &format!("{category}/{resource_id}"),
+    ))
+}
+
 /// Canonical labels accepted by descriptor subject kind scopes.
 ///
 /// These labels are policy vocabulary layered on top of Axon's typed URA

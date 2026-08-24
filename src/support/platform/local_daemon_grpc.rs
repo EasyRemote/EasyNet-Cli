@@ -182,6 +182,17 @@ pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
 }
 
 #[cfg(feature = "axon-pb")]
+pub(crate) struct LocalDaemonLiveBidiRequest<'a> {
+    pub function_name: &'a str,
+    pub payload_json: serde_json::Value,
+    pub callee_ura: &'a str,
+    pub subject_ura: &'a str,
+    pub authority_metadata:
+        crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    pub timeout: Duration,
+}
+
+#[cfg(feature = "axon-pb")]
 impl LocalDaemonSystemCalleePolicy {
     fn explicit(callee_ura: &str) -> anyhow::Result<Self> {
         Ok(Self::Explicit(normalized_local_daemon_ura(
@@ -569,6 +580,67 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_cau
         input_frames,
         max_frames,
     )
+}
+
+/// Open a live daemon-hosted InvokeBidi session for a session-authorized local
+/// system caller. The returned transport keeps upstream and downstream live;
+/// product callers own only their business-frame protocol.
+#[cfg(feature = "axon-pb")]
+pub(crate) async fn open_local_daemon_live_bidi_with_authority(
+    request: LocalDaemonLiveBidiRequest<'_>,
+) -> anyhow::Result<crate::support::platform::bidi_session::DaemonBidiSession> {
+    use axon_sdk::pb::axon::v1::{ContentEnvelope, EnvelopeOpen, StreamDescriptor};
+
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+        request.function_name,
+        request.payload_json,
+        request.callee_ura,
+        request.subject_ura,
+        request.timeout,
+    )?
+    .with_authority_metadata(request.authority_metadata);
+    let timeout = tuple_plan.timeout;
+    let authority_metadata = tuple_plan.authority_metadata.clone();
+    let socket_path = ensure_local_daemon_accepting()?;
+    let invocation = local_daemon_system_invocation_from_tuple_plan(tuple_plan)?;
+    let function_name = invocation.function_name().to_string();
+    let mut metadata = std::collections::HashMap::new();
+    if let Some(authority_metadata) = authority_metadata {
+        metadata.insert(
+            authority_metadata.key().to_string(),
+            authority_metadata.value().to_string(),
+        );
+    }
+    let envelope_open = EnvelopeOpen {
+        envelope: Some(invocation.envelope()?),
+        target: Some(wire_invocation_target(
+            function_name.clone(),
+            function_name.clone(),
+        )?),
+        initial_args: invocation.arguments().to_vec(),
+        args_content_type: "application/json".to_string(),
+        streams: vec![StreamDescriptor {
+            stream_id: 1,
+            content_type: "application/json".to_string(),
+            ordering: "STRICT".to_string(),
+            ..StreamDescriptor::default()
+        }],
+        content_envelope: Some(ContentEnvelope {
+            content_type: "application/json".to_string(),
+            encoding: "identity".to_string(),
+            ..ContentEnvelope::default()
+        }),
+        metadata,
+        ..EnvelopeOpen::default()
+    };
+    crate::support::platform::bidi_session::open_daemon_bidi_session(
+        socket_path,
+        timeout,
+        crate::support::platform::bidi_session::DaemonBidiContext::local(function_name),
+        envelope_open,
+        Vec::new(),
+    )
+    .await
 }
 
 #[cfg(feature = "axon-pb")]

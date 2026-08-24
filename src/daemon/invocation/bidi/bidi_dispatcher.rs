@@ -1965,6 +1965,14 @@ pub(crate) fn map_local_bidi_up_payload(
     use serde_json::json;
 
     match (wire_kind, payload) {
+        (LocalBidiWireKind::Pty, UpPayload::BinaryChunk(chunk))
+            if chunk.stream_id == crate::daemon::ability::wire::PTY_CONTROL_STREAM_ID =>
+        {
+            match serde_json::from_slice::<serde_json::Value>(&chunk.data) {
+                Ok(jsonv) => LocalBidiUpFrame::Forward(jsonv),
+                Err(_) => LocalBidiUpFrame::Ignore,
+            }
+        }
         (LocalBidiWireKind::Pty, UpPayload::BinaryChunk(chunk)) => {
             let b64 = B64.encode(&chunk.data);
             LocalBidiUpFrame::Forward(json!({"type": "stdin", "data": b64}))
@@ -4607,6 +4615,26 @@ mod tests {
             }
             other => panic!("expected remote BidiInput EOF, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn remote_bidi_input_preserves_reserved_pty_lifecycle_control() {
+        let mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::Pty,
+            UpPayload::BinaryChunk(BinaryChunk {
+                stream_id: crate::daemon::ability::wire::PTY_CONTROL_STREAM_ID,
+                data: serde_json::to_vec(&serde_json::json!({"type": "detach"}))
+                    .expect("detach JSON"),
+                ..BinaryChunk::default()
+            }),
+        );
+        let frame = build_remote_bidi_input_frame_from_mapped(45, mapped)
+            .expect("mapped pty control is forwarded")
+            .expect("mapped pty control builds");
+        let payload = decode_remote_bidi_input_payload(frame);
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("terminal control JSON");
+        assert_eq!(value, serde_json::json!({"type": "detach"}));
     }
 
     #[test]

@@ -431,6 +431,27 @@ impl LocalDaemonSystemAbilityIssuer {
         )
     }
 
+    #[cfg(feature = "axon-pb")]
+    pub(crate) async fn open_target_bidi_with_authority(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject_ura: &str,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<crate::support::platform::bidi_session::DaemonBidiSession> {
+        crate::support::platform::local_daemon_grpc::open_local_daemon_live_bidi_with_authority(
+            crate::support::platform::local_daemon_grpc::LocalDaemonLiveBidiRequest {
+                function_name: target.dispatch_name(),
+                payload_json: args,
+                callee_ura: target.callee_ura(),
+                subject_ura,
+                authority_metadata,
+                timeout,
+            },
+        )
+        .await
+    }
+
     pub fn invoke_issued_target_root_timeout(
         invocation: &LocalTargetRootInvocation,
         timeout: std::time::Duration,

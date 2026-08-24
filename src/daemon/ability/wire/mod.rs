@@ -19,6 +19,10 @@ use std::sync::{Arc, RwLock};
 use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::{PluginBidiWireKind, PluginHostError, PluginRuntimeState};
 
+/// Reserved binary stream carrying structured PTY lifecycle controls that do
+/// not have a first-class Axon `BidiControl` variant.
+pub(crate) const PTY_CONTROL_STREAM_ID: u32 = u32::MAX;
+
 /// Bidi wire codec used when an ability crosses the daemon/Axon session bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbilityBidiWireKind {

@@ -72,6 +72,19 @@ pub enum DeviceAction {
     Exec(exec::ExecArgs),
     /// Open an interactive invocation-backed PTY session.
     Terminal(TerminalArgs),
+    /// Copy one regular file through governed fs.transfer.
+    Cp(DeviceCopyArgs),
+    /// Forward TCP connections through governed net.tunnel.
+    Forward(DeviceForwardArgs),
+    /// Run a local SOCKS5 CONNECT adapter through governed net.tunnel.
+    Socks(DeviceSocksArgs),
+    /// Open the native EasyNet terminal, or explicitly opt into OpenSSH.
+    Ssh(DeviceSshArgs),
+    /// Print an ssh_config Host stanza backed by EasyNet net.tunnel.
+    SshConfig(DeviceSshConfigArgs),
+    /// Raw stdio adapter used by OpenSSH ProxyCommand.
+    #[command(hide = true)]
+    Proxy(DeviceProxyArgs),
     /// Drain in-flight work on a remote substrate, then deregister it
     /// from the federation (the device disappears from
     /// `device list`). Irreversible without a fresh pairing token —
@@ -109,9 +122,115 @@ pub struct DeviceAbilitiesArgs {
 
 #[derive(Debug, Args)]
 pub struct TerminalArgs {
-    /// Target substrate: `local`, this device's node id, this device's URA,
-    /// or a canonical remote Device URA.
-    pub node_id: String,
+    /// `DEVICE`, `list DEVICE`, or `close SESSION_ID DEVICE`.
+    #[arg(required = true, num_args = 1..=3)]
+    pub arguments: Vec<String>,
+    /// Reattach an existing session instead of creating a new one.
+    #[arg(long, conflicts_with = "new")]
+    pub session: Option<String>,
+    /// Explicitly create a new session (the default positional behavior).
+    #[arg(long)]
+    pub new: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceCopyArgs {
+    /// Local path or canonical-device-ura:/workspace|/tmp|/home/path.
+    pub source: String,
+    /// Local path or canonical-device-ura:/workspace|/tmp|/home/path.
+    pub destination: String,
+    /// Atomically replace an existing destination.
+    #[arg(long)]
+    pub overwrite: bool,
+    /// Narrow the per-Invocation transfer byte limit.
+    #[arg(
+        long,
+        default_value_t = crate::daemon::ability::builtins::device_control::file_transfer::FILE_TRANSFER_BYTE_CAP
+    )]
+    pub max_bytes: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceForwardArgs {
+    /// Remote Device id or canonical Device URA.
+    pub device: String,
+    /// Local listener: [bind_address:]port:remote_host:remote_port.
+    #[arg(
+        short = 'L',
+        long = "local",
+        conflicts_with = "remote",
+        required_unless_present = "remote"
+    )]
+    pub local: Option<String>,
+    /// Remote listener: [bind_address:]port:local_host:local_port.
+    #[arg(
+        short = 'R',
+        long = "remote",
+        conflicts_with = "local",
+        required_unless_present = "local"
+    )]
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceSocksArgs {
+    /// Remote Device id or canonical Device URA.
+    pub device: String,
+    /// Local loopback address for the SOCKS5 listener.
+    #[arg(long, default_value = "127.0.0.1:1080")]
+    pub listen: std::net::SocketAddr,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceSshArgs {
+    /// Remote Device id or canonical Device URA.
+    pub device: String,
+    /// Delegate SSH protocol/authentication/known_hosts to system OpenSSH.
+    #[arg(long)]
+    pub openssh: bool,
+    /// ssh_config host alias used for matching Host/Match rules.
+    #[arg(long)]
+    pub alias: Option<String>,
+    /// SSH server address as seen inside the remote Device boundary.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub remote_host: String,
+    /// SSH server port as seen inside the remote Device boundary.
+    #[arg(long, default_value_t = 22)]
+    pub remote_port: u16,
+    /// OpenSSH login user.
+    #[arg(long)]
+    pub user: Option<String>,
+    /// Explicit ssh_config file passed to `ssh -F`.
+    #[arg(long)]
+    pub config: Option<std::path::PathBuf>,
+    /// Remaining arguments passed to system OpenSSH after the destination.
+    #[arg(last = true, allow_hyphen_values = true)]
+    pub arguments: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceSshConfigArgs {
+    /// Remote Device id or canonical Device URA.
+    pub device: String,
+    /// Host alias to emit and later use directly or as ProxyJump.
+    #[arg(long)]
+    pub alias: String,
+    /// SSH server address as seen inside the remote Device boundary.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub remote_host: String,
+    /// SSH server port as seen inside the remote Device boundary.
+    #[arg(long, default_value_t = 22)]
+    pub remote_port: u16,
+    /// Optional OpenSSH login user.
+    #[arg(long)]
+    pub user: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceProxyArgs {
+    pub device: String,
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Args)]
@@ -140,6 +259,40 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
         DeviceAction::Abilities(a) => run_abilities(a),
         DeviceAction::Exec(a) => exec::run(a),
         DeviceAction::Terminal(a) => run_terminal(a),
+        DeviceAction::Cp(a) => crate::cli::commands::device_cp::run(
+            &a.source,
+            &a.destination,
+            a.overwrite,
+            a.max_bytes,
+        ),
+        DeviceAction::Forward(a) => crate::cli::commands::device_tunnel::run_forward(
+            &a.device,
+            a.local.as_deref(),
+            a.remote.as_deref(),
+        ),
+        DeviceAction::Socks(a) => {
+            crate::cli::commands::device_tunnel::run_socks(&a.device, a.listen)
+        }
+        DeviceAction::Ssh(a) => crate::cli::commands::device_ssh::run(
+            &a.device,
+            a.openssh,
+            a.alias.as_deref(),
+            &a.remote_host,
+            a.remote_port,
+            a.user.as_deref(),
+            a.config.as_ref(),
+            &a.arguments,
+        ),
+        DeviceAction::SshConfig(a) => crate::cli::commands::device_ssh::print_config(
+            &a.device,
+            &a.alias,
+            &a.remote_host,
+            a.remote_port,
+            a.user.as_deref(),
+        ),
+        DeviceAction::Proxy(a) => {
+            crate::cli::commands::device_tunnel::run_stdio_proxy(&a.device, &a.host, a.port)
+        }
         DeviceAction::Remove(a) => run_remove(a),
     }
 }
@@ -156,7 +309,24 @@ fn run_abilities(args: DeviceAbilitiesArgs) -> anyhow::Result<()> {
 }
 
 fn run_terminal(args: TerminalArgs) -> anyhow::Result<()> {
-    crate::cli::commands::device_terminal::run(&args.node_id)
+    match (args.arguments.as_slice(), args.session.as_deref(), args.new) {
+        ([target], Some(session_id), _) => {
+            crate::cli::commands::device_terminal::run_existing(target, session_id)
+        }
+        ([target], None, _) => crate::cli::commands::device_terminal::run(target),
+        ([action, target], None, false) if action == "list" => {
+            crate::cli::commands::device_terminal::list(target)
+        }
+        ([action, session_id, target], None, false) if action == "close" => {
+            crate::cli::commands::device_terminal::close_existing(target, session_id)
+        }
+        _ => bail!(
+            "usage: easynet device terminal [--new] DEVICE | \
+             easynet device terminal --session SESSION_ID DEVICE | \
+             easynet device terminal list DEVICE | \
+             easynet device terminal close SESSION_ID DEVICE"
+        ),
+    }
 }
 
 fn resolve_device_catalog_target_arg(raw_target: &str) -> anyhow::Result<String> {

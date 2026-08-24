@@ -1404,6 +1404,67 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
     )
 }
 
+/// Open a live remote InvokeBidi session through the attached local daemon.
+/// Route and authority binding are completed before frame zero is submitted;
+/// later product frames cannot mutate the Invocation tuple.
+pub(crate) async fn open_remote_target_bidi_session_with_signer(
+    request: RemoteInvocationRequest<'_>,
+    signer: RemoteInvocationCallerSigner,
+) -> anyhow::Result<crate::support::platform::bidi_session::DaemonBidiSession> {
+    if signer.owner_ura() != request.caller_ura {
+        anyhow::bail!(
+            "remote bidi invocation signer owner `{}` does not match request caller `{}`",
+            signer.owner_ura(),
+            request.caller_ura
+        );
+    }
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
+    ensure_remote_invocation_daemon_accepting(&socket_path)?;
+    let bound = RemoteInvocationAuthorityBinder::bind(request, signer.as_ref())
+        .await
+        .map_err(anyhow::Error::new)?;
+    let RemoteInvocationRequest {
+        target,
+        caller_ura,
+        subject_ura,
+        invocation_nonce,
+        causal_context,
+        args,
+        request_metadata,
+        timeout,
+    } = bound.into_request();
+    let arguments = serde_json::to_vec(&args).context("serialise remote bidi arguments")?;
+    let mut envelope_open = ProtoEnvelope::from_target(
+        caller_ura,
+        target.callee_ura.clone(),
+        subject_ura,
+        InvocationDerivationPolicy::Explicit {
+            invocation_nonce,
+            causal_context,
+        },
+    )?
+    .signed_descriptor_ref_bidi_open_with_signer(
+        target.route_function_name(),
+        target.descriptor_ref(),
+        arguments,
+        signer.as_ref(),
+    )
+    .await?;
+    envelope_open.metadata = request_metadata;
+    let open_mac = remote_bidi_frame_chain_mac(&envelope_open)?;
+    crate::support::platform::bidi_session::open_daemon_bidi_session(
+        socket_path,
+        timeout,
+        crate::support::platform::bidi_session::DaemonBidiContext::remote(
+            target.as_str(),
+            target.execution_target_ura(),
+        ),
+        envelope_open,
+        open_mac,
+    )
+    .await
+}
+
 /// Canonical caller-side input frame for a remote bidi invocation.
 ///
 /// The frame keeps bytes, structured JSON, and transport EOF distinct until
