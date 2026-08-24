@@ -263,7 +263,10 @@
         "target monitor supervisor and generation workers retain a focused component context instead of the RemoteDesktopPlugin aggregate, preventing plugin Drop from participating in a circular supervisor/generation join",
         "recovery startup synchronously settles snapshots whose lease elapsed while the daemon was down as durable session_expired terminal rows",
         "recovery snapshots persist session-local runtime input permission blockers and public show_session projects them after plugin restart",
-        "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row"
+        "runtime regression coverage proves public show_session, watch_events, and end_session operate on a rehydrated session row",
+        "frontend retry_session handling now preserves the daemon session id, token, consent, selected Resource URA, and event history while replacing only the WebRTC transport with a strictly newer epoch",
+        "frontend source gates reject the retired end_session-plus-create_session retry flow and require same-session device-resume and explicit-retry coverage",
+        "frontend retry uses a monotonic generation fence and PeerConnection ownership checks so offline/end/reset cannot be overwritten by stale show_session or set_description continuations"
       ],
       "required_evidence_before_product_complete": [
         "long-outage and network transport reconnect handoff E2E",
@@ -285,6 +288,7 @@
         "lease refresh and same-session show_session survival do not prove WebRTC media or input transport recovery",
         "the browser transport-resume verifier self-test does not prove a live network disconnect/reconnect",
         "the crash/restart recovery verifier self-test does not prove live process recovery",
+        "same-session frontend retry tests do not prove that a browser reconnects after a real daemon process crash",
         "Stage 1 startup rehydration, startup expiry settlement, target monitor re-registration, and new media epoch admission do not prove media reattachment, rendered frames after restart, endpoint cleanup, or full crash/restart product recovery"
       ]
     },
@@ -340,7 +344,7 @@
         "frontend session details render daemon-projected target recovery status/reason/action",
         "frontend session details render daemon-projected H.264/Opus media_pipeline_support, audio/video track evidence, drop policy, and product blockers",
         "frontend action row executes daemon-guided target refresh recovery",
-        "frontend action row executes daemon-guided retry_session recovery by ending then creating a session",
+        "frontend action row executes daemon-guided retry_session recovery by preserving the session aggregate and replacing only its WebRTC transport",
         "frontend share picker exposes host-local remote_desktop.permission_status preflight before create_session",
         "frontend denied permission_status stays in the share picker with Request permission recovery instead of becoming a session-level error",
         "frontend protocol/store/UI now project target_focus_epoch, reject stale/missing focus epochs before RTC input send, and send target_focus_epoch on pointer/key frames",

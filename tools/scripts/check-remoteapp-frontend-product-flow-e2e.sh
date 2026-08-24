@@ -400,8 +400,8 @@ require 'remoteDesktopMediaQualityLabel' "$FRONTEND_UI" \
   'frontend RemoteApp UI must render a media quality summary from session stats'
 require 'rtpSenderBackpressureDrops' "$FRONTEND_UI" \
   'frontend media quality summary must account for RTP sender backpressure drops'
-require 'media 18000kbps · 52\.5fps · drops 15 · backpressure 3' "$FRONTEND_UI_TEST" \
-  'frontend UI tests must prove media bitrate, FPS, drops, and backpressure are visible in session details'
+require 'media 18000kbps · 52\.5fps · route direct · drops 15 · backpressure 3' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove media bitrate, FPS, route, drops, and backpressure are visible in session details'
 require 'remoteDesktopTargetStatusLabel' "$FRONTEND_UI" \
   'frontend RemoteApp UI must render daemon-projected target recovery state in session details'
 require 'remoteDesktopTargetRecoveryMessage' "$FRONTEND_UI" \
@@ -428,10 +428,28 @@ require 'Retry session' "$FRONTEND_UI" \
   'frontend RemoteApp UI must expose an executable Retry session CTA for daemon retry_session guidance'
 require 'remoteDesktopRetrySessionRecommended' "$FRONTEND_UI" \
   'frontend RemoteApp retry CTA must be gated by explicit retry-session state'
-require 'executes daemon-requested remote desktop retry through end then create' "$FRONTEND_UI_TEST" \
-  'frontend UI tests must prove Retry session executes the recovery flow'
-require 'rdEnd\.mock\.invocationCallOrder\[0\].*rdCreate\.mock\.invocationCallOrder\[0\]' "$FRONTEND_UI_TEST" \
-  'frontend UI tests must prove Retry session ends the current session before creating a new one'
+require 'executes daemon-requested retry on the existing remote desktop session' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session executes same-session recovery'
+require 'expect\(rdRetry\)\.toHaveBeenCalledWith' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must bind Retry session to the store recovery state machine'
+require 'expect\(rdEnd\)\.not\.toHaveBeenCalled' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session does not terminate the recoverable session'
+require 'expect\(rdCreate\)\.not\.toHaveBeenCalled' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session does not mint a replacement session'
+require 'retryRemoteDesktopSessionTransport' "$FRONTEND_STORE" \
+  'frontend store must own one transport-retry state machine for device resume and user retry'
+require 'rdRetry: async' "$FRONTEND_STORE" \
+  'frontend store must expose same-session transport retry as a domain operation'
+require 'preserves one remote desktop session across device resume and explicit retry' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove device resume and user retry preserve one session'
+require 'transport_epoch: 4' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove explicit retry advances to a newer transport epoch'
+require 'remoteDesktopRetryGeneration' "$FRONTEND_STORE" \
+  'frontend retry must use a monotonic generation fence rather than session identity alone'
+require 'fences a stale transport retry when the device goes offline during session lookup' "$FRONTEND_STORE_TEST" \
+  'frontend tests must prove offline invalidates an in-flight session lookup'
+require 'does not resurrect a retry transport closed while WebRTC negotiation is in flight' "$FRONTEND_STORE_TEST" \
+  'frontend tests must prove offline invalidates an in-flight WebRTC negotiation'
 require 'entry\.loading \|\| \(entry\.session && !remoteDesktopSessionTerminal\(entry\.session\)\)' "$FRONTEND_STORE" \
   'frontend store must allow create_session after a retained terminal session receipt'
 require 'allows creating a new remote desktop session after a terminal receipt is retained' "$FRONTEND_STORE_TEST" \
@@ -459,8 +477,10 @@ require 'media_pipeline_support' "$AUDIT" \
   'product readiness audit must record frontend media-pipeline support visibility evidence'
 require 'Retry session' "$AUDIT" \
   'product readiness audit must record executable retry-session evidence'
-require 'input scope display_global' "$AUDIT" \
-  'product readiness audit must record input-scope visibility evidence'
+require 'target-kind-derived.*display_global' "$AUDIT" \
+  'product readiness audit must record display-global input-scope evidence'
+require 'target_local.*input scope' "$AUDIT" \
+  'product readiness audit must record target-local input-scope evidence'
 require 'Accessibility/input-injection permission' "$AUDIT" \
   'product readiness audit must record input-permission recovery evidence'
 require 'permission_status preflight' "$AUDIT" \
@@ -488,7 +508,7 @@ require 'Refresh targets' "$PLAN" \
   'product closure plan must record the executable target recovery CTA evidence'
 require 'route host_only · no NAT/relay' "$PLAN" \
   'product closure plan must record route-state UI evidence'
-require 'media 18000kbps · 52\.5fps · drops 15 · backpressure 3' "$PLAN" \
+require 'media 18000kbps · 52\.5fps · route direct · drops 15 · backpressure 3' "$PLAN" \
   'product closure plan must record media-quality summary UI evidence'
 require 'media_pipeline_support' "$PLAN" \
   'product closure plan must record frontend media-pipeline support visibility evidence'

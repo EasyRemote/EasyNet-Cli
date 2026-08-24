@@ -1304,3 +1304,41 @@ Product effect:
 - Source and contract tests do not prove a live slow-receiver path; the real
   baseline/degraded-network/backpressure media matrix remains required before
   product completion can be claimed.
+
+## 2026-08-24 — retry_session replaces transport, not the session aggregate
+
+Decision:
+
+- `retry_session` is a recovery instruction for an existing non-terminal
+  RemoteApp session. It preserves session identity, token, consent, selected
+  Resource URA, event history, and authority context.
+- Recovery may retire the old PeerConnection and negotiate a strictly newer
+  transport epoch. It must not invoke `end_session`, mint another consent grant,
+  or call `create_session`.
+- `new_session_required` remains the only recovery outcome that authorizes a
+  replacement session.
+
+Implementation delta:
+
+- Reused the store-owned device-resume transport state machine for the explicit
+  Retry session action and exposed it as `rdRetry`.
+- Renamed its in-flight identity guard from resume-specific to retry-specific so
+  presence recovery and user retry share one idempotent operation.
+- Added a monotonic retry generation in addition to session identity. Offline,
+  end, and reset invalidate that generation, and WebRTC negotiation checks both
+  operation ownership and PeerConnection ownership after every awaited step.
+  This prevents same-session ABA and stale async continuation resurrection.
+- Changed UI recovery copy and capability gates to the actual same-session
+  abilities: `show_session`, `set_description`, `add_ice_candidate`,
+  `watch_events`, and `refresh_lease`.
+- Replaced the source gate that required end-then-create with gates proving no
+  end/create call, stable session/token, watch reattachment, and a newer epoch.
+
+Product effect:
+
+- A daemon `SESSION_REHYDRATED`, `SESSION_DEGRADED`, or `TRANSPORT_FAILED`
+  recovery instruction no longer destroys the aggregate it asks the client to
+  recover.
+- Component/store tests are not live crash/restart evidence; the real recovery
+  runner must still prove post-restart media frames and input on the same
+  session.

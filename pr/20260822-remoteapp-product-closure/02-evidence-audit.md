@@ -429,7 +429,7 @@ Current frontend lifecycle evidence:
 - Frontend session details now render a compact media quality summary from
   daemon/browser `mediaStats`: bitrate, outbound FPS, aggregate drops, and RTP
   sender backpressure appear as status such as
-  `media 18000kbps · 52.5fps · drops 15 · backpressure 3`. This makes adaptive
+  `media 18000kbps · 52.5fps · route direct · drops 15 · backpressure 3`. This makes adaptive
   bitrate/drop behavior visible to operators; it does not prove real codec
   negotiation, host audio, soak, or degraded-network E2E.
 - Frontend protocol/UI now parses and renders daemon-projected
@@ -447,11 +447,13 @@ Current frontend lifecycle evidence:
   of making the closed state vanish as `session=null`; it remains separate from
   canonical Axon Invocation receipts.
 - Frontend RemoteApp UI now exposes `Retry session` when daemon/watch-event
-  state recommends `retry_session`. The CTA composes existing lifecycle
-  abilities in order: `rdEnd`/`remote_desktop.end_session` first, then
-  `rdCreate`/`remote_desktop.create_session` for the selected target. Component
-  coverage proves this order. This closes the short retry UX seam; it does not
-  prove long-outage, crash/restart, revoke, cancel, or timeout E2E.
+  state recommends `retry_session`. The CTA invokes the store-owned same-session
+  transport recovery path: validate with `show_session`, retire the old local
+  PeerConnection, renegotiate with `set_description`, attach a strictly newer
+  transport epoch, restart `watch_events`, and refresh the existing lease.
+  Component/store coverage proves the retry does not call `end_session` or
+  `create_session`. This closes the semantic retry UX seam; it does not prove
+  long-outage, crash/restart, revoke, cancel, or timeout E2E.
 - Permission revocation now terminates the daemon RemoteApp session with the
   stable `target_permission_revoked` reason and a RemoteApp
   `terminal_receipt`. The frontend closes local transport on the revoked-target
@@ -563,16 +565,29 @@ Current frontend lifecycle evidence:
   `target/e2e/remoteapp-crash-restart-probe/20260822-223509-45956`.
   The probe killed the daemon with active RemoteApp session
   `rd-crash-probe-45956`, restarted it, and public
-  `remote_desktop.show_session` returned `session_not_found`. This is
-  authoritative negative evidence: active RemoteApp sessions are not currently
-  rehydrated after daemon crash.
-- `plugins/remote-desktop/src/session_recovery.rs` now defines
-  `RemoteDesktopRecoveryStore` and `RemoteDesktopRecoverySnapshot` as the
-  daemon-local durable snapshot contract for the next recovery implementation
-  slice. The store has round-trip, corrupt-snapshot fail-closed, path-safe
-  session id, and selected Resource URA validation tests. This contract is not
-  yet wired into plugin startup rehydration and does not satisfy the live
-  crash/restart verifier.
+  `remote_desktop.show_session` returned `session_not_found`. This remains the
+  latest live and therefore authoritative historical negative artifact, but it
+  predates the current startup-rehydration wiring and must be rerun before it
+  can describe the current executable behavior.
+- `RemoteDesktopRecoveryStore` is now wired into plugin startup. Non-terminal
+  rows rehydrate as degraded sessions, retain the session token, consent,
+  target binding, input blocker, bounded event replay, and transport epoch high
+  watermark, then restart lease and target monitoring. Unit/runtime tests prove
+  public `show_session`, `watch_events`, `end_session`, and a newer media epoch
+  against the recovered aggregate. This is Stage 1 source evidence; it does not
+  satisfy the live crash/restart verifier.
+- The frontend Retry session action previously translated daemon
+  `retry_session` into `end_session` followed by `create_session`, contradicting
+  the daemon recovery contract and minting a new session/consent path. It now
+  invokes the shared store-owned transport retry state machine: public
+  `show_session`, a new PeerConnection, `set_description` with a strictly newer
+  transport epoch, `watch_events` reattachment, and lease refresh all preserve
+  the original session id/token/consent. Source tests reject end/create during
+  retry. Additional regressions suspend the device while `show_session` and
+  `set_description` are independently in flight; a monotonic retry generation
+  fences both stale continuations, leaves the original session preserved, and
+  prevents a closed PeerConnection from being resurrected. A live
+  daemon-crash/browser-reconnect artifact remains required.
 
 Missing or insufficient product evidence:
 

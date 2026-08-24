@@ -16,3 +16,10 @@
 11. Audio RTP backpressure never blocks the media control loop. Pending encoded
     audio is hard-bounded, stale packets are dropped before fresh packets, and
     the session owns cancellation of the only audio track writer.
+12. `retry_session` preserves the public session id, daemon-local session token,
+    consent grant, selected Resource URA, and event history. It may replace only
+    the local/remote transport generation with a strictly newer transport epoch.
+    Only an explicit `new_session_required` outcome may end the old session and
+    mint a new session or consent grant. Every asynchronous retry continuation is
+    fenced by a monotonic client generation so offline, end, reset, or a newer
+    retry cannot be overwritten by stale session lookup or WebRTC negotiation.
