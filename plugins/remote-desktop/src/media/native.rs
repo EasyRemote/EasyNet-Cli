@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
-use rtc::statistics::report::RTCStatsReportEntry;
+use rtc::statistics::report::{RTCStatsReport, RTCStatsReportEntry};
 #[cfg(target_os = "macos")]
 use rtc::statistics::stats::ice_candidate::RTCIceCandidateStats;
 #[cfg(target_os = "macos")]
@@ -222,14 +222,10 @@ pub(in crate::daemon::plugins::remote_desktop) async fn webrtc_stats_snapshot(
         .and_then(|id| report.candidate_pairs().find(|pair| pair.stats.id == id))
         .or_else(|| report.candidate_pairs().find(|pair| pair.nominated));
     let local_candidate = selected_pair.and_then(|pair| {
-        report
-            .get(&pair.local_candidate_id)
-            .and_then(ice_candidate_stats)
+        candidate_stats_for_pair_id(&report, &pair.local_candidate_id, IceCandidateSide::Local)
     });
     let remote_candidate = selected_pair.and_then(|pair| {
-        report
-            .get(&pair.remote_candidate_id)
-            .and_then(ice_candidate_stats)
+        candidate_stats_for_pair_id(&report, &pair.remote_candidate_id, IceCandidateSide::Remote)
     });
     let outbound = report.outbound_rtp_streams().next();
     let remote_inbound = outbound
@@ -301,10 +297,44 @@ pub(in crate::daemon::plugins::remote_desktop) async fn webrtc_stats_snapshot(
 }
 
 #[cfg(target_os = "macos")]
-fn ice_candidate_stats(entry: &RTCStatsReportEntry) -> Option<&RTCIceCandidateStats> {
-    match entry {
-        RTCStatsReportEntry::LocalCandidate(stats)
-        | RTCStatsReportEntry::RemoteCandidate(stats) => Some(stats),
+#[derive(Clone, Copy)]
+enum IceCandidateSide {
+    Local,
+    Remote,
+}
+
+#[cfg(target_os = "macos")]
+impl IceCandidateSide {
+    fn report_id(self, pair_candidate_id: &str) -> String {
+        match self {
+            Self::Local => format!("RTCLocalIceCandidate_{pair_candidate_id}"),
+            Self::Remote => format!("RTCRemoteIceCandidate_{pair_candidate_id}"),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn candidate_stats_for_pair_id<'a>(
+    report: &'a RTCStatsReport,
+    pair_candidate_id: &str,
+    side: IceCandidateSide,
+) -> Option<&'a RTCIceCandidateStats> {
+    let report_id = side.report_id(pair_candidate_id);
+    candidate_stats_entry(report, pair_candidate_id, side)
+        .or_else(|| candidate_stats_entry(report, &report_id, side))
+}
+
+#[cfg(target_os = "macos")]
+fn candidate_stats_entry<'a>(
+    report: &'a RTCStatsReport,
+    candidate_id: &str,
+    side: IceCandidateSide,
+) -> Option<&'a RTCIceCandidateStats> {
+    match (side, report.get(candidate_id)) {
+        (IceCandidateSide::Local, Some(RTCStatsReportEntry::LocalCandidate(stats))) => Some(stats),
+        (IceCandidateSide::Remote, Some(RTCStatsReportEntry::RemoteCandidate(stats))) => {
+            Some(stats)
+        }
         _ => None,
     }
 }
@@ -336,7 +366,7 @@ fn selected_candidate_route_class(
         .any(|candidate_type| matches!(candidate_type.as_str(), "srflx" | "prflx"))
     {
         Some("stun_srflx")
-    } else if !candidate_types.is_empty()
+    } else if candidate_types.len() == 2
         && candidate_types
             .iter()
             .all(|candidate_type| candidate_type == "host")
@@ -573,9 +603,31 @@ mod tests {
     }
 
     #[test]
+    fn selected_candidate_pair_ids_map_to_rtc_candidate_report_ids() {
+        assert_eq!(
+            IceCandidateSide::Local.report_id("candidate:local-id"),
+            "RTCLocalIceCandidate_candidate:local-id"
+        );
+        assert_eq!(
+            IceCandidateSide::Remote.report_id("candidate:remote-id"),
+            "RTCRemoteIceCandidate_candidate:remote-id"
+        );
+    }
+
+    #[test]
     fn selected_candidate_pair_route_evidence_does_not_guess_missing_stats() {
+        let local_host = ice_candidate_stat(
+            "local-host",
+            RTCStatsType::LocalCandidate,
+            RTCIceCandidateType::Host,
+            "udp",
+        );
         assert_eq!(candidate_type_value(None), None);
         assert_eq!(selected_candidate_route_class(None, None), None);
+        assert_eq!(
+            selected_candidate_route_class(Some(&local_host), None),
+            None
+        );
         assert_eq!(selected_candidate_protocol(None, None), None);
     }
 

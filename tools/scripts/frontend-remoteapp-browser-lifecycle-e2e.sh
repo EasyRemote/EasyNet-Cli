@@ -310,6 +310,34 @@ require(media_scope in {"video_only", "audio_video"},
         "media_pipeline_support_visible.media_scope must be video_only or audio_video")
 require(pipeline.get("product_ready") is False,
         "media_pipeline_support_visible must keep product_ready=false")
+selected_route_class = pipeline.get("selected_route_class")
+selected_pair_state = pipeline.get("selected_pair_state")
+selected_pair_nominated = pipeline.get("selected_pair_nominated")
+selected_local_candidate_type = pipeline.get("selected_local_candidate_type")
+selected_remote_candidate_type = pipeline.get("selected_remote_candidate_type")
+selected_candidate_protocol = pipeline.get("selected_candidate_protocol")
+require(selected_route_class in {"direct", "stun_srflx", "relay"},
+        "media_pipeline_support_visible must expose a known selected_route_class")
+require(isinstance(selected_pair_state, str)
+        and selected_pair_state.lower() == "succeeded",
+        "media_pipeline_support_visible must expose a succeeded selected pair")
+require(selected_pair_nominated is True,
+        "media_pipeline_support_visible must prove the selected pair is nominated")
+require(selected_local_candidate_type in {"host", "srflx", "prflx", "relay"},
+        "media_pipeline_support_visible must expose the selected local candidate type")
+require(selected_remote_candidate_type in {"host", "srflx", "prflx", "relay"},
+        "media_pipeline_support_visible must expose the selected remote candidate type")
+require(selected_candidate_protocol in {"udp", "tcp"},
+        "media_pipeline_support_visible must expose the selected candidate protocol")
+if selected_route_class == "direct":
+    require("host" in {selected_local_candidate_type, selected_remote_candidate_type},
+            "direct selected route must include a host candidate")
+if selected_route_class == "stun_srflx":
+    require(bool({selected_local_candidate_type, selected_remote_candidate_type} & {"srflx", "prflx"}),
+            "stun_srflx selected route must include a reflexive candidate")
+if selected_route_class == "relay":
+    require("relay" in {selected_local_candidate_type, selected_remote_candidate_type},
+            "relay selected route must include a relay candidate")
 blockers = pipeline.get("product_blockers")
 require(isinstance(blockers, list)
         and "remoteapp_media_adaptation_e2e_artifact_missing" in blockers,
@@ -501,6 +529,12 @@ steps = [
             "host_audio_not_implemented",
             "remoteapp_media_adaptation_e2e_artifact_missing",
         ],
+        "selected_route_class": "direct",
+        "selected_pair_state": "succeeded",
+        "selected_pair_nominated": True,
+        "selected_local_candidate_type": "host",
+        "selected_remote_candidate_type": "host",
+        "selected_candidate_protocol": "udp",
     },
     {
         "name": "input_control_attempted_or_policy_blocked",
