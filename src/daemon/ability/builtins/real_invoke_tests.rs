@@ -3327,9 +3327,10 @@ fn real_device_terminal_input_read_resize_round_trip() {
 async fn real_device_terminal_attach_returns_a_bidi_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
+    let io = terminal_io_ability::PtyIoService::new();
     let mut reg = runtime_attached_catalog();
-    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
-    terminal_attach_ability::register(&mut reg, Arc::clone(&pty));
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    terminal_attach_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
@@ -3339,7 +3340,11 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 
     let mut t = terminal_followup_target(
         "terminal.attach",
-        json!({"session_id": sid.clone()}),
+        json!({
+            "session_id": sid.clone(),
+            "attachment_id": "real-invoke-attachment",
+            "expected_epoch": 0,
+        }),
         &sid,
         "stream",
     );
@@ -4119,7 +4124,7 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = runtime_attached_catalog();
-    terminal_attach_ability::register(&mut reg, pty);
+    terminal_attach_ability::register(&mut reg, pty, terminal_io_ability::PtyIoService::new());
     assert!(
         reg.resolve_bidi_with_env("terminal.attach").is_some(),
         "terminal.attach (v2 alias) must be registered as bidi"

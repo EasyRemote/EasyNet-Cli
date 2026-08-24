@@ -3,30 +3,23 @@
 //
 // File: src/daemon/execution/pty/mod.rs
 //
-// Sub-service that owns every live PTY-hosted child process the
-// daemon spawns through `terminal.create`. v1 surface is
-// minimal: create one, close one, look one up. The `_attach` ability
-// (C-M3c) borrows a session through `get` to wire the client's
-// InvokeBidi frames against the PTY master fd.
+// Daemon-side client for the per-user PTY session supervisor. In production
+// the supervisor owns child processes, PTY handles, output buffers, and
+// attachment epochs so sessions survive daemon restarts. Unit tests use the
+// in-process backend below to keep lifecycle tests deterministic.
 //
 // Why a sub-service rather than per-handler statics
 // -------------------------------------------------
-// PTY sessions outlive a single Invoke call. The create handler
-// returns a session_id and exits; the child keeps running until
-// `_close` (or until it exits on its own); the attach handler
-// borrows the same session_id later. That requires process-wide
-// state with a single owner — the same shape PermissionService
-// owns the broker + pending queue. Pinning the ownership at the
-// service boundary lets the create / close / attach handlers all
-// hold an `Arc<PtyService>` without entangling each other.
+// PTY sessions outlive both an Invocation and the daemon process that admitted
+// it. The supervisor is therefore the sole owner of OS handles; this service
+// is an IPC facade used by terminal lifecycle and data-plane abilities. The
+// supervisor does not route or admit Invocations and is not a second Runtime.
 //
 // Concurrency model
 // -----------------
-// Every map operation goes through one `std::sync::Mutex` on the
-// session table. Per-session work (read/write/resize) goes through
-// a per-session `tokio::sync::Mutex` that lives inside the
-// `PtySession` row, so a slow attach loop on session A does NOT
-// block a create / close on session B.
+// Production calls use a bounded newline-delimited JSON protocol over an
+// owner-only local socket. The test backend protects its session table with a
+// process-local mutex and each PTY with a per-session async mutex.
 //
 // portable-pty wraps the unix openpty + child fork+exec sequence
 // behind one `PtySystem` trait; v1 uses the native_pty_system().
@@ -38,15 +31,22 @@
 // Copyright (c) 2026 EasyNet.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+#[cfg(test)]
+use portable_pty::{native_pty_system, CommandBuilder};
+use portable_pty::{MasterPty, PtySize};
+
+pub mod supervisor;
 
 /// Opaque identifier for one PTY session. v1 wraps a UUID v4 string
 /// for printability + cheap equality. The dispatch path treats it
 /// as opaque — handlers never parse it.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PtySessionId(String);
 
 impl PtySessionId {
@@ -66,7 +66,7 @@ impl std::fmt::Display for PtySessionId {
 
 /// Spec the create handler hands the service. Field shapes match the
 /// terminal.create wire schema (see `pty_lifecycle_ability.rs`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PtyCreateSpec {
     /// Initial column count. Defaults to 80 when unset.
     pub cols: u16,
@@ -88,7 +88,7 @@ pub struct PtyCreateSpec {
 
 /// Read-only snapshot of a live PTY session. This is the daemon-side
 /// truth exposed by `terminal.list`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PtySessionSnapshot {
     pub id: PtySessionId,
     pub created_unix_ms: u64,
@@ -159,7 +159,7 @@ impl std::fmt::Debug for PtySession {
 }
 
 /// Outcome of a close call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PtyCloseOutcome {
     /// True when a row matched; false when the id was unknown
     /// (idempotent close — the surface is "remove if present").
@@ -175,9 +175,13 @@ pub struct PtyCloseOutcome {
 /// state lives behind `Arc<Mutex<...>>`).
 #[derive(Clone)]
 pub struct PtyService {
+    #[cfg(test)]
     inner: Arc<Mutex<PtyServiceInner>>,
+    #[cfg(not(test))]
+    supervisor: supervisor::SupervisorClient,
 }
 
+#[cfg(test)]
 struct PtyServiceInner {
     sessions: HashMap<PtySessionId, Arc<PtySession>>,
 }
@@ -191,9 +195,12 @@ impl Default for PtyService {
 impl PtyService {
     pub fn new() -> Self {
         Self {
+            #[cfg(test)]
             inner: Arc::new(Mutex::new(PtyServiceInner {
                 sessions: HashMap::new(),
             })),
+            #[cfg(not(test))]
+            supervisor: supervisor::SupervisorClient::for_current_user(),
         }
     }
 
@@ -206,58 +213,65 @@ impl PtyService {
     ///     resources)
     ///   * spawn failure (command not found, permission denied)
     pub fn create(&self, spec: PtyCreateSpec) -> anyhow::Result<PtySessionId> {
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                cols: spec.cols,
-                rows: spec.rows,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| anyhow::anyhow!("openpty: {e}"))?;
-
-        let cmd_str = spec
-            .command
-            .clone()
-            .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| "/bin/sh".to_string());
-        let mut cmd = CommandBuilder::new(&cmd_str);
-        for arg in &spec.command_args {
-            cmd.arg(arg);
+        #[cfg(not(test))]
+        {
+            return self.supervisor.create(spec);
         }
-        if let Some(cwd) = &spec.cwd {
-            cmd.cwd(cwd);
+        #[cfg(test)]
+        {
+            let pty_system = native_pty_system();
+            let pair = pty_system
+                .openpty(PtySize {
+                    cols: spec.cols,
+                    rows: spec.rows,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| anyhow::anyhow!("openpty: {e}"))?;
+
+            let cmd_str = spec
+                .command
+                .clone()
+                .or_else(|| std::env::var("SHELL").ok())
+                .unwrap_or_else(|| "/bin/sh".to_string());
+            let mut cmd = CommandBuilder::new(&cmd_str);
+            for arg in &spec.command_args {
+                cmd.arg(arg);
+            }
+            if let Some(cwd) = &spec.cwd {
+                cmd.cwd(cwd);
+            }
+            for (k, v) in &spec.env {
+                cmd.env(k, v);
+            }
+
+            let child = pair
+                .slave
+                .spawn_command(cmd)
+                .map_err(|e| anyhow::anyhow!("spawn `{cmd_str}`: {e}"))?;
+            // Slave fd held by the child; drop our handle so the only
+            // process owning it is the child.
+            drop(pair.slave);
+
+            let id = PtySessionId::new(uuid::Uuid::new_v4().to_string());
+            let created_unix_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let session = Arc::new(PtySession {
+                id: id.clone(),
+                created_unix_ms,
+                command: Some(cmd_str),
+                command_args: spec.command_args.clone(),
+                cwd: spec.cwd.clone(),
+                master: tokio::sync::Mutex::new(pair.master),
+                child: std::sync::Mutex::new(Some(child)),
+            });
+
+            let mut g = self.inner.lock().expect("pty service lock");
+            g.sessions.insert(id.clone(), session);
+            Ok(id)
         }
-        for (k, v) in &spec.env {
-            cmd.env(k, v);
-        }
-
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| anyhow::anyhow!("spawn `{cmd_str}`: {e}"))?;
-        // Slave fd held by the child; drop our handle so the only
-        // process owning it is the child.
-        drop(pair.slave);
-
-        let id = PtySessionId::new(uuid::Uuid::new_v4().to_string());
-        let created_unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let session = Arc::new(PtySession {
-            id: id.clone(),
-            created_unix_ms,
-            command: Some(cmd_str),
-            command_args: spec.command_args.clone(),
-            cwd: spec.cwd.clone(),
-            master: tokio::sync::Mutex::new(pair.master),
-            child: std::sync::Mutex::new(Some(child)),
-        });
-
-        let mut g = self.inner.lock().expect("pty service lock");
-        g.sessions.insert(id.clone(), session);
-        Ok(id)
     }
 
     /// Look up a live session. Returns the same `Arc` the service
@@ -265,27 +279,44 @@ impl PtyService {
     /// it alive across `await` points without taking the service
     /// lock for the whole loop.
     pub fn get(&self, id: &PtySessionId) -> Option<Arc<PtySession>> {
-        let g = self.inner.lock().expect("pty service lock");
-        g.sessions.get(id).cloned()
+        #[cfg(not(test))]
+        {
+            let _ = id;
+            return None;
+        }
+        #[cfg(test)]
+        {
+            let g = self.inner.lock().expect("pty service lock");
+            g.sessions.get(id).cloned()
+        }
     }
 
     /// Return a stable snapshot of every live PTY session. The caller
     /// receives cloned metadata only; PTY handles never escape.
-    pub fn list(&self) -> Vec<PtySessionSnapshot> {
-        let g = self.inner.lock().expect("pty service lock");
-        let mut sessions = g
-            .sessions
-            .values()
-            .map(|session| PtySessionSnapshot {
-                id: session.id.clone(),
-                created_unix_ms: session.created_unix_ms,
-                command: session.command.clone(),
-                command_args: session.command_args.clone(),
-                cwd: session.cwd.clone(),
-            })
-            .collect::<Vec<_>>();
-        sessions.sort_by_key(|session| session.created_unix_ms);
-        sessions
+    /// Fallible lifecycle read used by wire handlers. Supervisor outages must
+    /// remain visible to callers rather than masquerading as an empty list.
+    pub fn try_list(&self) -> anyhow::Result<Vec<PtySessionSnapshot>> {
+        #[cfg(not(test))]
+        {
+            return self.supervisor.list();
+        }
+        #[cfg(test)]
+        {
+            let g = self.inner.lock().expect("pty service lock");
+            let mut sessions = g
+                .sessions
+                .values()
+                .map(|session| PtySessionSnapshot {
+                    id: session.id.clone(),
+                    created_unix_ms: session.created_unix_ms,
+                    command: session.command.clone(),
+                    command_args: session.command_args.clone(),
+                    cwd: session.cwd.clone(),
+                })
+                .collect::<Vec<_>>();
+            sessions.sort_by_key(|session| session.created_unix_ms);
+            Ok(sessions)
+        }
     }
 
     /// Close a session. Idempotent: returns `ack: false` when the id
@@ -305,43 +336,197 @@ impl PtyService {
     ///   3. Try-wait once for the exit status; if it's not yet
     ///      reaped return `exit_status: None`. The OS reaper still
     ///      claims it.
+    #[cfg(test)]
     pub fn close(&self, id: &PtySessionId) -> PtyCloseOutcome {
-        let session = {
-            let mut g = self.inner.lock().expect("pty service lock");
-            g.sessions.remove(id)
-        };
-        let Some(session) = session else {
-            return PtyCloseOutcome {
-                ack: false,
-                exit_status: None,
+        self.try_close(id).expect("in-process PTY close")
+    }
+
+    /// Fallible lifecycle mutation used by wire handlers. IPC failure is not
+    /// equivalent to an idempotent close of an unknown session.
+    pub fn try_close(&self, id: &PtySessionId) -> anyhow::Result<PtyCloseOutcome> {
+        #[cfg(not(test))]
+        {
+            return self.supervisor.close(id);
+        }
+        #[cfg(test)]
+        {
+            let session = {
+                let mut g = self.inner.lock().expect("pty service lock");
+                g.sessions.remove(id)
             };
-        };
-        let mut child_slot = session.child.lock().expect("pty child slot");
-        let Some(mut child) = child_slot.take() else {
-            // Already taken (close racing with itself). Treat as
-            // ack=true since the row was present when we removed it.
-            return PtyCloseOutcome {
+            let Some(session) = session else {
+                return Ok(PtyCloseOutcome {
+                    ack: false,
+                    exit_status: None,
+                });
+            };
+            let mut child_slot = session.child.lock().expect("pty child slot");
+            let Some(mut child) = child_slot.take() else {
+                // Already taken (close racing with itself). Treat as
+                // ack=true since the row was present when we removed it.
+                return Ok(PtyCloseOutcome {
+                    ack: true,
+                    exit_status: None,
+                });
+            };
+            // SIGHUP on unix; ignored if the child already exited.
+            let _ = child.kill();
+            // exit_code() returns u32; preserve as u32 (POSIX exit codes
+            // are 0-255). The previous `as i32` cast was a footgun for
+            // the rare cases when extended status fields encode signal
+            // info in high bits.
+            let exit_status = child.try_wait().ok().flatten().map(|s| s.exit_code());
+            Ok(PtyCloseOutcome {
                 ack: true,
-                exit_status: None,
-            };
-        };
-        // SIGHUP on unix; ignored if the child already exited.
-        let _ = child.kill();
-        // exit_code() returns u32; preserve as u32 (POSIX exit codes
-        // are 0-255). The previous `as i32` cast was a footgun for
-        // the rare cases when extended status fields encode signal
-        // info in high bits.
-        let exit_status = child.try_wait().ok().flatten().map(|s| s.exit_code());
-        PtyCloseOutcome {
-            ack: true,
-            exit_status,
+                exit_status,
+            })
         }
     }
 
     /// Test/operator helper: how many sessions are currently alive.
     pub fn live_count(&self) -> usize {
-        let g = self.inner.lock().expect("pty service lock");
-        g.sessions.len()
+        #[cfg(not(test))]
+        {
+            return self.supervisor.list().map(|rows| rows.len()).unwrap_or(0);
+        }
+        #[cfg(test)]
+        {
+            let g = self.inner.lock().expect("pty service lock");
+            g.sessions.len()
+        }
+    }
+
+    /// Fallible existence check for Invocation handlers. A supervisor IPC
+    /// outage must not be reported as SESSION_NOT_FOUND.
+    pub fn try_contains(&self, id: &PtySessionId) -> anyhow::Result<bool> {
+        #[cfg(not(test))]
+        {
+            self.supervisor.exists(id)
+        }
+        #[cfg(test)]
+        {
+            Ok(self.get(id).is_some())
+        }
+    }
+
+    pub(crate) fn is_supervised(&self) -> bool {
+        cfg!(not(test))
+    }
+
+    pub async fn resize_session(
+        &self,
+        id: &PtySessionId,
+        cols: u16,
+        rows: u16,
+    ) -> anyhow::Result<()> {
+        #[cfg(not(test))]
+        {
+            self.supervisor.resize(id, cols, rows)
+        }
+        #[cfg(test)]
+        {
+            self.get(id)
+                .ok_or_else(|| anyhow::anyhow!("unknown session_id `{id}`"))?
+                .resize(cols, rows)
+                .await
+        }
+    }
+
+    pub(crate) fn supervised_write(
+        &self,
+        id: &PtySessionId,
+        bytes: &[u8],
+    ) -> Option<anyhow::Result<bool>> {
+        #[cfg(not(test))]
+        {
+            Some(self.supervisor.write(id, bytes))
+        }
+        #[cfg(test)]
+        {
+            let _ = (id, bytes);
+            None
+        }
+    }
+
+    pub(crate) fn supervised_read(
+        &self,
+        id: &PtySessionId,
+        timeout: std::time::Duration,
+        max_bytes: usize,
+    ) -> Option<anyhow::Result<supervisor::SupervisorReadOutcome>> {
+        #[cfg(not(test))]
+        {
+            Some(self.supervisor.read(id, timeout, max_bytes))
+        }
+        #[cfg(test)]
+        {
+            let _ = (id, timeout, max_bytes);
+            None
+        }
+    }
+
+    pub(crate) fn supervised_claim(
+        &self,
+        id: &PtySessionId,
+        attachment_id: &str,
+        expected_epoch: u64,
+    ) -> Option<anyhow::Result<u64>> {
+        #[cfg(not(test))]
+        {
+            Some(self.supervisor.claim(id, attachment_id, expected_epoch))
+        }
+        #[cfg(test)]
+        {
+            let _ = (id, attachment_id, expected_epoch);
+            None
+        }
+    }
+
+    pub(crate) fn supervised_release(
+        &self,
+        id: &PtySessionId,
+        attachment_id: &str,
+        attached_epoch: u64,
+    ) -> Option<anyhow::Result<u64>> {
+        #[cfg(not(test))]
+        {
+            Some(self.supervisor.release(id, attachment_id, attached_epoch))
+        }
+        #[cfg(test)]
+        {
+            let _ = (id, attachment_id, attached_epoch);
+            None
+        }
+    }
+
+    pub(crate) fn supervised_attachment(
+        &self,
+        id: &PtySessionId,
+    ) -> Option<anyhow::Result<(u64, Option<String>)>> {
+        #[cfg(not(test))]
+        {
+            Some(self.supervisor.attachment(id))
+        }
+        #[cfg(test)]
+        {
+            let _ = id;
+            None
+        }
+    }
+
+    pub(crate) fn supervised_exit_status(
+        &self,
+        id: &PtySessionId,
+    ) -> Option<anyhow::Result<Option<u32>>> {
+        #[cfg(not(test))]
+        {
+            Some(self.supervisor.exit_status(id))
+        }
+        #[cfg(test)]
+        {
+            let _ = id;
+            None
+        }
     }
 }
 

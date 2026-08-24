@@ -118,6 +118,10 @@ required-features = ["axon-pb"]
 name = "easynet-keyring"
 path = "src/bin/easynet-keyring.rs"
 
+[[bin]]
+name = "easynet-session-supervisor"
+path = "src/bin/easynet-session-supervisor.rs"
+
 # Maintainer tool. Regenerates grouped system AbilityDescriptor TOMLs
 # under ability-descriptors/system/. Run after any change to a
 # `description_*` / `input_schema_*` function; the

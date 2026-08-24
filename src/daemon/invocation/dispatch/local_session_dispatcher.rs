@@ -1287,12 +1287,29 @@ impl LocalAxonSessionDispatcher {
                     disposition: BidiOutputDisposition::Data,
                 }))
             }
-            Some("exit") => Ok(Some(BidiOutputProjection {
-                call_id,
-                payload: Vec::new(),
-                failure: None,
-                disposition: BidiOutputDisposition::Data,
-            })),
+            Some("attached" | "detached" | "output_gap" | "exit") => {
+                let payload = serde_json::to_vec(value).map_err(|err| {
+                    SessionDispatchError::Other(format!("encode pty lifecycle frame failed: {err}"))
+                })?;
+                Ok(Some(BidiOutputProjection {
+                    call_id,
+                    payload,
+                    failure: None,
+                    disposition: BidiOutputDisposition::Data,
+                }))
+            }
+            Some("error") => {
+                let error = HandlerErrorFrame::parse(value, "pty error frame")?;
+                let payload = serde_json::to_vec(value).map_err(|err| {
+                    SessionDispatchError::Other(format!("encode pty error frame failed: {err}"))
+                })?;
+                Ok(Some(BidiOutputProjection {
+                    call_id,
+                    payload,
+                    failure: Some(error.failure()),
+                    disposition: BidiOutputDisposition::Failure,
+                }))
+            }
             Some("warn") => Ok(None),
             Some(other) => Err(SessionDispatchError::Other(format!(
                 "unknown pty handler frame type {other:?}"
@@ -3987,6 +4004,38 @@ mod tests {
             bytes, "device-B-bytes-from-real-fs-read",
             "payload bytes must come from the device-side filesystem, not a daemon-internal stub"
         );
+    }
+
+    #[test]
+    fn pty_output_projection_preserves_lifecycle_and_uses_native_binary_stdout() {
+        let attached = LocalAxonSessionDispatcher::map_remote_pty_output(
+            17,
+            &json!({"type": "attached", "attachment_id": "a", "epoch": 2}),
+        )
+        .expect("attached projection")
+        .expect("attached frame");
+        let attached_json: Value =
+            serde_json::from_slice(&attached.payload).expect("attached JSON payload");
+        assert_eq!(attached_json["type"], "attached");
+        assert_eq!(attached_json["epoch"], 2);
+
+        let stdout = LocalAxonSessionDispatcher::map_remote_pty_output(
+            17,
+            &json!({"type": "stdout", "data": "AAEC"}),
+        )
+        .expect("stdout projection")
+        .expect("stdout frame");
+        assert_eq!(stdout.payload, vec![0, 1, 2]);
+
+        let exit = LocalAxonSessionDispatcher::map_remote_pty_output(
+            17,
+            &json!({"type": "exit", "status": 0}),
+        )
+        .expect("exit projection")
+        .expect("exit frame");
+        let exit_json: Value = serde_json::from_slice(&exit.payload).expect("exit JSON payload");
+        assert_eq!(exit_json["type"], "exit");
+        assert_eq!(exit_json["status"], 0);
     }
 
     #[test]

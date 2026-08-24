@@ -737,7 +737,7 @@ fn build_registry_with_services_result_inner(
     let pty = Arc::new(PtyService::new());
     let terminal_io = terminal_io_ability::PtyIoService::new();
     terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(terminal_io.clone()));
-    terminal_attach_ability::register(&mut reg, Arc::clone(&pty));
+    terminal_attach_ability::register(&mut reg, Arc::clone(&pty), terminal_io.clone());
     // terminal.input / _read / _resize — unary-RPC data
     // plane. The backend's PTYDriver invokes these for the
     // production HTTP-session terminal flow before the WebSocket
