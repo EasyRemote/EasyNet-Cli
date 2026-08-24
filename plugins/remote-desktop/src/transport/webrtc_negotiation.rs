@@ -24,6 +24,7 @@ use crate::daemon::plugins::remote_desktop::request::{
 };
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::transport::{
     start_direct_webrtc_endpoint, StartDirectWebRtcEndpointRequest,
@@ -75,10 +76,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
         request.plugin.target_snapshot_executor(),
     );
     let epoch = request.plugin.transport_manager().allocate_epoch();
-    request
+    let recovery_snapshot = request
         .plugin
         .session_store()
-        .with_sessions(|sessions| -> anyhow::Result<()> {
+        .with_sessions(|sessions| -> anyhow::Result<RemoteDesktopRecoverySnapshot> {
             let session = sessions.get_mut(&session_id).ok_or_else(|| {
                 anyhow::anyhow!(
                     "{ABILITY_SET_DESCRIPTION}: session {session_id:?} disappeared before WebRTC negotiation; reason={REASON_SESSION_NOT_FOUND}"
@@ -91,9 +92,26 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
                 &request.access_args,
                 session,
             )?;
-            session.begin_webrtc_negotiation(epoch);
-            Ok(())
+            if !session.begin_webrtc_negotiation(epoch) {
+                anyhow::bail!(
+                    "{ABILITY_SET_DESCRIPTION}: transport epoch {} did not advance session {session_id:?}",
+                    epoch.value()
+                );
+            }
+            RemoteDesktopRecoverySnapshot::from_session(session)
         })?;
+    if let Err(error) = request.plugin.persist_recovery_snapshot(&recovery_snapshot) {
+        request
+            .plugin
+            .session_store()
+            .mark_direct_webrtc_generation_failed(
+                &session_id,
+                epoch,
+                "transport_epoch_checkpoint_failed",
+                error.to_string(),
+            );
+        return Err(error);
+    }
     let answer = match start_direct_webrtc_endpoint(StartDirectWebRtcEndpointRequest {
         sessions: request.plugin.session_store(),
         transports: request.plugin.transport_manager(),
@@ -108,12 +126,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
     }) {
         Ok(answer) => answer,
         Err(error) => {
-            request.plugin.session_store().mark_direct_webrtc_failed(
-                &session_id,
-                epoch,
-                "webrtc_endpoint_setup_failed",
-                error.to_string(),
-            );
+            request
+                .plugin
+                .session_store()
+                .mark_direct_webrtc_generation_failed(
+                    &session_id,
+                    epoch,
+                    "webrtc_endpoint_setup_failed",
+                    error.to_string(),
+                );
             return Err(error);
         }
     };

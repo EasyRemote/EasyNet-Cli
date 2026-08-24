@@ -247,6 +247,18 @@ async function startWebRtc(
   options: { endSessionOnTransportFailure?: boolean } = {},
 ) {
   const endSessionOnTransportFailure = options.endSessionOnTransportFailure ?? true
+  const negotiatedTransportEpoch = view.transportEpoch
+  if (!negotiatedTransportEpoch) {
+    throw new Error('Remote desktop WebRTC negotiation returned no transport epoch')
+  }
+  void invokeMediaUnary('remote_desktop.add_ice_candidate', {
+    args: {
+      session_id: view.sessionId,
+      session_token: view.sessionToken,
+      transport_epoch: negotiatedTransportEpoch,
+      candidate: {},
+    },
+  })
   if (!endSessionOnTransportFailure) {
     patchEntry(key, { webrtcStatus: 'remote desktop transport failed; session preserved for reconnect' })
     closeAttach(key, 'webrtc_failed_resume', { keepSessionPolling: true })
@@ -425,11 +437,14 @@ function WebRtcVideoViewport({
   const videoWithFrameCallback = video as HTMLVideoElement & {
     requestVideoFrameCallback?: (callback: () => void) => number
   }
+  const playbackState = {
+    framePresented: onPresented,
+  }
   videoWithFrameCallback.requestVideoFrameCallback?.(() => {
-    onPresented()
+    playbackState.framePresented()
   })
   const handlePlaying = () => {
-    if (!videoWithFrameCallback.requestVideoFrameCallback) onPresented()
+    if (!videoWithFrameCallback.requestVideoFrameCallback) playbackState.framePresented()
   }
   video.addEventListener('playing', handlePlaying)
   video.addEventListener('stalled', onStalled)
@@ -794,6 +809,10 @@ it('preserves and rebinds remote desktop sessions across device offline resume',
   expect(useMediaChannelStore.getState().entries[key].session.sessionToken).toBe('session-token')
   expect(mocks.invokeMediaUnary).toHaveBeenCalledWith('remote_desktop.show_session', expect.anything())
   expect(mocks.invokeMediaUnary).toHaveBeenCalledWith('remote_desktop.set_description', expect.anything())
+  expect(mocks.invokeMediaUnary).toHaveBeenCalledWith(
+    'remote_desktop.add_ice_candidate',
+    expect.objectContaining({ args: expect.objectContaining({ transport_epoch: 3 }) }),
+  )
   expect(mocks.invokeMediaStream).toHaveBeenCalledWith('remote_desktop.watch_events', expect.anything(), expect.anything())
 })
 TS

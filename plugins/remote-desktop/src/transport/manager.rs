@@ -23,6 +23,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::runtime::Handle;
 use tokio::sync::watch;
@@ -72,13 +73,32 @@ impl RemoteDesktopTransportManager {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
         Self {
             endpoints: Mutex::new(HashMap::new()),
-            next_epoch: AtomicU64::new(1),
+            // Epochs are public stale-callback fences, so a daemon restart
+            // must not reset the namespace to one. Recovery snapshots tighten
+            // this seed further through `observe_prior_epoch`.
+            next_epoch: AtomicU64::new(process_epoch_seed()),
             runtime: Mutex::new(None),
         }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn allocate_epoch(&self) -> TransportEpoch {
-        TransportEpoch::new(self.next_epoch.fetch_add(1, Ordering::Relaxed))
+        let value = self.next_epoch.fetch_add(1, Ordering::AcqRel);
+        assert_ne!(
+            value,
+            u64::MAX,
+            "RemoteApp transport epoch namespace exhausted"
+        );
+        TransportEpoch::new(value)
+    }
+
+    /// Move the process-local allocator past an epoch persisted by an earlier
+    /// daemon process. This is idempotent and safe to call for every recovered
+    /// session before the plugin accepts new offers.
+    pub(in crate::daemon::plugins::remote_desktop) fn observe_prior_epoch(&self, epoch: u64) {
+        let next = epoch
+            .checked_add(1)
+            .expect("persisted RemoteApp transport epoch namespace exhausted");
+        self.next_epoch.fetch_max(next, Ordering::AcqRel);
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn activate_endpoint(
@@ -187,6 +207,14 @@ impl RemoteDesktopTransportManager {
     }
 }
 
+fn process_epoch_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_micros().min(u64::MAX as u128 - 1) as u64)
+        .unwrap_or(1)
+        .max(1)
+}
+
 impl Drop for RemoteDesktopTransportManager {
     fn drop(&mut self) {
         let endpoints = match self.endpoints.get_mut() {
@@ -196,5 +224,23 @@ impl Drop for RemoteDesktopTransportManager {
         for (_, endpoint) in endpoints {
             endpoint.stop_and_join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocator_is_monotonic_and_advances_past_recovered_epochs() {
+        let manager = RemoteDesktopTransportManager::new();
+        let first = manager.allocate_epoch();
+        let second = manager.allocate_epoch();
+        assert!(second > first);
+
+        let recovered = second.value().saturating_add(10_000);
+        manager.observe_prior_epoch(recovered);
+        let resumed = manager.allocate_epoch();
+        assert!(resumed.value() > recovered);
     }
 }

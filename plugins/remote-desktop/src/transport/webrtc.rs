@@ -170,7 +170,7 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
                 let _ = self.connected_tx.try_send(());
             }
             RTCPeerConnectionState::Failed => {
-                self.sessions.mark_direct_webrtc_failed(
+                self.sessions.mark_direct_webrtc_generation_failed(
                     &self.session_id,
                     self.epoch,
                     "webrtc_peer_connection_failed",
@@ -180,8 +180,12 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
                 self.transports
                     .stop_endpoint_if_epoch(&self.session_id, self.epoch);
             }
-            RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
-                self.sessions.mark_direct_webrtc_failed(
+            RTCPeerConnectionState::Disconnected => {
+                self.sessions
+                    .mark_direct_webrtc_disconnected(&self.session_id, self.epoch);
+            }
+            RTCPeerConnectionState::Closed => {
+                self.sessions.mark_direct_webrtc_generation_failed(
                     &self.session_id,
                     self.epoch,
                     "webrtc_peer_connection_closed",

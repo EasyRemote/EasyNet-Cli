@@ -146,7 +146,7 @@ pub fn set_description_input_schema() -> Value {
 
 /// Human-readable contract for `remote_desktop.add_ice_candidate`.
 pub fn add_ice_candidate_description() -> &'static str {
-    "Append one ICE candidate to a remote desktop session's signaling log."
+    "Append one ICE candidate to the active epoch of a remote desktop session's signaling log."
 }
 
 /// JSON input schema for `remote_desktop.add_ice_candidate`.
@@ -154,10 +154,11 @@ pub fn add_ice_candidate_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["session_id", "session_token", "candidate"],
+        "required": ["session_id", "session_token", "transport_epoch", "candidate"],
         "properties": {
             "session_id": { "type": "string" },
             "session_token": { "type": "string" },
+            "transport_epoch": { "type": "integer", "minimum": 1 },
             "candidate": { "type": "object" }
         }
     })

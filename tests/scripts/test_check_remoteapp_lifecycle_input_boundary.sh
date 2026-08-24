@@ -25,6 +25,7 @@ write_fixture() {
 relay_ready
 Cross-display application window-set rebind is implemented through the explicit pending-media-rebind state machine and emits TARGET_REBOUND only after a renewed capture proof commits.
 Direct WebRTC route discovery is provider-backed. Host candidates, configured STUN server-reflexive routes, standard TURN relay routes, and EasyNet relay routes are represented as typed route evidence.
+Target-local input snapshot validation uses a 50 ms monotonic deadline.
 MD
 
   cat >"$SANDBOX/plugins/remote-desktop/src/constants.rs" <<'RS'
@@ -259,6 +260,16 @@ fn mark_active_media_source_lost() {
     self.transport.mark_media_source_lost(epoch);
 }
 
+fn begin_webrtc_negotiation() {
+    self.signaling.begin_transport_generation();
+}
+
+fn mark_webrtc_generation_failed_with_context() {
+    self.transport.mark_failed(epoch);
+    self.lifecycle.suspend();
+    session_events::webrtc_failed_with_context();
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -382,6 +393,9 @@ mod tests {
     fn pending_media_rebind_failure_rejects_session_rebinding() {}
 
     #[test]
+    fn pending_media_rebind_candidate_failure_restores_active_session() {}
+
+    #[test]
     fn production_media_ready_requires_target_scope_ready() {
         assert!(
             !session.production_media_ready(),
@@ -409,6 +423,8 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_recovery.rs" <<'RS'
 struct RemoteDesktopRecoverySnapshot {
+    #[serde(default)]
+    transport_epoch_high_watermark: u64,
     #[serde(default)]
     input_runtime_block_reason: Option<String>,
 }
@@ -502,6 +518,10 @@ fn deactivate_input_for_runtime_block() {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_transport_state.rs" <<'RS'
+struct RemoteDesktopTransportState {
+    epoch_high_watermark: u64,
+}
+
 enum PrimaryMediaPhase {
     MediaSourceLost,
     Failed,
@@ -510,6 +530,12 @@ enum PrimaryMediaPhase {
 fn can_transition_primary() {
     match from {
         PrimaryMediaPhase::MediaSourceLost => matches!(to, PrimaryMediaPhase::Failed),
+    }
+}
+
+fn begin_primary() {
+    if epoch.value() <= self.epoch_high_watermark {
+        return false;
     }
 }
 
@@ -929,12 +955,14 @@ fn mark_direct_webrtc_media_ready(session_id: &str) {
     direct_webrtc_endpoint_ura(session_id);
 }
 
-fn mark_direct_webrtc_failed() {
+fn mark_direct_webrtc_generation_failed() {
     WebRtcFailureEventKind::TransportFailed;
     webrtc_transport_failure_context();
 }
 
 fn fail_pending_media_rebind_for_session() {}
+
+fn supersede_pending_media_rebind_for_session() {}
 
 fn expire_target_rebind_deadline_for_session() {}
 
@@ -951,7 +979,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_webrtc_transport_failure_projects_recovery_context() {
+    fn direct_webrtc_transport_failure_suspends_session_for_a_new_generation() {
         assert_eq!(event["reason_code"], json!("transport_route_unavailable"));
         assert_eq!(event["recoverability"], json!("retry_session"));
         assert_eq!(event["payload"]["failure_domain"], json!("transport"));
@@ -971,6 +999,9 @@ fn fail_pending_media_rebind() {}
 mod tests {
     #[test]
     fn native_media_rebind_failure_projects_typed_target_lifecycle() {}
+
+    #[test]
+    fn native_media_rebind_candidate_failure_preserves_active_generation() {}
 }
 RS
 
@@ -1003,6 +1034,10 @@ fn mark_backend_unavailable() {
 
 fn commit_started_endpoint(session_id: &str) {
     direct_webrtc_endpoint_ura(session_id);
+}
+
+fn begin_generation() {
+    plugin.persist_recovery_snapshot(&recovery_snapshot);
 }
 RS
 
@@ -1230,6 +1265,7 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/input.rs" <<'RS'
 const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] = &["clipboard", "file_drop"];
+const TARGET_INPUT_GUARD_PROVIDER_DEADLINE: Duration = Duration::from_millis(50);
 
 fn unsupported_input_channel_types_value() {}
 
@@ -1307,8 +1343,18 @@ fn current_session_effective_input_policy() {
 }
 
 fn target_input_guard_validation() {
-    validate_live_target_input();
-    validate_live_target_pointer_input(binding, snapshot, point.x, point.y);
+    let sample = executor.sample_for_input(TARGET_INPUT_GUARD_PROVIDER_DEADLINE)?;
+    validate_target_pointer_input_observation(
+        sample.observation(),
+        binding,
+        snapshot,
+        point.x,
+        point.y,
+    );
+}
+
+fn target_snapshot_error_reason() {
+    "target_input_guard_deadline_exceeded";
 }
 
 fn display_interactive_without_input_consent_remains_view_only() {}
@@ -1341,6 +1387,9 @@ fn data_channel_loop() {
         sessions.mark_input_permission_blocked(&session_id, epoch, reason);
     }
 }
+
+#[test]
+fn target_local_input_provider_hang_rejects_with_bounded_deadline() {}
 
 const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
 const MAX_CLIENT_SEQUENCE: u64 = 9_007_199_254_740_991;
@@ -1749,10 +1798,12 @@ fn observe_bound_session_target_once() {
     };
     sessions.expire_target_rebind_deadline_for_session();
     TargetObservationPollResult::rebind_deadline_expired(media_source_lost);
-    record_target_observation_for_session();
+    commit_target_observation_for_session();
 }
 
-fn validate_live_target_input() {}
+fn validate_target_input_observation() {}
+
+fn validate_target_pointer_input_observation() {}
 
 enum TargetInputGuardFailure {
     PointerOutsideTargetSurface,
@@ -1917,10 +1968,47 @@ fn spawn_target_monitor_worker() -> std::io::Result<JoinHandle<()>> {
         .spawn(move || run_target_monitor(plugin, rx))
 }
 
+fn apply_supervisor_command() {}
+
+fn apply_generation_command() {}
+
+fn spawn_target_monitor_generation() {}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn target_monitor_command_state_machine_tracks_cancels_and_shuts_down() {}
+
+    #[test]
+    fn snapshot_deadline_fences_late_result_and_bounds_native_call_count() {}
+
+    #[test]
+    fn provider_hang_exhausts_budget_without_spawning_unbounded_native_calls() {
+        // plugin shutdown must not join the blocked native provider call
+    }
+
+    #[test]
+    fn input_deadline_shares_monitor_single_flight_and_fences_monitor_result() {}
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/target_snapshot.rs" <<'RS'
+struct TargetSnapshotDeadlineExecutor;
+
+enum TargetSnapshotOwner {
+    MonitorGeneration,
+    InputRequest,
+}
+
+fn sample_for_generation() {
+    let _ = receiver.recv_timeout(remaining);
+    if completed.owner != owner {
+        return;
+    }
+}
+
+fn sample_for_input() {
+    let _ = TargetSnapshotOwner::InputRequest;
 }
 RS
 
@@ -1967,6 +2055,12 @@ fn track_session_target(plugin: &Arc<RemoteDesktopPlugin>, session_id: String) -
 
 fn cancel_session_target_tracking(&self, session_id: &str) {
     self.target_monitor.cancel(session_id);
+}
+
+fn rehydrate_recovery_snapshots() {
+    plugin
+        .transport_manager()
+        .observe_prior_epoch(snapshot.transport_epoch_high_watermark());
 }
 RS
 
@@ -2404,19 +2498,19 @@ perl -0pi -e 's/assert_eq!\(rebind_failed\["target_identity_epoch"\], json!\(ses
 run_fail 'session aggregate must assert TARGET_REBIND_FAILED top-level target identity epoch'
 
 write_fixture
-perl -0pi -e 's/pending_media_rebind_failure_rejects_session_rebinding/pending_media_rebind_failure_leaves_session_rebinding/' \
+perl -0pi -e 's/pending_media_rebind_candidate_failure_restores_active_session/pending_media_rebind_candidate_failure_degrades_active_session/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
-run_fail 'session aggregate must reject Rebinding when pending media source rebuild fails'
+run_fail 'session aggregate must preserve the committed media generation when a pending candidate fails'
 
 write_fixture
-perl -0pi -e 's/fail_pending_media_rebind_for_session/native_rebind_error_bridge_removed/' \
+perl -0pi -e 's/supersede_pending_media_rebind_for_session/native_rebind_supersession_bridge_removed/' \
   "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
-run_fail 'session store must expose a target-lifecycle failure projection for native pending media rebind failures'
+run_fail 'session store must expose the aggregate-owned supersession path for rejected native rebind candidates'
 
 write_fixture
-perl -0pi -e 's/native_media_rebind_failure_projects_typed_target_lifecycle/native_media_rebind_failure_projects_transport_only/' \
+perl -0pi -e 's/native_media_rebind_candidate_failure_preserves_active_generation/native_media_rebind_candidate_failure_degrades_active_generation/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs"
-run_fail 'native WebRTC media path must test target-lifecycle projection for pending media rebind failures'
+run_fail 'native WebRTC media path must test rejected candidate supersession without degrading active media'
 
 write_fixture
 perl -0pi -e 's/TARGET_CHANGED_EVENT_TYPES\.contains\(&event_type\)/TARGET_CHANGED_EVENT_TYPES.is_empty()/' \
@@ -2489,9 +2583,9 @@ perl -0pi -e 's/webrtc_transport_failure_context\(\);/Value::Null;/' \
 run_fail 'direct WebRTC default failure path must not emit empty transport failure context'
 
 write_fixture
-perl -0pi -e 's/direct_webrtc_transport_failure_projects_recovery_context/direct_webrtc_transport_failure_lacks_recovery_context/' \
+perl -0pi -e 's/direct_webrtc_transport_failure_suspends_session_for_a_new_generation/direct_webrtc_transport_failure_terminates_session/' \
   "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
-run_fail 'session-store tests must prove default transport failures publish recovery context'
+run_fail 'session-store tests must prove transport failure preserves the session for a newer epoch'
 
 write_fixture
 perl -0pi -e 's/assert_eq!\(event\["reason_code"\], json!\("transport_route_unavailable"\)\);//' \
@@ -3189,7 +3283,7 @@ perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value
 run_fail 'request input policy projection must reuse the input-domain unsupported type set'
 
 write_fixture
-perl -0pi -e 's/validate_live_target_pointer_input\(binding, snapshot, point\.x, point\.y\)/validate_pointer_without_host_surface_guard(binding)/' \
+perl -0pi -e 's/validate_target_pointer_input_observation/validate_pointer_without_host_surface_guard/g' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'target-local pointer execution must validate the mapped host point before OS injection'
 
@@ -3207,5 +3301,15 @@ write_fixture
 perl -0pi -e 's/fn commit_application_surface\(/fn commit_application_surface_unchecked(/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'target tracking must commit application identity and surface layout through one domain transition'
+
+write_fixture
+perl -0pi -e 's/fn mark_webrtc_generation_failed_with_context\(\) \{\s*self\.transport\.mark_failed\(epoch\);\s*self\.lifecycle\.suspend\(\);/fn mark_webrtc_generation_failed_with_context() { self.transport.mark_failed(epoch);/s' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'failed WebRTC generations must suspend the reusable product session'
+
+write_fixture
+perl -0pi -e 's/epoch\.value\(\) <= self\.epoch_high_watermark/epoch.value() < self.epoch_high_watermark/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_transport_state.rs"
+run_fail 'transport state must reject reused or regressing epochs'
 
 printf 'test_check_remoteapp_lifecycle_input_boundary.sh: all cases passed\n'

@@ -151,6 +151,10 @@ require 'subjectURA: currentView\.subjectUra' "$STORE" \
   'frontend client media report must use the session subject URA as Invocation.subject'
 require 'transport_epoch: epoch' "$STORE" \
   'frontend client media report must bind presentation state to the negotiated transport epoch'
+require 'transport_epoch: negotiatedTransportEpoch' "$STORE" \
+  'frontend ICE trickle must bind every candidate to the negotiated transport epoch'
+require 'Remote desktop WebRTC negotiation returned no transport epoch' "$STORE" \
+  'frontend must fail closed when set_description omits the transport epoch'
 require 'state: desired' "$STORE" \
   'frontend client media report must submit the latest desired client media state'
 require 'collectRemoteDesktopClientEvidence' "$STORE" \
@@ -268,7 +272,7 @@ require 'remoteTargetReady' "$ACCESS" \
   'frontend must gate only screen/remote desktop launchers on live target readiness'
 require 'requestVideoFrameCallback' "$ACCESS" \
   'frontend WebRTC viewport must prefer decoded-frame callbacks for client-presenting evidence'
-require 'if \(!videoWithFrameCallback\.requestVideoFrameCallback\) onPresented\(\)' "$ACCESS" \
+require 'if \(!videoWithFrameCallback\.requestVideoFrameCallback\) playbackState\.framePresented\(\)' "$ACCESS" \
   'frontend WebRTC viewport may use playing only as a no-requestVideoFrameCallback fallback'
 require 'onPresented=\{reportPresented\}' "$ACCESS" \
   'frontend WebRTC viewport must wire decoded-frame presentation to client media reporting'
@@ -397,6 +401,8 @@ require 'expect\(entry\.error\)\.toBeUndefined\(\)' "$STORE_TEST" \
   'frontend store tests must prove denied permission_status preflight stays in picker state'
 require 'preserves and rebinds remote desktop sessions across device offline resume' "$STORE_TEST" \
   'frontend store tests must prove RemoteApp offline resume preserves and rebinds daemon sessions'
+require 'transport_epoch: 3' "$STORE_TEST" \
+  'frontend resume tests must prove the resumed PeerConnection sends ICE with its new epoch'
 require 'target_permission_revoked' "$STORE_TEST" \
   'frontend store tests must prove permission-revoked events synchronize daemon terminal receipts'
 require 'session\?\.sessionToken\)\.toBeUndefined\(\)' "$STORE_TEST" \

@@ -291,6 +291,9 @@ impl RemoteDesktopPlugin {
         let mut restored = Vec::new();
         let recovery_now_ms = now_ms();
         for snapshot in snapshots {
+            plugin
+                .transport_manager()
+                .observe_prior_epoch(snapshot.transport_epoch_high_watermark());
             let mut session = match RemoteDesktopSession::rehydrate(&snapshot) {
                 Ok(session) => session,
                 Err(error) => {

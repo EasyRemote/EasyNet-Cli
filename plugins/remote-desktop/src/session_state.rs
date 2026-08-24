@@ -363,16 +363,6 @@ impl RemoteDesktopSessionStateMachine {
         true
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn fail(&mut self, reason: &str) -> bool {
-        if self.is_terminal() {
-            return false;
-        }
-        self.phase = RemoteDesktopSessionPhase::Terminated;
-        self.public_state = RemoteDesktopState::Failed;
-        self.end_reason = Some(reason.to_string());
-        true
-    }
-
     fn set_active(
         &mut self,
         phase: RemoteDesktopSessionPhase,
@@ -427,16 +417,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_reason_is_absorbing() {
-        let mut state = RemoteDesktopSessionStateMachine::new();
+    fn rehydrated_terminal_failure_is_absorbing() {
+        let mut state = RemoteDesktopSessionStateMachine::rehydrate_terminal(
+            RemoteDesktopState::Failed,
+            "fatal_snapshot".to_string(),
+        )
+        .expect("terminal failure rehydrates");
 
-        assert!(state.fail("webrtc_failed"));
         assert!(!state.expire("lease_expired"));
         assert!(!state.start_media());
 
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Terminated);
         assert_eq!(state.state(), RemoteDesktopState::Failed);
-        assert_eq!(state.end_reason(), Some("webrtc_failed"));
+        assert_eq!(state.end_reason(), Some("fatal_snapshot"));
     }
 
     #[test]

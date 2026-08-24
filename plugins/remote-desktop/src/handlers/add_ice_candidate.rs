@@ -15,6 +15,7 @@ use crate::daemon::plugins::remote_desktop::sdp::{
 };
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::daemon::plugins::remote_desktop::session_signaling::RemoteDesktopSignalingError;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::transport::{
     apply_remote_ice_candidate_values, DirectWebRtcEndpoint,
 };
@@ -32,6 +33,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     args: Value,
 ) -> anyhow::Result<Value> {
     let session_id = require_str(&args, "session_id", ABILITY_ADD_ICE_CANDIDATE)?.to_string();
+    let requested_epoch = args
+        .get("transport_epoch")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .map(TransportEpoch::new)
+        .ok_or_else(|| RemoteDesktopError::InvalidArgument {
+            ability: ABILITY_ADD_ICE_CANDIDATE,
+            detail: "positive transport_epoch is required".to_string(),
+        })?;
     let candidate_ref =
         args.get("candidate")
             .ok_or_else(|| RemoteDesktopError::InvalidArgument {
@@ -68,6 +78,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     &args,
                     session,
                 )?;
+                if session.transport_epoch() != Some(requested_epoch.value()) {
+                    return Err(RemoteDesktopError::TransportEpochMismatch {
+                        ability: ABILITY_ADD_ICE_CANDIDATE,
+                        epoch: requested_epoch.value(),
+                    }
+                    .into());
+                }
                 let current = plugin.endpoint(&session_id);
                 let stable = match (&endpoint, &current) {
                     (None, None) => true,
@@ -75,9 +92,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     _ => false,
                 };
                 if !stable
-                    || endpoint.as_ref().is_some_and(|applied| {
-                        session.transport_epoch() != Some(applied.epoch.value())
-                    })
+                    || endpoint
+                        .as_ref()
+                        .is_some_and(|applied| applied.epoch != requested_epoch)
                 {
                     return Ok(None);
                 }
@@ -93,7 +110,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     return Ok(Some(RemoteIceAdmission::Reserved(endpoint.clone())));
                 }
                 session
-                    .add_remote_ice_candidate(candidate.clone(), "pending", None)
+                    .add_remote_ice_candidate(candidate.clone(), "pending", Some(requested_epoch))
                     .map_err(map_signaling_admission_error)?;
                 Ok(Some(RemoteIceAdmission::Committed(serialize_session(
                     session,
@@ -138,11 +155,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                         &args,
                         session,
                     )?;
+                    if session.transport_epoch() != Some(requested_epoch.value()) {
+                        session.release_remote_ice_candidate_slot();
+                        return Err(RemoteDesktopError::TransportEpochMismatch {
+                            ability: ABILITY_ADD_ICE_CANDIDATE,
+                            epoch: requested_epoch.value(),
+                        }
+                        .into());
+                    }
                     let current = plugin.endpoint(&session_id);
-                    let stable = current
-                        .as_ref()
-                        .is_some_and(|active| endpoint.epoch == active.epoch);
-                    if !stable || session.transport_epoch() != Some(endpoint.epoch.value()) {
+                    let stable = current.as_ref().is_some_and(|active| {
+                        endpoint.epoch == active.epoch && active.epoch == requested_epoch
+                    });
+                    if !stable {
                         session.release_remote_ice_candidate_slot();
                         return Ok(None);
                     }
@@ -150,7 +175,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                         .commit_reserved_remote_ice_candidate(
                             candidate.clone(),
                             "applied",
-                            Some(endpoint.epoch),
+                            Some(requested_epoch),
                         )
                         .map_err(map_signaling_admission_error)?;
                     Ok(Some(serialize_session(session)))
@@ -214,7 +239,8 @@ mod tests {
     fn insert_test_session(plugin: &RemoteDesktopPlugin, session_id: &str, subject: &str) {
         let mut init = test_session_init(session_id, subject, vec![TRANSPORT_WEBRTC.to_string()]);
         init.lease_ttl_ms = 60_000;
-        let session = RemoteDesktopSession::new(init);
+        let mut session = RemoteDesktopSession::new(init);
+        assert!(session.begin_webrtc_negotiation(TransportEpoch::new(1)));
         plugin.session_store().with_sessions(|sessions| {
             sessions.insert(session_id.to_string(), session);
         });
@@ -234,6 +260,7 @@ mod tests {
             json!({
                 "session_id": "rd-ice-schema",
                 "session_token": "token",
+                "transport_epoch": 1,
                 "candidate": {}
             }),
         )
@@ -271,6 +298,7 @@ mod tests {
                 json!({
                     "session_id": "rd-ice-flood",
                     "session_token": "token",
+                    "transport_epoch": 1,
                     "candidate": {
                         "candidate": format!("candidate:{index} 1 UDP 2122252543 127.0.0.1 {} typ host", 40000 + index),
                         "sdpMid": "0",
@@ -310,6 +338,45 @@ mod tests {
                 MAX_REMOTE_ICE_CANDIDATES,
                 "serialized session view must remain bounded at the remote candidate cap"
             );
+        });
+    }
+
+    #[test]
+    fn add_ice_candidate_rejects_a_stale_transport_generation() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let subject = "easynet:///r/acme/resource/display.ice-stale";
+        insert_test_session(&plugin, "rd-ice-stale", subject);
+        plugin.session_store().with_sessions(|sessions| {
+            let session = sessions.get_mut("rd-ice-stale").unwrap();
+            assert!(session.begin_webrtc_negotiation(TransportEpoch::new(2)));
+        });
+
+        let err = handle(
+            Arc::clone(&plugin),
+            env_for(subject),
+            json!({
+                "session_id": "rd-ice-stale",
+                "session_token": "token",
+                "transport_epoch": 1,
+                "candidate": {
+                    "candidate": "candidate:stale 1 UDP 2122252543 127.0.0.1 41000 typ host",
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0
+                }
+            }),
+        )
+        .expect_err("a prior PeerConnection must not mutate the current ICE generation")
+        .to_string();
+
+        assert!(err.contains("transport epoch 1 is not active"), "got {err}");
+        plugin.session_store().with_sessions(|sessions| {
+            assert!(sessions
+                .get("rd-ice-stale")
+                .unwrap()
+                .remote_ice_candidates()
+                .is_empty());
         });
     }
 }

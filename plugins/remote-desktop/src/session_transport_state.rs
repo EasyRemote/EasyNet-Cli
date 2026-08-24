@@ -134,6 +134,7 @@ impl RemoteDesktopMediaStats {
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTransportState {
     primary: Option<PrimaryMediaState>,
+    epoch_high_watermark: u64,
     media_stats: Option<RemoteDesktopMediaStats>,
     client_media_feedback: Option<ClientMediaFeedback>,
     preview_stop_tx: Option<watch::Sender<bool>>,
@@ -143,10 +144,27 @@ impl RemoteDesktopTransportState {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
         Self {
             primary: None,
+            epoch_high_watermark: 0,
             media_stats: None,
             client_media_feedback: None,
             preview_stop_tx: None,
         }
+    }
+
+    /// Rehydrate session-scoped epoch history without pretending that a
+    /// process-local endpoint survived daemon restart.
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(epoch_high_watermark: u64) -> Self {
+        Self {
+            primary: None,
+            epoch_high_watermark,
+            media_stats: None,
+            client_media_feedback: None,
+            preview_stop_tx: None,
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn epoch_high_watermark(&self) -> u64 {
+        self.epoch_high_watermark
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn active_epoch(
@@ -171,13 +189,18 @@ impl RemoteDesktopTransportState {
     pub(in crate::daemon::plugins::remote_desktop) fn begin_primary(
         &mut self,
         epoch: TransportEpoch,
-    ) {
+    ) -> bool {
+        if epoch.value() <= self.epoch_high_watermark {
+            return false;
+        }
         self.primary = Some(PrimaryMediaState {
             epoch,
             phase: PrimaryMediaPhase::Negotiating,
         });
+        self.epoch_high_watermark = epoch.value();
         self.media_stats = None;
         self.client_media_feedback = None;
+        true
     }
 
     fn transition_primary(&mut self, epoch: TransportEpoch, phase: PrimaryMediaPhase) -> bool {

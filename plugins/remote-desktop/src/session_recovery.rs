@@ -64,6 +64,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnaps
     lease_expires_at_ms: u64,
     lifecycle_state: String,
     #[serde(default)]
+    transport_epoch_high_watermark: u64,
+    #[serde(default)]
     input_runtime_block_reason: Option<String>,
     terminal_receipt: Option<Value>,
     events: Vec<Value>,
@@ -100,6 +102,7 @@ impl RemoteDesktopRecoverySnapshot {
             session.events(),
         )?;
         snapshot.target_tracking = Some(session.target_tracking_recovery_value());
+        snapshot.transport_epoch_high_watermark = session.transport_epoch_high_watermark();
         snapshot.validate()?;
         Ok(snapshot)
     }
@@ -143,6 +146,7 @@ impl RemoteDesktopRecoverySnapshot {
             updated_at_ms,
             lease_expires_at_ms,
             lifecycle_state,
+            transport_epoch_high_watermark: 0,
             input_runtime_block_reason,
             terminal_receipt,
             events,
@@ -250,6 +254,12 @@ impl RemoteDesktopRecoverySnapshot {
 
     pub(in crate::daemon::plugins::remote_desktop) fn lifecycle_state(&self) -> &str {
         &self.lifecycle_state
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn transport_epoch_high_watermark(
+        &self,
+    ) -> u64 {
+        self.transport_epoch_high_watermark
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn input_runtime_block_reason(

@@ -179,6 +179,16 @@ impl RemoteDesktopSignalingState {
         }
     }
 
+    /// Start one independent signaling generation.
+    ///
+    /// SDP, ICE, codec and diagnostic facts are PeerConnection-scoped. Keeping
+    /// them across a resumed transport would apply stale ICE candidates to the
+    /// new endpoint and could make an old browser callback mutate the current
+    /// session generation.
+    pub(in crate::daemon::plugins::remote_desktop) fn begin_transport_generation(&mut self) {
+        *self = Self::new();
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn local_description(&self) -> Option<Value> {
         self.local_description
             .as_ref()
@@ -549,6 +559,42 @@ mod tests {
 
         assert!(local_err.contains("exceeds"), "got {local_err}");
         assert_eq!(signaling.local_description(), None);
+        assert_eq!(signaling.negotiated_codec(), None);
+    }
+
+    #[test]
+    fn new_transport_generation_discards_prior_peer_connection_state() {
+        let mut signaling = RemoteDesktopSignalingState::new();
+        signaling
+            .set_description("remote", json!({"type": "offer", "sdp": "v=0"}))
+            .expect("remote description records");
+        signaling
+            .push_remote_ice_candidate(json!({
+                "candidate": "candidate:old 1 UDP 2122252543 127.0.0.1 41000 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("remote candidate records");
+        signaling
+            .push_local_ice_candidate(json!({
+                "candidate": "candidate:old-local 1 UDP 2122252543 127.0.0.1 42000 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("local candidate records");
+        signaling.record_webrtc_diagnostic(
+            Some("old_transport_failed".to_string()),
+            &json!({"peer_connection_state": "failed"}),
+        );
+
+        signaling.begin_transport_generation();
+
+        assert_eq!(signaling.local_description(), None);
+        assert_eq!(signaling.remote_description(), None);
+        assert!(signaling.local_ice_candidates().is_empty());
+        assert!(signaling.remote_ice_candidates().is_empty());
+        assert_eq!(signaling.webrtc_peer_state(), None);
+        assert_eq!(signaling.webrtc_error(), None);
         assert_eq!(signaling.negotiated_codec(), None);
     }
 

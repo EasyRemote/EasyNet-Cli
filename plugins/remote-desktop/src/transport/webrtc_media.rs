@@ -211,7 +211,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                             kind = direct_webrtc_native_unavailable,
                             reason = failure.message.clone(),
                         );
-                        sessions.mark_direct_webrtc_failed_with_context(
+                        sessions.mark_direct_webrtc_generation_failed_with_context(
                             &session_id,
                             epoch,
                             failure.event_kind,
@@ -226,7 +226,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             }
             #[cfg(not(target_os = "macos"))]
             {
-                sessions.mark_direct_webrtc_failed(
+                sessions.mark_direct_webrtc_generation_failed(
                     &session_id,
                     epoch,
                     "native_media_unavailable",
@@ -238,7 +238,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         }
         Err(err) => {
             let failure = direct_webrtc_target_failure_projection(&err, &target_binding);
-            sessions.mark_direct_webrtc_failed_with_context(
+            sessions.mark_direct_webrtc_generation_failed_with_context(
                 &session_id,
                 epoch,
                 failure.event_kind,
@@ -278,7 +278,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     )
     .await;
     if let Err(err) = result {
-        sessions.mark_direct_webrtc_failed(
+        sessions.mark_direct_webrtc_generation_failed(
             &session_id,
             epoch,
             "baseline_media_pipeline_failed",

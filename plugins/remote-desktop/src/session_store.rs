@@ -228,6 +228,21 @@ impl RemoteDesktopSessionStore {
         session.block_input_for_runtime_permission(epoch, reason)
     }
 
+    /// Project WebRTC's transient `disconnected` state as degraded health.
+    /// The endpoint remains alive because ICE is allowed to recover without a
+    /// new PeerConnection; a later `failed`/`closed` callback retires it.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_disconnected(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.report_client_media_state(epoch, "stalled", None)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn target_observation_inputs_for_session(
         &self,
         session_id: &str,
@@ -340,28 +355,30 @@ impl RemoteDesktopSessionStore {
         session.supersede_pending_media_rebind(epoch, reason, detail)
     }
 
-    /// Mark a direct WebRTC endpoint failed for one non-terminal session.
+    /// Retire one direct WebRTC generation without terminating its product
+    /// session. A later authenticated offer must be able to allocate a newer
+    /// epoch and resume the same session identity.
     ///
     /// This helper intentionally accepts domain strings rather than transport
     /// error types so the session store stays independent of WebRTC internals.
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_failed(
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_generation_failed(
         &self,
         session_id: &str,
         epoch: TransportEpoch,
         reason: &str,
         message: String,
-    ) {
-        self.mark_direct_webrtc_failed_with_context(
+    ) -> bool {
+        self.mark_direct_webrtc_generation_failed_with_context(
             session_id,
             epoch,
             WebRtcFailureEventKind::TransportFailed,
             reason,
             message,
             webrtc_transport_failure_context(),
-        );
+        )
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_failed_with_context(
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_generation_failed_with_context(
         &self,
         session_id: &str,
         epoch: TransportEpoch,
@@ -369,16 +386,13 @@ impl RemoteDesktopSessionStore {
         reason: &str,
         message: String,
         context: Value,
-    ) {
+    ) -> bool {
         let mut sessions = self.lock();
         let Some(session) = sessions.get_mut(session_id) else {
-            return;
+            return false;
         };
-        if let Some(preview_stop) =
-            session.mark_webrtc_failed_with_context(epoch, event_kind, reason, message, context)
-        {
-            let _ = preview_stop.send(true);
-        }
+        session
+            .mark_webrtc_generation_failed_with_context(epoch, event_kind, reason, message, context)
     }
 
     /// Append a local ICE candidate projected from the transport layer.
@@ -719,6 +733,7 @@ mod tests {
             "easynet:///r/acme/resource/display.serialized-bound",
             vec![TRANSPORT_WEBRTC.to_string()],
         ));
+        assert!(session.begin_webrtc_negotiation(TransportEpoch::new(1)));
         let sdp = format!(
             "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n{}",
             "a=x\r\n".repeat((MAX_SIGNALING_DESCRIPTION_BYTES / 8).saturating_sub(4096))
@@ -830,11 +845,11 @@ mod tests {
     }
 
     #[test]
-    fn direct_webrtc_transport_failure_projects_recovery_context() {
+    fn direct_webrtc_transport_failure_suspends_session_for_a_new_generation() {
         let store = RemoteDesktopSessionStore::new();
         insert_test_session(&store, "rd-transport-failed");
 
-        store.mark_direct_webrtc_failed(
+        store.mark_direct_webrtc_generation_failed(
             "rd-transport-failed",
             TransportEpoch::new(1),
             "webrtc_peer_connection_failed",
@@ -842,7 +857,7 @@ mod tests {
         );
 
         store.with_sessions(|sessions| {
-            let session = sessions.get("rd-transport-failed").unwrap();
+            let session = sessions.get_mut("rd-transport-failed").unwrap();
             let event = session
                 .events()
                 .into_iter()
@@ -864,6 +879,39 @@ mod tests {
             assert_eq!(event["payload"]["transport_kind"], json!(TRANSPORT_WEBRTC));
             assert_eq!(event["payload"]["media_transport_ready"], json!(false));
             assert_eq!(event["payload"]["transport_epoch"], json!(1));
+            assert!(!session.is_terminal());
+            assert_eq!(serialize_session(session)["state"], json!("suspended"));
+            assert!(session.terminal_receipt().is_none());
+            assert!(session.subscribe_events().is_some());
+
+            assert!(session.begin_webrtc_negotiation(TransportEpoch::new(2)));
+            assert_eq!(session.transport_epoch(), Some(2));
+            assert_eq!(serialize_session(session)["state"], json!("negotiating"));
+            assert!(session.remote_ice_candidates().is_empty());
+        });
+    }
+
+    #[test]
+    fn transient_disconnect_degrades_and_recovers_without_replacing_the_epoch() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-transport-disconnected");
+        let epoch = TransportEpoch::new(1);
+        store.mark_direct_webrtc_media_ready("rd-transport-disconnected", epoch);
+        store.with_sessions(|sessions| {
+            assert!(sessions
+                .get_mut("rd-transport-disconnected")
+                .unwrap()
+                .report_client_media_state(epoch, "presenting", None));
+        });
+
+        assert!(store.mark_direct_webrtc_disconnected("rd-transport-disconnected", epoch));
+        store.with_sessions(|sessions| {
+            let session = sessions.get_mut("rd-transport-disconnected").unwrap();
+            assert!(!session.is_terminal());
+            assert_eq!(session.transport_epoch(), Some(1));
+            assert_eq!(serialize_session(session)["state"], json!("degraded"));
+            assert!(session.report_client_media_state(epoch, "presenting", None));
+            assert_eq!(serialize_session(session)["state"], json!("connected"));
         });
     }
 

@@ -180,7 +180,9 @@ impl RemoteDesktopSession {
                 snapshot.lease_expires_at_ms(),
             )?,
             signaling: RemoteDesktopSignalingState::new(),
-            transport: RemoteDesktopTransportState::new(),
+            transport: RemoteDesktopTransportState::rehydrate(
+                snapshot.transport_epoch_high_watermark(),
+            ),
             event_log: RemoteDesktopEventLog::rehydrate(snapshot.events(), terminal)?,
             input_runtime_block_reason: if terminal {
                 None
@@ -434,6 +436,12 @@ impl RemoteDesktopSession {
 
     pub(in crate::daemon::plugins::remote_desktop) fn transport_epoch(&self) -> Option<u64> {
         self.transport.active_epoch().map(TransportEpoch::value)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn transport_epoch_high_watermark(
+        &self,
+    ) -> u64 {
+        self.transport.epoch_high_watermark()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn transport_state(&self) -> Value {
@@ -980,14 +988,18 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn begin_webrtc_negotiation(
         &mut self,
         epoch: TransportEpoch,
-    ) {
+    ) -> bool {
         if self.lifecycle.is_terminal() {
-            return;
+            return false;
         }
-        self.transport.begin_primary(epoch);
+        if !self.transport.begin_primary(epoch) {
+            return false;
+        }
+        self.signaling.begin_transport_generation();
         self.lifecycle.start_media();
         self.reconcile_lifecycle();
         self.touch();
+        true
     }
 
     /// Append a local ICE candidate produced by the device-side WebRTC endpoint.
@@ -998,11 +1010,15 @@ impl RemoteDesktopSession {
         if self.lifecycle.is_terminal() {
             return Ok(());
         }
+        let transport_epoch = self.transport.active_epoch().ok_or_else(|| {
+            anyhow::anyhow!("local ICE candidate requires an active transport epoch")
+        })?;
         let candidate_count = self.signaling.push_local_ice_candidate(candidate.clone())?;
         self.touch();
         self.push_projected_event(session_events::local_ice_candidate(
             candidate,
             candidate_count,
+            transport_epoch.value(),
             self.transport.media_transport_ready(),
         ));
         Ok(())
@@ -1258,23 +1274,23 @@ impl RemoteDesktopSession {
         true
     }
 
-    /// Mark a non-terminal session failed and record the failure event.
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_failed_with_context(
+    /// Retire one failed WebRTC generation while preserving the product
+    /// session for an authenticated offer on a newer transport epoch.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_generation_failed_with_context(
         &mut self,
         epoch: TransportEpoch,
         event_kind: session_events::WebRtcFailureEventKind,
         reason: &str,
         message: String,
         context: serde_json::Value,
-    ) -> Option<watch::Sender<bool>> {
+    ) -> bool {
         if !self.transport.accepts_epoch(epoch) {
-            return None;
+            return false;
         }
-        if !self.lifecycle.fail(reason) {
-            return None;
+        if !self.transport.mark_failed(epoch) {
+            return false;
         }
-        self.transport.mark_failed(epoch);
-        let preview_stop = self.transport.detach_preview_transport();
+        self.lifecycle.suspend();
         self.signaling.set_webrtc_error(reason);
         self.touch();
         self.push_projected_event(session_events::webrtc_failed_with_context(
@@ -1284,8 +1300,7 @@ impl RemoteDesktopSession {
             epoch.value(),
             context,
         ));
-        self.event_log.close();
-        preview_stop
+        true
     }
 }
 
@@ -1476,11 +1491,12 @@ mod tests {
 
     #[test]
     fn rehydrated_non_terminal_session_can_start_new_media_epoch_without_new_session() {
-        let source = RemoteDesktopSession::new(test_session_init(
+        let mut source = RemoteDesktopSession::new(test_session_init(
             "rd-rehydrate-media-resume",
             "easynet:///r/acme/resource/display.rehydrate-media",
             vec!["webrtc".into()],
         ));
+        assert!(source.begin_webrtc_negotiation(TransportEpoch::new(6)));
         let snapshot =
             RemoteDesktopRecoverySnapshot::from_session(&source).expect("snapshot derives");
         let mut session = RemoteDesktopSession::rehydrate(&snapshot).expect("session rehydrates");
@@ -1494,8 +1510,10 @@ mod tests {
             RemoteDesktopSessionPhase::Suspended
         );
         assert!(!session.media_transport_ready());
+        assert_eq!(session.transport_epoch_high_watermark(), 6);
+        assert!(!session.begin_webrtc_negotiation(TransportEpoch::new(6)));
 
-        session.begin_webrtc_negotiation(epoch);
+        assert!(session.begin_webrtc_negotiation(epoch));
         session
             .set_local_webrtc_answer(
                 epoch,

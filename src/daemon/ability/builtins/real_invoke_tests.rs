@@ -3783,19 +3783,25 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     assert_eq!(signaled["state"], "negotiating");
     let token = created["session_token"].as_str().unwrap().to_string();
 
-    let candidate_view = d
+    let candidate_err = d
         .execute_rpc(explicit_target(
             "remote_desktop.add_ice_candidate",
             json!({
                 "session_id": session_id,
                 "session_token": token,
+                "transport_epoch": 1,
                 "candidate": {"candidate": "candidate:1"}
             }),
             subject.clone(),
             remote_desktop_test_consent_causal_context(),
         ))
-        .expect("remote_desktop.add_ice_candidate must dispatch");
-    assert_eq!(candidate_view["signaling"]["ice_candidate_count"], 1);
+        .expect_err("ICE without an active WebRTC generation must fail closed");
+    assert!(
+        candidate_err
+            .to_string()
+            .contains("transport epoch 1 is not active"),
+        "unexpected inactive-generation ICE error: {candidate_err}"
+    );
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let mut watch = explicit_target(
@@ -3810,10 +3816,10 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
         .expect("remote_desktop.watch_events must dispatch")
         .into_snapshot();
     assert!(
-        events
+        !events
             .iter()
             .any(|event| event["event_type"] == "ICE_CANDIDATE_ADDED"),
-        "watch_events must include the ICE candidate event: {events:?}"
+        "inactive-generation ICE must not mutate the session event log: {events:?}"
     );
     let token = created["session_token"].as_str().unwrap().to_string();
 

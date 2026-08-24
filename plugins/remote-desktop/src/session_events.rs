@@ -335,6 +335,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn transport_blocked(
 pub(in crate::daemon::plugins::remote_desktop) fn local_ice_candidate(
     candidate: Value,
     candidate_count: usize,
+    transport_epoch: u64,
     media_transport_ready: bool,
 ) -> RemoteDesktopEventProjection {
     RemoteDesktopEventProjection::new(
@@ -342,6 +343,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn local_ice_candidate(
         json!({
             "candidate": candidate,
             "candidate_count": candidate_count,
+            "transport_epoch": transport_epoch,
             "media_transport_ready": media_transport_ready,
         }),
     )

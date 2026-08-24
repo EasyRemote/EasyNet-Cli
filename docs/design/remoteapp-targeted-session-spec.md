@@ -172,6 +172,11 @@ set_description/add_ice_candidate/watch_events/attach/refresh_lease/end_session:
   subject = the original selected target resource URA captured by create_session
   session_id/session_token are access facts in args, not Invocation.subject
   the surface adapter must not put subject or resource_ura in args
+
+set_description/add_ice_candidate/report_client_state:
+  set_description allocates and returns a strictly increasing transport_epoch
+  add_ice_candidate/report_client_state must carry that exact epoch
+  stale generations are rejected before signaling, endpoint, or session mutation
 ```
 
 The frontend must never pass `subject` in JSON args.
@@ -1081,6 +1086,14 @@ Rules:
 - `media_source_epoch` changes when the native capture source/filter is rebuilt.
 - `consent_epoch` changes when the applicable EasyNet consent is granted, renewed, revoked, or replaced.
 - Media frames and input coordinate transforms must refer to the same `binding_epoch` and compatible `target_geometry_revision`.
+- A WebRTC PeerConnection failure terminates only that transport generation. It
+  moves the reusable session to `Suspended`; it does not close the event log or
+  mint a terminal receipt.
+- A newer authenticated offer resumes the same session with a strictly larger
+  `transport_epoch`. SDP, ICE, codec, diagnostics, media feedback, and input
+  readiness are generation-scoped and reset before the new endpoint starts.
+- Recovery snapshots retain the transport epoch high-watermark. Daemon restart
+  must allocate beyond it before accepting a resumed offer.
 
 ## 11. Input routing
 
@@ -1182,6 +1195,12 @@ failed
 `turn_relay` means a standard TURN route. `easynet_relay` is a distinct EasyNet relay route; consumers that only need to know whether any relay exists must use `relay_ready`, not infer it from `turn_relay`.
 
 No UI may report production online unless a production media path is actually ready.
+
+WebRTC transport generations are replaceable resources, not product sessions.
+`Disconnected`, `Failed`, endpoint setup failure, and browser replacement must
+leave a non-terminal session resumable until its lease or another explicit
+terminal policy ends it. ICE trickle without the active `transport_epoch` is
+invalid.
 
 ## 14. Clipboard and file transfer
 
@@ -1502,6 +1521,10 @@ create_session requires consent causal context
 create_session returns target_binding
 create_session returns scope_audit
 watch_events emits target lifecycle events
+transport failure suspends rather than terminalizes the session
+new signaling generation clears prior SDP/ICE/codec state
+add_ice_candidate rejects a stale transport_epoch
+daemon restart allocates beyond the persisted transport epoch high-watermark
 ```
 
 Anti-regression tests:

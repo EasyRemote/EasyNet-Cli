@@ -451,8 +451,26 @@ require_multiline '/fn webrtc_transport_failure_context\((?:(?!fn session_create
   'direct WebRTC transport failure context must publish retry_session recovery action'
 require 'webrtc_transport_failure_context\(\)' "$SESSION_STORE" \
   'direct WebRTC default failure path must not emit empty transport failure context'
-require 'direct_webrtc_transport_failure_projects_recovery_context' "$SESSION_STORE" \
-  'session-store tests must prove default transport failures publish recovery context'
+require 'direct_webrtc_transport_failure_suspends_session_for_a_new_generation' "$SESSION_STORE" \
+  'session-store tests must prove transport failure preserves the session for a newer epoch'
+require 'fn mark_webrtc_generation_failed_with_context' "$SESSION" \
+  'session aggregate must distinguish a failed WebRTC generation from terminal session failure'
+require_multiline '/fn mark_webrtc_generation_failed_with_context\((?:(?!fn recovery_terminal_reason).)*self\.lifecycle\.suspend\(\)/s' "$SESSION" \
+  'failed WebRTC generations must suspend the reusable product session'
+reject_multiline '/fn mark_webrtc_generation_failed_with_context\((?:(?!fn recovery_terminal_reason).)*self\.event_log\.close\(\)/s' "$SESSION" \
+  'failed WebRTC generations must keep watch_events open for resume'
+require 'begin_transport_generation\(\)' "$SESSION" \
+  'starting a new WebRTC epoch must reset PeerConnection-scoped signaling state'
+require 'epoch_high_watermark' "$SESSION_TRANSPORT_STATE" \
+  'transport state must retain a session-scoped epoch high-watermark'
+require 'epoch\.value\(\) <= self\.epoch_high_watermark' "$SESSION_TRANSPORT_STATE" \
+  'transport state must reject reused or regressing epochs'
+require 'transport_epoch_high_watermark' "$SESSION_RECOVERY" \
+  'recovery snapshots must persist the latest allocated transport epoch'
+require 'observe_prior_epoch' "$RUNTIME" \
+  'plugin startup must advance the allocator past recovered transport epochs'
+require 'persist_recovery_snapshot\(&recovery_snapshot\)' "$WEBRTC_NEGOTIATION" \
+  'negotiation must durably checkpoint its epoch before endpoint side effects'
 require 'event\["reason_code"\]' "$SESSION_STORE" \
   'session-store tests must prove TRANSPORT_FAILED top-level reason_code is projected'
 require 'event\["recoverability"\]' "$SESSION_STORE" \

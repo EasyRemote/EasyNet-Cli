@@ -106,6 +106,14 @@ mod tests {
             signaled.get("session_token").is_none(),
             "session_token is create-only and must not appear in session views"
         );
+        plugin.session_store().with_sessions(|sessions| {
+            assert!(sessions
+                .get_mut("rd-test")
+                .unwrap()
+                .begin_webrtc_negotiation(
+                    crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch::new(1),
+                ));
+        });
 
         add_ice_candidate::handle(
             Arc::clone(&plugin),
@@ -113,6 +121,7 @@ mod tests {
             json!({
                 "session_id": "rd-test",
                 "session_token": token.clone(),
+                "transport_epoch": 1,
                 "candidate": { "candidate": "candidate:1" }
             }),
         )

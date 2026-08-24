@@ -37,8 +37,10 @@ use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecov
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target_observer::observe_bound_session_target_once;
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::target_snapshot::TargetObservationSampler;
 use crate::daemon::plugins::remote_desktop::target_snapshot::{
-    TargetObservationSampler, TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
+    TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
 use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;

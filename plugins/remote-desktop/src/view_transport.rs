@@ -673,6 +673,7 @@ mod tests {
             "easynet:///r/acme/resource/display.01",
             vec![TRANSPORT_WEBRTC.to_string()],
         ));
+        assert!(session.begin_webrtc_negotiation(TransportEpoch::new(1)));
         session
             .record_local_ice_candidate(json!({
                 "candidate": "candidate:1 1 UDP 1686052607 203.0.113.1 50000 typ srflx",
