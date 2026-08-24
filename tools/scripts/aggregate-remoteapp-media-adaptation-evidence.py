@@ -260,6 +260,11 @@ def scenario_projection(
         (integer(sample.get("queued_units")) for sample in eligible),
         default=0,
     )
+    audio_queue_depth = integer(latest.get("audio_max_queue_depth"))
+    observed_audio_queue_depth = max(
+        (integer(sample.get("audio_queue_depth")) for sample in eligible),
+        default=0,
+    )
     terminal = terminal_receipt(evidence, session_id)
 
     if scenario_name in {"degraded_network", "backpressure"}:
@@ -308,6 +313,24 @@ def scenario_projection(
             "samples_rendered": integer(probe.get("decoded_audio_samples")),
             "host_audio_not_implemented": latest.get("host_audio_not_implemented"),
             "muted": latest.get("audio_blocker") is not None,
+            "transport_write_isolated": latest.get("audio_transport_write_isolated"),
+            "queue": {
+                "max_depth": audio_queue_depth,
+                "observed_max_depth": observed_audio_queue_depth,
+                "bounded": (
+                    1 <= audio_queue_depth <= 8
+                    and observed_audio_queue_depth <= audio_queue_depth
+                ),
+            },
+            "drop_stale_packets": latest.get("audio_drop_stale_packets"),
+            "drop_policy": latest.get("audio_drop_policy"),
+            "stale_packets_dropped": integer(latest.get("audio_stale_packets_dropped")),
+            "sender_backpressure_errors": integer(
+                latest.get("audio_sender_backpressure_errors")
+            ),
+            "sender_backpressure_drops": integer(
+                latest.get("audio_sender_backpressure_drops")
+            ),
         },
         "queue": {
             "max_depth": queue_depth,

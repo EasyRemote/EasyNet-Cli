@@ -1273,3 +1273,34 @@ Product effect:
   join when the final aggregate reference is released on a worker thread.
 - Live daemon/plugin crash-restart recovery is still required before product
   completion can be claimed.
+
+## 2026-08-24 — Audio transport backpressure must not own session progress
+
+Decision:
+
+- A live audio sample write may wait indefinitely for transport capacity, so it
+  cannot execute inside the media control loop.
+- Real-time audio freshness has a finite latency budget. Once the encoded audio
+  queue is full, the oldest packet is discarded before admitting the newest;
+  reconnect recovery must not replay stale audio.
+- Moving writes to a worker is insufficient if completion reporting creates an
+  unbounded per-packet queue. Writer observations must remain fixed-size.
+
+Implementation delta:
+
+- Added a session-owned, abortable native audio RTP writer.
+- Bounded capture and encoded-packet queues to four entries each; the encoded
+  queue represents at most 80 ms of pending 20 ms Opus packets.
+- Replaced per-packet completion messages with atomic totals plus one terminal
+  error slot.
+- Added runtime stats, evidence aggregation/verification, frontend projection,
+  and regression coverage for transport isolation, queue bounds, stale-packet
+  drops, and counter consistency.
+
+Product effect:
+
+- Slow or disconnected audio transport can no longer block video adaptation,
+  target rebind, cancellation, statistics, or terminal lifecycle progress.
+- Source and contract tests do not prove a live slow-receiver path; the real
+  baseline/degraded-network/backpressure media matrix remains required before
+  product completion can be claimed.

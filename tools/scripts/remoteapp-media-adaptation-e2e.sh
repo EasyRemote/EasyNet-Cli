@@ -295,6 +295,31 @@ for scenario_name in sorted(required_scenarios):
             f"{prefix}: host audio unsupported state is not product media evidence")
     require(audio.get("muted") is False,
             f"{prefix}: audio.muted must be false")
+    require(audio.get("transport_write_isolated") is True,
+            f"{prefix}: audio transport writes must be isolated from the media control loop")
+    audio_queue = audio.get("queue")
+    require(isinstance(audio_queue, dict), f"{prefix}: audio.queue evidence must be present")
+    if not isinstance(audio_queue, dict):
+        audio_queue = {}
+    audio_max_depth = integer(audio_queue.get("max_depth"))
+    audio_observed_depth = integer(audio_queue.get("observed_max_depth"))
+    require(1 <= audio_max_depth <= 8,
+            f"{prefix}: audio.queue.max_depth must be bounded")
+    require(0 <= audio_observed_depth <= audio_max_depth,
+            f"{prefix}: audio.queue.observed_max_depth must not exceed max_depth")
+    require(audio_queue.get("bounded") is True,
+            f"{prefix}: audio.queue.bounded must be true")
+    require(audio.get("drop_stale_packets") is True,
+            f"{prefix}: audio must drop stale packets instead of replaying latency")
+    require(audio.get("drop_policy") == "bounded_queue_drop_oldest_audio_packet",
+            f"{prefix}: audio.drop_policy must preserve the freshest bounded audio")
+    audio_stale_drops = integer(audio.get("stale_packets_dropped"))
+    audio_sender_errors = integer(audio.get("sender_backpressure_errors"))
+    audio_backpressure_drops = integer(audio.get("sender_backpressure_drops"))
+    require(audio_stale_drops >= 0 and audio_sender_errors >= 0,
+            f"{prefix}: audio drop/error counters must be non-negative")
+    require(audio_backpressure_drops == audio_stale_drops + audio_sender_errors,
+            f"{prefix}: audio sender backpressure drops must equal stale drops plus sender errors")
 
     queue = scenario.get("queue")
     require(isinstance(queue, dict), f"{prefix}: queue evidence must be present")
@@ -384,6 +409,8 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: video.frames_rendered_after_adaptation must be positive after backpressure")
         require(integer(video.get("frames_rendered_after_adaptation_at_ms")) > latest_adaptation_event_at_ms,
                 f"{prefix}: video.frames_rendered_after_adaptation_at_ms must be after adaptation events")
+        require(audio_backpressure_drops > 0,
+                f"{prefix}: audio backpressure must drop a stale packet or report a sender-capacity error")
 
     render_probe = scenario.get("render_probe")
     require(isinstance(render_probe, dict), f"{prefix}: render_probe evidence must be present")
@@ -449,6 +476,7 @@ for scenario_name in sorted(required_scenarios):
         "frames_rendered": integer(video.get("frames_rendered")),
         "audio_packets_rendered": integer(audio.get("packets_rendered")),
         "audio_samples_rendered": integer(audio.get("samples_rendered")),
+        "audio_sender_backpressure_drops": audio_backpressure_drops,
         "frames_dropped": integer(drop_policy.get("frames_dropped")),
         "adaptation_event_types": sorted(str(event_type) for event_type in event_types if event_type),
     })
@@ -479,6 +507,11 @@ if (isinstance(baseline, dict) and isinstance(backpressure, dict)
     backpressure_frames_dropped = integer(nested_get(backpressure, "drop_policy.frames_dropped"))
     require(backpressure_frames_dropped > baseline_frames_dropped,
             "backpressure frames_dropped must exceed baseline")
+if isinstance(baseline, dict) and isinstance(backpressure, dict):
+    baseline_audio_drops = integer(nested_get(baseline, "audio.sender_backpressure_drops"))
+    backpressure_audio_drops = integer(nested_get(backpressure, "audio.sender_backpressure_drops"))
+    require(backpressure_audio_drops > baseline_audio_drops,
+            "backpressure audio sender drops must exceed baseline")
 
 if all(isinstance(scenario_by_name.get(name), dict) for name in required_scenarios):
     comparable_fields = (
@@ -655,6 +688,17 @@ def scenario(name, *, degraded=False, backpressure=False):
             "samples_rendered": 384000,
             "host_audio_not_implemented": False,
             "muted": False,
+            "transport_write_isolated": True,
+            "queue": {
+                "max_depth": 4,
+                "observed_max_depth": 4 if backpressure else 1,
+                "bounded": True,
+            },
+            "drop_stale_packets": True,
+            "drop_policy": "bounded_queue_drop_oldest_audio_packet",
+            "stale_packets_dropped": 4 if backpressure else 0,
+            "sender_backpressure_errors": 1 if backpressure else 0,
+            "sender_backpressure_drops": 5 if backpressure else 0,
         },
         "queue": {
             "max_depth": 3,

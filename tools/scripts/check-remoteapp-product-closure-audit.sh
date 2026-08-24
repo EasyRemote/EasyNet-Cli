@@ -1035,6 +1035,14 @@ require 'native_media_adaptation_event' "$NATIVE_WEBRTC_MEDIA" \
   'native WebRTC media loop must bind adaptation events to session and pipeline context'
 require 'audio_media_observed' "$NATIVE_WEBRTC_MEDIA" \
   'native WebRTC media stats must distinguish pipeline readiness from observed audio media'
+require 'NativeAudioWriterState' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC audio writes must report through fixed-size shared state'
+require 'NATIVE_AUDIO_PACKET_QUEUE_DEPTH' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC audio writer must hard-bound pending encoded packets'
+require 'audio_transport_write_isolated' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must expose audio transport-write isolation'
+require 'bounded_queue_drop_oldest_audio_packet' "$NATIVE_WEBRTC_MEDIA" \
+  'native WebRTC media stats must expose the stale-audio drop policy'
 require 'RemoteAppOpusEncoder' "$SCREENCAPTUREKIT_AUDIO" \
   'ScreenCaptureKit audio path must encode bounded PCM frames as Opus'
 require 'SCStreamOutputType::Audio' "$SCREENCAPTUREKIT_CAPTURE" \
@@ -1125,6 +1133,16 @@ require 'host audio unsupported state is not product media evidence' "$MEDIA_ADA
   'media adaptation verifier must reject host-audio unsupported evidence'
 require 'queue.observed_max_depth must not exceed max_depth' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must reject unbounded queue evidence'
+require 'audio transport writes must be isolated from the media control loop' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require isolated audio transport writes'
+require 'audio.queue.observed_max_depth must not exceed max_depth' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must reject unbounded audio queue evidence'
+require 'audio.drop_policy must preserve the freshest bounded audio' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require stale-audio drop semantics'
+require 'audio sender backpressure drops must equal stale drops plus sender errors' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require internally consistent audio drop counters'
+require 'backpressure audio sender drops must exceed baseline' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must require observed audio backpressure behavior'
 require 'remote_desktop\.create_session' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect create_session evidence'
 require 'remote_desktop\.set_description' "$MEDIA_ADAPTATION" \

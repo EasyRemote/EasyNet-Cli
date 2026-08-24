@@ -4,8 +4,9 @@
 // File: plugins/remote-desktop/src/transport/webrtc_native_media.rs
 // Description: macOS ScreenCaptureKit + VideoToolbox strategy for direct WebRTC.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Receiver, TrySendError};
+use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,8 +26,8 @@ use crate::daemon::plugins::remote_desktop::media::native::{
     NativeLatencyStats, NativeReceiverPressureTracker,
 };
 use crate::daemon::plugins::remote_desktop::screencapturekit_audio::{
-    AudioCaptureEvent, AudioSink, RemoteAppOpusEncoder, REMOTEAPP_AUDIO_CHANNELS,
-    REMOTEAPP_AUDIO_SAMPLE_RATE_HZ,
+    AudioCaptureEvent, AudioSink, CapturedAudioChunk, EncodedOpusPacket, RemoteAppOpusEncoder,
+    REMOTEAPP_AUDIO_CHANNELS, REMOTEAPP_AUDIO_SAMPLE_RATE_HZ,
 };
 use crate::daemon::plugins::remote_desktop::screencapturekit_capture::{
     target_for_binding, target_for_pending_application_rebind, CapturedFrame,
@@ -48,6 +49,7 @@ const NATIVE_WEBRTC_AUDIO_CODEC: &str = "opus";
 const NATIVE_WEBRTC_AUDIO_PAYLOAD_CONTENT_TYPE: &str = "audio/opus";
 const NATIVE_MEDIA_PIPELINE_STATS_CONTRACT: &str = "remoteapp_media_pipeline_stats_v1";
 const NATIVE_AUDIO_CAPTURE_QUEUE_DEPTH: usize = 4;
+const NATIVE_AUDIO_PACKET_QUEUE_DEPTH: usize = 4;
 
 /// A single replaceable pending value for a live-media worker.
 ///
@@ -81,6 +83,61 @@ impl<T> LatestPendingWrite<T> {
             .lock()
             .expect("latest pending media write mutex poisoned")
             .take()
+    }
+}
+
+/// A hard-bounded FIFO that preserves the freshest real-time media.
+///
+/// Once capacity is reached, the oldest pending value is evicted before the
+/// new value is admitted. This is appropriate for audio/video data planes:
+/// replaying stale media after transport recovery is worse than an explicit,
+/// measurable gap.
+#[derive(Debug)]
+struct BoundedPendingWrites<T> {
+    values: Mutex<VecDeque<T>>,
+    capacity: usize,
+}
+
+impl<T> BoundedPendingWrites<T> {
+    fn new(capacity: usize) -> Self {
+        assert!(
+            capacity > 0,
+            "bounded media queue capacity must be positive"
+        );
+        Self {
+            values: Mutex::new(VecDeque::with_capacity(capacity)),
+            capacity,
+        }
+    }
+
+    /// Returns true when an older pending value was dropped.
+    fn push_fresh(&self, value: T) -> bool {
+        let mut values = self
+            .values
+            .lock()
+            .expect("bounded pending media queue mutex poisoned");
+        let dropped = if values.len() == self.capacity {
+            values.pop_front();
+            true
+        } else {
+            false
+        };
+        values.push_back(value);
+        dropped
+    }
+
+    fn pop_oldest(&self) -> Option<T> {
+        self.values
+            .lock()
+            .expect("bounded pending media queue mutex poisoned")
+            .pop_front()
+    }
+
+    fn len(&self) -> usize {
+        self.values
+            .lock()
+            .expect("bounded pending media queue mutex poisoned")
+            .len()
     }
 }
 
@@ -215,20 +272,159 @@ struct NativeAudioStats {
     packets_written: u64,
     bytes_written: u64,
     capture_chunks_dropped: u64,
+    queued_packets: usize,
+    max_queued_packets: usize,
+    stale_packets_dropped: u64,
+    sender_backpressure_errors: u64,
     sender_backpressure_drops: u64,
     blocker: Option<String>,
 }
 
-struct NativeAudioPipeline {
-    track: Arc<TrackLocalStaticSample>,
-    ssrc: u32,
-    payload_type: u8,
-    encoder: Option<RemoteAppOpusEncoder>,
-    capture_rx: Receiver<AudioCaptureEvent>,
-    capture_chunks_dropped: Arc<AtomicU64>,
+#[derive(Debug, Clone)]
+struct NativeAudioWriterSnapshot {
     packets_written: u64,
     bytes_written: u64,
-    sender_backpressure_drops: u64,
+    sender_backpressure_errors: u64,
+    fatal_error: Option<String>,
+}
+
+/// Lock-free counters plus a single terminal error slot shared with the
+/// transport worker. Unlike an outcome channel, this state cannot accumulate
+/// one allocation per packet while the media control loop is descheduled.
+#[derive(Debug, Default)]
+struct NativeAudioWriterState {
+    packets_written: AtomicU64,
+    bytes_written: AtomicU64,
+    sender_backpressure_errors: AtomicU64,
+    fatal_error: Mutex<Option<String>>,
+}
+
+impl NativeAudioWriterState {
+    fn record_written(&self, bytes_len: u64) {
+        self.packets_written.fetch_add(1, Ordering::Relaxed);
+        self.bytes_written.fetch_add(bytes_len, Ordering::Relaxed);
+    }
+
+    fn record_failure(&self, error: String) -> bool {
+        if is_webrtc_sender_backpressure(&error) {
+            self.sender_backpressure_errors
+                .fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let mut fatal_error = self
+            .fatal_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if fatal_error.is_none() {
+            *fatal_error = Some(error);
+        }
+        true
+    }
+
+    fn snapshot(&self) -> NativeAudioWriterSnapshot {
+        NativeAudioWriterSnapshot {
+            packets_written: self.packets_written.load(Ordering::Relaxed),
+            bytes_written: self.bytes_written.load(Ordering::Relaxed),
+            sender_backpressure_errors: self.sender_backpressure_errors.load(Ordering::Relaxed),
+            fatal_error: self
+                .fatal_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+        }
+    }
+}
+
+/// Owns the only RTP sample writer for the native audio track.
+///
+/// Audio transport capacity is independent from capture/session control. A
+/// blocked `write_sample` therefore lives in this abortable task while the
+/// media control loop remains able to adapt video, rebind targets, emit stats,
+/// and terminate the session. Pending Opus packets are hard-bounded to 80 ms.
+struct NativeAudioWriter {
+    pending: Arc<BoundedPendingWrites<EncodedOpusPacket>>,
+    pending_notify: Arc<tokio::sync::Notify>,
+    state: Arc<NativeAudioWriterState>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl NativeAudioWriter {
+    async fn start(track: Arc<TrackLocalStaticSample>, payload_type: u8) -> anyhow::Result<Self> {
+        let ssrc = track
+            .ssrcs()
+            .await
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("direct WebRTC audio track has no SSRC"))?;
+        let pending: Arc<BoundedPendingWrites<EncodedOpusPacket>> =
+            Arc::new(BoundedPendingWrites::new(NATIVE_AUDIO_PACKET_QUEUE_DEPTH));
+        let pending_notify = Arc::new(tokio::sync::Notify::new());
+        let state = Arc::new(NativeAudioWriterState::default());
+        let worker_pending = Arc::clone(&pending);
+        let worker_notify = Arc::clone(&pending_notify);
+        let worker_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            loop {
+                worker_notify.notified().await;
+                while let Some(packet) = worker_pending.pop_oldest() {
+                    let bytes_len = packet.payload.len() as u64;
+                    match track
+                        .sample_writer(ssrc, payload_type)
+                        .write_sample(&Sample {
+                            data: Bytes::from(packet.payload),
+                            duration: packet.duration,
+                            ..Default::default()
+                        })
+                        .await
+                    {
+                        Ok(()) => worker_state.record_written(bytes_len),
+                        Err(error) if worker_state.record_failure(error.to_string()) => return,
+                        Err(_) => {}
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            pending,
+            pending_notify,
+            state,
+            task,
+        })
+    }
+
+    /// Returns true when the oldest pending packet was dropped.
+    fn enqueue(&self, packet: EncodedOpusPacket) -> bool {
+        let dropped = self.pending.push_fresh(packet);
+        self.pending_notify.notify_one();
+        dropped
+    }
+
+    fn queued_packets(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn snapshot(&self) -> NativeAudioWriterSnapshot {
+        self.state.snapshot()
+    }
+
+    fn abort(&self) {
+        self.task.abort();
+    }
+}
+
+impl Drop for NativeAudioWriter {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+struct NativeAudioPipeline {
+    encoder: Option<RemoteAppOpusEncoder>,
+    capture_pending: Arc<BoundedPendingWrites<CapturedAudioChunk>>,
+    capture_error: Arc<Mutex<Option<String>>>,
+    capture_chunks_dropped: Arc<AtomicU64>,
+    writer: NativeAudioWriter,
+    stale_packets_dropped: u64,
     blocker: Option<String>,
 }
 
@@ -237,49 +433,52 @@ impl NativeAudioPipeline {
         track: &Arc<TrackLocalStaticSample>,
         payload_type: u8,
     ) -> anyhow::Result<(AudioSink, Self)> {
-        let ssrc = track
-            .ssrcs()
-            .await
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("direct WebRTC audio track has no SSRC"))?;
-        let (capture_tx, capture_rx) = sync_channel(NATIVE_AUDIO_CAPTURE_QUEUE_DEPTH);
+        let capture_pending = Arc::new(BoundedPendingWrites::new(NATIVE_AUDIO_CAPTURE_QUEUE_DEPTH));
+        let capture_error = Arc::new(Mutex::new(None));
         let capture_chunks_dropped = Arc::new(AtomicU64::new(0));
+        let pending_for_sink = Arc::clone(&capture_pending);
+        let error_for_sink = Arc::clone(&capture_error);
         let dropped_for_sink = Arc::clone(&capture_chunks_dropped);
-        let sink: AudioSink = Arc::new(move |event| {
-            if let Err(error) = capture_tx.try_send(event) {
-                if matches!(error, TrySendError::Full(_)) {
+        let sink: AudioSink = Arc::new(move |event: AudioCaptureEvent| match event {
+            Ok(chunk) => {
+                if pending_for_sink.push_fresh(chunk) {
                     dropped_for_sink.fetch_add(1, Ordering::Relaxed);
                 }
             }
+            Err(reason) => {
+                *error_for_sink
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(reason);
+            }
         });
+        let writer = NativeAudioWriter::start(Arc::clone(track), payload_type).await?;
         Ok((
             sink,
             Self {
-                track: Arc::clone(track),
-                ssrc,
-                payload_type,
                 encoder: Some(RemoteAppOpusEncoder::new()?),
-                capture_rx,
+                capture_pending,
+                capture_error,
                 capture_chunks_dropped,
-                packets_written: 0,
-                bytes_written: 0,
-                sender_backpressure_drops: 0,
+                writer,
+                stale_packets_dropped: 0,
                 blocker: None,
             },
         ))
     }
 
-    async fn drain(&mut self) {
-        while let Ok(event) = self.capture_rx.try_recv() {
-            let chunk = match event {
-                Ok(chunk) => chunk,
-                Err(reason) => {
-                    self.blocker = Some(format!("host_audio_capture_failed: {reason}"));
-                    self.encoder = None;
-                    continue;
-                }
-            };
+    fn drain(&mut self) {
+        self.observe_writer_failure();
+        let capture_error = self
+            .capture_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(reason) = capture_error {
+            self.blocker = Some(format!("host_audio_capture_failed: {reason}"));
+            self.encoder = None;
+            self.writer.abort();
+        }
+        while let Some(chunk) = self.capture_pending.pop_oldest() {
             let Some(encoder) = self.encoder.as_mut() else {
                 continue;
             };
@@ -292,43 +491,41 @@ impl NativeAudioPipeline {
                 }
             };
             for packet in packets {
-                let bytes = packet.payload.len() as u64;
-                let result = self
-                    .track
-                    .sample_writer(self.ssrc, self.payload_type)
-                    .write_sample(&Sample {
-                        data: Bytes::from(packet.payload),
-                        duration: packet.duration,
-                        ..Default::default()
-                    })
-                    .await;
-                match result {
-                    Ok(()) => {
-                        self.packets_written = self.packets_written.saturating_add(1);
-                        self.bytes_written = self.bytes_written.saturating_add(bytes);
-                    }
-                    Err(err) if is_webrtc_sender_backpressure(&err) => {
-                        self.sender_backpressure_drops =
-                            self.sender_backpressure_drops.saturating_add(1);
-                    }
-                    Err(err) => {
-                        self.blocker = Some(format!("host_audio_send_failed: {err}"));
-                        self.encoder = None;
-                        break;
-                    }
+                if self.writer.enqueue(packet) {
+                    self.stale_packets_dropped = self.stale_packets_dropped.saturating_add(1);
                 }
             }
+        }
+        self.observe_writer_failure();
+    }
+
+    fn observe_writer_failure(&mut self) {
+        if let Some(error) = self.writer.snapshot().fatal_error {
+            self.blocker = Some(format!("host_audio_send_failed: {error}"));
+            self.encoder = None;
+            self.writer.abort();
         }
     }
 
     fn stats(&self) -> NativeAudioStats {
+        let writer = self.writer.snapshot();
         NativeAudioStats {
             negotiated: true,
-            packets_written: self.packets_written,
-            bytes_written: self.bytes_written,
+            packets_written: writer.packets_written,
+            bytes_written: writer.bytes_written,
             capture_chunks_dropped: self.capture_chunks_dropped.load(Ordering::Relaxed),
-            sender_backpressure_drops: self.sender_backpressure_drops,
-            blocker: self.blocker.clone(),
+            queued_packets: self.writer.queued_packets(),
+            max_queued_packets: NATIVE_AUDIO_PACKET_QUEUE_DEPTH,
+            stale_packets_dropped: self.stale_packets_dropped,
+            sender_backpressure_errors: writer.sender_backpressure_errors,
+            sender_backpressure_drops: self
+                .stale_packets_dropped
+                .saturating_add(writer.sender_backpressure_errors),
+            blocker: self.blocker.clone().or_else(|| {
+                writer
+                    .fatal_error
+                    .map(|error| format!("host_audio_send_failed: {error}"))
+            }),
         }
     }
 }
@@ -339,6 +536,10 @@ fn audio_stats_not_negotiated() -> NativeAudioStats {
         packets_written: 0,
         bytes_written: 0,
         capture_chunks_dropped: 0,
+        queued_packets: 0,
+        max_queued_packets: 0,
+        stale_packets_dropped: 0,
+        sender_backpressure_errors: 0,
         sender_backpressure_drops: 0,
         blocker: Some("host_audio_not_negotiated".to_string()),
     }
@@ -581,6 +782,37 @@ impl NativeMediaStatsSample<'_> {
             json!(self.audio.capture_chunks_dropped),
         );
         payload.insert(
+            "audio_queue_depth".to_string(),
+            json!(self.audio.queued_packets),
+        );
+        payload.insert(
+            "audio_max_queue_depth".to_string(),
+            json!(self.audio.max_queued_packets),
+        );
+        payload.insert(
+            "audio_transport_write_isolated".to_string(),
+            json!(self.audio.negotiated),
+        );
+        payload.insert(
+            "audio_drop_stale_packets".to_string(),
+            json!(self.audio.negotiated),
+        );
+        payload.insert(
+            "audio_drop_policy".to_string(),
+            self.audio
+                .negotiated
+                .then(|| json!("bounded_queue_drop_oldest_audio_packet"))
+                .unwrap_or(Value::Null),
+        );
+        payload.insert(
+            "audio_stale_packets_dropped".to_string(),
+            json!(self.audio.stale_packets_dropped),
+        );
+        payload.insert(
+            "audio_sender_backpressure_errors".to_string(),
+            json!(self.audio.sender_backpressure_errors),
+        );
+        payload.insert(
             "audio_sender_backpressure_drops".to_string(),
             json!(self.audio.sender_backpressure_drops),
         );
@@ -780,7 +1012,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             active_media_source_epoch,
         )?;
         if let Some(audio) = audio_pipeline.as_mut() {
-            audio.drain().await;
+            audio.drain();
         }
         while let Ok(outcome) = video_writer.outcomes.try_recv() {
             match outcome {
@@ -1216,6 +1448,35 @@ mod tests {
     }
 
     #[test]
+    fn bounded_pending_writes_drop_oldest_without_exceeding_capacity() {
+        let pending = BoundedPendingWrites::new(3);
+        assert!(!pending.push_fresh(1_u64));
+        assert!(!pending.push_fresh(2_u64));
+        assert!(!pending.push_fresh(3_u64));
+        assert!(pending.push_fresh(4_u64));
+        assert_eq!(pending.len(), 3);
+        assert_eq!(pending.pop_oldest(), Some(2));
+        assert_eq!(pending.pop_oldest(), Some(3));
+        assert_eq!(pending.pop_oldest(), Some(4));
+        assert_eq!(pending.pop_oldest(), None);
+    }
+
+    #[test]
+    fn native_audio_writer_state_is_fixed_size_and_fail_closed() {
+        let state = NativeAudioWriterState::default();
+        state.record_written(128);
+        assert!(!state.record_failure("SenderRtp Full(1)".to_string()));
+        assert!(state.record_failure("transport closed".to_string()));
+        assert!(state.record_failure("later fatal error".to_string()));
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.packets_written, 1);
+        assert_eq!(snapshot.bytes_written, 128);
+        assert_eq!(snapshot.sender_backpressure_errors, 1);
+        assert_eq!(snapshot.fatal_error.as_deref(), Some("transport closed"));
+    }
+
+    #[test]
     fn native_media_rebind_candidate_failure_preserves_active_generation() {
         let store = RemoteDesktopSessionStore::new();
         let session_id = "rd-native-media-rebind-filter-failed";
@@ -1385,7 +1646,11 @@ mod tests {
                 packets_written: 96,
                 bytes_written: 24_000,
                 capture_chunks_dropped: 2,
-                sender_backpressure_drops: 1,
+                queued_packets: 1,
+                max_queued_packets: NATIVE_AUDIO_PACKET_QUEUE_DEPTH,
+                stale_packets_dropped: 3,
+                sender_backpressure_errors: 1,
+                sender_backpressure_drops: 4,
                 blocker: None,
             },
         }
@@ -1445,6 +1710,19 @@ mod tests {
         assert_eq!(stats["audio_codec"], json!("opus"));
         assert_eq!(stats["audio_packets_written"], json!(96));
         assert_eq!(stats["audio_capture_chunks_dropped"], json!(2));
+        assert_eq!(stats["audio_queue_depth"], json!(1));
+        assert_eq!(
+            stats["audio_max_queue_depth"],
+            json!(NATIVE_AUDIO_PACKET_QUEUE_DEPTH)
+        );
+        assert_eq!(
+            stats["audio_drop_policy"],
+            json!("bounded_queue_drop_oldest_audio_packet")
+        );
+        assert_eq!(stats["audio_transport_write_isolated"], json!(true));
+        assert_eq!(stats["audio_stale_packets_dropped"], json!(3));
+        assert_eq!(stats["audio_sender_backpressure_errors"], json!(1));
+        assert_eq!(stats["audio_sender_backpressure_drops"], json!(4));
         assert_eq!(stats["terminal"], json!(false));
     }
 }

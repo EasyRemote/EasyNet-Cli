@@ -613,14 +613,16 @@ Missing or insufficient product evidence:
   codec, host audio, FPS, bitrate, bounded queues, backpressure, drop policy,
   adaptation under degraded network, rendered media after adaptation, and
   terminal receipts.
-  Current source/product-path progress: frontend protocol projection now parses
-  daemon `audio` and `production_readiness.audio_*` fields, and session details
-  show `audio blocked · host_audio_not_implemented`. Device capabilities now
-  expose `media_pipeline_support` with video-only scope, H.264 payload
-  metadata, bounded queue stale-frame drop policy, native adaptation policy,
-  diagnostic stale-frame policy, `host_audio_not_implemented`, and missing
-  media-adaptation E2E as a product blocker. This is product transparency, not
-  host-audio or degraded-network implementation evidence.
+  Current source/product-path progress: the macOS ScreenCaptureKit path captures
+  host audio, encodes bounded 20 ms Opus packets, and sends them on the shared
+  WebRTC peer connection. Audio capture and encoded-packet queues are now hard
+  bounded, stale packets are dropped, and the only RTP writer runs in a
+  session-owned abortable task so slow audio transport cannot block video
+  adaptation, target rebind, cancellation, or terminal progress. Runtime stats,
+  the evidence verifier, and frontend details project the queue bound, observed
+  depth, drop policy, isolated-writer state, and drop/error counters. This is
+  executable source and contract evidence, not a live second-device host-audio
+  or degraded-network artifact.
 - Multi-window tracking E2E using
   `remoteapp-multi-window-tracking-e2e.sh` with a live artifact proving
   independent concurrent window streams, non-interleaved frames, move/resize

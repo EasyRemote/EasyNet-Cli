@@ -13,3 +13,6 @@
    epoch are proven on the execution path.
 10. Product-complete requires current authoritative evidence for each supported
     OS/network/frontend path; source-contract gates alone are insufficient.
+11. Audio RTP backpressure never blocks the media control loop. Pending encoded
+    audio is hard-bounded, stale packets are dropped before fresh packets, and
+    the session owns cancellation of the only audio track writer.
