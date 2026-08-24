@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, watch};
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend,
 };
-use crate::daemon::ability::dispatch::BidiOutputFrame;
+use crate::daemon::ability::dispatch::{BidiInputFrame, BidiOutputFrame};
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED,
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
@@ -43,7 +43,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct BidiCaptureWorkerConfig {
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) encoding: AttachEncoding,
     pub(in crate::daemon::plugins::remote_desktop) input_policy: EffectiveRemoteDesktopInputPolicy,
-    pub(in crate::daemon::plugins::remote_desktop) from_client: mpsc::Receiver<Value>,
+    pub(in crate::daemon::plugins::remote_desktop) from_client: mpsc::Receiver<BidiInputFrame>,
     pub(in crate::daemon::plugins::remote_desktop) to_client: mpsc::Sender<BidiOutputFrame>,
     pub(in crate::daemon::plugins::remote_desktop) stop_tx: watch::Sender<bool>,
     pub(in crate::daemon::plugins::remote_desktop) stop_rx: watch::Receiver<bool>,
@@ -295,13 +295,26 @@ fn build_bidi_frames(seq: u64, hardware_id: &str, frame: EncodedFrame) -> Vec<Bi
 fn spawn_bidi_control_loop(
     session_store: Arc<RemoteDesktopSessionStore>,
     session_id: String,
-    mut from_client: mpsc::Receiver<Value>,
+    mut from_client: mpsc::Receiver<BidiInputFrame>,
     to_client: mpsc::Sender<BidiOutputFrame>,
     input_policy: EffectiveRemoteDesktopInputPolicy,
     stop_tx: watch::Sender<bool>,
 ) {
     tokio::spawn(async move {
         while let Some(frame) = from_client.recv().await {
+            let frame: Value = match serde_json::from_slice(&frame.payload) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let _ = to_client
+                        .send(BidiOutputFrame::json(json!({
+                            "type": "warn",
+                            "code": "invalid_frame",
+                            "message": format!("remote desktop bidi input is not JSON: {error}"),
+                        })))
+                        .await;
+                    continue;
+                }
+            };
             let frame_type = match bidi_control_frame_type(&frame) {
                 Ok(frame_type) => frame_type,
                 Err(warn) => {

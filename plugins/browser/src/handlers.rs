@@ -27,7 +27,8 @@ use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::daemon::ability::dispatch::{
-    BidiOutputFrame, BidiSource, EnvelopeContext, StreamSource, BIDI_CHANNEL_BOUND,
+    bidi_input_channel, BidiInputFrame, BidiOutputFrame, BidiSource, EnvelopeContext, StreamSource,
+    BIDI_CHANNEL_BOUND,
 };
 
 use super::cdp::{validate_agent_command, CdpEvent, CdpFailure};
@@ -137,7 +138,7 @@ pub fn attach_session(
     let session = runtime.require_session(ABILITY_ATTACH_SESSION, &env)?;
     let lease = session.begin_attachment()?;
     let mut events = session.client().subscribe();
-    let (to_handler, from_transport) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (to_handler, from_transport) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (from_handler, to_transport) = mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
     tokio::spawn(async move {
         run_attachment(
@@ -284,7 +285,7 @@ async fn run_capture(
 async fn run_attachment(
     runtime: Arc<BrowserRuntime>,
     session: Arc<BrowserSession>,
-    mut inbound: mpsc::Receiver<Value>,
+    mut inbound: mpsc::Receiver<BidiInputFrame>,
     outbound: mpsc::Sender<BidiOutputFrame>,
     events: &mut broadcast::Receiver<CdpEvent>,
     _lease: SessionActivityLease,
@@ -474,6 +475,19 @@ async fn run_attachment(
             ) < ATTACH_OPERATION_BOUND => {
                 let Some(frame) = frame else {
                     break;
+                };
+                let frame: Value = match serde_json::from_slice(&frame.payload) {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        if send_json(&outbound, json!({
+                            "type": "error",
+                            "code": "invalid_frame",
+                            "message": format!("browser bidi input is not JSON: {error}"),
+                        })).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                 };
                 if let Some(reply) =
                     handle_cdp_subscription_frame(&frame, &mut cdp_event_subscriptions)

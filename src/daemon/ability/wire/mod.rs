@@ -21,7 +21,7 @@ use crate::daemon::plugins::{PluginBidiWireKind, PluginHostError, PluginRuntimeS
 
 /// Reserved binary stream carrying structured PTY lifecycle controls that do
 /// not have a first-class Axon `BidiControl` variant.
-pub(crate) const PTY_CONTROL_STREAM_ID: u32 = u32::MAX;
+pub(crate) const CONTROL_STREAM_ID: u32 = u32::MAX;
 
 /// Bidi wire codec used when an ability crosses the daemon/Axon session bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +32,9 @@ pub enum AbilityBidiWireKind {
     /// File-transfer stream. Binary chunks and JSON control frames follow the
     /// daemon's file-transfer envelope contract.
     FileTransfer,
+    /// Governed TCP byte stream. Stream 1 carries raw payload bytes while the
+    /// reserved control stream carries JSON lifecycle frames.
+    Tunnel,
     /// JSON control-frame stream. Input and output payloads are structured JSON
     /// values owned by the ability implementation.
     JsonFrames,
@@ -142,7 +145,7 @@ pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKi
         return Some(AbilityBidiWireKind::FileTransfer);
     }
     if ability == crate::daemon::ability::builtins::device_control::net_tunnel::ABILITY_NET_TUNNEL {
-        return Some(AbilityBidiWireKind::JsonFrames);
+        return Some(AbilityBidiWireKind::Tunnel);
     }
     None
 }
@@ -178,7 +181,7 @@ mod tests {
             registry.bidi_wire_kind_for(
                 crate::daemon::ability::builtins::device_control::net_tunnel::ABILITY_NET_TUNNEL
             ),
-            Some(AbilityBidiWireKind::JsonFrames)
+            Some(AbilityBidiWireKind::Tunnel)
         );
     }
 
@@ -283,6 +286,7 @@ exposure = "task"
 dedicated_surface = "none"
 subject_contract_kind = "authenticated-user"
 admission_action = "stream"
+bidi_wire_kind = "{wire_kind}"
 
 [input_schema]
 type = "object"

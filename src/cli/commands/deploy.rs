@@ -492,6 +492,7 @@ mod tests {
             content_type: "application/json".to_string(),
             terminal: false,
             payload: json!({"type": "error", "message": "denied"}),
+            binary: None,
         }];
 
         let err = super::ensure_remote_upload_completed(&frames)
@@ -517,6 +518,7 @@ mod tests {
                     "sha256": "abc"
                 }
             }),
+            binary: None,
         }];
 
         super::ensure_remote_upload_completed(&frames)

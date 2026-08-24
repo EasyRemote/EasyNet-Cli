@@ -244,6 +244,7 @@ mod tests {
             content_type: "application/json".to_string(),
             terminal: true,
             payload: json!({"type": "closed"}),
+            binary: None,
         };
         let raw = json!({
             "sequence": frame.sequence,

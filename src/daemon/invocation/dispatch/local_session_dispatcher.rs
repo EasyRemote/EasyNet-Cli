@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axon_sdk::invocation::{BidiInputFrame, BidiInputSender};
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -179,6 +178,7 @@ struct ActiveRemoteBidi {
 }
 
 struct PendingRemoteBidiInput {
+    content_type: String,
     payload: Vec<u8>,
     eof: bool,
 }
@@ -1215,24 +1215,6 @@ impl LocalAxonSessionDispatcher {
         value: &Value,
     ) -> Result<Option<BidiOutputProjection>, SessionDispatchError> {
         match value.get("type").and_then(Value::as_str) {
-            Some("chunk") => {
-                let data_b64 = value.get("data").and_then(Value::as_str).ok_or_else(|| {
-                    SessionDispatchError::Other(
-                        "file_transfer chunk frame missing `data`".to_string(),
-                    )
-                })?;
-                let raw = B64.decode(data_b64).map_err(|err| {
-                    SessionDispatchError::Other(format!(
-                        "file_transfer chunk base64 decode failed: {err}"
-                    ))
-                })?;
-                Ok(Some(BidiOutputProjection {
-                    call_id,
-                    payload: raw,
-                    failure: None,
-                    disposition: BidiOutputDisposition::Data,
-                }))
-            }
             Some("complete") => {
                 let payload = serde_json::to_vec(value).map_err(|err| {
                     SessionDispatchError::Other(format!(
@@ -1273,20 +1255,6 @@ impl LocalAxonSessionDispatcher {
         value: &Value,
     ) -> Result<Option<BidiOutputProjection>, SessionDispatchError> {
         match value.get("type").and_then(Value::as_str) {
-            Some("stdout") => {
-                let data_b64 = value.get("data").and_then(Value::as_str).ok_or_else(|| {
-                    SessionDispatchError::Other("pty stdout frame missing `data`".to_string())
-                })?;
-                let raw = B64.decode(data_b64).map_err(|err| {
-                    SessionDispatchError::Other(format!("pty stdout base64 decode failed: {err}"))
-                })?;
-                Ok(Some(BidiOutputProjection {
-                    call_id,
-                    payload: raw,
-                    failure: None,
-                    disposition: BidiOutputDisposition::Data,
-                }))
-            }
             Some("attached" | "detached" | "output_gap" | "exit") => {
                 let payload = serde_json::to_vec(value).map_err(|err| {
                     SessionDispatchError::Other(format!("encode pty lifecycle frame failed: {err}"))
@@ -1361,6 +1329,15 @@ impl LocalAxonSessionDispatcher {
         Self::map_remote_file_transfer_output(call_id, value)
     }
 
+    fn map_native_bidi_data(call_id: u64, payload: Vec<u8>) -> BidiOutputProjection {
+        BidiOutputProjection {
+            call_id,
+            payload,
+            failure: None,
+            disposition: BidiOutputDisposition::Data,
+        }
+    }
+
     /// Canonical carrier bidi open: the request is the complete signed Invocation, so
     /// the open enters the same descriptor-bound runtime path as unary calls.
     async fn handle_canonical_carrier_bidi_open(
@@ -1377,7 +1354,7 @@ impl LocalAxonSessionDispatcher {
             call_id = call_id,
             ability = ability,
         );
-        let Some(wire_kind) = local_bidi_wire_kind_for(&self.ability_wire, &ability) else {
+        if local_bidi_wire_kind_for(&self.ability_wire, &ability).is_none() {
             return Self::send_bidi_control_failure(
                 outbound,
                 call_id,
@@ -1387,7 +1364,7 @@ impl LocalAxonSessionDispatcher {
                 ),
             )
             .await;
-        };
+        }
         let Some(envelope) = request.envelope else {
             return self
                 .fail_remote_bidi_opening(
@@ -1584,7 +1561,6 @@ impl LocalAxonSessionDispatcher {
         self.register_remote_bidi(
             call_id,
             &ability,
-            wire_kind,
             handle,
             input_rx,
             outbound,
@@ -1802,7 +1778,6 @@ impl LocalAxonSessionDispatcher {
         &self,
         call_id: u64,
         ability: &str,
-        wire_kind: LocalBidiWireKind,
         handle: axon_sdk::invocation::BidiInvocationHandle,
         mut input_rx: mpsc::Receiver<PendingRemoteBidiInput>,
         outbound: &SessionUpSender,
@@ -1934,16 +1909,14 @@ impl LocalAxonSessionDispatcher {
 
         let dispatcher_for_input = self.clone();
         let outbound_for_input = outbound.clone();
-        let ability_for_input = ability.to_string();
         tokio::spawn(async move {
             while let Some(pending) = input_rx.recv().await {
                 let eof = pending.eof;
                 if dispatcher_for_input
                     .send_remote_bidi_input_to_handler(
                         call_id,
-                        &ability_for_input,
-                        wire_kind,
                         &handler_in_tx,
+                        pending.content_type,
                         pending.payload,
                         eof,
                         &outbound_for_input,
@@ -2013,18 +1986,12 @@ impl LocalAxonSessionDispatcher {
                 }
                 let mapped = if frame.payload.is_empty() {
                     None
-                } else if LocalAxonSessionDispatcher::is_json_frame_bidi_with(
-                    &ability_wire,
-                    &ability_owned,
-                ) && !frame.content_type.is_empty()
-                    && frame.content_type != "application/json"
+                } else if !frame.content_type.is_empty() && frame.content_type != "application/json"
                 {
-                    Some(BidiOutputProjection {
+                    Some(LocalAxonSessionDispatcher::map_native_bidi_data(
                         call_id,
-                        payload: frame.payload,
-                        failure: None,
-                        disposition: BidiOutputDisposition::Data,
-                    })
+                        frame.payload,
+                    ))
                 } else {
                     match serde_json::from_slice::<Value>(&frame.payload) {
                         Ok(value) => {
@@ -2130,6 +2097,7 @@ impl LocalAxonSessionDispatcher {
     async fn forward_remote_bidi_input(
         &self,
         call_id: u64,
+        content_type: String,
         payload: Vec<u8>,
         eof: bool,
         outbound: &SessionUpSender,
@@ -2205,7 +2173,11 @@ impl LocalAxonSessionDispatcher {
         };
 
         ingress
-            .send(PendingRemoteBidiInput { payload, eof })
+            .send(PendingRemoteBidiInput {
+                content_type,
+                payload,
+                eof,
+            })
             .await
             .map_err(|_| {
                 SessionDispatchError::Other(format!(
@@ -2217,28 +2189,17 @@ impl LocalAxonSessionDispatcher {
     async fn send_remote_bidi_input_to_handler(
         &self,
         call_id: u64,
-        ability: &str,
-        wire_kind: LocalBidiWireKind,
         sender: &BidiInputSender,
+        content_type: String,
         payload: Vec<u8>,
         eof: bool,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        // The hub-side wire codec maps canonical InvokeBidi frames exactly
-        // once into the handler's JSON protocol.  The execution host owns
-        // delivery and lifecycle only; re-encoding here would corrupt binary
-        // FileTransfer payloads and conflate transport EOF with business data.
         let send_result = if payload.is_empty() {
             Ok(())
         } else {
-            serde_json::from_slice::<Value>(&payload).map_err(|err| {
-                SessionDispatchError::Other(format!(
-                    "decode {:?} remote bidi handler input for {}: {err}",
-                    wire_kind, ability
-                ))
-            })?;
             sender
-                .send(BidiInputFrame::new(payload).with_content_type("application/json"))
+                .send(BidiInputFrame::new(payload).with_content_type(content_type))
                 .await
                 .map(|_| ())
         };
@@ -2380,6 +2341,25 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
             data_bytes = data_bytes,
         );
 
+        if let Some(input) =
+            crate::daemon::invocation::bidi::session_wire::decode_carrier_bidi_input(&chunk.data)
+                .map_err(|error| {
+                    SessionDispatchError::Other(format!(
+                        "session down native Bidi input is invalid: {error}"
+                    ))
+                })?
+        {
+            return self
+                .forward_remote_bidi_input(
+                    input.call_id,
+                    input.content_type,
+                    input.payload,
+                    input.eof,
+                    outbound,
+                )
+                .await;
+        }
+
         let dispatch = SessionDispatch::decode_frame(&chunk.data).map_err(|err| {
             SessionDispatchError::Other(format!(
                 "session down BinaryChunk is not valid SessionDispatch JSON: {err}"
@@ -2422,15 +2402,6 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 );
                 cancel.cancel();
                 return Ok(());
-            }
-            SessionDispatch::BidiInput {
-                call_id,
-                payload,
-                eof,
-            } => {
-                return self
-                    .forward_remote_bidi_input(call_id, payload, eof, outbound)
-                    .await;
             }
             SessionDispatch::RequestResult { call_id, outcome } => {
                 if let Some(correlation) = self.escalation_correlation.as_ref() {
@@ -2591,12 +2562,18 @@ mod tests {
         let producer = tokio::spawn(async move {
             for chunk in producer_source.chunks(CHUNK_BYTES) {
                 producer_dispatcher
-                    .forward_remote_bidi_input(61, chunk.to_vec(), false, &producer_outbound)
+                    .forward_remote_bidi_input(
+                        61,
+                        "application/octet-stream".to_string(),
+                        chunk.to_vec(),
+                        false,
+                        &producer_outbound,
+                    )
                     .await
                     .expect("every data frame enters the lossless ingress");
             }
             producer_dispatcher
-                .forward_remote_bidi_input(61, Vec::new(), true, &producer_outbound)
+                .forward_remote_bidi_input(61, String::new(), Vec::new(), true, &producer_outbound)
                 .await
                 .expect("EOF follows all data frames");
         });
@@ -2633,11 +2610,7 @@ mod tests {
 
         dispatcher
             .handle_down(
-                session_frame(SessionDispatch::BidiInput {
-                    call_id: 9,
-                    payload: b"late".to_vec(),
-                    eof: false,
-                }),
+                carrier_bidi_input_frame(9, "application/octet-stream", b"late", false),
                 &outbound,
             )
             .await
@@ -2992,6 +2965,28 @@ mod tests {
         }
     }
 
+    fn carrier_bidi_input_frame(
+        call_id: u64,
+        content_type: &str,
+        payload: &[u8],
+        eof: bool,
+    ) -> InvokeBidiDown {
+        InvokeBidiDown {
+            sequence: 0,
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                data: crate::daemon::invocation::bidi::session_wire::encode_carrier_bidi_input(
+                    call_id,
+                    content_type,
+                    payload,
+                    eof,
+                )
+                .expect("encode carrier bidi input"),
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        }
+    }
+
     fn canonical_carrier_explicit_test_call(
         call_id: u64,
         ability: &str,
@@ -3240,26 +3235,13 @@ mod tests {
         .expect("canonical bidi open succeeds");
 
         disp.handle_down(
-            session_frame(SessionDispatch::BidiInput {
-                call_id: 77,
-                payload: serde_json::to_vec(&json!({
-                    "type": "chunk",
-                    "data": B64.encode(bytes),
-                }))
-                .expect("mapped file-transfer chunk"),
-                eof: false,
-            }),
+            carrier_bidi_input_frame(77, "application/octet-stream", bytes, false),
             &session_tx,
         )
         .await
         .expect("bidi chunk forwards");
         disp.handle_down(
-            session_frame(SessionDispatch::BidiInput {
-                call_id: 77,
-                payload: serde_json::to_vec(&json!({"type": "eof"}))
-                    .expect("mapped file-transfer EOF"),
-                eof: true,
-            }),
+            carrier_bidi_input_frame(77, "", &[], true),
             &session_tx,
         )
         .await
@@ -4019,12 +4001,7 @@ mod tests {
         assert_eq!(attached_json["type"], "attached");
         assert_eq!(attached_json["epoch"], 2);
 
-        let stdout = LocalAxonSessionDispatcher::map_remote_pty_output(
-            17,
-            &json!({"type": "stdout", "data": "AAEC"}),
-        )
-        .expect("stdout projection")
-        .expect("stdout frame");
+        let stdout = LocalAxonSessionDispatcher::map_native_bidi_data(17, vec![0, 1, 2]);
         assert_eq!(stdout.payload, vec![0, 1, 2]);
 
         let exit = LocalAxonSessionDispatcher::map_remote_pty_output(

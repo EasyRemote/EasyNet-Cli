@@ -84,24 +84,25 @@ pub(crate) struct DaemonBidiSender {
 }
 
 impl DaemonBidiSender {
-    pub(crate) async fn send_json(&mut self, value: &serde_json::Value) -> anyhow::Result<()> {
-        let data = serde_json::to_vec(value)
-            .with_context(|| format!("encode {} bidi JSON frame", self.context.invocation))?;
-        self.send_binary(data).await
-    }
-
-    pub(crate) async fn send_pty_control_json(
+    pub(crate) async fn send_control_json(
         &mut self,
         value: &serde_json::Value,
     ) -> anyhow::Result<()> {
         let data = serde_json::to_vec(value)
             .with_context(|| format!("encode {} PTY control frame", self.context.invocation))?;
         self.send_payload(UpPayload::BinaryChunk(BinaryChunk {
-            stream_id: crate::daemon::ability::wire::PTY_CONTROL_STREAM_ID,
+            stream_id: crate::daemon::ability::wire::CONTROL_STREAM_ID,
             data,
             ..BinaryChunk::default()
         }))
         .await
+    }
+
+    pub(crate) async fn send_pty_control_json(
+        &mut self,
+        value: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        self.send_control_json(value).await
     }
 
     pub(crate) async fn send_pty_resize(&mut self, cols: u32, rows: u32) -> anyhow::Result<()> {
@@ -272,10 +273,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sender_owns_strict_sequence_across_json_binary_and_eof() {
+    async fn sender_owns_strict_sequence_across_control_binary_and_eof() {
         let (mut sender, mut receiver) = test_sender();
         sender
-            .send_json(&serde_json::json!({"type": "stdin", "data": "YQ=="}))
+            .send_control_json(&serde_json::json!({"type": "resize", "cols": 80, "rows": 24}))
             .await
             .expect("json frame");
         sender.send_binary(vec![2, 3]).await.expect("binary frame");

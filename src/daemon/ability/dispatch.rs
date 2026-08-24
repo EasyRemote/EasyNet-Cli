@@ -19,6 +19,7 @@ use std::future::Future;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
+pub use axon_sdk::invocation::BidiInputFrame;
 use axon_sdk::invocation::{
     make_ability, AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions, AxonError,
     AxonErrorKind, CallMode as AxonCallMode, ErrorCode, ErrorStage, LocalRuntime, SecurityClass,
@@ -671,6 +672,34 @@ pub type LocalStreamHandlerWithEnvelope =
 /// cannot exceed the writer's own backlog.
 pub const BIDI_CHANNEL_BOUND: usize = 256;
 
+#[derive(Debug, Clone)]
+pub struct BidiInputSender {
+    inner: mpsc::Sender<BidiInputFrame>,
+}
+
+impl BidiInputSender {
+    /// Send one structured control frame. This convenience stays on the local
+    /// handler test/product boundary; data-plane callers use `send_frame`.
+    pub async fn send(&self, value: Value) -> Result<(), mpsc::error::SendError<BidiInputFrame>> {
+        let payload =
+            serde_json::to_vec(&value).expect("serde_json::Value serialization should not fail");
+        self.send_frame(BidiInputFrame::new(payload).with_content_type("application/json"))
+            .await
+    }
+
+    pub async fn send_frame(
+        &self,
+        frame: BidiInputFrame,
+    ) -> Result<(), mpsc::error::SendError<BidiInputFrame>> {
+        self.inner.send(frame).await
+    }
+}
+
+pub fn bidi_input_channel(bound: usize) -> (BidiInputSender, mpsc::Receiver<BidiInputFrame>) {
+    let (inner, receiver) = mpsc::channel(bound);
+    (BidiInputSender { inner }, receiver)
+}
+
 /// Both ends of one open bidi session, **as seen by the transport
 /// layer** (the IPC server). Per C-M3a §D1, two distinct `mpsc`
 /// channels (not `broadcast`) — bidi sessions are point-to-point,
@@ -709,7 +738,7 @@ pub const BIDI_CHANNEL_BOUND: usize = 256;
 pub struct BidiSource {
     /// Transport WRITE end. `SendBidi` frames push here; the
     /// handler's matching Receiver delivers them.
-    pub to_client: mpsc::Sender<Value>,
+    pub to_client: BidiInputSender,
     /// Transport READ end. The forwarder reads here and emits each
     /// value as `RecvBidi`; the handler's matching Sender is what
     /// produces them.
@@ -1309,12 +1338,11 @@ async fn run_bidi_source(
                 inbound = inbound_rx.recv() => {
                     match inbound {
                         Some(msg) => {
-                            let value = match payload_to_json_value(&msg.payload) {
-                                Ok(value) => value,
-                                Err(e) => break 'run Err(*e),
-                            };
+                            let frame = BidiInputFrame::new(msg.payload)
+                                .with_content_type(msg.content_type)
+                                .with_message_id(msg.message_id);
                             let send_closed = match to_client.as_ref() {
-                                Some(sender) => sender.send(value).await.is_err(),
+                                Some(sender) => sender.send_frame(frame).await.is_err(),
                                 None => false,
                             };
                             if send_closed {
@@ -7179,6 +7207,37 @@ fn runtime_stream_source(
 }
 
 #[cfg(test)]
+fn project_runtime_bidi_output(
+    frame: axon_sdk::invocation::AbilityFrame,
+) -> anyhow::Result<Option<BidiOutputFrame>> {
+    if frame.payload.is_empty() {
+        return Ok(None);
+    }
+
+    // EasyNet handlers can only terminate with `terminal_json`. Axon preserves
+    // the last progress content type on the Completed event, so terminality is
+    // the authoritative discriminator for this adapter boundary.
+    if frame.terminal || frame.content_type == "application/json" || frame.content_type.is_empty() {
+        let value =
+            crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(
+                &frame,
+            )
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        return Ok(Some(if frame.terminal {
+            BidiOutputFrame::terminal_json(value)
+        } else {
+            BidiOutputFrame::json(value)
+        }));
+    }
+
+    Ok(Some(BidiOutputFrame {
+        payload: frame.payload,
+        content_type: frame.content_type,
+        terminal: frame.terminal,
+    }))
+}
+
+#[cfg(test)]
 fn runtime_bidi_source(
     runtime: Arc<LocalRuntime>,
     target: InvocationTarget,
@@ -7209,39 +7268,11 @@ fn runtime_bidi_source(
                         }
                     };
 
-                let (to_client, mut to_runtime) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                let (to_client, mut to_runtime) = bidi_input_channel(BIDI_CHANNEL_BOUND);
                 let (from_runtime, from_client) =
                     mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
                 let runtime_input = source.to_client;
                 let mut runtime_output = source.from_client;
-
-                match tokio::time::timeout(
-                    std::time::Duration::from_millis(100),
-                    runtime_output.next_frame(),
-                )
-                .await
-                {
-                    Ok(Some(Ok(frame))) => {
-                        if !frame.payload.is_empty() {
-                            match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(
-                                &frame,
-                            ) {
-                                Ok(value) => {
-                                    let _ = from_runtime.send(BidiOutputFrame::json(value)).await;
-                                }
-                                Err(err) => {
-                                    let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    Ok(Some(Err(err))) => {
-                        let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
-                        return;
-                    }
-                    Ok(None) | Err(_) => {}
-                }
 
                 if ready_tx
                     .send(Ok(BidiSource {
@@ -7254,12 +7285,7 @@ fn runtime_bidi_source(
                 }
 
                 let input_task = tokio::spawn(async move {
-                    while let Some(value) = to_runtime.recv().await {
-                        let Ok(payload) = json_value_to_payload(&value) else {
-                            continue;
-                        };
-                        let frame = axon_sdk::invocation::BidiInputFrame::new(payload)
-                            .with_content_type("application/json");
+                    while let Some(frame) = to_runtime.recv().await {
                         if runtime_input.send(frame).await.is_err() {
                             break;
                         }
@@ -7269,29 +7295,39 @@ fn runtime_bidi_source(
 
                 let output_task = tokio::spawn(async move {
                     while let Some(frame_result) = runtime_output.next_frame().await {
-                        let Ok(frame) = frame_result else {
-                            break;
+                        let frame = match frame_result {
+                            Ok(frame) => frame,
+                            Err(error) => {
+                                let _ = from_runtime
+                                    .send(BidiOutputFrame::terminal_json(serde_json::json!({
+                                        "type": "error",
+                                        "code": "runtime_bidi_failed",
+                                        "message": error.to_string(),
+                                    })))
+                                    .await;
+                                break;
+                            }
                         };
-                        if !frame.payload.is_empty() {
-                            let output_frame = if frame.content_type == "application/json"
-                                || frame.content_type.is_empty()
-                            {
-                                match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(
-                                    &frame,
-                                ) {
-                                    Ok(value) => Ok(BidiOutputFrame::json(value)),
-                                    Err(err) => Err(anyhow::anyhow!("{err}")),
-                                }
-                            } else {
-                                Ok(BidiOutputFrame::binary(frame.payload, frame.content_type))
-                            };
-                            if let Ok(output_frame) = output_frame {
-                                if from_runtime.send(output_frame).await.is_err() {
+                        let terminal = frame.terminal;
+                        match project_runtime_bidi_output(frame) {
+                            Ok(Some(frame)) => {
+                                if from_runtime.send(frame).await.is_err() {
                                     break;
                                 }
                             }
+                            Ok(None) => {}
+                            Err(error) => {
+                                let _ = from_runtime
+                                    .send(BidiOutputFrame::terminal_json(serde_json::json!({
+                                        "type": "error",
+                                        "code": "runtime_projection_failed",
+                                        "message": error.to_string(),
+                                    })))
+                                    .await;
+                                break;
+                            }
                         }
-                        if frame.terminal {
+                        if terminal {
                             break;
                         }
                     }
@@ -9065,7 +9101,7 @@ mod tests {
         Arc::new(|_args: Value| {
             let (_to_handler_tx, from_client) =
                 mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
-            let (to_client, _to_client_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+            let (to_client, _to_client_rx) = bidi_input_channel(BIDI_CHANNEL_BOUND);
             Ok(BidiSource {
                 from_client,
                 to_client,
@@ -9154,7 +9190,7 @@ mod tests {
             OwnerKind::runtime_introspection_system(),
             Arc::new(|_args: Value| {
                 let (client_to_handler_tx, mut client_to_handler_rx) =
-                    mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                    bidi_input_channel(BIDI_CHANNEL_BOUND);
                 let (handler_to_client_tx, handler_to_client_rx) =
                     mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
                 // Forwarder side of the BidiSource is what we hand
@@ -9164,6 +9200,9 @@ mod tests {
                 // handler keeps the opposite ends.
                 tokio::spawn(async move {
                     while let Some(v) = client_to_handler_rx.recv().await {
+                        let Ok(v) = serde_json::from_slice(&v.payload) else {
+                            break;
+                        };
                         if handler_to_client_tx
                             .send(BidiOutputFrame::json(v))
                             .await
@@ -9874,7 +9913,7 @@ mod tests {
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
-            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (tx_to_client, _rx_to_client) = bidi_input_channel(1);
             let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
@@ -9885,7 +9924,7 @@ mod tests {
         let stream_env: LocalStreamHandlerWithEnvelope =
             Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
-            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (tx_to_client, _rx_to_client) = bidi_input_channel(1);
             let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
@@ -10057,7 +10096,7 @@ mod tests {
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
-            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (tx_to_client, _rx_to_client) = bidi_input_channel(1);
             let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
@@ -10068,7 +10107,7 @@ mod tests {
         let stream_env: LocalStreamHandlerWithEnvelope =
             Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
-            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (tx_to_client, _rx_to_client) = bidi_input_channel(1);
             let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,

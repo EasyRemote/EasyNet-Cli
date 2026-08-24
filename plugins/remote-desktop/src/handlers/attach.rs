@@ -7,7 +7,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::dispatch::{
-    BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
+    bidi_input_channel, BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
 };
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_ATTACH_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
@@ -64,7 +64,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
             })?
     };
 
-    let (xport_to_handler_tx, xport_to_handler_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_to_handler_tx, xport_to_handler_rx) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (xport_from_handler_tx, xport_from_handler_rx) =
         mpsc::channel::<BidiOutputFrame>(plugin.config().max_frame_queue());
     spawn_bidi_capture_worker(BidiCaptureWorkerConfig {

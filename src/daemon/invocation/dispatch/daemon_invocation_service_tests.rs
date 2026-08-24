@@ -43,7 +43,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     wire_invocation_target, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
-use axon_sdk::invocation::{AbilityFrame, BidiInputFrame, CallMode};
+use axon_sdk::invocation::{AbilityFrame, CallMode};
 use axon_sdk::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, BinaryChunk, StreamDescriptor,
 };

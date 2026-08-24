@@ -72,13 +72,22 @@ pub struct LocalBidiFrame {
     pub terminal: bool,
     /// JSON projection of the frame payload.
     pub payload: Value,
+    /// Raw bytes for a native data-plane frame. JSON controls and receipts
+    /// leave this empty; payload bytes are never Base64-expanded internally.
+    pub binary: Option<LocalBidiBinaryFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBidiBinaryFrame {
+    pub stream_id: u32,
+    pub data: Vec<u8>,
 }
 
 /// Project one Axon `InvokeBidiDown` frame into the support-layer JSON frame
 /// shape consumed by CLI/product callers.
 ///
-/// Binary chunks are payload bytes by definition, so non-JSON data is exposed
-/// losslessly as `data_b64`. Receipt payloads are different: they are receipt
+/// Binary chunks are payload bytes by definition, so data is exposed
+/// losslessly through `LocalBidiBinaryFrame`. Receipt payloads are different: they are receipt
 /// projection facts. A non-empty receipt payload must declare a JSON content
 /// type and parse as JSON, otherwise the projection fails before product code
 /// can mistake opaque bytes for verified receipt facts.
@@ -87,7 +96,6 @@ pub fn project_invoke_bidi_down_frame(
     frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
 ) -> anyhow::Result<Option<LocalBidiFrame>> {
     use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use serde_json::json;
 
     let sequence = frame.sequence;
@@ -97,18 +105,31 @@ pub fn project_invoke_bidi_down_frame(
 
     let projected = match payload {
         DownPayload::BinaryChunk(chunk) => {
-            let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
-                json!({
-                    "type": "binary",
-                    "stream_id": chunk.stream_id,
-                    "data_b64": B64.encode(&chunk.data),
-                })
-            });
-            LocalBidiFrame {
-                sequence,
-                content_type: "application/json".to_string(),
-                terminal: false,
-                payload,
+            if chunk.stream_id == crate::daemon::ability::wire::CONTROL_STREAM_ID {
+                let payload = serde_json::from_slice(&chunk.data).map_err(|error| {
+                    anyhow::anyhow!("InvokeBidi control frame is not valid JSON: {error}")
+                })?;
+                LocalBidiFrame {
+                    sequence,
+                    content_type: "application/json".to_string(),
+                    terminal: false,
+                    payload,
+                    binary: None,
+                }
+            } else {
+                LocalBidiFrame {
+                    sequence,
+                    content_type: "application/octet-stream".to_string(),
+                    terminal: false,
+                    payload: json!({
+                        "type": "binary",
+                        "stream_id": chunk.stream_id,
+                    }),
+                    binary: Some(LocalBidiBinaryFrame {
+                        stream_id: chunk.stream_id,
+                        data: chunk.data,
+                    }),
+                }
             }
         }
         DownPayload::Receipt(receipt) => {
@@ -132,6 +153,7 @@ pub fn project_invoke_bidi_down_frame(
                     })),
                     "payload": receipt_payload,
                 }),
+                binary: None,
             }
         }
         DownPayload::Control(_) => LocalBidiFrame {
@@ -139,6 +161,7 @@ pub fn project_invoke_bidi_down_frame(
             content_type: "application/json".to_string(),
             terminal: false,
             payload: json!({"type": "control"}),
+            binary: None,
         },
         DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => return Ok(None),
     };
@@ -2636,7 +2659,7 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn bidi_down_projection_preserves_binary_chunk_as_lossless_b64() {
+    fn bidi_down_projection_preserves_binary_chunk_as_raw_bytes() {
         use axon_sdk::pb::axon::v1::{
             invoke_bidi_down::Payload as DownPayload, BinaryChunk, InvokeBidiDown,
         };
@@ -2656,7 +2679,9 @@ mod tests {
         assert_eq!(frame.sequence, 7);
         assert_eq!(frame.payload["type"], "binary");
         assert_eq!(frame.payload["stream_id"], 3);
-        assert_eq!(frame.payload["data_b64"], "/wAB");
+        let binary = frame.binary.expect("raw binary projection");
+        assert_eq!(binary.stream_id, 3);
+        assert_eq!(binary.data, [0xff, 0x00, 0x01]);
     }
 
     #[cfg(feature = "axon-pb")]
