@@ -1065,8 +1065,8 @@ require 'queue.observed_max_depth must not exceed max_depth' "$MEDIA_ADAPTATION"
   'media adaptation verifier must reject unbounded queue evidence'
 require 'remote_desktop\.create_session' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect create_session evidence'
-require 'remote_desktop\.attach' "$MEDIA_ADAPTATION" \
-  'media adaptation verifier must inspect attach evidence'
+require 'remote_desktop\.set_description' "$MEDIA_ADAPTATION" \
+  'media adaptation verifier must inspect production WebRTC signaling evidence'
 require 'remote_desktop\.watch_events' "$MEDIA_ADAPTATION" \
   'media adaptation verifier must inspect watch_events evidence'
 require 'remote_desktop\.end_session' "$MEDIA_ADAPTATION" \

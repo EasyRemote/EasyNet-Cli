@@ -79,6 +79,47 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopMediaStats {
     value: Value,
 }
 
+/// Latest authenticated receiver-side media feedback for one transport epoch.
+///
+/// Cumulative counters are kept typed instead of being re-read from the public
+/// JSON projection by the encoder loop. A newer browser sample may influence
+/// quality adaptation, but it cannot change session authority or lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::daemon::plugins::remote_desktop) struct ClientMediaFeedback {
+    pub(in crate::daemon::plugins::remote_desktop) sampled_at_ms: u64,
+    pub(in crate::daemon::plugins::remote_desktop) frames_dropped: u64,
+    pub(in crate::daemon::plugins::remote_desktop) freeze_count: u64,
+    pub(in crate::daemon::plugins::remote_desktop) jitter_buffer_avg_ms: f64,
+    pub(in crate::daemon::plugins::remote_desktop) jitter_buffer_target_avg_ms: f64,
+}
+
+impl ClientMediaFeedback {
+    fn from_stats_patch(stats: &Value) -> Option<Self> {
+        let browser = stats.get("browser_stats")?.as_object()?;
+        Some(Self {
+            sampled_at_ms: browser.get("sampled_at_ms")?.as_u64()?,
+            frames_dropped: browser
+                .get("frames_dropped")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            freeze_count: browser
+                .get("freeze_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            jitter_buffer_avg_ms: browser
+                .get("jitter_buffer_avg_ms")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .unwrap_or(0.0),
+            jitter_buffer_target_avg_ms: browser
+                .get("jitter_buffer_target_avg_ms")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .unwrap_or(0.0),
+        })
+    }
+}
+
 impl RemoteDesktopMediaStats {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn new(value: Value) -> Self {
@@ -94,6 +135,7 @@ impl RemoteDesktopMediaStats {
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTransportState {
     primary: Option<PrimaryMediaState>,
     media_stats: Option<RemoteDesktopMediaStats>,
+    client_media_feedback: Option<ClientMediaFeedback>,
     preview_stop_tx: Option<watch::Sender<bool>>,
 }
 
@@ -102,6 +144,7 @@ impl RemoteDesktopTransportState {
         Self {
             primary: None,
             media_stats: None,
+            client_media_feedback: None,
             preview_stop_tx: None,
         }
     }
@@ -134,6 +177,7 @@ impl RemoteDesktopTransportState {
             phase: PrimaryMediaPhase::Negotiating,
         });
         self.media_stats = None;
+        self.client_media_feedback = None;
     }
 
     fn transition_primary(&mut self, epoch: TransportEpoch, phase: PrimaryMediaPhase) -> bool {
@@ -263,10 +307,27 @@ impl RemoteDesktopTransportState {
         if !self.accepts_epoch(epoch) {
             return false;
         }
+        if let Some(feedback) = ClientMediaFeedback::from_stats_patch(&stats) {
+            let is_newer = self
+                .client_media_feedback
+                .is_none_or(|current| feedback.sampled_at_ms > current.sampled_at_ms);
+            if is_newer {
+                self.client_media_feedback = Some(feedback);
+            }
+        }
         let mut merged = self.media_stats().unwrap_or_else(|| json!({}));
         merge_json_object(&mut merged, stats);
         self.media_stats = Some(RemoteDesktopMediaStats::new(merged));
         true
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn client_media_feedback(
+        &self,
+        epoch: TransportEpoch,
+    ) -> Option<ClientMediaFeedback> {
+        self.accepts_epoch(epoch)
+            .then_some(self.client_media_feedback)
+            .flatten()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn preview_attached(&self) -> bool {
@@ -370,6 +431,60 @@ mod tests {
         assert!(transport.mark_device_sending(epoch));
         assert!(transport.mark_client_presenting(epoch));
         assert!(transport.client_media_ready());
+    }
+
+    #[test]
+    fn receiver_feedback_is_epoch_fenced_and_monotonic() {
+        let mut transport = RemoteDesktopTransportState::new();
+        let epoch = TransportEpoch::new(7);
+        transport.begin_primary(epoch);
+        assert!(transport.merge_media_stats(
+            epoch,
+            json!({
+                "browser_stats": {
+                    "sampled_at_ms": 2000,
+                    "frames_dropped": 4,
+                    "freeze_count": 2,
+                    "jitter_buffer_avg_ms": 240.0,
+                    "jitter_buffer_target_avg_ms": 125.0
+                }
+            }),
+        ));
+        assert_eq!(
+            transport.client_media_feedback(epoch),
+            Some(ClientMediaFeedback {
+                sampled_at_ms: 2000,
+                frames_dropped: 4,
+                freeze_count: 2,
+                jitter_buffer_avg_ms: 240.0,
+                jitter_buffer_target_avg_ms: 125.0,
+            })
+        );
+
+        assert!(transport.merge_media_stats(
+            epoch,
+            json!({
+                "browser_stats": {
+                    "sampled_at_ms": 1000,
+                    "frames_dropped": 99,
+                    "freeze_count": 99,
+                    "jitter_buffer_avg_ms": 999.0,
+                    "jitter_buffer_target_avg_ms": 999.0
+                }
+            }),
+        ));
+        assert_eq!(
+            transport
+                .client_media_feedback(epoch)
+                .unwrap()
+                .frames_dropped,
+            4,
+            "late receiver feedback must not replace the current sample"
+        );
+        assert_eq!(
+            transport.client_media_feedback(TransportEpoch::new(8)),
+            None
+        );
     }
 
     #[test]

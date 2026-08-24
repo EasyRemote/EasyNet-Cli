@@ -4,9 +4,9 @@
 // File: plugins/remote-desktop/src/transport/webrtc_native_media.rs
 // Description: macOS ScreenCaptureKit + VideoToolbox strategy for direct WebRTC.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, TrySendError};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::{channel, sync_channel, Receiver, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -22,7 +22,7 @@ use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::media::native::{
     is_webrtc_sender_backpressure, latest_native_rtp_units, native_capture_dimensions,
     native_rtp_sample_duration, webrtc_cmtime, webrtc_stats_snapshot, NativeAdaptiveBitrate,
-    NativeLatencyStats,
+    NativeLatencyStats, NativeReceiverPressureTracker,
 };
 use crate::daemon::plugins::remote_desktop::screencapturekit_audio::{
     AudioCaptureEvent, AudioSink, RemoteAppOpusEncoder, REMOTEAPP_AUDIO_CHANNELS,
@@ -49,12 +49,164 @@ const NATIVE_WEBRTC_AUDIO_PAYLOAD_CONTENT_TYPE: &str = "audio/opus";
 const NATIVE_MEDIA_PIPELINE_STATS_CONTRACT: &str = "remoteapp_media_pipeline_stats_v1";
 const NATIVE_AUDIO_CAPTURE_QUEUE_DEPTH: usize = 4;
 
+/// A single replaceable pending value for a live-media worker.
+///
+/// The producer never waits for a slow transport. While one sample is being
+/// written, newer samples replace the pending sample so recovery resumes from
+/// the freshest desktop state instead of replaying stale frames.
+#[derive(Debug)]
+struct LatestPendingWrite<T> {
+    value: Mutex<Option<T>>,
+}
+
+impl<T> Default for LatestPendingWrite<T> {
+    fn default() -> Self {
+        Self {
+            value: Mutex::new(None),
+        }
+    }
+}
+
+impl<T> LatestPendingWrite<T> {
+    fn replace(&self, value: T) -> bool {
+        self.value
+            .lock()
+            .expect("latest pending media write mutex poisoned")
+            .replace(value)
+            .is_some()
+    }
+
+    fn take(&self) -> Option<T> {
+        self.value
+            .lock()
+            .expect("latest pending media write mutex poisoned")
+            .take()
+    }
+}
+
+#[derive(Debug)]
+struct NativeVideoWriteCommand {
+    data: Bytes,
+    is_keyframe: bool,
+    pts_ms: u64,
+    encode_submitted_at_ms: u64,
+    encoded_at_ms: u64,
+    encode_latency_ms: u64,
+}
+
+#[derive(Debug)]
+enum NativeVideoWriteOutcome {
+    Written {
+        bytes_len: u64,
+        is_keyframe: bool,
+        encode_submitted_at_ms: u64,
+        encoded_at_ms: u64,
+        encode_latency_ms: u64,
+        rtp_write_started_ms: u64,
+        rtp_write_finished_ms: u64,
+    },
+    Failed(String),
+}
+
+/// Owns the only RTP sample writer for the native video track.
+///
+/// `TrackLocalStaticSample::write_sample` may legitimately await transport
+/// capacity for an unbounded interval. Keeping that await in this worker lets
+/// the media control loop continue sampling pressure, adapting bitrate/FPS,
+/// handling cancellation, and replacing stale pending frames. The worker is
+/// aborted with the session, so a disconnected transport cannot leak a task.
+struct NativeVideoWriter {
+    pending: Arc<LatestPendingWrite<NativeVideoWriteCommand>>,
+    pending_notify: Arc<tokio::sync::Notify>,
+    outcomes: Receiver<NativeVideoWriteOutcome>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl NativeVideoWriter {
+    fn start(
+        track: Arc<TrackLocalStaticSample>,
+        ssrc: u32,
+        payload_type: u8,
+        frame_duration: Duration,
+        control_wakeup: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        let pending: Arc<LatestPendingWrite<NativeVideoWriteCommand>> =
+            Arc::new(LatestPendingWrite::default());
+        let pending_notify = Arc::new(tokio::sync::Notify::new());
+        let (outcome_tx, outcomes) = channel();
+        let worker_pending = Arc::clone(&pending);
+        let worker_notify = Arc::clone(&pending_notify);
+        let task = tokio::spawn(async move {
+            let mut last_written_pts_ms = None;
+            loop {
+                worker_notify.notified().await;
+                while let Some(command) = worker_pending.take() {
+                    let sample_duration = native_rtp_sample_duration(
+                        last_written_pts_ms,
+                        command.pts_ms,
+                        frame_duration,
+                    );
+                    let rtp_write_started_ms = now_ms();
+                    let result = track
+                        .sample_writer(ssrc, payload_type)
+                        .write_sample(&Sample {
+                            data: command.data.clone(),
+                            duration: sample_duration,
+                            ..Default::default()
+                        })
+                        .await;
+                    let outcome = match result {
+                        Ok(()) => {
+                            last_written_pts_ms = Some(command.pts_ms);
+                            NativeVideoWriteOutcome::Written {
+                                bytes_len: command.data.len() as u64,
+                                is_keyframe: command.is_keyframe,
+                                encode_submitted_at_ms: command.encode_submitted_at_ms,
+                                encoded_at_ms: command.encoded_at_ms,
+                                encode_latency_ms: command.encode_latency_ms,
+                                rtp_write_started_ms,
+                                rtp_write_finished_ms: now_ms(),
+                            }
+                        }
+                        Err(error) => NativeVideoWriteOutcome::Failed(error.to_string()),
+                    };
+                    if outcome_tx.send(outcome).is_err() {
+                        return;
+                    }
+                    control_wakeup.notify_one();
+                }
+            }
+        });
+        Self {
+            pending,
+            pending_notify,
+            outcomes,
+            task,
+        }
+    }
+
+    /// Returns true when an older pending sample was replaced.
+    fn enqueue(&self, command: NativeVideoWriteCommand) -> bool {
+        let replaced = self.pending.replace(command);
+        self.pending_notify.notify_one();
+        replaced
+    }
+}
+
+impl Drop for NativeVideoWriter {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct NativeMediaDropCounters {
     input_dropped_frames: u64,
+    adaptation_skipped_frames: u64,
     output_dropped_units: u64,
     rtp_stale_units_dropped: u64,
     rtp_sender_backpressure_drops: u64,
+    receiver_dropped_frames: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +350,7 @@ impl NativeMediaDropCounters {
             .saturating_add(self.output_dropped_units)
             .saturating_add(self.rtp_stale_units_dropped)
             .saturating_add(self.rtp_sender_backpressure_drops)
+            .saturating_add(self.receiver_dropped_frames)
     }
 }
 
@@ -212,6 +365,7 @@ struct NativeMediaStatsSample<'a> {
     stream_elapsed: Duration,
     sampled_at_ms: u64,
     current_bitrate_kbps: u32,
+    effective_fps: u32,
     min_bitrate_kbps: u32,
     written_units: u64,
     written_keyframes: u64,
@@ -291,8 +445,8 @@ impl NativeMediaStatsSample<'_> {
             "requested_fps".to_string(),
             json!(self.config.requested_fps),
         );
-        payload.insert("effective_fps".to_string(), json!(self.config.fps));
-        payload.insert("target_fps".to_string(), json!(self.config.fps));
+        payload.insert("effective_fps".to_string(), json!(self.effective_fps));
+        payload.insert("target_fps".to_string(), json!(self.effective_fps));
         payload.insert(
             "measured_fps".to_string(),
             json!(measured_fps(self.written_units, self.stream_elapsed)),
@@ -331,6 +485,10 @@ impl NativeMediaStatsSample<'_> {
             json!(self.drop_counters.input_dropped_frames),
         );
         payload.insert(
+            "adaptation_skipped_frames".to_string(),
+            json!(self.drop_counters.adaptation_skipped_frames),
+        );
+        payload.insert(
             "output_dropped_units".to_string(),
             json!(self.drop_counters.output_dropped_units),
         );
@@ -341,6 +499,10 @@ impl NativeMediaStatsSample<'_> {
         payload.insert(
             "rtp_sender_backpressure_drops".to_string(),
             json!(self.drop_counters.rtp_sender_backpressure_drops),
+        );
+        payload.insert(
+            "receiver_dropped_frames".to_string(),
+            json!(self.drop_counters.receiver_dropped_frames),
         );
         payload.insert(
             "max_frame_queue_depth".to_string(),
@@ -541,10 +703,24 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     )?;
 
     let encoder_for_sink = encoder.session();
+    let effective_fps = StdArc::new(AtomicU32::new(fps));
+    let frame_admission_phase = StdArc::new(AtomicU64::new(0));
+    let adaptation_skipped_frames = StdArc::new(AtomicU64::new(0));
+    let effective_fps_for_sink = StdArc::clone(&effective_fps);
+    let frame_admission_phase_for_sink = StdArc::clone(&frame_admission_phase);
+    let adaptation_skipped_frames_for_sink = StdArc::clone(&adaptation_skipped_frames);
     let sink: crate::daemon::plugins::remote_desktop::screencapturekit_capture::FrameSink =
         StdArc::new(move |frame: CapturedFrame| {
+            let admitted_fps = effective_fps_for_sink.load(Ordering::Relaxed).clamp(1, fps);
+            let phase = frame_admission_phase_for_sink
+                .fetch_add(u64::from(admitted_fps), Ordering::Relaxed)
+                % u64::from(fps);
+            if phase.saturating_add(u64::from(admitted_fps)) < u64::from(fps) {
+                adaptation_skipped_frames_for_sink.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
             let pts = frame.pts;
-            let duration = webrtc_cmtime(1, fps);
+            let duration = webrtc_cmtime(1, admitted_fps);
             let _ = encoder_for_sink.encode(&frame.image_buffer, pts, duration);
         });
 
@@ -572,6 +748,13 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
 
     let stream_started_at = Instant::now();
     let frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
+    let video_writer = NativeVideoWriter::start(
+        Arc::clone(track),
+        ssrc,
+        payload_type,
+        frame_dur,
+        Arc::clone(&encoder_wakeup),
+    );
     let mut written_units = 0_u64;
     let mut written_keyframes = 0_u64;
     let mut written_bytes = 0_u64;
@@ -582,9 +765,9 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     let mut adaptation_event_sequence = 0_u64;
     let mut last_stats_at = Instant::now();
     let mut bitrate_controller = NativeAdaptiveBitrate::new(config.bitrate_kbps);
+    let mut receiver_pressure_tracker = NativeReceiverPressureTracker::default();
     let mut latency_stats = NativeLatencyStats::default();
     let mut decoder_primed = false;
-    let mut last_written_pts_ms: Option<u64> = None;
     loop {
         if execution.should_stop() {
             break;
@@ -599,50 +782,56 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         if let Some(audio) = audio_pipeline.as_mut() {
             audio.drain().await;
         }
+        while let Ok(outcome) = video_writer.outcomes.try_recv() {
+            match outcome {
+                NativeVideoWriteOutcome::Written {
+                    bytes_len,
+                    is_keyframe,
+                    encode_submitted_at_ms,
+                    encoded_at_ms,
+                    encode_latency_ms,
+                    rtp_write_started_ms,
+                    rtp_write_finished_ms,
+                } => {
+                    latency_stats.record_encoded_unit(
+                        encode_submitted_at_ms,
+                        encoded_at_ms,
+                        encode_latency_ms,
+                        rtp_write_started_ms,
+                        rtp_write_finished_ms,
+                    );
+                    if is_keyframe {
+                        if !decoder_primed {
+                            execution.mark_media_ready();
+                        }
+                        decoder_primed = true;
+                        written_keyframes = written_keyframes.saturating_add(1);
+                    }
+                    written_units = written_units.saturating_add(1);
+                    written_bytes = written_bytes.saturating_add(bytes_len);
+                }
+                NativeVideoWriteOutcome::Failed(error) => {
+                    if is_webrtc_sender_backpressure(&error) {
+                        rtp_sender_backpressure_drops =
+                            rtp_sender_backpressure_drops.saturating_add(1);
+                    } else {
+                        anyhow::bail!("native WebRTC RTP writer failed: {error}");
+                    }
+                }
+            }
+        }
         let (units, stale_dropped) = latest_native_rtp_units(encoder.poll(), decoder_primed);
         rtp_stale_units_dropped = rtp_stale_units_dropped.saturating_add(stale_dropped as u64);
         for unit in units {
-            let bytes_len = unit.annexb.len() as u64;
-            let is_keyframe = unit.is_keyframe;
-            let encode_submitted_at_ms = unit.encode_submitted_at_ms;
-            let encoded_at_ms = unit.encoded_at_ms;
-            let encode_latency_ms = unit.encode_latency_ms;
-            let sample_duration =
-                native_rtp_sample_duration(last_written_pts_ms, unit.pts_ms, frame_dur);
-            let rtp_write_started_ms = now_ms();
-            let write_result = track
-                .sample_writer(ssrc, payload_type)
-                .write_sample(&Sample {
-                    data: Bytes::from(unit.annexb),
-                    duration: sample_duration,
-                    ..Default::default()
-                })
-                .await;
-            if let Err(err) = write_result {
-                if is_webrtc_sender_backpressure(&err) {
-                    rtp_sender_backpressure_drops = rtp_sender_backpressure_drops.saturating_add(1);
-                    continue;
-                }
-                return Err(err.into());
-            }
-            last_written_pts_ms = Some(unit.pts_ms);
-            latency_stats.record_encoded_unit(
-                encode_submitted_at_ms,
-                encoded_at_ms,
-                encode_latency_ms,
-                rtp_write_started_ms,
-                now_ms(),
-            );
-            if is_keyframe {
-                if !decoder_primed {
-                    execution.mark_media_ready();
-                }
-                decoder_primed = true;
-            }
-            written_units = written_units.saturating_add(1);
-            written_bytes = written_bytes.saturating_add(bytes_len);
-            if is_keyframe {
-                written_keyframes = written_keyframes.saturating_add(1);
+            if video_writer.enqueue(NativeVideoWriteCommand {
+                data: Bytes::from(unit.annexb),
+                is_keyframe: unit.is_keyframe,
+                pts_ms: unit.pts_ms,
+                encode_submitted_at_ms: unit.encode_submitted_at_ms,
+                encoded_at_ms: unit.encoded_at_ms,
+                encode_latency_ms: unit.encode_latency_ms,
+            }) {
+                rtp_sender_backpressure_drops = rtp_sender_backpressure_drops.saturating_add(1);
             }
         }
         if last_stats_at.elapsed() >= Duration::from_secs(1) {
@@ -650,6 +839,11 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             let (webrtc_stats, available_outgoing_bitrate_bps) =
                 webrtc_stats_snapshot(peer_connection).await;
             let sampled_at_ms = now_ms();
+            let client_feedback = execution
+                .sessions()
+                .client_media_feedback_for_session(execution.session_id(), execution.epoch());
+            let receiver_pressure =
+                receiver_pressure_tracker.observe(client_feedback, sampled_at_ms);
             let previous_bitrate_kbps = bitrate_controller.current_kbps;
             let applied_bitrate = if let Some(next_bitrate) = bitrate_controller.propose(
                 stats.input_dropped_frames,
@@ -660,6 +854,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 stats.queued_units,
                 stats.in_flight_frames,
                 available_outgoing_bitrate_bps,
+                receiver_pressure.pressure_units(),
             ) {
                 match encoder.set_bitrate_kbps(next_bitrate) {
                     Ok(()) => {
@@ -680,17 +875,36 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             } else {
                 None
             };
+            let previous_effective_fps = effective_fps.load(Ordering::Relaxed);
+            let next_effective_fps = effective_fps_for_bitrate(
+                fps,
+                bitrate_controller.current_kbps,
+                bitrate_controller.target_kbps,
+            );
+            effective_fps.store(next_effective_fps, Ordering::Relaxed);
+            let skipped_frames = adaptation_skipped_frames.load(Ordering::Relaxed);
             let drop_counters = NativeMediaDropCounters {
-                input_dropped_frames: stats.input_dropped_frames,
+                input_dropped_frames: stats.input_dropped_frames.saturating_add(skipped_frames),
+                adaptation_skipped_frames: skipped_frames,
                 output_dropped_units: stats.output_dropped_units,
                 rtp_stale_units_dropped,
                 rtp_sender_backpressure_drops,
+                receiver_dropped_frames: client_feedback
+                    .map(|feedback| feedback.frames_dropped)
+                    .unwrap_or(0),
             };
             let total_frames_dropped = drop_counters.total_frames_dropped();
             let frame_drop_delta =
                 total_frames_dropped.saturating_sub(last_reported_frames_dropped);
-            let backpressure_delta =
+            let sender_backpressure_delta =
                 rtp_sender_backpressure_drops.saturating_sub(last_reported_backpressure_drops);
+            let receiver_non_drop_pressure = receiver_pressure
+                .freeze_delta
+                .saturating_add(u64::from(receiver_pressure.elevated_jitter));
+            // A bounded latest-frame queue dropping input/output/stale units is
+            // itself pipeline backpressure even when the WebRTC writer accepts
+            // the newest RTP sample. Writer errors are only one pressure source.
+            let backpressure_delta = frame_drop_delta.saturating_add(receiver_non_drop_pressure);
             let mut adaptation_events = Vec::new();
             if let Some(next_bitrate_kbps) = applied_bitrate {
                 adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
@@ -715,6 +929,29 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     }),
                 ));
             }
+            if next_effective_fps != previous_effective_fps {
+                adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
+                adaptation_events.push(native_media_adaptation_event(
+                    adaptation_event_sequence,
+                    if next_effective_fps < previous_effective_fps {
+                        "fps_downshift"
+                    } else {
+                        "fps_upshift"
+                    },
+                    sampled_at_ms,
+                    execution.session_id(),
+                    execution.epoch(),
+                    target_binding,
+                    active_media_source_epoch,
+                    config.backend.backend_id(),
+                    json!({
+                        "algorithm": "native_encoder_feedback",
+                        "previous_fps": previous_effective_fps,
+                        "next_fps": next_effective_fps,
+                        "requested_fps": fps,
+                    }),
+                ));
+            }
             if backpressure_delta > 0 {
                 adaptation_event_sequence = adaptation_event_sequence.saturating_add(1);
                 adaptation_events.push(native_media_adaptation_event(
@@ -729,7 +966,12 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     json!({
                         "algorithm": "native_encoder_feedback",
                         "delta": backpressure_delta,
-                        "total": rtp_sender_backpressure_drops,
+                        "sender_drop_delta": sender_backpressure_delta,
+                        "pipeline_frame_drop_delta": frame_drop_delta,
+                        "receiver_frame_drop_delta": receiver_pressure.frames_dropped_delta,
+                        "receiver_freeze_delta": receiver_pressure.freeze_delta,
+                        "receiver_elevated_jitter": receiver_pressure.elevated_jitter,
+                        "sender_drop_total": rtp_sender_backpressure_drops,
                     }),
                 ));
             }
@@ -748,6 +990,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                         "algorithm": "native_encoder_feedback",
                         "delta": frame_drop_delta,
                         "total": total_frames_dropped,
+                        "receiver_frame_drop_delta": receiver_pressure.frames_dropped_delta,
                     }),
                 ));
             }
@@ -765,6 +1008,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     stream_elapsed: stream_started_at.elapsed(),
                     sampled_at_ms,
                     current_bitrate_kbps: bitrate_controller.current_kbps,
+                    effective_fps: next_effective_fps,
                     min_bitrate_kbps: bitrate_controller.min_kbps,
                     written_units,
                     written_keyframes,
@@ -809,15 +1053,24 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             stream_elapsed: stream_started_at.elapsed(),
             sampled_at_ms: now_ms(),
             current_bitrate_kbps: bitrate_controller.current_kbps,
+            effective_fps: effective_fps.load(Ordering::Relaxed),
             min_bitrate_kbps: bitrate_controller.min_kbps,
             written_units,
             written_keyframes,
             written_bytes,
             drop_counters: NativeMediaDropCounters {
-                input_dropped_frames: stats.input_dropped_frames,
+                input_dropped_frames: stats
+                    .input_dropped_frames
+                    .saturating_add(adaptation_skipped_frames.load(Ordering::Relaxed)),
+                adaptation_skipped_frames: adaptation_skipped_frames.load(Ordering::Relaxed),
                 output_dropped_units: stats.output_dropped_units,
                 rtp_stale_units_dropped,
                 rtp_sender_backpressure_drops,
+                receiver_dropped_frames: execution
+                    .sessions()
+                    .client_media_feedback_for_session(execution.session_id(), execution.epoch())
+                    .map(|feedback| feedback.frames_dropped)
+                    .unwrap_or(0),
             },
             queued_units: stats.queued_units,
             in_flight_frames: stats.in_flight_frames,
@@ -837,6 +1090,16 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         .to_json(),
     );
     Ok(())
+}
+
+fn effective_fps_for_bitrate(requested_fps: u32, current_kbps: u32, target_kbps: u32) -> u32 {
+    let requested_fps = requested_fps.max(1);
+    let minimum_fps = requested_fps.min(15);
+    let target_kbps = target_kbps.max(1);
+    requested_fps
+        .saturating_mul(current_kbps)
+        .saturating_div(target_kbps)
+        .clamp(minimum_fps, requested_fps)
 }
 
 fn native_media_adaptation_event(
@@ -941,6 +1204,16 @@ mod tests {
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::test_application_session_init;
+
+    #[test]
+    fn latest_pending_write_replaces_stale_value_without_growing_a_queue() {
+        let pending = LatestPendingWrite::default();
+        assert!(!pending.replace(1_u64));
+        assert!(pending.replace(2_u64));
+        assert!(pending.replace(3_u64));
+        assert_eq!(pending.take(), Some(3));
+        assert_eq!(pending.take(), None);
+    }
 
     #[test]
     fn native_media_rebind_candidate_failure_preserves_active_generation() {
@@ -1076,15 +1349,18 @@ mod tests {
             stream_elapsed: Duration::from_secs(2),
             sampled_at_ms: 1_700,
             current_bitrate_kbps: 4_500,
+            effective_fps: 60,
             min_bitrate_kbps: 500,
             written_units: 120,
             written_keyframes: 4,
             written_bytes: 1_250_000,
             drop_counters: NativeMediaDropCounters {
                 input_dropped_frames: 1,
+                adaptation_skipped_frames: 0,
                 output_dropped_units: 2,
                 rtp_stale_units_dropped: 3,
                 rtp_sender_backpressure_drops: 4,
+                receiver_dropped_frames: 5,
             },
             queued_units: 1,
             in_flight_frames: 1,
@@ -1141,11 +1417,12 @@ mod tests {
         assert_eq!(stats["video_transport"], json!("webrtc"));
         assert_eq!(stats["requested_fps"], json!(144));
         assert_eq!(stats["effective_fps"], json!(60));
+        assert_eq!(stats["adaptation_skipped_frames"], json!(0));
         assert_eq!(stats["target_fps"], json!(60));
         assert_eq!(stats["measured_fps"], json!(60.0));
         assert_eq!(stats["target_bitrate_kbps"], json!(4_500));
         assert_eq!(stats["observed_bitrate_kbps"], json!(5_000));
-        assert_eq!(stats["frames_dropped"], json!(10));
+        assert_eq!(stats["frames_dropped"], json!(15));
         assert_eq!(
             stats["drop_policy"],
             json!("bounded_queue_drop_stale_frames")

@@ -33,7 +33,7 @@ use crate::daemon::plugins::remote_desktop::session_state::{
 use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopState;
 use crate::daemon::plugins::remote_desktop::session_transport_state::{
-    PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
+    ClientMediaFeedback, PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
 };
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, ResolvedCaptureTargetProof, TargetResolutionError,
@@ -439,6 +439,13 @@ impl RemoteDesktopSession {
     /// Latest media pipeline statistics.
     pub(in crate::daemon::plugins::remote_desktop) fn media_stats(&self) -> Option<Value> {
         self.transport.media_stats()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn client_media_feedback(
+        &self,
+        epoch: TransportEpoch,
+    ) -> Option<ClientMediaFeedback> {
+        self.transport.client_media_feedback(epoch)
     }
 
     /// Whether the diagnostic preview transport is attached.

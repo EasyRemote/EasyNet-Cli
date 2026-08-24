@@ -5,6 +5,7 @@
 // Description: macOS native WebRTC media helpers for remote desktop.
 
 #[cfg(target_os = "macos")]
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
@@ -22,9 +23,86 @@ use webrtc::peer_connection::PeerConnection;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::VideoResolution;
 #[cfg(target_os = "macos")]
 use crate::daemon::plugins::remote_desktop::constants::NATIVE_MIN_BITRATE_KBPS;
+#[cfg(target_os = "macos")]
+use crate::daemon::plugins::remote_desktop::session_transport_state::ClientMediaFeedback;
 
 #[cfg(target_os = "macos")]
 const NATIVE_BITRATE_STEP_KBPS: u32 = 500;
+#[cfg(target_os = "macos")]
+const RECEIVER_JITTER_PRESSURE_MS: f64 = 100.0;
+#[cfg(target_os = "macos")]
+const RECEIVER_FEEDBACK_MAX_AGE_MS: u64 = 10_000;
+#[cfg(target_os = "macos")]
+const RECEIVER_PRESSURE_RECOVERY_HOLD_SAMPLES: u8 = 8;
+#[cfg(target_os = "macos")]
+const NATIVE_LATENCY_WINDOW_SAMPLES: usize = 512;
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct NativeReceiverPressure {
+    pub(in crate::daemon::plugins::remote_desktop) frames_dropped_delta: u64,
+    pub(in crate::daemon::plugins::remote_desktop) freeze_delta: u64,
+    pub(in crate::daemon::plugins::remote_desktop) elevated_jitter: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeReceiverPressure {
+    pub(in crate::daemon::plugins::remote_desktop) fn pressure_units(self) -> u64 {
+        self.frames_dropped_delta
+            .saturating_add(self.freeze_delta)
+            .saturating_add(u64::from(self.elevated_jitter))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Default)]
+pub(in crate::daemon::plugins::remote_desktop) struct NativeReceiverPressureTracker {
+    last_sampled_at_ms: u64,
+    last_frames_dropped: u64,
+    last_freeze_count: u64,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeReceiverPressureTracker {
+    pub(in crate::daemon::plugins::remote_desktop) fn observe(
+        &mut self,
+        feedback: Option<ClientMediaFeedback>,
+        observed_at_ms: u64,
+    ) -> NativeReceiverPressure {
+        let Some(feedback) = feedback else {
+            return NativeReceiverPressure::default();
+        };
+        if feedback.sampled_at_ms <= self.last_sampled_at_ms
+            || observed_at_ms.saturating_sub(feedback.sampled_at_ms) > RECEIVER_FEEDBACK_MAX_AGE_MS
+        {
+            return NativeReceiverPressure::default();
+        }
+        let first_sample = self.last_sampled_at_ms == 0;
+        let pressure = NativeReceiverPressure {
+            frames_dropped_delta: if first_sample {
+                0
+            } else {
+                feedback
+                    .frames_dropped
+                    .saturating_sub(self.last_frames_dropped)
+            },
+            freeze_delta: if first_sample {
+                0
+            } else {
+                feedback.freeze_count.saturating_sub(self.last_freeze_count)
+            },
+            elevated_jitter: !first_sample
+                && feedback
+                    .jitter_buffer_avg_ms
+                    .max(feedback.jitter_buffer_target_avg_ms)
+                    >= RECEIVER_JITTER_PRESSURE_MS,
+        };
+        self.last_sampled_at_ms = feedback.sampled_at_ms;
+        self.last_frames_dropped = feedback.frames_dropped;
+        self.last_freeze_count = feedback.freeze_count;
+        pressure
+    }
+}
 
 /// Adaptive bitrate controller for the native macOS media path.
 ///
@@ -40,6 +118,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct NativeAdaptiveBitrate {
     pub(in crate::daemon::plugins::remote_desktop) min_kbps: u32,
     last_input_dropped: u64,
     last_output_dropped: u64,
+    recovery_hold_samples: u8,
 }
 
 #[cfg(target_os = "macos")]
@@ -52,6 +131,7 @@ impl NativeAdaptiveBitrate {
             min_kbps: NATIVE_MIN_BITRATE_KBPS.min(target_kbps),
             last_input_dropped: 0,
             last_output_dropped: 0,
+            recovery_hold_samples: 0,
         }
     }
 
@@ -68,21 +148,41 @@ impl NativeAdaptiveBitrate {
         queued_units: usize,
         in_flight_frames: usize,
         available_outgoing_bitrate_bps: Option<f64>,
+        receiver_pressure_units: u64,
     ) -> Option<u32> {
         let input_delta = input_dropped.saturating_sub(self.last_input_dropped);
         let output_delta = output_dropped.saturating_sub(self.last_output_dropped);
         self.last_input_dropped = input_dropped;
         self.last_output_dropped = output_dropped;
 
+        let dropped_delta = input_delta
+            .saturating_add(output_delta)
+            .saturating_add(receiver_pressure_units);
+        if dropped_delta > 0 {
+            self.recovery_hold_samples = RECEIVER_PRESSURE_RECOVERY_HOLD_SAMPLES;
+        } else if self.recovery_hold_samples > 0 {
+            self.recovery_hold_samples -= 1;
+        }
         let next = adaptive_bitrate_kbps(
             self.current_kbps,
             self.target_kbps,
             self.min_kbps,
-            input_delta.saturating_add(output_delta),
+            dropped_delta,
             queued_units,
             in_flight_frames,
             available_outgoing_bitrate_bps,
+            self.recovery_hold_samples == 0,
         );
+        if next == self.current_kbps {
+            return None;
+        }
+        if next > self.current_kbps && next.abs_diff(self.current_kbps) < NATIVE_BITRATE_STEP_KBPS {
+            return Some(
+                self.current_kbps
+                    .saturating_add(NATIVE_BITRATE_STEP_KBPS)
+                    .min(self.target_kbps),
+            );
+        }
         if next.abs_diff(self.current_kbps) < NATIVE_BITRATE_STEP_KBPS {
             return None;
         }
@@ -103,6 +203,7 @@ fn adaptive_bitrate_kbps(
     queued_units: usize,
     in_flight_frames: usize,
     available_outgoing_bitrate_bps: Option<f64>,
+    allow_increase: bool,
 ) -> u32 {
     let min_kbps = min_kbps.min(target_kbps).max(1);
     if dropped_delta > 0 || queued_units > 1 || in_flight_frames > 1 {
@@ -120,7 +221,10 @@ fn adaptive_bitrate_kbps(
         if current_kbps > ceiling {
             return ceiling;
         }
-        if current_kbps < target_kbps && available_kbps > current_kbps.saturating_mul(130) / 100 {
+        if allow_increase
+            && current_kbps < target_kbps
+            && available_kbps > current_kbps.saturating_mul(130) / 100
+        {
             return current_kbps
                 .saturating_mul(110)
                 .saturating_div(100)
@@ -129,7 +233,7 @@ fn adaptive_bitrate_kbps(
         }
         return current_kbps;
     }
-    if current_kbps < target_kbps {
+    if allow_increase && current_kbps < target_kbps {
         return current_kbps
             .saturating_mul(105)
             .saturating_div(100)
@@ -146,6 +250,7 @@ struct NativeLatencyAccumulator {
     total_ms: u64,
     max_ms: u64,
     last_ms: u64,
+    rolling_ms: VecDeque<u64>,
 }
 
 #[cfg(target_os = "macos")]
@@ -155,6 +260,10 @@ impl NativeLatencyAccumulator {
         self.total_ms = self.total_ms.saturating_add(value_ms);
         self.max_ms = self.max_ms.max(value_ms);
         self.last_ms = value_ms;
+        if self.rolling_ms.len() == NATIVE_LATENCY_WINDOW_SAMPLES {
+            self.rolling_ms.pop_front();
+        }
+        self.rolling_ms.push_back(value_ms);
     }
 
     fn to_json(&self) -> Value {
@@ -163,10 +272,24 @@ impl NativeLatencyAccumulator {
         } else {
             self.total_ms as f64 / self.samples as f64
         };
+        let mut rolling = self.rolling_ms.iter().copied().collect::<Vec<_>>();
+        rolling.sort_unstable();
+        let p95_ms = rolling
+            .get(
+                rolling
+                    .len()
+                    .saturating_mul(95)
+                    .div_ceil(100)
+                    .saturating_sub(1),
+            )
+            .copied()
+            .unwrap_or(0);
         json!({
             "samples": self.samples,
+            "rolling_samples": rolling.len(),
             "last_ms": self.last_ms,
             "avg_ms": (avg_ms * 10.0).round() / 10.0,
+            "p95_ms": p95_ms,
             "max_ms": self.max_ms,
         })
     }
@@ -174,7 +297,8 @@ impl NativeLatencyAccumulator {
 
 /// Latency counters emitted into remote desktop media diagnostics.
 ///
-/// Invariant 1: every field is monotonic and saturating.
+/// Invariant 1: cumulative counters are monotonic and saturating; rolling p95
+/// is bounded to the latest `NATIVE_LATENCY_WINDOW_SAMPLES` observations.
 /// Invariant 2: conversion to JSON is side-effect free so it can be sampled
 /// from the media loop without resetting counters.
 #[cfg(target_os = "macos")]
@@ -583,7 +707,7 @@ mod tests {
         let mut controller = NativeAdaptiveBitrate::new(6_000);
 
         let proposed = controller
-            .propose(1, 0, 0, 0, None)
+            .propose(1, 0, 0, 0, None, 0)
             .expect("drop pressure must propose a downshift");
 
         assert_eq!(proposed, 4_800);
@@ -594,6 +718,86 @@ mod tests {
 
         controller.commit_applied(proposed);
         assert_eq!(controller.current_kbps, 4_800);
+    }
+
+    #[test]
+    fn receiver_pressure_holds_recovery_before_a_bounded_upshift() {
+        let mut controller = NativeAdaptiveBitrate::new(6_000);
+        let proposed = controller
+            .propose(0, 0, 0, 0, None, 1)
+            .expect("receiver pressure must propose a downshift");
+        controller.commit_applied(proposed);
+        assert_eq!(controller.current_kbps, 4_800);
+
+        for _ in 0..7 {
+            assert_eq!(controller.propose(0, 0, 0, 0, None, 0), None);
+        }
+        let recovery = controller
+            .propose(0, 0, 0, 0, None, 0)
+            .expect("recovery may resume after the hold window");
+        assert_eq!(recovery, 5_300);
+    }
+
+    #[test]
+    fn receiver_pressure_tracker_accepts_only_fresh_monotonic_samples() {
+        let mut tracker = NativeReceiverPressureTracker::default();
+        let baseline = ClientMediaFeedback {
+            sampled_at_ms: 1_000,
+            frames_dropped: 2,
+            freeze_count: 1,
+            jitter_buffer_avg_ms: 40.0,
+            jitter_buffer_target_avg_ms: 40.0,
+        };
+        assert_eq!(
+            tracker.observe(Some(baseline), 1_100),
+            NativeReceiverPressure::default()
+        );
+
+        let pressured = ClientMediaFeedback {
+            sampled_at_ms: 2_000,
+            frames_dropped: 5,
+            freeze_count: 3,
+            jitter_buffer_avg_ms: 140.0,
+            jitter_buffer_target_avg_ms: 60.0,
+        };
+        assert_eq!(
+            tracker.observe(Some(pressured), 2_100),
+            NativeReceiverPressure {
+                frames_dropped_delta: 3,
+                freeze_delta: 2,
+                elevated_jitter: true,
+            }
+        );
+        assert_eq!(
+            tracker.observe(Some(pressured), 2_200),
+            NativeReceiverPressure::default(),
+            "a cumulative browser sample must influence adaptation once"
+        );
+
+        let stale = ClientMediaFeedback {
+            sampled_at_ms: 3_000,
+            frames_dropped: 9,
+            freeze_count: 4,
+            jitter_buffer_avg_ms: 200.0,
+            jitter_buffer_target_avg_ms: 200.0,
+        };
+        assert_eq!(
+            tracker.observe(Some(stale), 13_001),
+            NativeReceiverPressure::default()
+        );
+    }
+
+    #[test]
+    fn latency_accumulator_projects_a_bounded_rolling_p95() {
+        let mut latency = NativeLatencyAccumulator::default();
+        for sample in 1..=600 {
+            latency.record(sample);
+        }
+        let projected = latency.to_json();
+        assert_eq!(projected["samples"], json!(600));
+        assert_eq!(projected["rolling_samples"], json!(512));
+        assert_eq!(projected["p95_ms"], json!(575));
+        assert_eq!(projected["max_ms"], json!(600));
     }
 
     #[test]

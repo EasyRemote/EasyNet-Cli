@@ -13,7 +13,9 @@
 // - Resolve one desktop-independent SCContentFilter per committed SCWindow.
 // - Scale all surfaces into one negotiated output canvas.
 // - Retain only one fresh BGRA frame per surface and alpha-compose at most the
-//   negotiated FPS into one CoreVideo pixel buffer.
+//   negotiated FPS into one CoreVideo pixel buffer. A dormant committed window
+//   must not stall the complete application stream: surfaces without an
+//   initial frame remain opaque black until their first callback arrives.
 //
 // Architectural Position:
 // - EasyNet-Cli RemoteApp plugin native capture adapter (macOS only).
@@ -331,13 +333,11 @@ impl MultiAppSurfaceCompositor {
             };
             *slot = Some(latest);
             let composite_pts = greatest_surface_pts(&state.latest)?;
-            if state.latest.iter().any(Option::is_none)
-                || state.last_emitted_at.is_some_and(|last| {
-                    now.saturating_duration_since(last) < state.minimum_emit_interval
-                })
-                || state
-                    .last_emitted_pts
-                    .is_some_and(|last| unsafe { composite_pts.compare(last) } <= 0)
+            if state.last_emitted_at.is_some_and(|last| {
+                now.saturating_duration_since(last) < state.minimum_emit_interval
+            }) || state
+                .last_emitted_pts
+                .is_some_and(|last| unsafe { composite_pts.compare(last) } <= 0)
             {
                 None
             } else {
@@ -448,10 +448,9 @@ fn compose_locked_surfaces(state: &CompositorState) -> anyhow::Result<Retained<C
         order.sort_by_key(|index| std::cmp::Reverse(state.surfaces[*index].front_to_back_index));
         for index in order {
             let layout = state.surfaces[index];
-            let source = state.latest[index]
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("multi-app compositor source is missing"))?;
-            alpha_blend_bgra(destination, stride, source, layout)?;
+            if let Some(source) = state.latest[index].as_ref() {
+                alpha_blend_bgra(destination, stride, source, layout)?;
+            }
         }
         Ok(())
     })();
@@ -634,6 +633,37 @@ mod tests {
         ];
         let greatest = greatest_surface_pts(&frames).expect("valid greatest pts");
         assert_eq!(unsafe { greatest.compare(valid_pts(30)) }, 0);
+    }
+
+    #[test]
+    fn compositor_does_not_wait_for_a_dormant_committed_window() {
+        let state = CompositorState {
+            width: 2,
+            height: 1,
+            surfaces: vec![
+                SurfaceLayout {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: 1,
+                    height: 1,
+                    front_to_back_index: 0,
+                },
+                SurfaceLayout {
+                    offset_x: 1,
+                    offset_y: 0,
+                    width: 1,
+                    height: 1,
+                    front_to_back_index: 1,
+                },
+            ],
+            latest: vec![Some(frame_with_pts(1)), None],
+            minimum_emit_interval: Duration::ZERO,
+            last_emitted_at: None,
+            last_emitted_pts: None,
+        };
+
+        compose_locked_surfaces(&state)
+            .expect("a ready application surface must not wait for a dormant window");
     }
 
     #[test]

@@ -156,7 +156,7 @@ allowed_audio_codecs = {"opus", "aac", "pcm", "flac"}
 allowed_transports = {"webrtc", "raw_stream_v8", "native_webrtc"}
 required_abilities = (
     "remote_desktop.create_session",
-    "remote_desktop.attach",
+    "remote_desktop.set_description",
     "remote_desktop.watch_events",
     "remote_desktop.end_session",
 )
@@ -312,12 +312,16 @@ for scenario_name in sorted(required_scenarios):
     require(isinstance(drop_policy, dict), f"{prefix}: drop_policy must be present")
     if not isinstance(drop_policy, dict):
         drop_policy = {}
-    require(drop_policy.get("name") in {"latest_frame_bounded_gop", "stale_frame_drop"},
+    require(drop_policy.get("name") in {
+                "latest_frame_bounded_gop",
+                "stale_frame_drop",
+                "bounded_queue_drop_stale_frames",
+            },
             f"{prefix}: drop_policy.name must be explicit")
     require(drop_policy.get("unbounded_queue") is False,
             f"{prefix}: drop_policy.unbounded_queue must be false")
-    require(drop_policy.get("preserves_terminal_frame") is True,
-            f"{prefix}: drop_policy.preserves_terminal_frame must be true")
+    require(drop_policy.get("terminal_lifecycle_independent") is True,
+            f"{prefix}: media drop policy must not own terminal lifecycle")
 
     adaptation = scenario.get("adaptation")
     require(isinstance(adaptation, dict), f"{prefix}: adaptation evidence must be present")
@@ -360,10 +364,22 @@ for scenario_name in sorted(required_scenarios):
     if scenario_name == "backpressure":
         require("backpressure_detected" in event_types,
                 f"{prefix}: backpressure must include backpressure_detected")
-        require("frame_drop" in event_types,
-                f"{prefix}: backpressure must include frame_drop")
-        require(integer(drop_policy.get("frames_dropped")) > 0,
-                f"{prefix}: drop_policy.frames_dropped must be positive")
+        receiver_pressure = any(
+            isinstance(event, dict)
+            and event.get("type") == "backpressure_detected"
+            and isinstance(event.get("detail"), dict)
+            and (
+                event["detail"].get("receiver_elevated_jitter") is True
+                or integer(event["detail"].get("receiver_frame_drop_delta")) > 0
+                or integer(event["detail"].get("receiver_freeze_delta")) > 0
+            )
+            for event in events
+        )
+        require("frame_drop" in event_types or receiver_pressure,
+                f"{prefix}: backpressure must prove a local frame drop or typed receiver pressure")
+        if "frame_drop" in event_types:
+            require(integer(drop_policy.get("frames_dropped")) > 0,
+                    f"{prefix}: frame_drop evidence requires a positive drop count")
         require(integer(video.get("frames_rendered_after_adaptation")) > 0,
                 f"{prefix}: video.frames_rendered_after_adaptation must be positive after backpressure")
         require(integer(video.get("frames_rendered_after_adaptation_at_ms")) > latest_adaptation_event_at_ms,
@@ -454,7 +470,11 @@ if isinstance(baseline, dict) and isinstance(degraded, dict):
             "degraded_network observed_bitrate_kbps must be lower than baseline")
     require(degraded_effective_fps < baseline_effective_fps or degraded_frames_dropped > 0,
             "degraded_network must reduce effective_fps or drop frames versus baseline")
-if isinstance(baseline, dict) and isinstance(backpressure, dict):
+if (isinstance(baseline, dict) and isinstance(backpressure, dict)
+        and any(
+            isinstance(event, dict) and event.get("type") == "frame_drop"
+            for event in nested_get(backpressure, "adaptation.events", [])
+        )):
     baseline_frames_dropped = integer(nested_get(baseline, "drop_policy.frames_dropped"))
     backpressure_frames_dropped = integer(nested_get(backpressure, "drop_policy.frames_dropped"))
     require(backpressure_frames_dropped > baseline_frames_dropped,
@@ -527,7 +547,7 @@ import sys
 def abilities(subject, session_id):
     return [
         {"name": "remote_desktop.create_session", "subject_ura": subject},
-        {"name": "remote_desktop.attach", "subject_ura": subject, "session_id": session_id},
+        {"name": "remote_desktop.set_description", "subject_ura": subject, "session_id": session_id},
         {"name": "remote_desktop.watch_events", "subject_ura": subject, "session_id": session_id},
         {"name": "remote_desktop.end_session", "subject_ura": subject, "session_id": session_id},
     ]
@@ -644,7 +664,7 @@ def scenario(name, *, degraded=False, backpressure=False):
         "drop_policy": {
             "name": "latest_frame_bounded_gop",
             "unbounded_queue": False,
-            "preserves_terminal_frame": True,
+            "terminal_lifecycle_independent": True,
             "frames_dropped": frames_dropped,
         },
         "adaptation": {

@@ -19,7 +19,9 @@ use crate::daemon::plugins::remote_desktop::session::{
 use crate::daemon::plugins::remote_desktop::session_events::{
     webrtc_transport_failure_context, WebRtcFailureEventKind,
 };
-use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::session_transport_state::{
+    ClientMediaFeedback, TransportEpoch,
+};
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, ResolvedCaptureTargetProof, TargetResolutionError,
 };
@@ -423,6 +425,19 @@ impl RemoteDesktopSessionStore {
             return;
         };
         session.record_media_stats(epoch, stats);
+    }
+
+    /// Read the latest authenticated browser receiver feedback for one media
+    /// generation. The typed copy keeps the encoder loop outside the session
+    /// mutex and prevents stale transport epochs from influencing adaptation.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(in crate::daemon::plugins::remote_desktop) fn client_media_feedback_for_session(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+    ) -> Option<ClientMediaFeedback> {
+        let sessions = self.lock();
+        sessions.get(session_id)?.client_media_feedback(epoch)
     }
 
     /// Detach the diagnostic InvokeBidi preview transport after a worker
