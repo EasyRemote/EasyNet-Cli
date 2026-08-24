@@ -38,6 +38,7 @@ use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionS
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target_observer::{
     observe_bound_session_target_once, sample_platform_target_observations,
+    PlatformTargetObservationSample,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
 use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;
@@ -46,12 +47,15 @@ const TARGET_MONITOR_INTERVAL: Duration = Duration::from_millis(250);
 const TARGET_MONITOR_SUPERVISOR_INTERVAL: Duration = Duration::from_millis(25);
 const TARGET_MONITOR_RETRY_BASE: Duration = Duration::from_millis(50);
 const TARGET_MONITOR_RETRY_MAX: Duration = Duration::from_secs(2);
+const TARGET_MONITOR_PROVIDER_DEADLINE: Duration = Duration::from_secs(1);
 const TARGET_MONITOR_FAILURE_BUDGET: u32 = 3;
 
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTargetMonitor {
     worker: Mutex<LifecycleWorker<TargetMonitorCommand>>,
     desired: Mutex<HashSet<String>>,
     generation: Arc<AtomicU64>,
+    snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
+    provider_deadline: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -67,9 +71,10 @@ enum TargetMonitorCommand {
     Shutdown,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 enum TargetMonitorGenerationEvent {
     PollSucceeded,
+    PollFailed { detail: String },
 }
 
 struct TargetMonitorGeneration {
@@ -77,6 +82,71 @@ struct TargetMonitorGeneration {
     tx: Sender<TargetMonitorCommand>,
     events: Receiver<TargetMonitorGenerationEvent>,
     join: JoinHandle<()>,
+    failure_detail: Option<String>,
+}
+
+pub(in crate::daemon::plugins::remote_desktop) trait TargetObservationSampler:
+    Send + Sync
+{
+    fn sample(&self) -> PlatformTargetObservationSample;
+}
+
+struct PlatformTargetObservationSampler;
+
+impl TargetObservationSampler for PlatformTargetObservationSampler {
+    fn sample(&self) -> PlatformTargetObservationSample {
+        sample_platform_target_observations()
+    }
+}
+
+struct TargetSnapshotDeadlineExecutor {
+    sampler: Arc<dyn TargetObservationSampler>,
+    in_flight: Mutex<Option<InFlightTargetSnapshot>>,
+    request_sequence: AtomicU64,
+}
+
+struct InFlightTargetSnapshot {
+    request_id: u64,
+    owner_generation: u64,
+    result_rx: Receiver<PlatformTargetObservationSample>,
+    _join: JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TargetSnapshotDeadlineError {
+    DeadlineExceeded {
+        request_id: u64,
+        owner_generation: u64,
+    },
+    SpawnFailed(String),
+    WorkerFailed {
+        request_id: u64,
+        owner_generation: u64,
+    },
+}
+
+impl std::fmt::Display for TargetSnapshotDeadlineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DeadlineExceeded {
+                request_id,
+                owner_generation,
+            } => write!(
+                formatter,
+                "host target snapshot request {request_id} owned by generation {owner_generation} exceeded deadline"
+            ),
+            Self::SpawnFailed(detail) => {
+                write!(formatter, "host target snapshot worker spawn failed: {detail}")
+            }
+            Self::WorkerFailed {
+                request_id,
+                owner_generation,
+            } => write!(
+                formatter,
+                "host target snapshot request {request_id} owned by generation {owner_generation} failed"
+            ),
+        }
+    }
 }
 
 trait TargetMediaSourceStopper {
@@ -89,13 +159,121 @@ impl TargetMediaSourceStopper for RemoteDesktopTransportManager {
     }
 }
 
+impl TargetSnapshotDeadlineExecutor {
+    fn new(sampler: Arc<dyn TargetObservationSampler>) -> Self {
+        Self {
+            sampler,
+            in_flight: Mutex::new(None),
+            request_sequence: AtomicU64::new(0),
+        }
+    }
+
+    fn sample_for_generation(
+        &self,
+        generation: u64,
+        timeout: Duration,
+    ) -> Result<PlatformTargetObservationSample, TargetSnapshotDeadlineError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let mut in_flight = match self.in_flight.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if in_flight.is_none() {
+                *in_flight = Some(self.spawn_request(generation)?);
+            }
+            let request = in_flight
+                .as_mut()
+                .expect("target snapshot request exists after spawn");
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(TargetSnapshotDeadlineError::DeadlineExceeded {
+                    request_id: request.request_id,
+                    owner_generation: request.owner_generation,
+                });
+            }
+            match request.result_rx.recv_timeout(remaining) {
+                Ok(sample) => {
+                    let completed = in_flight
+                        .take()
+                        .expect("completed target snapshot request exists");
+                    if completed.owner_generation != generation {
+                        continue;
+                    }
+                    return Ok(sample);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(TargetSnapshotDeadlineError::DeadlineExceeded {
+                        request_id: request.request_id,
+                        owner_generation: request.owner_generation,
+                    });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    let failed = in_flight
+                        .take()
+                        .expect("failed target snapshot request exists");
+                    if failed.owner_generation != generation {
+                        continue;
+                    }
+                    return Err(TargetSnapshotDeadlineError::WorkerFailed {
+                        request_id: failed.request_id,
+                        owner_generation: failed.owner_generation,
+                    });
+                }
+            }
+        }
+    }
+
+    fn spawn_request(
+        &self,
+        generation: u64,
+    ) -> Result<InFlightTargetSnapshot, TargetSnapshotDeadlineError> {
+        let request_id = self.request_sequence.fetch_add(1, Ordering::AcqRel) + 1;
+        let sampler = Arc::clone(&self.sampler);
+        let (result_tx, result_rx) = mpsc::channel();
+        let join = thread::Builder::new()
+            .name(format!("easynet-rd-target-snapshot-{request_id}"))
+            .spawn(move || {
+                let sample = sampler.sample();
+                let _ = result_tx.send(sample);
+            })
+            .map_err(|error| TargetSnapshotDeadlineError::SpawnFailed(error.to_string()))?;
+        Ok(InFlightTargetSnapshot {
+            request_id,
+            owner_generation: generation,
+            result_rx,
+            _join: join,
+        })
+    }
+}
+
 impl RemoteDesktopTargetMonitor {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
+        Self::with_sampler(
+            Arc::new(PlatformTargetObservationSampler),
+            TARGET_MONITOR_PROVIDER_DEADLINE,
+        )
+    }
+
+    fn with_sampler(
+        sampler: Arc<dyn TargetObservationSampler>,
+        provider_deadline: Duration,
+    ) -> Self {
         Self {
             worker: Mutex::new(LifecycleWorker::new()),
             desired: Mutex::new(HashSet::new()),
             generation: Arc::new(AtomicU64::new(0)),
+            snapshot_executor: Arc::new(TargetSnapshotDeadlineExecutor::new(sampler)),
+            provider_deadline,
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn with_sampler_for_test(
+        sampler: Arc<dyn TargetObservationSampler>,
+        provider_deadline: Duration,
+    ) -> Self {
+        Self::with_sampler(sampler, provider_deadline)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn track(
@@ -167,9 +345,17 @@ impl RemoteDesktopTargetMonitor {
         }
         let initial_tracked = self.desired_snapshot();
         let generation = Arc::clone(&self.generation);
+        let snapshot_executor = Arc::clone(&self.snapshot_executor);
+        let provider_deadline = self.provider_deadline;
         worker
             .start(|| {
-                spawn_target_monitor_supervisor(Arc::downgrade(plugin), initial_tracked, generation)
+                spawn_target_monitor_supervisor(
+                    Arc::downgrade(plugin),
+                    initial_tracked,
+                    generation,
+                    snapshot_executor,
+                    provider_deadline,
+                )
             })
             .map_err(|err| anyhow::anyhow!("spawn remote desktop target monitor: {err}"))
     }
@@ -181,9 +367,17 @@ impl RemoteDesktopTargetMonitor {
         let mut worker = self.worker();
         let initial_tracked = self.desired_snapshot();
         let generation = Arc::clone(&self.generation);
+        let snapshot_executor = Arc::clone(&self.snapshot_executor);
+        let provider_deadline = self.provider_deadline;
         worker
             .start(|| {
-                spawn_target_monitor_supervisor(Arc::downgrade(plugin), initial_tracked, generation)
+                spawn_target_monitor_supervisor(
+                    Arc::downgrade(plugin),
+                    initial_tracked,
+                    generation,
+                    snapshot_executor,
+                    provider_deadline,
+                )
             })
             .map_err(|err| anyhow::anyhow!("restart remote desktop target monitor: {err}"))
     }
@@ -221,12 +415,21 @@ fn spawn_target_monitor_supervisor(
     plugin: Weak<RemoteDesktopPlugin>,
     initial_tracked: HashSet<String>,
     generation_counter: Arc<AtomicU64>,
+    snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
+    provider_deadline: Duration,
 ) -> std::io::Result<(Sender<TargetMonitorCommand>, JoinHandle<()>)> {
     let (tx, rx) = mpsc::channel();
     let join = thread::Builder::new()
         .name("easynet-rd-target-supervisor".into())
         .spawn(move || {
-            run_target_monitor_supervisor(plugin, rx, initial_tracked, generation_counter)
+            run_target_monitor_supervisor(
+                plugin,
+                rx,
+                initial_tracked,
+                generation_counter,
+                snapshot_executor,
+                provider_deadline,
+            )
         })?;
     Ok((tx, join))
 }
@@ -236,6 +439,8 @@ fn run_target_monitor_supervisor(
     rx: Receiver<TargetMonitorCommand>,
     initial_tracked: HashSet<String>,
     generation_counter: Arc<AtomicU64>,
+    snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
+    provider_deadline: Duration,
 ) {
     let mut tracked = initial_tracked;
     let mut consecutive_failures = 0_u32;
@@ -247,6 +452,8 @@ fn run_target_monitor_supervisor(
                 plugin.clone(),
                 tracked.clone(),
                 &generation_counter,
+                Arc::clone(&snapshot_executor),
+                provider_deadline,
             ) {
                 Ok(next) => {
                     generation = Some(next);
@@ -275,16 +482,35 @@ fn run_target_monitor_supervisor(
         let current = generation
             .as_mut()
             .expect("target monitor generation exists after spawn branch");
-        while let Ok(TargetMonitorGenerationEvent::PollSucceeded) = current.events.try_recv() {
-            consecutive_failures = 0;
+        while let Ok(event) = current.events.try_recv() {
+            match event {
+                TargetMonitorGenerationEvent::PollSucceeded => {
+                    consecutive_failures = 0;
+                    current.failure_detail = None;
+                }
+                TargetMonitorGenerationEvent::PollFailed { detail } => {
+                    current.failure_detail = Some(detail)
+                }
+            }
         }
 
         if current.join.is_finished() {
-            let failed = generation
+            let mut failed = generation
                 .take()
                 .expect("finished target monitor generation exists");
             let failed_generation = failed.id;
             let panicked = failed.join.join().is_err();
+            while let Ok(event) = failed.events.try_recv() {
+                match event {
+                    TargetMonitorGenerationEvent::PollSucceeded => {
+                        consecutive_failures = 0;
+                        failed.failure_detail = None;
+                    }
+                    TargetMonitorGenerationEvent::PollFailed { detail } => {
+                        failed.failure_detail = Some(detail)
+                    }
+                }
+            }
             if plugin.upgrade().is_none() {
                 return;
             }
@@ -293,7 +519,9 @@ fn run_target_monitor_supervisor(
                 &tracked,
                 &mut consecutive_failures,
                 failed_generation,
-                if panicked {
+                if let Some(detail) = failed.failure_detail.as_deref() {
+                    detail
+                } else if panicked {
                     "worker panicked"
                 } else {
                     "worker exited unexpectedly"
@@ -378,27 +606,43 @@ fn spawn_target_monitor_generation(
     plugin: Weak<RemoteDesktopPlugin>,
     initial_tracked: HashSet<String>,
     generation_counter: &AtomicU64,
+    snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
+    provider_deadline: Duration,
 ) -> std::io::Result<TargetMonitorGeneration> {
     let id = generation_counter.load(Ordering::Acquire).saturating_add(1);
     let (tx, rx) = mpsc::channel();
     let (event_tx, events) = mpsc::channel();
     let join = thread::Builder::new()
         .name(format!("easynet-rd-target-monitor-{id}"))
-        .spawn(move || run_target_monitor_generation(plugin, rx, event_tx, initial_tracked))?;
+        .spawn(move || {
+            run_target_monitor_generation(
+                id,
+                plugin,
+                rx,
+                event_tx,
+                initial_tracked,
+                snapshot_executor,
+                provider_deadline,
+            )
+        })?;
     generation_counter.store(id, Ordering::Release);
     Ok(TargetMonitorGeneration {
         id,
         tx,
         events,
         join,
+        failure_detail: None,
     })
 }
 
 fn run_target_monitor_generation(
+    generation: u64,
     plugin: Weak<RemoteDesktopPlugin>,
     rx: Receiver<TargetMonitorCommand>,
     event_tx: Sender<TargetMonitorGenerationEvent>,
     initial_tracked: HashSet<String>,
+    snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
+    provider_deadline: Duration,
 ) {
     let mut tracked = initial_tracked;
     loop {
@@ -424,10 +668,24 @@ fn run_target_monitor_generation(
             Err(RecvTimeoutError::Timeout) => {}
         }
 
-        if !poll_tracked_sessions(&plugin, &mut tracked) {
-            return;
+        match poll_tracked_sessions(
+            generation,
+            &plugin,
+            &mut tracked,
+            &snapshot_executor,
+            provider_deadline,
+        ) {
+            Ok(true) => {
+                let _ = event_tx.send(TargetMonitorGenerationEvent::PollSucceeded);
+            }
+            Ok(false) => return,
+            Err(error) => {
+                let _ = event_tx.send(TargetMonitorGenerationEvent::PollFailed {
+                    detail: error.to_string(),
+                });
+                return;
+            }
         }
-        let _ = event_tx.send(TargetMonitorGenerationEvent::PollSucceeded);
     }
 }
 
@@ -522,15 +780,18 @@ fn mark_target_monitor_unhealthy(
 }
 
 fn poll_tracked_sessions(
+    generation: u64,
     plugin: &Weak<RemoteDesktopPlugin>,
     tracked: &mut HashSet<String>,
-) -> bool {
+    snapshot_executor: &TargetSnapshotDeadlineExecutor,
+    provider_deadline: Duration,
+) -> Result<bool, TargetSnapshotDeadlineError> {
     let Some(plugin) = plugin.upgrade() else {
-        return false;
+        return Ok(false);
     };
     let sessions = plugin.session_store();
     let transports = plugin.transport_manager();
-    let provider = sample_platform_target_observations();
+    let provider = snapshot_executor.sample_for_generation(generation, provider_deadline)?;
     tracked.retain(|session_id| {
         let result = observe_bound_session_target_once(&sessions, session_id, &provider);
         stop_lost_media_source(transports.as_ref(), session_id, result.media_source_lost);
@@ -539,7 +800,7 @@ fn poll_tracked_sessions(
         }
         result.keep_tracking
     });
-    true
+    Ok(true)
 }
 
 fn persist_target_monitor_snapshot(
@@ -585,7 +846,8 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::sync::{Arc, Mutex, MutexGuard};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, MutexGuard};
     use std::time::{Duration, Instant};
 
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
@@ -600,7 +862,12 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
     use crate::daemon::plugins::remote_desktop::target_monitor::{
         apply_generation_command, stop_lost_media_source, target_monitor_retry_after,
-        TargetMediaSourceStopper, TargetMonitorCommand, TARGET_MONITOR_RETRY_MAX,
+        RemoteDesktopTargetMonitor, TargetMediaSourceStopper, TargetMonitorCommand,
+        TargetObservationSampler, TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
+        TARGET_MONITOR_RETRY_MAX,
+    };
+    use crate::daemon::plugins::remote_desktop::target_observer::{
+        sample_platform_target_observations, PlatformTargetObservationSample,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
         test_runtime_limits, test_session_init, TestRemoteAppTargetBindingVerifier,
@@ -610,6 +877,54 @@ mod tests {
     struct RecordingStopper {
         calls: Mutex<Vec<(String, TransportEpoch)>>,
         stopped: bool,
+    }
+
+    struct BlockingFirstTargetSampler {
+        calls: AtomicUsize,
+        released: Mutex<bool>,
+        release_signal: Condvar,
+    }
+
+    impl BlockingFirstTargetSampler {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                released: Mutex::new(false),
+                release_signal: Condvar::new(),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::Acquire)
+        }
+
+        fn release(&self) {
+            let mut released = self
+                .released
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *released = true;
+            self.release_signal.notify_all();
+        }
+    }
+
+    impl TargetObservationSampler for BlockingFirstTargetSampler {
+        fn sample(&self) -> PlatformTargetObservationSample {
+            let call = self.calls.fetch_add(1, Ordering::AcqRel);
+            if call == 0 {
+                let mut released = self
+                    .released
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                while !*released {
+                    released = self
+                        .release_signal
+                        .wait(released)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                }
+            }
+            sample_platform_target_observations()
+        }
     }
 
     impl RecordingStopper {
@@ -727,6 +1042,44 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_deadline_fences_late_result_and_bounds_native_call_count() {
+        let sampler = Arc::new(BlockingFirstTargetSampler::new());
+        let sampler_trait: Arc<dyn TargetObservationSampler> = sampler.clone();
+        let executor = Arc::new(TargetSnapshotDeadlineExecutor::new(sampler_trait));
+
+        let first = executor.sample_for_generation(1, Duration::from_millis(20));
+        assert!(matches!(
+            first,
+            Err(TargetSnapshotDeadlineError::DeadlineExceeded {
+                owner_generation: 1,
+                ..
+            })
+        ));
+        assert_eq!(sampler.calls(), 1);
+
+        let next_executor = Arc::clone(&executor);
+        let next = std::thread::spawn(move || {
+            next_executor.sample_for_generation(2, Duration::from_secs(1))
+        });
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            sampler.calls(),
+            1,
+            "a replacement generation must wait on the existing native call"
+        );
+
+        sampler.release();
+        next.join()
+            .expect("replacement generation joins")
+            .expect("replacement generation starts a fresh snapshot after fencing stale result");
+        assert_eq!(
+            sampler.calls(),
+            2,
+            "the late generation-1 sample must be discarded before one fresh generation-2 call"
+        );
+    }
+
+    #[test]
     fn supervisor_restarts_panicked_generation_without_a_new_track_command() {
         let plugin = RemoteDesktopPlugin::with_target_binding_verifier(
             Arc::new(SyntheticScreenBackend),
@@ -806,6 +1159,56 @@ mod tests {
         assert_eq!(recovered.target_tracking_state()["input_enabled"], false);
     }
 
+    #[test]
+    fn provider_hang_exhausts_budget_without_spawning_unbounded_native_calls() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let recovery = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
+        let sampler = Arc::new(BlockingFirstTargetSampler::new());
+        let sampler_trait: Arc<dyn TargetObservationSampler> = sampler.clone();
+        let monitor = Arc::new(RemoteDesktopTargetMonitor::with_sampler_for_test(
+            sampler_trait,
+            Duration::from_millis(25),
+        ));
+        let plugin = RemoteDesktopPlugin::with_target_monitor_for_test(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+            Arc::clone(&recovery),
+            monitor,
+        );
+        let session_id = "rd-monitor-provider-hang";
+        let session = RemoteDesktopSession::new(test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.monitor-provider-hang",
+            vec!["webrtc".into()],
+        ));
+        plugin.session_store().with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+        RemoteDesktopPlugin::track_target_for_test(&plugin, session_id)
+            .expect("target tracking starts the supervisor");
+
+        wait_for_target_status(&plugin, session_id, "lost", Duration::from_secs(3));
+        assert_eq!(
+            sampler.calls(),
+            1,
+            "three timed-out generations must share one bounded native call"
+        );
+        let snapshot = wait_for_recovery_snapshot(&recovery, session_id);
+        let recovered = RemoteDesktopSession::rehydrate(&snapshot)
+            .expect("hung-provider unavailable state rehydrates");
+        assert_eq!(recovered.target_tracking_state()["status"], "lost");
+        assert_eq!(recovered.target_tracking_state()["input_enabled"], false);
+
+        let shutdown_started = Instant::now();
+        drop(plugin);
+        assert!(
+            shutdown_started.elapsed() < Duration::from_millis(500),
+            "plugin shutdown must not join the blocked native provider call"
+        );
+        sampler.release();
+    }
+
     fn wait_for_generation_after(plugin: &RemoteDesktopPlugin, previous: u64) -> u64 {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -816,6 +1219,30 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "target monitor generation did not advance after injected failure"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wait_for_target_status(
+        plugin: &RemoteDesktopPlugin,
+        session_id: &str,
+        expected: &str,
+        timeout: Duration,
+    ) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let matches = plugin.session_store().with_sessions(|sessions| {
+                sessions
+                    .get(session_id)
+                    .is_some_and(|session| session.target_tracking_state()["status"] == expected)
+            });
+            if matches {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "target monitor did not reach expected status {expected}"
             );
             std::thread::sleep(Duration::from_millis(10));
         }

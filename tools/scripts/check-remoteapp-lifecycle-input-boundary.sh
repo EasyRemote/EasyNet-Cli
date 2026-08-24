@@ -242,6 +242,20 @@ require 'TargetMonitorCommand::Shutdown => false' "$TARGET_MONITOR" \
   'target monitor command state machine must handle Shutdown as the terminal command'
 require 'target_monitor_command_state_machine_tracks_cancels_and_shuts_down' "$TARGET_MONITOR" \
   'target monitor must test track/cancel/shutdown command semantics'
+require 'struct TargetSnapshotDeadlineExecutor' "$TARGET_MONITOR" \
+  'target monitor must isolate host snapshots behind one plugin-owned deadline executor'
+require 'fn sample_for_generation\(' "$TARGET_MONITOR" \
+  'target snapshot acquisition must be explicitly fenced by monitor generation'
+require 'recv_timeout\(remaining\)' "$TARGET_MONITOR" \
+  'target monitor generations must use a monotonic bounded wait for native provider results'
+require 'completed\.owner_generation != generation' "$TARGET_MONITOR" \
+  'a replacement generation must discard a late result owned by an obsolete generation'
+require 'snapshot_deadline_fences_late_result_and_bounds_native_call_count' "$TARGET_MONITOR" \
+  'target monitor tests must prove stale-result fencing and single-flight native sampling'
+require 'provider_hang_exhausts_budget_without_spawning_unbounded_native_calls' "$TARGET_MONITOR" \
+  'target monitor tests must prove a permanent provider hang fails safe without unbounded native calls'
+require 'plugin shutdown must not join the blocked native provider call' "$TARGET_MONITOR" \
+  'target monitor tests must prove plugin shutdown remains bounded while a native call is blocked'
 require 'fn push_target_tracking_event\(' "$SESSION" \
   'session aggregate must own target-event transport epoch projection'
 require 'payload\["transport_epoch"\]' "$SESSION" \

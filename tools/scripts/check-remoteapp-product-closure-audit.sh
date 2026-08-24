@@ -1515,6 +1515,12 @@ require 'initial_tracked: HashSet<String>' "$TARGET_MONITOR" \
   'RemoteApp target monitor worker restarts must be seeded from desired tracking state'
 require 'desired_sessions_for_test' "$TARGET_MONITOR" \
   'RemoteApp target monitor must expose test evidence for desired tracking state'
+require 'struct TargetSnapshotDeadlineExecutor' "$TARGET_MONITOR" \
+  'RemoteApp target monitor must own a single-flight native snapshot deadline boundary'
+require 'snapshot_deadline_fences_late_result_and_bounds_native_call_count' "$TARGET_MONITOR" \
+  'RemoteApp target monitor must prove late native results cannot cross generation authority'
+require 'provider_hang_exhausts_budget_without_spawning_unbounded_native_calls' "$TARGET_MONITOR" \
+  'RemoteApp target monitor must prove provider hangs are bounded and fail safe'
 require 'SESSION_REHYDRATED' "$SESSION" \
   'RemoteApp session aggregate must emit SESSION_REHYDRATED for non-terminal startup recovery'
 require 'session_events::session_rehydrated' "$SESSION" \

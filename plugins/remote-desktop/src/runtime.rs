@@ -78,6 +78,7 @@ impl RemoteDesktopPlugin {
             Arc::new(PlatformRemoteAppTargetBindingVerifier),
             config,
             Arc::new(RemoteDesktopRecoveryStore::daemon_default()),
+            Arc::new(RemoteDesktopTargetMonitor::new()),
             true,
         )
     }
@@ -93,6 +94,7 @@ impl RemoteDesktopPlugin {
             target_binding_verifier,
             config,
             Arc::new(RemoteDesktopRecoveryStore::daemon_default()),
+            Arc::new(RemoteDesktopTargetMonitor::new()),
             false,
         )
     }
@@ -109,6 +111,25 @@ impl RemoteDesktopPlugin {
             target_binding_verifier,
             config,
             recovery,
+            Arc::new(RemoteDesktopTargetMonitor::new()),
+            true,
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn with_target_monitor_for_test(
+        screen_backend: Arc<dyn ScreenSnapshotBackend>,
+        target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
+        config: RemoteDesktopRuntimeConfig,
+        recovery: Arc<RemoteDesktopRecoveryStore>,
+        target_monitor: Arc<RemoteDesktopTargetMonitor>,
+    ) -> Arc<Self> {
+        Self::with_target_binding_verifier_inner(
+            screen_backend,
+            target_binding_verifier,
+            config,
+            recovery,
+            target_monitor,
             true,
         )
     }
@@ -118,6 +139,7 @@ impl RemoteDesktopPlugin {
         target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
         config: RemoteDesktopRuntimeConfig,
         recovery: Arc<RemoteDesktopRecoveryStore>,
+        target_monitor: Arc<RemoteDesktopTargetMonitor>,
         rehydrate: bool,
     ) -> Arc<Self> {
         let plugin = Arc::new(Self {
@@ -126,7 +148,7 @@ impl RemoteDesktopPlugin {
                 config.max_sessions().saturating_mul(4),
             )),
             lease_monitor: Arc::new(RemoteDesktopLeaseMonitor::new()),
-            target_monitor: Arc::new(RemoteDesktopTargetMonitor::new()),
+            target_monitor,
             transports: Arc::new(RemoteDesktopTransportManager::new()),
             recovery,
             screen_backend,
