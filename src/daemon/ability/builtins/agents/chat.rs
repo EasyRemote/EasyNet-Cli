@@ -2,47 +2,19 @@
 // =======================================================
 //
 // File: src/daemon/ability/builtins/agents/chat.rs
-// Description: First-class registration of every locally-installed
-//              agent's `chat` ability on the daemon's
-//              `AxonAbilityCatalog`. After this lands, both the
-//              Kernel and the MCP adapter can dispatch through the
-//              same registered handler instead of each maintaining
-//              their own special-case path into `send_external`.
+// Description: Execution semantics and handler factories for every
+//              locally-installed agent's `chat` ability. Transactional
+//              registration is owned exclusively by HotAgentRegistrar.
 //
 // Why this lives in daemon builtins even though the wire name is `<agent>.chat`
 // --------------------------------------------------------------------------------
-// The daemon ability builtins tree is the registration surface: files here
-// mount handlers on the registry. The `system.<feature>`
+// The daemon ability builtins tree owns handler semantics. The `system.<feature>`
 // naming convention is a rule about *which abilities are device-level*,
 // not a rule about which files are allowed to register handlers. Chat
 // is bound to a specific agent (so its name is `<agent>.chat`, not
-// `system.chat`), but it is still registered by the daemon at boot
-// from this module — there is no agent-side code path for it.
-//
-// Per-agent registration
-// ----------------------
-// Unlike `observe.health` (one handler globally) or `session.list`
-// (one handler that reads from a shared `SessionService`), chat
-// registers one handler **per agent** in the registry. The handler
-// closure captures the agent name + entry by value, so a later
-// `get_rpc("alice.chat")` resolves to a closure that already knows it
-// is dispatching to `alice` and does not re-look-up the registry.
-//
-// Why the registry snapshot is captured at registration time
-// ----------------------------------------------------------
-// The ergonomic alternative would be to register a single
-// "chat-router" handler that does a registry lookup at every call.
-// We do not, for two reasons:
-//   1. It would couple the chat handler to the persistence-layer
-//      `load_agents()` call on every invocation — cheap but not free,
-//      and the failure mode (registry briefly unreadable) would surface
-//      as a chat error rather than a startup error.
-//   2. The registry is the single-writer in the daemon (see
-//      `AxonAbilityCatalog::register_rpc` doc): adding a new agent
-//      means re-running boot or calling `register` again with the
-//      updated registry. Mid-life additions are rare today and the
-//      explicit "re-register on add" pattern keeps the dispatch path
-//      monomorphic and easy to reason about.
+// `system.chat`). HotAgentRegistrar captures the Agent entry into one
+// monomorphic handler per registered owner and commits descriptor, execution,
+// authority, and LocalRuntime state as one transaction.
 //
 // What this PR's handler does NOT yet do
 // --------------------------------------
@@ -69,7 +41,7 @@
 //     driver exposes either knob), and every other driver-shaped
 //     field is rejected instead of becoming a hidden lifecycle
 //     surface (see parse_driver_overrides).
-//   * stream: register_for_agent mounts both an RPC and a Stream
+//   * stream: HotAgentRegistrar mounts both an RPC and a Stream
 //     handler; the stream variant emits typed frames. `stream:true`
 //     under the RPC entry point is rejected with a clear error.
 //
@@ -95,7 +67,7 @@ use crate::daemon::execution::mission::dispatch::{
     AgentExecution, AgentResponse, DriverOverrides, ToolCall, MAX_INVOCATION_TIMEOUT_MS,
 };
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
-use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
+use crate::daemon::persistence::agent_registry::AgentEntry;
 
 /// The wire-level *verb* portion of every chat ability name. The
 /// fully-qualified ability name is always `<agent>.chat`. A future
@@ -144,174 +116,6 @@ pub trait ContextLoader: Send + Sync {
     /// Produce the loader's contribution for the given agent +
     /// session, or `None` when there is nothing to contribute.
     fn load(&self, agent_name: &str, session_id: &str) -> anyhow::Result<Option<String>>;
-}
-
-/// Register a `<agent>.chat` handler on the supplied registry for
-/// every agent in `agents`. Idempotent: re-calling with an updated
-/// registry replaces the previous handler set per agent.
-///
-/// The `_loaders` parameter is the seam for the pluggable
-/// context-loader chain. Today the daemon passes an empty Vec; later
-/// PRs construct loaders during boot and pass them in.
-pub fn register(
-    reg: &mut AxonAbilityCatalog,
-    agents: &AgentRegistry,
-    loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-    _dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) {
-    for (agent_name, entry) in &agents.agents {
-        register_for_agent(reg, agent_name.clone(), entry.clone(), Arc::clone(&loaders));
-    }
-    // The owner-namespaced `<agent>.discover` self-bundle ability lives in
-    // its own module — see
-    // `daemon::ability::catalog::build_registry_with_services` (called after
-    // the dispatch handle is in scope).
-    //
-    // No lookup-miss fallback is installed here. Post-boot agent
-    // additions flow through HotAgentRegistrar, which materialises
-    // handlers in LocalRuntime and advertises the owner projection.
-    // A name that is absent from LocalRuntime must remain absent so
-    // RFC-005 resolve-before-invoke can return a typed negative
-    // instead of a hidden, locally-synthesised route.
-}
-
-/// Register a single `<agent>.chat` handler. Factored out so a
-/// future "an agent was added at runtime" path can call it directly
-/// without re-walking the registry.
-///
-/// Mounts both the RPC and the Stream handler on the same name. The
-/// dispatcher routes by `CallMode`: `Rpc` invocations land on the
-/// RPC handler, `Stream`/Subscribe lands on the stream handler.
-/// Sharing the ability name across both modes is the point — a
-/// caller chooses how it wants to consume chat (one-shot vs framed),
-/// not which "kind of chat" it is calling.
-pub fn register_for_agent(
-    reg: &mut AxonAbilityCatalog,
-    agent_name: String,
-    entry: AgentEntry,
-    loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-) {
-    use crate::daemon::ability::dispatch::OwnerKind;
-    let ability = format!("{agent_name}.{ABILITY_VERB}");
-    let owner = OwnerKind::Agent(agent_name.clone());
-
-    // RPC: the synchronous one-shot path. Registered with the
-    // canonical chat manifest so the Frontend
-    // `InvokeAbilityDialog` renders a SchemaForm (prompt /
-    // context / session_id / skills / context_loaders / driver /
-    // stream / attachments) instead of a free-text JSON box.
-    // Without this, the dialog falls back to "no declared
-    // schema" and the user has to guess the args shape.
-    let rpc_agent = agent_name.clone();
-    let rpc_entry = entry.clone();
-    let rpc_loaders = Arc::clone(&loaders);
-    reg.register_rpc_with_spec(
-        &ability,
-        owner.clone(),
-        crate::daemon::ability::manifest::default_chat_manifest()
-            .with_admission_action(
-                crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
-            )
-            .expect("chat manifest accepts invoke admission_action"),
-        Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
-    );
-
-    // For every OTHER ability the agent declares via its
-    // workspace `<root>/abilities/*.toml`, register an adapter
-    // handler that dispatches back to this agent's chat with a
-    // synthesised prompt instructing it to fulfill the named
-    // ability with the given args. Without this, an agent could
-    // declare abilities (which surface in MCP catalog and
-    // skills_loaded) but the LLM running inside has no way to
-    // invoke them: the dispatcher returns NOT_FOUND for every
-    // <agent>.<ability> name that isn't `<agent>.chat`.
-    //
-    let other_abilities =
-        crate::daemon::execution::mission::agent_ability_specs::abilities_for(&agent_name, &entry);
-    let manifests =
-        crate::daemon::execution::mission::agent_ability_specs::manifests_for(&agent_name, &entry);
-    let chat_name = ability.clone();
-    for spec in other_abilities {
-        if spec.name() == chat_name {
-            continue;
-        }
-        let ability_name = spec.name().to_string();
-        let bare_ability = ability_name
-            .strip_prefix(&format!("{agent_name}."))
-            .unwrap_or(&ability_name)
-            .to_string();
-
-        let Some(manifest) = manifests.iter().find(|m| m.name() == bare_ability) else {
-            continue;
-        };
-        let Some(exec) = manifest.exec() else {
-            continue;
-        };
-        match exec {
-            crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
-                if manifest.admission_action() == Some("invoke") {
-                    let h = build_host_rpc_handler(stream_spec.clone());
-                    let manifest = manifest
-                        .clone()
-                        .with_admission_action(
-                            crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
-                        )
-                        .expect("agent host_stream manifest accepts invoke admission_action");
-                    reg.register_rpc_with_envelope_and_spec(
-                        &ability_name,
-                        owner.clone(),
-                        manifest,
-                        h,
-                    );
-                } else {
-                    let h = build_host_stream_handler(stream_spec.clone());
-                    let manifest = manifest
-                        .clone()
-                        .with_admission_action(
-                            crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
-                        )
-                        .expect("agent host_stream manifest accepts stream admission_action");
-                    reg.register_stream_with_envelope_and_spec(
-                        &ability_name,
-                        owner.clone(),
-                        manifest,
-                        h,
-                    );
-                }
-            }
-            _ => {
-                let h = build_agent_ability_handler(
-                    agent_name.clone(),
-                    entry.clone(),
-                    Arc::clone(&loaders),
-                    bare_ability,
-                );
-                let manifest = manifest
-                    .clone()
-                    .with_admission_action(
-                        crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
-                    )
-                    .expect("agent executor manifest accepts invoke admission_action");
-                reg.register_rpc_with_envelope_and_spec(&ability_name, owner.clone(), manifest, h);
-            }
-        }
-    }
-
-    // Stream: emit framed events. v1 ships a Snapshot variant
-    // (eagerly materialised list) because the underlying LLM driver
-    // is synchronous; once the driver gains an async token stream
-    // the handler upgrades to `Live(broadcast::Receiver)` without
-    // changing the wire frame shape.
-    reg.register_stream_with_spec(
-        &ability,
-        owner,
-        crate::daemon::ability::manifest::default_chat_manifest()
-            .with_admission_action(
-                crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
-            )
-            .expect("chat manifest accepts stream admission_action"),
-        Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
-    );
 }
 
 /// Build the envelope-aware stream handler for a `host_stream` ability.
@@ -370,10 +174,8 @@ pub(crate) fn build_chat_stream_handler_for(
 }
 
 /// Build one executor-bound RPC handler for an agent's
-/// non-`chat` ability. Pulled out as a free fn so both the
-/// boot-time pre-registration loop in `register_for_agent` and
-/// HotAgentRegistrar produce byte-for-byte the same handler. This
-/// keeps manifest executor routing in exactly one place.
+/// non-`chat` ability. HotAgentRegistrar owns the surrounding catalogue
+/// transaction; this factory owns executor routing semantics.
 pub(crate) fn build_agent_ability_handler(
     agent_name: String,
     entry: AgentEntry,
@@ -443,10 +245,9 @@ pub(crate) fn build_agent_ability_handler(
     })
 }
 
-/// Build an `<agent>.chat` handler. Same
-/// shape as the boot-time registration in `register_for_agent`,
-/// pulled out as a helper so the hot-add and boot paths produce
-/// byte-identical handlers.
+/// Build an `<agent>.chat` handler for the transactional hosted-Agent
+/// registrar. The closure captures the validated durable entry once, keeping
+/// the invocation hot path free of registry I/O.
 pub(crate) fn build_chat_handler_for(
     agent_name: String,
     entry: AgentEntry,
@@ -2248,123 +2049,16 @@ fn uuid_like() -> String {
 #[cfg(test)]
 mod tests {
     //! Tests cover the argument-parsing surface (the deterministic,
-    //! pure portion of the handler) and the registration shape.
+    //! pure portion of the handler) and stream execution shape.
     //! Tests that exercise actual LLM dispatch live under integration
     //! tests in `tests/chat_ability_*.rs` because they need real
     //! agent directories and would otherwise spawn subprocesses.
 
     use super::*;
     use crate::core::agent::spec::RuntimeKind;
-    use crate::daemon::persistence::agent_registry::AgentRegistry;
 
     fn entry() -> AgentEntry {
         AgentEntry::new(RuntimeKind::ClaudeCode, None)
-    }
-
-    fn materialized_entry(name: &str) -> AgentEntry {
-        let root = crate::daemon::persistence::config::agents_root().join(name);
-        std::fs::create_dir_all(root.join("abilities")).expect("agent fixture root");
-        let spec = crate::core::agent::spec::AgentSpec::new(name, RuntimeKind::ClaudeCode);
-        std::fs::write(
-            root.join("agent.toml"),
-            spec.to_toml_string().expect("canonical agent fixture spec"),
-        )
-        .expect("write canonical agent fixture spec");
-        let mut entry = entry();
-        entry.root_path = Some(root);
-        entry
-    }
-
-    fn agent_chat_test_catalog() -> AxonAbilityCatalog {
-        let authority = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
-            "easynet:///r/test/device/agent-chat",
-            [
-                crate::core::ura::agent_ura("test", "local", "alice"),
-                crate::core::ura::agent_ura("test", "local", "bob"),
-            ],
-        )
-        .expect("chat fixture hosted Agent authority");
-        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority)
-    }
-
-    #[test]
-    fn register_mounts_one_handler_per_agent() {
-        // Hold the env lock: register() consults HOME-rooted registry
-        // state, so a concurrent HOME-mutating test must not race it.
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = agent_chat_test_catalog();
-        let mut agents = AgentRegistry::default();
-        agents
-            .agents
-            .insert("alice".into(), materialized_entry("alice"));
-        agents
-            .agents
-            .insert("bob".into(), materialized_entry("bob"));
-        register(
-            &mut reg,
-            &agents,
-            Arc::new(Vec::new()),
-            Arc::new(std::sync::OnceLock::new()),
-        );
-        assert!(reg.get_rpc("alice.chat").is_some());
-        assert!(reg.get_rpc("bob.chat").is_some());
-        let alice_chat = reg
-            .control_plane_record_for_mode("alice.chat", crate::daemon::ability::CallMode::Rpc)
-            .expect("chat descriptor lookup is unambiguous")
-            .expect("chat registration publishes a descriptor");
-        assert_eq!(alice_chat.descriptor().metadata["exposure"], "task");
-        // Stream handler registered too — same name, different mode.
-        assert!(reg.get_stream("alice.chat").is_some());
-        assert!(reg.get_stream("bob.chat").is_some());
-        // No collateral registrations.
-        assert!(reg.get_rpc("alice.voice").is_none());
-        assert!(reg.get_rpc("system.chat").is_none());
-        assert!(
-            reg.resolve_rpc("charlie.chat").is_none(),
-            "lookup miss must stay a miss; hot agents are materialised through HotAgentRegistrar"
-        );
-    }
-
-    #[test]
-    fn register_does_not_mount_unbound_manifest_as_chat_route() {
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let root = crate::daemon::persistence::config::agents_root().join("alice");
-        let abilities_dir = root.join("abilities");
-        std::fs::create_dir_all(&abilities_dir).expect("abilities dir");
-        std::fs::write(
-            root.join("agent.toml"),
-            "schema_version = \"1\"\nname = \"alice\"\nruntime = \"claude-code\"\n",
-        )
-        .expect("agent.toml");
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
-            "echo",
-            "Unbound manifest.",
-            json!({"type": "object"}),
-        )
-        .expect("manifest");
-        std::fs::write(
-            abilities_dir.join("echo.ability.toml"),
-            manifest.to_toml_string().expect("manifest toml"),
-        )
-        .expect("ability manifest");
-
-        let mut entry = entry();
-        entry.root_path = Some(root);
-        let mut agents = AgentRegistry::default();
-        agents.agents.insert("alice".into(), entry);
-        let mut reg = agent_chat_test_catalog();
-        register(
-            &mut reg,
-            &agents,
-            Arc::new(Vec::new()),
-            Arc::new(std::sync::OnceLock::new()),
-        );
-
-        assert!(reg.get_rpc("alice.chat").is_some());
-        assert!(
-            reg.get_rpc("alice.echo").is_none(),
-            "manifest without [exec] must not be routed through an LLM-mediated handler"
-        );
     }
 
     #[test]
