@@ -54,7 +54,7 @@ use crate::daemon::invocation::bidi::session_wire::{
     call_id_hex, RequestOutcome, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
-    DispatchResult, DispatchStreamEvent,
+    DispatchResult, DispatchStreamChunk, DispatchStreamEvent,
 };
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 
@@ -821,7 +821,13 @@ fn reverse_stream_event(
             true,
         );
     }
-    (DispatchStreamEvent::Chunk(result.payload), false)
+    (
+        DispatchStreamEvent::Chunk(DispatchStreamChunk::new(
+            result.payload,
+            result.result_content_type,
+        )),
+        false,
+    )
 }
 
 fn dispatch_result_from_reverse_result(

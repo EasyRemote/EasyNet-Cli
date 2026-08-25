@@ -22,6 +22,7 @@ use crate::daemon::plugins::{PluginBidiWireKind, PluginHostError, PluginRuntimeS
 /// Reserved binary stream carrying structured PTY lifecycle controls that do
 /// not have a first-class Axon `BidiControl` variant.
 pub(crate) const CONTROL_STREAM_ID: u32 = u32::MAX;
+pub(crate) const CONTROL_CONTENT_TYPE: &str = "application/json";
 
 /// Bidi wire codec used when an ability crosses the daemon/Axon session bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

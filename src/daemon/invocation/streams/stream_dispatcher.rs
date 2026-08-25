@@ -664,7 +664,7 @@ async fn project_forwarded_remote_stream(
                         }
                     }
                 }
-                DispatchStreamEvent::Chunk(payload) => {
+                DispatchStreamEvent::Chunk(chunk) => {
                     if let Err(status) = finalization.observe_data() {
                         let _ = tx.send(Err(status)).await;
                         break;
@@ -680,7 +680,7 @@ async fn project_forwarded_remote_stream(
                     let chunk = remote_stream_chunk(RemoteStreamChunkParts {
                         invocation_id,
                         state: axon_sdk::invocation::InvocationState::Running,
-                        payload,
+                        payload: chunk.payload,
                         sequence,
                         terminal: false,
                         admission_receipt: None,

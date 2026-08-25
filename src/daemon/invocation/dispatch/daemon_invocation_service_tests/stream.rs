@@ -983,7 +983,13 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         crate::daemon::invocation::bidi::state::pending_dispatch::StreamDeliver::Delivered
     );
     assert_eq!(
-        pending_stream.try_push_chunk(call_id, br#"{"delta":"part-1"}"#.to_vec()),
+        pending_stream.try_push_chunk(
+            call_id,
+            crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamChunk::new(
+                br#"{"delta":"part-1"}"#.to_vec(),
+                "application/json",
+            ),
+        ),
         crate::daemon::invocation::bidi::state::pending_dispatch::StreamDeliver::Delivered
     );
     assert_eq!(

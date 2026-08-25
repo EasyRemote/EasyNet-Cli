@@ -717,7 +717,13 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
     let target_ura = "easynet:///r/test-realm/device/target-stream";
     let mut handle = pending_stream.register_pending_for(target_ura);
     assert_eq!(
-        pending_stream.try_push_chunk(handle.call_id(), b"partial".to_vec()),
+        pending_stream.try_push_chunk(
+            handle.call_id(),
+            crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamChunk::new(
+                b"partial".to_vec(),
+                "application/octet-stream",
+            ),
+        ),
         crate::daemon::invocation::bidi::state::pending_dispatch::StreamDeliver::Delivered
     );
 
@@ -734,8 +740,9 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
             );
 
             match tokio::time::timeout(std::time::Duration::from_millis(20), handle.recv()).await {
-                Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Chunk(bytes))) => {
-                    assert_eq!(bytes, b"partial");
+                Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Chunk(chunk))) => {
+                    assert_eq!(chunk.payload, b"partial");
+                    assert_eq!(chunk.content_type, "application/octet-stream");
                 }
                 Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Admission(_))) => {
                     panic!("offline cancellation fixture did not dispatch an invocation");

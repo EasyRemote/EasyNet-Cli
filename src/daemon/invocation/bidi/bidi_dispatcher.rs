@@ -86,7 +86,8 @@ use crate::daemon::invocation::streams::stream_dispatcher::StreamDispatcher;
 use axon_sdk::invocation::{AbilityContext, AbilityFrame, AxonError, BidiInputFrame, CallMode};
 
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
-    DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
+    DispatchResult, DispatchStreamChunk, DispatchStreamEvent, PendingDispatchMap,
+    PendingStreamDispatchMap,
 };
 use crate::daemon::invocation::bidi::state::presence::{
     DispatchFrame, DispatchSender, OfflineReason, PresenceRegistration, PresenceRegistry,
@@ -700,12 +701,13 @@ impl BidiDispatcher {
                             break;
                         }
                     }
-                    DispatchStreamEvent::Chunk(bytes) => {
+                    DispatchStreamEvent::Chunk(chunk) => {
                         crate::op_event!(
                             component = daemon_invocation,
                             kind = hub_session_bidi_chunk_received,
                             call_id = call_id_hex_for_results,
-                            payload_bytes = bytes.len(),
+                            payload_bytes = chunk.payload.len(),
+                            content_type = chunk.content_type.as_str(),
                         );
                         if let Err(status) = finalization.observe_data() {
                             crate::op_event!(
@@ -717,14 +719,7 @@ impl BidiDispatcher {
                             let _ = down_tx_for_results.send(Err(status)).await;
                             break;
                         }
-                        let frame = InvokeBidiDown {
-                            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                                stream_id: stdout_stream_id,
-                                data: bytes,
-                                ..BinaryChunk::default()
-                            })),
-                            ..InvokeBidiDown::default()
-                        };
+                        let frame = bidi_down_from_dispatch_chunk(chunk, stdout_stream_id);
                         if down_tx_for_results.send(Ok(frame)).await.is_err() {
                             break;
                         }
@@ -981,12 +976,13 @@ impl BidiDispatcher {
                             break;
                         }
                     }
-                    DispatchStreamEvent::Chunk(bytes) => {
+                    DispatchStreamEvent::Chunk(chunk) => {
                         crate::op_event!(
                             component = daemon_invocation,
                             kind = remote_bidi_bridge_chunk_received,
                             call_id = call_id,
-                            payload_bytes = bytes.len(),
+                            payload_bytes = chunk.payload.len(),
+                            content_type = chunk.content_type.as_str(),
                         );
                         if let Err(status) = finalization.observe_data() {
                             crate::op_event!(
@@ -998,14 +994,7 @@ impl BidiDispatcher {
                             let _ = down_tx_for_results.send(Err(status)).await;
                             break;
                         }
-                        let frame = InvokeBidiDown {
-                            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                                stream_id: stdout_stream_id,
-                                data: bytes,
-                                ..BinaryChunk::default()
-                            })),
-                            ..InvokeBidiDown::default()
-                        };
+                        let frame = bidi_down_from_dispatch_chunk(chunk, stdout_stream_id);
                         if down_tx_for_results.send(Ok(frame)).await.is_err() {
                             break;
                         }
@@ -2737,7 +2726,7 @@ pub(crate) fn pending_result_from_canonical_carrier(
 #[derive(Debug)]
 enum CarrierDispatchEvent {
     Admission(Box<axon_sdk::pb::axon::v1::InvocationReceipt>),
-    Chunk(Vec<u8>),
+    Chunk(DispatchStreamChunk),
     Terminal(Box<DispatchResult>),
 }
 
@@ -2837,7 +2826,32 @@ fn classify_canonical_carrier_result(
     if result.failure.is_some() {
         return Err((call_id, pending_result_from_canonical_carrier(&result)));
     }
-    Ok((call_id, CarrierDispatchEvent::Chunk(result.payload)))
+    Ok((
+        call_id,
+        CarrierDispatchEvent::Chunk(DispatchStreamChunk::new(
+            result.payload,
+            result.result_content_type,
+        )),
+    ))
+}
+
+fn bidi_down_from_dispatch_chunk(
+    chunk: DispatchStreamChunk,
+    stdout_stream_id: u32,
+) -> InvokeBidiDown {
+    let stream_id = if chunk.content_type == crate::daemon::ability::wire::CONTROL_CONTENT_TYPE {
+        crate::daemon::ability::wire::CONTROL_STREAM_ID
+    } else {
+        stdout_stream_id
+    };
+    InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+            stream_id,
+            data: chunk.payload,
+            ..BinaryChunk::default()
+        })),
+        ..InvokeBidiDown::default()
+    }
 }
 
 pub(crate) fn session_failure_from_axon_error(
@@ -3076,6 +3090,13 @@ fn build_reverse_dispatch_bidi_result_frame(
         DownPayload::BinaryChunk(chunk) => ReverseDispatchResult {
             call_id: call_id.to_vec(),
             payload: chunk.data,
+            result_content_type: if chunk.stream_id
+                == crate::daemon::ability::wire::CONTROL_STREAM_ID
+            {
+                crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string()
+            } else {
+                "application/octet-stream".to_string()
+            },
             ..ReverseDispatchResult::default()
         },
         DownPayload::ReverseDispatchResult(mut result) => {
@@ -3470,10 +3491,10 @@ async fn drain_session_runtime_up_stream(
                             );
                         }
                     }
-                    Ok((call_id, CarrierDispatchEvent::Chunk(payload))) => {
+                    Ok((call_id, CarrierDispatchEvent::Chunk(chunk))) => {
                         if let Some(pending_stream) = pending_stream.as_ref() {
                             report_chunk_delivery(
-                                pending_stream.deliver_chunk(call_id, payload).await,
+                                pending_stream.deliver_chunk(call_id, chunk).await,
                                 &caller_ura,
                                 call_id,
                             );
@@ -4352,6 +4373,66 @@ mod tests {
         assert!(result.terminal);
         assert!(result.admission_receipt.is_some());
         assert!(result.terminal_receipt.is_some());
+    }
+
+    #[test]
+    fn remote_bidi_chunk_routing_uses_content_type_without_decoding_payload() {
+        let control_payload = vec![0xff, 0x00];
+        let control = bidi_down_from_dispatch_chunk(
+            DispatchStreamChunk::new(
+                control_payload.clone(),
+                crate::daemon::ability::wire::CONTROL_CONTENT_TYPE,
+            ),
+            7,
+        );
+        let Some(DownPayload::BinaryChunk(control)) = control.payload else {
+            panic!("expected control BinaryChunk");
+        };
+        assert_eq!(
+            control.stream_id,
+            crate::daemon::ability::wire::CONTROL_STREAM_ID
+        );
+        assert_eq!(control.data, control_payload);
+
+        let native_payload = br#"{"looks":"json"}"#.to_vec();
+        let native = bidi_down_from_dispatch_chunk(
+            DispatchStreamChunk::new(native_payload.clone(), "application/octet-stream"),
+            7,
+        );
+        let Some(DownPayload::BinaryChunk(native)) = native.payload else {
+            panic!("expected native BinaryChunk");
+        };
+        assert_eq!(native.stream_id, 7);
+        assert_eq!(native.data, native_payload);
+    }
+
+    #[test]
+    fn reverse_bidi_binary_chunk_projects_stream_semantics_as_content_type() {
+        for (stream_id, expected_content_type) in [
+            (
+                crate::daemon::ability::wire::CONTROL_STREAM_ID,
+                crate::daemon::ability::wire::CONTROL_CONTENT_TYPE,
+            ),
+            (7, "application/octet-stream"),
+        ] {
+            let frame = build_reverse_dispatch_bidi_result_frame(
+                [6; 16],
+                InvokeBidiDown {
+                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                        stream_id,
+                        data: vec![1, 2, 3],
+                        ..BinaryChunk::default()
+                    })),
+                    ..InvokeBidiDown::default()
+                },
+            )
+            .expect("binary chunk must be forwarded");
+            let Some(DownPayload::ReverseDispatchResult(result)) = frame.frame.payload else {
+                panic!("expected ReverseDispatchResult");
+            };
+            assert_eq!(result.payload, vec![1, 2, 3]);
+            assert_eq!(result.result_content_type, expected_content_type);
+        }
     }
 
     #[test]

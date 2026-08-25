@@ -247,6 +247,7 @@ const REMOTE_BIDI_INPUT_CAPACITY: usize = 32;
 struct BidiOutputProjection {
     call_id: u64,
     payload: Vec<u8>,
+    content_type: String,
     failure: Option<SessionFailure>,
     disposition: BidiOutputDisposition,
 }
@@ -1214,6 +1215,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(Some(BidiOutputProjection {
                     call_id,
                     payload,
+                    content_type: crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string(),
                     failure: None,
                     disposition: BidiOutputDisposition::Completion,
                 }))
@@ -1228,6 +1230,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(Some(BidiOutputProjection {
                     call_id,
                     payload,
+                    content_type: crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string(),
                     failure: Some(error.failure()),
                     disposition: BidiOutputDisposition::Failure,
                 }))
@@ -1252,6 +1255,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(Some(BidiOutputProjection {
                     call_id,
                     payload,
+                    content_type: crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string(),
                     failure: None,
                     disposition: BidiOutputDisposition::Data,
                 }))
@@ -1264,6 +1268,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(Some(BidiOutputProjection {
                     call_id,
                     payload,
+                    content_type: crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string(),
                     failure: Some(error.failure()),
                     disposition: BidiOutputDisposition::Failure,
                 }))
@@ -1302,6 +1307,7 @@ impl LocalAxonSessionDispatcher {
         Ok(Some(BidiOutputProjection {
             call_id,
             payload,
+            content_type: crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string(),
             failure,
             disposition,
         }))
@@ -1323,6 +1329,7 @@ impl LocalAxonSessionDispatcher {
         Ok(Some(BidiOutputProjection {
             call_id,
             payload,
+            content_type: crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string(),
             failure,
             disposition: if frame_type == Some("error") {
                 BidiOutputDisposition::Failure
@@ -1363,10 +1370,15 @@ impl LocalAxonSessionDispatcher {
         }
     }
 
-    fn map_native_bidi_data(call_id: u64, payload: Vec<u8>) -> BidiOutputProjection {
+    fn map_native_bidi_data(
+        call_id: u64,
+        payload: Vec<u8>,
+        content_type: String,
+    ) -> BidiOutputProjection {
         BidiOutputProjection {
             call_id,
             payload,
+            content_type,
             failure: None,
             disposition: BidiOutputDisposition::Data,
         }
@@ -1674,6 +1686,7 @@ impl LocalAxonSessionDispatcher {
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id: projection.call_id,
                 payload: projection.payload,
+                result_content_type: projection.content_type,
                 failure,
                 ..Default::default()
             },
@@ -2025,6 +2038,7 @@ impl LocalAxonSessionDispatcher {
                     Some(LocalAxonSessionDispatcher::map_native_bidi_data(
                         call_id,
                         frame.payload,
+                        frame.content_type,
                     ))
                 } else {
                     match serde_json::from_slice::<Value>(&frame.payload) {
@@ -4034,9 +4048,18 @@ mod tests {
             serde_json::from_slice(&attached.payload).expect("attached JSON payload");
         assert_eq!(attached_json["type"], "attached");
         assert_eq!(attached_json["epoch"], 2);
+        assert_eq!(
+            attached.content_type,
+            crate::daemon::ability::wire::CONTROL_CONTENT_TYPE
+        );
 
-        let stdout = LocalAxonSessionDispatcher::map_native_bidi_data(17, vec![0, 1, 2]);
+        let stdout = LocalAxonSessionDispatcher::map_native_bidi_data(
+            17,
+            vec![0, 1, 2],
+            "application/octet-stream".to_string(),
+        );
         assert_eq!(stdout.payload, vec![0, 1, 2]);
+        assert_eq!(stdout.content_type, "application/octet-stream");
 
         let exit = LocalAxonSessionDispatcher::map_remote_pty_output(
             17,
@@ -4067,6 +4090,10 @@ mod tests {
             .expect("tunnel control projection")
             .expect("tunnel control frame");
             assert_eq!(mapped.call_id, 18);
+            assert_eq!(
+                mapped.content_type,
+                crate::daemon::ability::wire::CONTROL_CONTENT_TYPE
+            );
             assert_eq!(mapped.disposition, BidiOutputDisposition::Data);
             assert!(mapped.failure.is_none());
             assert_eq!(

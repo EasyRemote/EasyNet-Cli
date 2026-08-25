@@ -266,8 +266,25 @@ impl PendingDispatchMap {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DispatchStreamEvent {
     Admission(Box<DispatchReceipt>),
-    Chunk(Vec<u8>),
+    Chunk(DispatchStreamChunk),
     Terminal(Box<DispatchResult>),
+}
+
+/// One non-terminal carrier data frame. Payload bytes and their media type
+/// form one transport fact and must remain coupled across queue boundaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchStreamChunk {
+    pub payload: Vec<u8>,
+    pub content_type: String,
+}
+
+impl DispatchStreamChunk {
+    pub fn new(payload: Vec<u8>, content_type: impl Into<String>) -> Self {
+        Self {
+            payload,
+            content_type: content_type.into(),
+        }
+    }
 }
 
 /// Outcome of a non-blocking delivery into a pending stream entry.
@@ -383,7 +400,7 @@ impl PendingStreamDispatchMap {
         }
     }
 
-    pub async fn push_chunk(&self, call_id: u64, payload: Vec<u8>) -> bool {
+    pub async fn push_chunk(&self, call_id: u64, chunk: DispatchStreamChunk) -> bool {
         let Some(sender) = self
             .inner
             .entries
@@ -392,10 +409,7 @@ impl PendingStreamDispatchMap {
         else {
             return false;
         };
-        sender
-            .send(DispatchStreamEvent::Chunk(payload))
-            .await
-            .is_ok()
+        sender.send(DispatchStreamEvent::Chunk(chunk)).await.is_ok()
     }
 
     pub async fn finish(&self, call_id: u64, result: DispatchResult) -> bool {
@@ -412,7 +426,7 @@ impl PendingStreamDispatchMap {
     /// Deliver a chunk according to the entry's explicit lifecycle policy.
     /// Lossless entries await downstream capacity; bounded entries keep the
     /// existing no-wait stall isolation semantics.
-    pub async fn deliver_chunk(&self, call_id: u64, payload: Vec<u8>) -> StreamDeliver {
+    pub async fn deliver_chunk(&self, call_id: u64, chunk: DispatchStreamChunk) -> StreamDeliver {
         let Some((sender, delivery_policy)) = self
             .inner
             .entries
@@ -422,9 +436,9 @@ impl PendingStreamDispatchMap {
             return StreamDeliver::NoMatch;
         };
         match delivery_policy {
-            StreamDeliveryPolicy::BoundedNoWait => self.try_push_chunk(call_id, payload),
+            StreamDeliveryPolicy::BoundedNoWait => self.try_push_chunk(call_id, chunk),
             StreamDeliveryPolicy::LosslessBackpressure => {
-                match sender.send(DispatchStreamEvent::Chunk(payload)).await {
+                match sender.send(DispatchStreamEvent::Chunk(chunk)).await {
                     Ok(()) => StreamDeliver::Delivered,
                     Err(_) => {
                         self.inner.entries.remove(&call_id);
@@ -508,7 +522,7 @@ impl PendingStreamDispatchMap {
     /// evicted: the stalled call alone is cut — its consumer sees
     /// end-of-stream after the buffered chunks — and the drain moves
     /// on.
-    pub fn try_push_chunk(&self, call_id: u64, payload: Vec<u8>) -> StreamDeliver {
+    pub fn try_push_chunk(&self, call_id: u64, chunk: DispatchStreamChunk) -> StreamDeliver {
         let Some(sender) = self
             .inner
             .entries
@@ -517,7 +531,7 @@ impl PendingStreamDispatchMap {
         else {
             return StreamDeliver::NoMatch;
         };
-        match sender.try_send(DispatchStreamEvent::Chunk(payload)) {
+        match sender.try_send(DispatchStreamEvent::Chunk(chunk)) {
             Ok(()) => StreamDeliver::Delivered,
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.inner.entries.remove(&call_id);
@@ -603,6 +617,10 @@ mod tests {
 
     const TEST_TARGET_URA: &str = "easynet:///r/realm/device/target";
     const OTHER_TARGET_URA: &str = "easynet:///r/realm/device/other";
+
+    fn chunk(payload: impl Into<Vec<u8>>) -> DispatchStreamChunk {
+        DispatchStreamChunk::new(payload.into(), "application/octet-stream")
+    }
 
     #[test]
     fn new_map_is_empty() {
@@ -801,7 +819,7 @@ mod tests {
         let writer = {
             let map = map.clone();
             tokio::spawn(async move {
-                assert!(map.push_chunk(id, b"part-1".to_vec()).await);
+                assert!(map.push_chunk(id, chunk(b"part-1")).await);
                 assert!(
                     map.finish(
                         id,
@@ -822,7 +840,7 @@ mod tests {
 
         assert_eq!(
             handle.recv().await,
-            Some(DispatchStreamEvent::Chunk(b"part-1".to_vec()))
+            Some(DispatchStreamEvent::Chunk(chunk(b"part-1")))
         );
         assert_eq!(
             handle.recv().await,
@@ -847,7 +865,7 @@ mod tests {
 
         assert_eq!(map.outstanding(), 1);
         assert_eq!(
-            map.try_push_chunk(id, b"partial-frame".to_vec()),
+            map.try_push_chunk(id, chunk(b"partial-frame")),
             StreamDeliver::Delivered
         );
         assert_eq!(
@@ -865,7 +883,7 @@ mod tests {
 
         assert_eq!(
             handle.recv().await,
-            Some(DispatchStreamEvent::Chunk(b"partial-frame".to_vec()))
+            Some(DispatchStreamEvent::Chunk(chunk(b"partial-frame")))
         );
         let Some(DispatchStreamEvent::Terminal(result)) = handle.recv().await else {
             panic!("cancel_for must deliver one terminal failure event");
@@ -890,7 +908,7 @@ mod tests {
 
         for i in 0..PendingStreamDispatchMap::CHANNEL_CAPACITY {
             assert_eq!(
-                map.deliver_chunk(id, vec![i as u8]).await,
+                map.deliver_chunk(id, chunk(vec![i as u8])).await,
                 StreamDeliver::Delivered
             );
         }
@@ -899,7 +917,7 @@ mod tests {
         let map_for_writer = map.clone();
         let blocked_writer = tokio::spawn(async move {
             map_for_writer
-                .deliver_chunk(id, b"after-capacity".to_vec())
+                .deliver_chunk(id, chunk(b"after-capacity"))
                 .await
         });
         tokio::task::yield_now().await;
@@ -911,7 +929,7 @@ mod tests {
 
         assert_eq!(
             handle.recv().await,
-            Some(DispatchStreamEvent::Chunk(vec![0]))
+            Some(DispatchStreamEvent::Chunk(chunk(vec![0])))
         );
         assert_eq!(
             blocked_writer.await.expect("writer joined"),
@@ -942,7 +960,7 @@ mod tests {
         }
         assert_eq!(
             handle.recv().await,
-            Some(DispatchStreamEvent::Chunk(b"after-capacity".to_vec()))
+            Some(DispatchStreamEvent::Chunk(chunk(b"after-capacity")))
         );
         assert_eq!(
             terminal_writer.await.expect("terminal writer joined"),
