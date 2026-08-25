@@ -611,6 +611,18 @@ impl HotAgentRegistrar {
         }
 
         self.require_ready()?;
+        // One immutable manifest snapshot drives every row in this
+        // registration transaction. AgentDirectory is the descriptor
+        // authority: never reconstruct `chat` from a hard-coded manifest or
+        // re-enumerate the directory through a second discovery projection.
+        let manifests =
+            crate::daemon::execution::mission::agent_ability_specs::manifests_for_shared(
+                name, entry,
+            );
+        let chat_manifest = manifests
+            .iter()
+            .find(|manifest| manifest.name() == "chat")
+            .cloned();
         let runtime = self
             .runtime
             .get()
@@ -670,39 +682,46 @@ impl HotAgentRegistrar {
                 failures: &mut failures,
             };
 
-            // ── chat
-            let chat_ability = format!("{name}.chat");
-            let chat_handler =
-                build_chat_handler_for(name.to_string(), entry.clone(), Arc::clone(&self.loaders));
-            if Self::register_rpc_with_spec(
-                &mut sync_ctx,
-                &chat_ability,
-                owner.clone(),
-                crate::daemon::ability::manifest::default_chat_manifest(),
-                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
-                chat_handler,
-            )
-            .await
-            {
-                synced.insert(chat_ability.clone());
-            }
+            // ── chat. Deleting chat.ability.toml withdraws the surface;
+            // the reconcile phase below removes any previously committed row.
+            // There is deliberately no synthesized compatibility fallback.
+            if let Some(chat_manifest) = chat_manifest {
+                let chat_ability = format!("{name}.chat");
+                let chat_handler = build_chat_handler_for(
+                    name.to_string(),
+                    entry.clone(),
+                    Arc::clone(&self.loaders),
+                );
+                if Self::register_rpc_with_spec(
+                    &mut sync_ctx,
+                    &chat_ability,
+                    owner.clone(),
+                    chat_manifest.clone(),
+                    crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                    chat_handler,
+                )
+                .await
+                {
+                    synced.insert(chat_ability.clone());
+                }
 
-            let chat_stream_handler = build_chat_stream_handler_for(
-                name.to_string(),
-                entry.clone(),
-                Arc::clone(&self.loaders),
-            );
-            if Self::register_stream_with_spec(
-                &mut sync_ctx,
-                &chat_ability,
-                owner.clone(),
-                crate::daemon::ability::manifest::default_chat_manifest(),
-                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
-                chat_stream_handler,
-            )
-            .await
-            {
-                synced.insert(chat_ability.clone());
+                let chat_stream_handler = build_chat_stream_handler_for(
+                    name.to_string(),
+                    entry.clone(),
+                    Arc::clone(&self.loaders),
+                );
+                if Self::register_stream_with_spec(
+                    &mut sync_ctx,
+                    &chat_ability,
+                    owner.clone(),
+                    chat_manifest,
+                    crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                    chat_stream_handler,
+                )
+                .await
+                {
+                    synced.insert(chat_ability);
+                }
             }
 
             // ── discover
@@ -728,24 +747,12 @@ impl HotAgentRegistrar {
             // ── TOML-declared executor-bound abilities. Manifests without
             // `[exec]` are discoverable declarations, not invocable runtime
             // handlers.
-            let chat_name = format!("{name}.chat");
-            let manifests =
-                crate::daemon::execution::mission::agent_ability_specs::manifests_for(name, entry);
-            for spec in
-                crate::daemon::execution::mission::agent_ability_specs::abilities_for(name, entry)
-            {
-                let ability_name = spec.name().to_string();
-                if ability_name == chat_name {
+            for manifest in manifests.iter() {
+                if manifest.name() == "chat" {
                     continue;
                 }
-                let bare = ability_name
-                    .strip_prefix(&format!("{name}."))
-                    .unwrap_or(&ability_name)
-                    .to_string();
-
-                let Some(manifest) = manifests.iter().find(|m| m.name() == bare) else {
-                    continue;
-                };
+                let bare = manifest.name().to_string();
+                let ability_name = manifest.qualified_name(name);
                 let Some(exec) = manifest.exec() else {
                     if Self::register_descriptor_only(
                         &mut sync_ctx,
@@ -1354,10 +1361,11 @@ impl HotAgentRegistrar {
 mod tests {
     use super::*;
 
-    use crate::core::agent::spec::RuntimeKind;
+    use crate::core::agent::spec::{AgentSpec, RuntimeKind};
+    use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
     use crate::daemon::persistence::agent_registry::AgentEntry;
 
-    fn seed_hosted_agent(name: &str) -> String {
+    fn seed_hosted_agent(name: &str) -> (String, AgentEntry) {
         crate::daemon::persistence::config::save_credentials(
             &crate::daemon::persistence::config::Credentials {
                 node_id: "dev".to_string(),
@@ -1385,16 +1393,25 @@ mod tests {
             },
         )
         .expect("seed local-agents.json");
+        let directory = AgentDirectory::create(
+            &Location::Global {
+                name: name.to_string(),
+            },
+            AgentSpec::new(name, RuntimeKind::ClaudeCode),
+        )
+        .expect("seed canonical AgentDirectory");
+        let mut entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
+        entry.root_path = Some(directory.root().to_path_buf());
         let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         registry.agents.insert(
             crate::core::agent::id::AgentId::parse(name)
                 .expect("test agent name")
                 .to_string(),
-            AgentEntry::new(RuntimeKind::ClaudeCode, None),
+            entry.clone(),
         );
         crate::daemon::persistence::agent_registry::save_agents(&registry)
             .expect("seed durable Agent registry");
-        agent_ura
+        (agent_ura, entry)
     }
 
     fn runtime_key(agent: &str, registry_ability: &str) -> String {
@@ -1478,7 +1495,7 @@ mod tests {
 
         // User-owned shape passes the same gate untouched.
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_hosted_agent("liangbing");
+        let (_, entry) = seed_hosted_agent("liangbing");
         registrar
             .register_agent("liangbing", &entry)
             .await
@@ -1498,7 +1515,7 @@ mod tests {
         );
         let catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_hosted_agent("liangbing");
+        let (_, entry) = seed_hosted_agent("liangbing");
 
         // Simulate an earlier sync's TOML ability whose manifest has
         // since been deleted: the row exists in the runtime but no
@@ -1524,7 +1541,6 @@ mod tests {
             .expect("seed dynamic ghost ability");
         assert!(rt.has_ability(&ghost_key).await);
 
-        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         let outcome = registrar
             .register_agent("liangbing", &entry)
             .await
@@ -1567,9 +1583,7 @@ mod tests {
         );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_hosted_agent("liangbing");
-
-        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
+        let (_, entry) = seed_hosted_agent("liangbing");
         let outcome = registrar
             .register_agent("liangbing", &entry)
             .await
@@ -1609,6 +1623,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn register_agent_derives_chat_descriptors_from_agent_directory_manifest() {
+        let registrar = build_pending();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let (agent_ura, entry) = seed_hosted_agent("liangbing");
+
+        let manifest_path = entry
+            .root_path
+            .as_ref()
+            .expect("canonical test AgentDirectory")
+            .join("abilities/chat.ability.toml");
+        let original_manifest =
+            crate::daemon::execution::mission::agent_ability_specs::manifests_for(
+                "liangbing",
+                &entry,
+            )
+            .into_iter()
+            .find(|manifest| manifest.name() == "chat")
+            .expect("seeded chat manifest");
+        let original_toml =
+            std::fs::read_to_string(&manifest_path).expect("read seeded chat manifest");
+        let authoritative_description =
+            "directory-authored chat contract used by discovery and execution";
+        let edited_toml = original_toml.replacen(
+            original_manifest.description(),
+            authoritative_description,
+            1,
+        );
+        assert_ne!(original_toml, edited_toml, "fixture must edit manifest");
+        std::fs::write(&manifest_path, edited_toml).expect("write edited chat manifest");
+
+        let authoritative_manifest =
+            crate::daemon::execution::mission::agent_ability_specs::manifests_for(
+                "liangbing",
+                &entry,
+            )
+            .into_iter()
+            .find(|manifest| manifest.name() == "chat")
+            .expect("edited chat manifest");
+        assert_eq!(
+            authoritative_manifest.description(),
+            authoritative_description
+        );
+
+        registrar
+            .register_agent("liangbing", &entry)
+            .await
+            .expect("register from authoritative manifest");
+        let descriptors = registrar
+            .publication_snapshot()
+            .expect("publication snapshot")
+            .owner_descriptors(&agent_ura);
+
+        for mode in [
+            crate::daemon::ability::CallMode::Rpc,
+            crate::daemon::ability::CallMode::Stream,
+        ] {
+            let committed = descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == "chat" && descriptor.call_mode() == mode)
+                .unwrap_or_else(|| panic!("committed chat {mode:?} descriptor"));
+            let expected =
+                crate::daemon::ability::descriptors::AbilityDescriptor::from_registry_manifest(
+                    "liangbing.chat",
+                    agent_ura.clone(),
+                    mode,
+                    crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                    &authoritative_manifest,
+                )
+                .expect("expected manifest descriptor")
+                .with_source("daemon:control-plane");
+            assert_eq!(committed.description, authoritative_description);
+            assert_eq!(
+                committed
+                    .descriptor_ref()
+                    .expect("committed descriptor ref"),
+                expected.descriptor_ref().expect("expected descriptor ref"),
+                "{mode:?} descriptor must use the AgentDirectory manifest verbatim"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn register_agent_replaces_existing_runtime_rows_without_duplicate_failures() {
         // `agent set` and `agent.refresh` both call
         // `register_agent` for an agent that may already be live.
@@ -1624,9 +1725,8 @@ mod tests {
         );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_hosted_agent("liangbing");
-
-        let first_entry = AgentEntry::new(RuntimeKind::ClaudeCode, Some("sonnet".to_string()));
+        let (_, mut first_entry) = seed_hosted_agent("liangbing");
+        first_entry.with_model(Some("sonnet".to_string()));
         let first = registrar
             .register_agent("liangbing", &first_entry)
             .await
@@ -1636,7 +1736,8 @@ mod tests {
         assert_eq!(first.failed, 0);
 
         let mut changes = rt.subscribe_ability_changes();
-        let second_entry = AgentEntry::new(RuntimeKind::ClaudeCode, Some("opus".to_string()));
+        let mut second_entry = first_entry.clone();
+        second_entry.with_model(Some("opus".to_string()));
         let second = registrar
             .register_agent("liangbing", &second_entry)
             .await
@@ -1705,9 +1806,7 @@ mod tests {
         );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_hosted_agent("liangbing");
-
-        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
+        let (_, entry) = seed_hosted_agent("liangbing");
         registrar
             .register_agent("liangbing", &entry)
             .await
