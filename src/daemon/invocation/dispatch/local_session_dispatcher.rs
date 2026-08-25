@@ -1010,16 +1010,6 @@ impl LocalAxonSessionDispatcher {
         true
     }
 
-    fn is_json_frame_bidi_with(
-        registry: &crate::daemon::ability::wire::AbilityWireRegistry,
-        ability: &str,
-    ) -> bool {
-        matches!(
-            local_bidi_wire_kind_for(registry, ability),
-            Some(LocalBidiWireKind::JsonFrames)
-        )
-    }
-
     /// Construct the device-side session dispatcher over the daemon-owned
     /// canonical Invocation lifecycle registry.
     ///
@@ -1286,6 +1276,62 @@ impl LocalAxonSessionDispatcher {
         }
     }
 
+    fn map_remote_tunnel_output(
+        call_id: u64,
+        value: &Value,
+    ) -> Result<Option<BidiOutputProjection>, SessionDispatchError> {
+        let (failure, disposition) = match value.get("type").and_then(Value::as_str) {
+            Some("connected" | "listener_ready" | "accepted" | "half_close") => {
+                (None, BidiOutputDisposition::Data)
+            }
+            Some("complete") => (None, BidiOutputDisposition::Completion),
+            Some("error") => (
+                Some(HandlerErrorFrame::parse(value, "tunnel error frame")?.failure()),
+                BidiOutputDisposition::Failure,
+            ),
+            Some(other) => {
+                return Err(SessionDispatchError::Other(format!(
+                    "unknown tunnel handler frame type {other:?}"
+                )))
+            }
+            None => return Ok(None),
+        };
+        let payload = serde_json::to_vec(value).map_err(|err| {
+            SessionDispatchError::Other(format!("encode tunnel control frame failed: {err}"))
+        })?;
+        Ok(Some(BidiOutputProjection {
+            call_id,
+            payload,
+            failure,
+            disposition,
+        }))
+    }
+
+    fn map_remote_json_frame_output(
+        call_id: u64,
+        value: &Value,
+    ) -> Result<Option<BidiOutputProjection>, SessionDispatchError> {
+        let frame_type = value.get("type").and_then(Value::as_str);
+        let payload = serde_json::to_vec(value).map_err(|err| {
+            SessionDispatchError::Other(format!("plugin JSON-frame bidi encode failed: {err}"))
+        })?;
+        let failure = if frame_type == Some("error") {
+            Some(HandlerErrorFrame::parse(value, "JSON-frame bidi error frame")?.failure())
+        } else {
+            None
+        };
+        Ok(Some(BidiOutputProjection {
+            call_id,
+            payload,
+            failure,
+            disposition: if frame_type == Some("error") {
+                BidiOutputDisposition::Failure
+            } else {
+                BidiOutputDisposition::Data
+            },
+        }))
+    }
+
     #[cfg(all(test, feature = "remote-desktop"))]
     fn map_remote_bidi_output(
         &self,
@@ -1302,31 +1348,19 @@ impl LocalAxonSessionDispatcher {
         ability: &str,
         value: &Value,
     ) -> Result<Option<BidiOutputProjection>, SessionDispatchError> {
-        if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH {
-            return Self::map_remote_pty_output(call_id, value);
+        match local_bidi_wire_kind_for(registry, ability) {
+            Some(LocalBidiWireKind::Pty) => Self::map_remote_pty_output(call_id, value),
+            Some(LocalBidiWireKind::FileTransfer) => {
+                Self::map_remote_file_transfer_output(call_id, value)
+            }
+            Some(LocalBidiWireKind::Tunnel) => Self::map_remote_tunnel_output(call_id, value),
+            Some(LocalBidiWireKind::JsonFrames) => {
+                Self::map_remote_json_frame_output(call_id, value)
+            }
+            None => Err(SessionDispatchError::Other(format!(
+                "remote bidi ability {ability:?} has no registered wire profile"
+            ))),
         }
-        if Self::is_json_frame_bidi_with(registry, ability) {
-            let frame_type = value.get("type").and_then(Value::as_str);
-            let payload = serde_json::to_vec(value).map_err(|err| {
-                SessionDispatchError::Other(format!("plugin JSON-frame bidi encode failed: {err}"))
-            })?;
-            let failure = if frame_type == Some("error") {
-                Some(HandlerErrorFrame::parse(value, "JSON-frame bidi error frame")?.failure())
-            } else {
-                None
-            };
-            return Ok(Some(BidiOutputProjection {
-                call_id,
-                payload,
-                failure,
-                disposition: if frame_type == Some("error") {
-                    BidiOutputDisposition::Failure
-                } else {
-                    BidiOutputDisposition::Data
-                },
-            }));
-        }
-        Self::map_remote_file_transfer_output(call_id, value)
     }
 
     fn map_native_bidi_data(call_id: u64, payload: Vec<u8>) -> BidiOutputProjection {
@@ -4013,6 +4047,70 @@ mod tests {
         let exit_json: Value = serde_json::from_slice(&exit.payload).expect("exit JSON payload");
         assert_eq!(exit_json["type"], "exit");
         assert_eq!(exit_json["status"], 0);
+    }
+
+    #[test]
+    fn tunnel_wire_profile_projects_control_frames_without_file_transfer_fallback() {
+        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
+        let ability =
+            crate::daemon::ability::builtins::device_control::net_tunnel::ABILITY_NET_TUNNEL;
+
+        for value in [
+            json!({"type": "connected", "connection_id": "c1"}),
+            json!({"type": "listener_ready", "address": "127.0.0.1:1"}),
+            json!({"type": "accepted", "connection_id": "c2"}),
+            json!({"type": "half_close", "connection_id": "c1", "direction": "read"}),
+        ] {
+            let mapped = LocalAxonSessionDispatcher::map_remote_bidi_output_with(
+                &registry, 18, ability, &value,
+            )
+            .expect("tunnel control projection")
+            .expect("tunnel control frame");
+            assert_eq!(mapped.call_id, 18);
+            assert_eq!(mapped.disposition, BidiOutputDisposition::Data);
+            assert!(mapped.failure.is_none());
+            assert_eq!(
+                serde_json::from_slice::<Value>(&mapped.payload).expect("control JSON"),
+                value
+            );
+        }
+
+        let complete = LocalAxonSessionDispatcher::map_remote_bidi_output_with(
+            &registry,
+            18,
+            ability,
+            &json!({"type": "complete", "connection_id": "c1", "bytes": 4}),
+        )
+        .expect("tunnel completion projection")
+        .expect("tunnel completion frame");
+        assert_eq!(complete.disposition, BidiOutputDisposition::Completion);
+
+        let failure = LocalAxonSessionDispatcher::map_remote_bidi_output_with(
+            &registry,
+            18,
+            ability,
+            &json!({"type": "error", "code": "IDLE_TIMEOUT", "message": "IDLE_TIMEOUT"}),
+        )
+        .expect("tunnel failure projection")
+        .expect("tunnel failure frame");
+        assert_eq!(failure.disposition, BidiOutputDisposition::Failure);
+        assert_eq!(failure.failure.expect("typed failure").code, "IDLE_TIMEOUT");
+    }
+
+    #[test]
+    fn unregistered_bidi_wire_profile_is_rejected_explicitly() {
+        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
+        let error = LocalAxonSessionDispatcher::map_remote_bidi_output_with(
+            &registry,
+            19,
+            "unknown.bidi",
+            &json!({"type": "complete"}),
+        )
+        .expect_err("unknown wire profiles must not inherit file-transfer semantics");
+        assert!(
+            error.to_string().contains("has no registered wire profile"),
+            "{error}"
+        );
     }
 
     #[test]
