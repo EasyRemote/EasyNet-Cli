@@ -474,10 +474,6 @@ async fn run_hosted_agent_advertise_prelude(
         return Ok(());
     }
 
-    let caller_node_id = crate::core::ura::parse_ura(caller_ura)
-        .ok()
-        .filter(|p| p.kind == crate::core::ura::URAKind::Device)
-        .and_then(|p| p.device_id().map(str::to_string));
     let entries_count = entries.len();
     let labels_display = format!(
         "{:?}",
@@ -502,7 +498,6 @@ async fn run_hosted_agent_advertise_prelude(
         advertise_hosted_agent_entry(
             client,
             caller_ura,
-            &caller_node_id,
             ability_descriptors,
             entry,
             signer,
@@ -601,18 +596,15 @@ fn resolve_runtime_user_ura_for_owner_projection(
 async fn advertise_hosted_agent_entry(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
-    caller_node_id: &Option<String>,
     ability_descriptors: &[AbilityDescriptor],
     entry: &AgentHostedAdvertiseEntry,
     signer: &dyn CanonicalSigner,
     user_signer: &dyn CanonicalSigner,
 ) -> Result<(), String> {
-    let host_for_advertise = caller_node_id.as_deref();
     let plan =
         crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
             entry.agent_ura(),
             caller_ura,
-            host_for_advertise,
             ability_descriptors,
         )?;
     let assignment = send_advertise_agent_prelude(
@@ -1683,23 +1675,6 @@ pub(super) async fn invoke_prelude_unary(
     Ok(response)
 }
 
-#[cfg(test)]
-pub(super) fn committed_owner_ability_descriptors(
-    descriptors: &[AbilityDescriptor],
-    owner_ura: &str,
-    host_node_id: Option<&str>,
-) -> Vec<AbilityDescriptor> {
-    descriptors
-        .iter()
-        .filter(|descriptor| descriptor.owner_ura == owner_ura)
-        .cloned()
-        .map(|descriptor| match host_node_id {
-            Some(node_id) => descriptor.with_metadata_entry("host_node_id", node_id.to_string()),
-            None => descriptor,
-        })
-        .collect()
-}
-
 /// Partition the committed device-native namespace by its real public owner.
 ///
 /// DeviceProfileProjection rows remain a same-device migration cursor. Every
@@ -2361,7 +2336,6 @@ mod tests {
             crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 owner,
                 "easynet:///r/realm/device/n1",
-                Some("n1"),
                 &[],
             );
         let error = match result {
@@ -2395,7 +2369,6 @@ mod tests {
             crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 owner,
                 host,
-                Some("n1"),
                 &descriptors,
             )
             .expect("first hosted-agent plan");
@@ -2403,7 +2376,6 @@ mod tests {
             crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 owner,
                 host,
-                Some("n1"),
                 &descriptors,
             )
             .expect("retry hosted-agent plan");

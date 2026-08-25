@@ -3610,7 +3610,6 @@ mod tests {
             let plan = match crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &request.agent_ura,
                 &host_device_ura,
-                Some(&credentials.node_id),
                 &request.descriptors,
             ) {
                 Ok(plan) => plan,
@@ -3944,7 +3943,6 @@ mod tests {
             crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 agent_ura,
                 &host_device_ura,
-                Some("dev-1"),
                 &descriptors,
             )
             .unwrap();
@@ -4597,7 +4595,6 @@ mod tests {
             let plan = crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &agent_ura,
                 &host_device_ura,
-                Some("dev-1"),
                 &descriptors,
             )
             .expect("registration becomes durably pending before the Hub call");
@@ -4673,7 +4670,6 @@ mod tests {
             let plan = crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &agent_ura,
                 &crate::core::ura::device_ura("localhost", "dev-1"),
-                Some("dev-1"),
                 &descriptors,
             )
             .unwrap();
@@ -4763,7 +4759,6 @@ mod tests {
             let plan = crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &agent_ura,
                 &crate::core::ura::device_ura("localhost", "dev-1"),
-                Some("dev-1"),
                 &descriptors,
             )
             .unwrap();

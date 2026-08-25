@@ -1588,13 +1588,11 @@ async fn publish_hosted_agent_from_snapshot(
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
 ) -> DynamicPublicationOutcome {
-    let host_node_id = host_node_id_from_device_ura(host_device_ura);
     let descriptors = snapshot.owner_descriptors(agent_ura);
     let plan =
         match crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin_at_catalog_epoch(
             agent_ura,
             host_device_ura,
-            host_node_id.as_deref(),
             &descriptors,
             Some(catalog_epoch),
         ) {
@@ -1814,13 +1812,6 @@ fn hosted_publication_now_unix_ms() -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX - 1)
 }
 
-fn host_node_id_from_device_ura(host_device_ura: &str) -> Option<String> {
-    crate::core::ura::parse_ura(host_device_ura)
-        .ok()
-        .filter(|parsed| parsed.kind == crate::core::ura::URAKind::Device)
-        .and_then(|parsed| parsed.device_id().map(str::to_string))
-}
-
 fn service_owner_user_ura(owner_ura: &str) -> Option<String> {
     let owner = crate::core::ura::parse_ura(owner_ura).ok()?;
     if owner.kind != crate::core::ura::URAKind::Service {
@@ -1996,7 +1987,6 @@ fn transport_daemon_ura(
 struct SessionHotAgentAdvertiser {
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     caller_ura: String,
-    host_node_id: Option<String>,
 }
 
 impl SessionHotAgentAdvertiser {
@@ -2006,14 +1996,9 @@ impl SessionHotAgentAdvertiser {
         >,
         caller_ura: String,
     ) -> Self {
-        let host_node_id = crate::core::ura::parse_ura(&caller_ura)
-            .ok()
-            .filter(|parsed| parsed.kind == crate::core::ura::URAKind::Device)
-            .and_then(|parsed| parsed.device_id().map(str::to_string));
         Self {
             escalation,
             caller_ura,
-            host_node_id,
         }
     }
 }
@@ -2072,7 +2057,6 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         let plan = match crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
             &request.agent_ura,
             &self.caller_ura,
-            self.host_node_id.as_deref(),
             &request.descriptors,
         ) {
             Ok(plan) => plan,
@@ -2894,7 +2878,6 @@ mod tests {
             crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &agent_ura,
                 &host_device_ura,
-                Some("device-1"),
                 &descriptors,
             )
             .expect("hosted agent publication plan");
