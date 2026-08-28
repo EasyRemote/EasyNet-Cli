@@ -112,7 +112,9 @@ pub use envelope::build_session_envelope_open;
 use frame_loop::{run_live_session, LiveSessionRun};
 pub(crate) use prelude::owner_projection_delegation_metadata;
 #[cfg(test)]
-use prelude::{committed_device_native_owner_descriptors, committed_owner_ability_descriptors};
+use prelude::{
+    committed_device_native_owner_descriptors, committed_user_service_owner_descriptors,
+};
 use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};
 pub use prelude::{
     PairedUserTrustSigner, SessionPreludeInputs, UserTrustBootstrapError, UserTrustSync,
@@ -1075,7 +1077,11 @@ mod tests {
             )
             .expect("SystemAgent descriptor"),
         ];
-        let descriptors = committed_owner_ability_descriptors(&committed, owner, Some("dev-1"));
+        let mut by_owner =
+            committed_user_service_owner_descriptors(&committed, "easynet:///r/acme/user/alice");
+        let descriptors = by_owner
+            .remove(owner)
+            .expect("paired user projection contains its owned Service descriptor");
         let by_public: std::collections::BTreeMap<_, _> = descriptors
             .iter()
             .map(|d| (d.public_name(), d.canonical_ability_ura()))
@@ -1090,13 +1096,9 @@ mod tests {
             schema["required"][0], "project_id",
             "committed schema must survive publication, got: {schema}"
         );
-        assert_eq!(
-            descriptors[0]
-                .metadata
-                .get("host_node_id")
-                .map(String::as_str),
-            Some("dev-1"),
-            "committed descriptor must remain bound to the execution host"
+        assert!(
+            !descriptors[0].metadata.contains_key("host_node_id"),
+            "public Service descriptor identity must not be rewritten with one execution host"
         );
     }
 
