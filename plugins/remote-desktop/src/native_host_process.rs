@@ -58,8 +58,8 @@ use easynet_remoteapp_native_protocol::media_session::{AUDIO_LANE_FD_ENV, VIDEO_
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 use easynet_remoteapp_native_protocol::shared_media_lane::{
-    SharedMediaLaneConsumer, SharedMediaLaneError, SharedMediaLaneFile, SharedMediaLaneLayout,
-    SharedSlotNotification,
+    DetachedMediaBufferPool, SharedMediaLaneConsumer, SharedMediaLaneError, SharedMediaLaneFile,
+    SharedMediaLaneLayout, SharedSlotNotification,
 };
 #[cfg(all(feature = "native-media", target_os = "windows"))]
 use easynet_remoteapp_native_protocol::shared_media_lane::{
@@ -96,6 +96,26 @@ const MEDIA_VIDEO_QUEUE_DEPTH: usize = 3;
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 const MEDIA_AUDIO_QUEUE_DEPTH: usize = 4;
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+const MEDIA_VIDEO_TRANSPORT_POOL_BUFFERS: usize = 32;
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+const MEDIA_VIDEO_TRANSPORT_POOL_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+const MEDIA_AUDIO_TRANSPORT_POOL_BUFFERS: usize = 64;
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+const MEDIA_AUDIO_TRANSPORT_POOL_BYTES: usize = 256 * 1024;
 
 #[cfg(windows)]
 struct WindowsKillOnCloseJob(windows_sys::Win32::Foundation::HANDLE);
@@ -574,6 +594,16 @@ impl MediaHostProcess {
         let (control_tx, control) = mpsc::sync_channel(MEDIA_CONTROL_QUEUE_DEPTH);
         let (audio_tx, audio) = mpsc::sync_channel(MEDIA_AUDIO_QUEUE_DEPTH);
         let video = Arc::new(VideoEventMailbox::new(MEDIA_VIDEO_QUEUE_DEPTH));
+        let video_transport_pool = DetachedMediaBufferPool::new(
+            MEDIA_VIDEO_TRANSPORT_POOL_BUFFERS,
+            MEDIA_VIDEO_TRANSPORT_POOL_BYTES,
+        )
+        .map_err(shared_lane_io_error)?;
+        let audio_transport_pool = DetachedMediaBufferPool::new(
+            MEDIA_AUDIO_TRANSPORT_POOL_BUFFERS,
+            MEDIA_AUDIO_TRANSPORT_POOL_BYTES,
+        )
+        .map_err(shared_lane_io_error)?;
         let mut readers: Vec<JoinHandle<()>> = Vec::with_capacity(3);
         let control_violation = Arc::clone(&protocol_violation);
         let control_validator = Arc::clone(&conversation);
@@ -614,6 +644,7 @@ impl MediaHostProcess {
                     audio_validator,
                     audio_violation,
                     audio_generation_nonce,
+                    audio_transport_pool,
                 )
             });
         match audio_reader {
@@ -644,6 +675,7 @@ impl MediaHostProcess {
                     video_validator,
                     video_violation,
                     video_generation_nonce,
+                    video_transport_pool,
                 )
             });
         match video_reader {
@@ -838,6 +870,7 @@ fn read_video_events<Reader: Read>(
     conversation: Arc<Mutex<MediaConversationValidator>>,
     protocol_violation: Arc<AtomicBool>,
     generation_nonce: [u8; 16],
+    transport_pool: DetachedMediaBufferPool,
 ) {
     loop {
         let message = read_shared_media_event(
@@ -846,6 +879,7 @@ fn read_video_events<Reader: Read>(
             MediaLane::Video,
             &conversation,
             generation_nonce,
+            &transport_pool,
         );
         match message {
             Ok(SharedMediaRead::Event(event)) => mailbox.push(event),
@@ -879,6 +913,7 @@ fn read_shared_audio_events<Reader: Read>(
     conversation: Arc<Mutex<MediaConversationValidator>>,
     protocol_violation: Arc<AtomicBool>,
     generation_nonce: [u8; 16],
+    transport_pool: DetachedMediaBufferPool,
 ) {
     loop {
         let message = read_shared_media_event(
@@ -887,6 +922,7 @@ fn read_shared_audio_events<Reader: Read>(
             MediaLane::Audio,
             &conversation,
             generation_nonce,
+            &transport_pool,
         );
         match message {
             Ok(SharedMediaRead::Event(event)) => match sender.try_send(Ok(Some(event))) {
@@ -928,6 +964,7 @@ fn read_shared_media_event(
     lane: MediaLane,
     conversation: &Arc<Mutex<MediaConversationValidator>>,
     generation_nonce: [u8; 16],
+    transport_pool: &DetachedMediaBufferPool,
 ) -> Result<SharedMediaRead, FrameError> {
     let Some(notification) = SharedSlotNotification::read_from(reader, lane)
         .map_err(|error| FrameError::Decode(error.to_string()))?
@@ -1000,7 +1037,7 @@ fn read_shared_media_event(
     // WebRTC packetizer and NACK history may retain payload bytes beyond this
     // receive turn. Detach exactly once at that ownership boundary so network
     // retransmission lifetime cannot pin the producer's bounded shared ring.
-    let payload = Bytes::copy_from_slice(payload_view);
+    let payload = Bytes::from_owner(transport_pool.copy_from_slice(payload_view));
     drop(frame);
     Ok(SharedMediaRead::Event(MediaHostMediaEvent {
         metadata,

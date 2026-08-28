@@ -11,8 +11,9 @@ use easynet_remoteapp_native_protocol::media_session::{
     NativeTargetPlan, StartContract, TargetKind, VideoCodec, VideoConfig, PROTOCOL, SCHEMA_VERSION,
 };
 use easynet_remoteapp_native_protocol::shared_media_lane::{
-    SharedMediaLaneConsumer, SharedMediaLaneFile, SharedMediaLaneLayout, SharedMediaLaneProducer,
-    SharedPublishOutcome, SharedSlotNotification, SHARED_SLOT_NOTIFICATION_BYTES,
+    DetachedMediaBufferPool, SharedMediaLaneConsumer, SharedMediaLaneFile, SharedMediaLaneLayout,
+    SharedMediaLaneProducer, SharedPublishOutcome, SharedSlotNotification,
+    SHARED_SLOT_NOTIFICATION_BYTES,
 };
 use openh264::encoder::{
     BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod,
@@ -293,6 +294,7 @@ fn shared_lane_benchmark_emits_comparative_evidence() {
     let mut pipe_latency_ns = Vec::with_capacity(FRAME_COUNT);
     let mut pipe_frame = Vec::with_capacity(frame_capacity);
     let mut retained_transport_bytes: Option<Bytes> = None;
+    let transport_pool = DetachedMediaBufferPool::new(2, 2 * PAYLOAD_BYTES).unwrap();
     let mut shared_validator = activated_validator(contract.clone(), &fence);
     let mut pipe_validator = activated_validator(contract, &fence);
 
@@ -328,6 +330,12 @@ fn shared_lane_benchmark_emits_comparative_evidence() {
     .unwrap()
     .unwrap();
     pipe_frame.clear();
+    // Two transport buffers cover one retained payload plus the next detach.
+    // Their backing allocations are warm-up cost, not per-frame hot-path cost.
+    let warm_transport_a = Bytes::from_owner(transport_pool.copy_from_slice(&payload));
+    let warm_transport_b = Bytes::from_owner(transport_pool.copy_from_slice(&payload));
+    drop(warm_transport_a);
+    drop(warm_transport_b);
 
     reset_allocations();
     let shared_started = Instant::now();
@@ -366,7 +374,7 @@ fn shared_lane_benchmark_emits_comparative_evidence() {
             .observe_binary_media(MediaLane::Video, &decoded, payload_view)
             .unwrap();
         let mapped_payload_pointer = payload_view.as_ptr();
-        let webrtc_bytes = Bytes::copy_from_slice(payload_view);
+        let webrtc_bytes = Bytes::from_owner(transport_pool.copy_from_slice(payload_view));
         assert_ne!(webrtc_bytes.as_ptr(), mapped_payload_pointer);
         assert_eq!(webrtc_bytes.len(), PAYLOAD_BYTES);
         drop(frame);
@@ -431,7 +439,7 @@ fn shared_lane_benchmark_emits_comparative_evidence() {
         "REMOTEAPP_SHARED_LANE_BENCHMARK_JSON={}",
         serde_json::json!({
             "schema": "remoteapp_shared_media_lane_benchmark_v2",
-            "hot_path": "shared_slot_decode_validate_transport_detach",
+            "hot_path": "shared_slot_decode_validate_pooled_transport_detach",
             "frame_count": FRAME_COUNT,
             "payload_bytes_per_frame": PAYLOAD_BYTES,
             "shared_v2": {

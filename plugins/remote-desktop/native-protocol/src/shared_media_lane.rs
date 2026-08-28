@@ -15,7 +15,7 @@ use std::ops::{Deref, DerefMut};
 #[cfg(windows)]
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -1138,6 +1138,127 @@ impl Drop for SharedMediaPayload {
     }
 }
 
+/// Recycles detached transport buffers without coupling network lifetime to a
+/// shared-memory slot.
+///
+/// A shared slot must be released as soon as its canonical frame has been
+/// validated, while RTP packetization and NACK history may retain the encoded
+/// payload for longer. `DetachedMediaPayloadPool` preserves that ownership
+/// boundary: one copy moves the compressed payload into transport-owned
+/// memory, and the last transport-owner clone returns its backing allocation
+/// to this pool. Retention is bounded independently by buffer count and total
+/// bytes. This protocol crate deliberately returns an `AsRef<[u8]>` owner;
+/// transport-specific `Bytes` projection remains in the daemon.
+#[derive(Clone)]
+pub struct DetachedMediaBufferPool {
+    inner: Arc<DetachedMediaPayloadPoolInner>,
+}
+
+struct DetachedMediaPayloadPoolInner {
+    state: Mutex<DetachedMediaPayloadPoolState>,
+    max_retained_buffers: usize,
+    max_retained_bytes: usize,
+}
+
+#[derive(Default)]
+struct DetachedMediaPayloadPoolState {
+    free: Vec<Vec<u8>>,
+    retained_bytes: usize,
+}
+
+impl DetachedMediaBufferPool {
+    pub fn new(max_retained_buffers: usize, max_retained_bytes: usize) -> Result<Self> {
+        if max_retained_buffers == 0 || max_retained_bytes == 0 {
+            return Err(SharedMediaLaneError::Invalid(
+                "detached media payload pool bounds must be positive".into(),
+            ));
+        }
+        Ok(Self {
+            inner: Arc::new(DetachedMediaPayloadPoolInner {
+                state: Mutex::new(DetachedMediaPayloadPoolState::default()),
+                max_retained_buffers,
+                max_retained_bytes,
+            }),
+        })
+    }
+
+    /// Copies one validated compressed payload into a transport-owned buffer.
+    ///
+    /// The copy is intentional: it releases the producer's bounded shared ring
+    /// before an asynchronous network stack retains the payload. Allocation is
+    /// amortized because the backing buffer returns on the last `Bytes` drop.
+    pub fn copy_from_slice(&self, payload: &[u8]) -> DetachedMediaBuffer {
+        let mut buffer = {
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let selected = state
+                .free
+                .iter()
+                .enumerate()
+                .filter(|(_, buffer)| buffer.capacity() >= payload.len())
+                .min_by_key(|(_, buffer)| buffer.capacity())
+                .map(|(index, _)| index)
+                .or_else(|| {
+                    state
+                        .free
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, buffer)| buffer.capacity())
+                        .map(|(index, _)| index)
+                });
+            selected.map_or_else(Vec::new, |index| {
+                let buffer = state.free.swap_remove(index);
+                state.retained_bytes = state.retained_bytes.saturating_sub(buffer.capacity());
+                buffer
+            })
+        };
+        buffer.clear();
+        buffer.extend_from_slice(payload);
+        DetachedMediaBuffer {
+            buffer: Some(buffer),
+            pool: Arc::clone(&self.inner),
+        }
+    }
+}
+
+pub struct DetachedMediaBuffer {
+    buffer: Option<Vec<u8>>,
+    pool: Arc<DetachedMediaPayloadPoolInner>,
+}
+
+impl AsRef<[u8]> for DetachedMediaBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.buffer.as_deref().unwrap_or_default()
+    }
+}
+
+impl Drop for DetachedMediaBuffer {
+    fn drop(&mut self) {
+        let Some(mut buffer) = self.buffer.take() else {
+            return;
+        };
+        buffer.clear();
+        let capacity = buffer.capacity();
+        let mut state = self
+            .pool
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let within_count = state.free.len() < self.pool.max_retained_buffers;
+        let within_bytes = state
+            .retained_bytes
+            .checked_add(capacity)
+            .is_some_and(|bytes| bytes <= self.pool.max_retained_bytes);
+        if within_count && within_bytes {
+            state.retained_bytes += capacity;
+            state.free.push(buffer);
+        }
+    }
+}
+
 fn validate_header(
     control: &[u8],
     expected_lane: MediaLane,
@@ -1345,6 +1466,44 @@ mod tests {
             producer.publish(identity(23), b"released").unwrap(),
             SharedPublishOutcome::Published(_)
         ));
+    }
+
+    #[test]
+    fn detached_payload_pool_reuses_only_after_last_bytes_owner_drops() {
+        let pool = DetachedMediaBufferPool::new(2, 256).unwrap();
+        let first = Bytes::from_owner(pool.copy_from_slice(&[0x5a; 64]));
+        let first_pointer = first.as_ptr();
+        let clone = first.clone();
+        drop(first);
+
+        let concurrent = Bytes::from_owner(pool.copy_from_slice(&[0x33; 8]));
+        assert_ne!(concurrent.as_ptr(), first_pointer);
+        drop(concurrent);
+        drop(clone);
+
+        let reused = Bytes::from_owner(pool.copy_from_slice(&[0x44; 32]));
+        assert_eq!(reused.as_ptr(), first_pointer);
+        assert_eq!(&reused[..], &[0x44; 32]);
+    }
+
+    #[test]
+    fn detached_payload_pool_does_not_retain_buffers_past_byte_budget() {
+        let pool = DetachedMediaBufferPool::new(2, 8).unwrap();
+        let oversized = Bytes::from_owner(pool.copy_from_slice(&[0x5a; 32]));
+        drop(oversized);
+        let state = pool
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(state.free.is_empty());
+        assert_eq!(state.retained_bytes, 0);
+    }
+
+    #[test]
+    fn detached_payload_pool_rejects_unbounded_configuration() {
+        assert!(DetachedMediaBufferPool::new(0, 1).is_err());
+        assert!(DetachedMediaBufferPool::new(1, 0).is_err());
     }
 
     #[test]
