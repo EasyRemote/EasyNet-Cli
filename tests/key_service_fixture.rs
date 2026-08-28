@@ -8,6 +8,8 @@
 //! suites. A thread-owned UDS fixture avoids leaking child processes from test
 //! binaries.
 
+#![cfg(unix)]
+
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};

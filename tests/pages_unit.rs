@@ -26,6 +26,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#![cfg(unix)]
+
 #[path = "key_service_fixture.rs"]
 mod key_service_fixture;
 #[path = "support/runtime_fixture.rs"]
