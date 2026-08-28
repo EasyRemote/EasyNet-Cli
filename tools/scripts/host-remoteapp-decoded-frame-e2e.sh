@@ -17,6 +17,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 BUNDLED_PROBE="$SELF_DIR/host-remoteapp-decoded-frame-probe.sh"
 BUNDLED_PERMISSION_PREFLIGHT="$SELF_DIR/host-remoteapp-permission-subject-e2e.sh"
 BUNDLED_SENTINEL_FIXTURE="$SELF_DIR/host-remoteapp-sentinel-fixture.sh"
@@ -24,6 +25,7 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${EASYNET_REMOTEAPP_E2E_OUT_DIR:-}"
 RUN="${EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E:-0}"
 SELF_TEST=0
+MODE=run
 PROBE_CMD="${EASYNET_REMOTEAPP_FRAME_PROBE_CMD:-}"
 PROBE_CMD_USES_BUNDLED=0
 TARGET_KIND="${EASYNET_REMOTEAPP_E2E_TARGET_KIND:-window}"
@@ -31,6 +33,7 @@ LIFECYCLE_SCENARIO="${EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO:-none}"
 PRE_MEDIA_RESOURCE_REFRESH="${EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH:-0}"
 SENTINEL_FIXTURE="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE:-0}"
 SENTINEL_FIXTURE_CMD="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD:-}"
+AUDIO_TONE="${EASYNET_REMOTEAPP_AUDIO_TONE_FIXTURE:-0}"
 DEFAULT_SENTINEL_TOLERANCE=64
 
 usage() {
@@ -49,6 +52,8 @@ Options:
                         probe and source its env.sh. This creates visible
                         selected/unrelated native windows; it does not fake
                         inventory, session creation, media, or pixel evidence.
+  --audio-tone          In application mode, require target-scoped host audio
+                        and emit distinct selected/unrelated fixture tones.
   --lifecycle-scenario SCENARIO
                         Optional window lifecycle scenario: none, move-resize,
                         or target-loss. The bundled fixture executes the host
@@ -80,6 +85,8 @@ Environment:
                         Equivalent to --sentinel-fixture.
   EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD
                         Same as --sentinel-fixture-cmd.
+  EASYNET_REMOTEAPP_AUDIO_TONE_FIXTURE=1
+                        Equivalent to --audio-tone.
   EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO
                         Optional lifecycle scenario: none, move-resize, or
                         target-loss.
@@ -145,6 +152,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-dir) OUT_DIR="${2:?missing value for --out-dir}"; shift 2 ;;
     --sentinel-fixture) SENTINEL_FIXTURE=1; shift ;;
+    --audio-tone) AUDIO_TONE=1; SENTINEL_FIXTURE=1; shift ;;
     --lifecycle-scenario)
       case "${2:?missing value for --lifecycle-scenario}" in
         none|move-resize|target-loss) LIFECYCLE_SCENARIO="$2" ;;
@@ -158,11 +166,16 @@ while [[ $# -gt 0 ]]; do
       SENTINEL_FIXTURE_CMD="${2:?missing value for --sentinel-fixture-cmd}"
       shift 2
       ;;
-    --self-test) SELF_TEST=1; shift ;;
+    --self-test) SELF_TEST=1; MODE=self-test; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 64 ;;
   esac
 done
+
+if [[ "$AUDIO_TONE" == "1" && "$TARGET_KIND" != "application" ]]; then
+  echo "--audio-tone requires --target-kind application" >&2
+  exit 64
+fi
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$REPO_ROOT/target/e2e/host-remoteapp-decoded-frame/$TIMESTAMP-$TARGET_KIND-$$"
@@ -189,6 +202,7 @@ PY
 
   python3 - "$control_json" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
@@ -288,6 +302,7 @@ PY
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$TARGET_KIND" <<'PY'
 import json
 import os
@@ -330,7 +345,11 @@ scope_widened = get("target_binding.scope_audit.scope_widened")
 display_fallback_used = get("target_binding.scope_audit.display_fallback_used")
 decoded_frame_count = get("decoded_frames.count")
 rtp_packet_count = get("decoded_frames.rtp_packet_count")
+video_decode_error_count = get("decoded_frames.decode_error_count")
 transport_kind = get("transport.kind")
+transport_audio_codec = get("transport.audio_codec")
+transport_media_scope = get("transport.media_scope")
+decoded_audio = get("decoded_audio")
 production_media_ready = get("production_media_ready")
 production_readiness = get("production_readiness")
 client_media_ready = get("production_readiness.client_media_ready")
@@ -357,6 +376,11 @@ def parse_rgb_env(name):
             f"{name} must contain exactly three RGB bytes")
     return parts if len(parts) == 3 else None
 
+def parse_optional_rgb_env(name):
+    if not os.environ.get(name, "").strip():
+        return None
+    return parse_rgb_env(name)
+
 def env_int(name, default):
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -379,6 +403,18 @@ def optional_positive_env_int(name):
         require(False, f"{name} must be an integer")
         return None
     require(value > 0, f"{name} must be positive")
+    return value
+
+def optional_positive_env_float(name):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        require(False, f"{name} must be a number")
+        return None
+    require(value > 0.0, f"{name} must be positive")
     return value
 
 def contains_create_session_subject_arg(value):
@@ -443,11 +479,34 @@ def count_rgb_matches(rgb, expected, tolerance):
     return count
 
 selected_rgb = parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
+selected_secondary_rgb = parse_optional_rgb_env(
+    "EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_RGB"
+)
 unrelated_rgb = parse_rgb_env("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB")
 selected_pid = optional_positive_env_int("EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID")
 unrelated_pid = optional_positive_env_int("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID")
 sentinel_tolerance = env_int("EASYNET_REMOTEAPP_SENTINEL_TOLERANCE", 64)
 selected_min_pixels = env_int("EASYNET_REMOTEAPP_SELECTED_SENTINEL_MIN_PIXELS", 8)
+expected_audio_frequency_hz = optional_positive_env_float(
+    "EASYNET_REMOTEAPP_EXPECTED_AUDIO_FREQUENCY_HZ"
+)
+unrelated_audio_frequency_hz = optional_positive_env_float(
+    "EASYNET_REMOTEAPP_UNRELATED_AUDIO_FREQUENCY_HZ"
+)
+audio_frequency_tolerance_hz = optional_positive_env_float(
+    "EASYNET_REMOTEAPP_AUDIO_FREQUENCY_TOLERANCE_HZ"
+) or 25.0
+audio_min_rms = optional_positive_env_float("EASYNET_REMOTEAPP_AUDIO_MIN_RMS") or 0.01
+audio_selected_power_ratio = optional_positive_env_float(
+    "EASYNET_REMOTEAPP_AUDIO_SELECTED_POWER_RATIO"
+) or 4.0
+audio_min_packets = env_int("EASYNET_REMOTEAPP_AUDIO_MIN_PACKETS", 8)
+audio_required = expected_audio_frequency_hz is not None
+if audio_required:
+    require(expected_kind == "application",
+            "target-scoped audio proof currently requires an application target")
+    require(unrelated_audio_frequency_hz is not None,
+            "EASYNET_REMOTEAPP_UNRELATED_AUDIO_FREQUENCY_HZ is required for audio isolation")
 
 require(isinstance(sentinel_fixture, dict),
         "sentinel_fixture must describe the selected and unrelated visual witnesses")
@@ -468,6 +527,19 @@ if isinstance(selected_fixture, dict):
             f"sentinel_fixture.selected.target_kind must be {expected_kind}")
     require(selected_fixture.get("rgb") == selected_rgb,
             "sentinel_fixture.selected.rgb must match EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
+    selected_surfaces = selected_fixture.get("surfaces")
+    if expected_kind == "application":
+        require(selected_secondary_rgb is not None,
+                "application proof requires EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_RGB")
+        require(isinstance(selected_surfaces, list) and len(selected_surfaces) == 2,
+                "application selected fixture must describe exactly two selected surfaces")
+        if isinstance(selected_surfaces, list) and len(selected_surfaces) == 2:
+            require(selected_surfaces[0].get("role") == "primary"
+                    and selected_surfaces[0].get("rgb") == selected_rgb,
+                    "application primary selected surface must match the primary RGB witness")
+            require(selected_surfaces[1].get("role") == "secondary"
+                    and selected_surfaces[1].get("rgb") == selected_secondary_rgb,
+                    "application secondary selected surface must match the secondary RGB witness")
     fixture_selected_pid = selected_fixture.get("pid")
     if fixture_selected_pid is not None:
         require(isinstance(fixture_selected_pid, int) and fixture_selected_pid > 0,
@@ -475,6 +547,9 @@ if isinstance(selected_fixture, dict):
     if selected_pid is not None:
         require(fixture_selected_pid == selected_pid,
                 "sentinel_fixture.selected.pid must match EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID")
+    if audio_required:
+        require(selected_fixture.get("audio_tone_frequency_hz") == expected_audio_frequency_hz,
+                "selected fixture audio frequency must match the expected selected tone")
 if isinstance(unrelated_fixture, dict):
     unrelated_label = unrelated_fixture.get("label")
     placement = unrelated_fixture.get("placement")
@@ -489,6 +564,9 @@ if isinstance(unrelated_fixture, dict):
     if unrelated_pid is not None:
         require(fixture_unrelated_pid == unrelated_pid,
                 "sentinel_fixture.unrelated.pid must match EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID")
+    if audio_required:
+        require(unrelated_fixture.get("audio_tone_frequency_hz") == unrelated_audio_frequency_hz,
+                "unrelated fixture audio frequency must match the unrelated tone witness")
     require(placement in {"outside_selected_target", "other_window", "other_application", "desktop_background"},
             "sentinel_fixture.unrelated.placement must describe a non-target surface")
     unrelated_resource_ura = unrelated_fixture.get("resource_ura")
@@ -564,16 +642,32 @@ else:
             "application target must include target_binding.app_window_set")
     if isinstance(app_window_set, dict):
         app_display_id = app_window_set.get("display_id")
+        app_display_ids = app_window_set.get("display_ids")
         app_window_set_epoch = app_window_set.get("window_set_epoch")
         app_resolved_window_ids = app_window_set.get("resolved_window_ids")
-        require(isinstance(app_display_id, int) and app_display_id > 0,
-                "application app_window_set.display_id must be a positive integer")
+        require(
+            app_display_id is None
+            or (isinstance(app_display_id, int) and app_display_id > 0),
+            "application app_window_set.display_id must be null or a positive routing identity",
+        )
+        require(
+            isinstance(app_display_ids, list)
+            and len(app_display_ids) > 0
+            and all(isinstance(display_id, int) and display_id > 0 for display_id in app_display_ids)
+            and app_display_ids == sorted(set(app_display_ids)),
+            "application app_window_set.display_ids must be a non-empty canonical topology set",
+        )
+        if isinstance(app_display_id, int) and isinstance(app_display_ids, list):
+            require(
+                app_display_id in app_display_ids,
+                "application routing display_id must be included in display_ids topology evidence",
+            )
         require(isinstance(app_window_set_epoch, int) and app_window_set_epoch > 0,
                 "application app_window_set.window_set_epoch must be a positive integer")
         require(isinstance(app_resolved_window_ids, list)
-                and len(app_resolved_window_ids) > 0
+                and len(app_resolved_window_ids) >= 2
                 and all(isinstance(window_id, int) and window_id > 0 for window_id in app_resolved_window_ids),
-                "application app_window_set.resolved_window_ids must be a non-empty positive integer list")
+                "application multi-window proof requires at least two positive resolved_window_ids")
     require(isinstance(resolved_identity, dict),
             "application target must include target_binding.resolved_identity")
     if isinstance(resolved_identity, dict):
@@ -614,10 +708,63 @@ if isinstance(production_readiness, dict):
             "production_readiness.media_transport_ready must be true")
     require(production_readiness.get("client_media_ready") is True,
             "production_readiness.client_media_ready must be true after the receiver reports decoded/presenting media")
+    if audio_required:
+        require(production_readiness.get("media_scope") == "audio_video",
+                "production_readiness.media_scope must be audio_video for audio-required proof")
+        require(production_readiness.get("audio_required") is True,
+                "production_readiness.audio_required must be true for audio-required proof")
+        require(production_readiness.get("audio_ready") is True,
+                "production_readiness.audio_ready must be true after host audio packets are sent")
+if audio_required:
+    require(transport_audio_codec == "opus",
+            "transport.audio_codec must be opus for audio-required proof")
+    require(transport_media_scope == "audio_video",
+            "transport.media_scope must be audio_video for audio-required proof")
+    require(isinstance(decoded_audio, dict),
+            "decoded_audio must contain receiver-derived Opus evidence")
+    if isinstance(decoded_audio, dict):
+        decoded_audio_packets = decoded_audio.get("decoded_packet_count")
+        decoded_audio_rtp_packets = decoded_audio.get("rtp_packet_count")
+        decoded_audio_samples = decoded_audio.get("decoded_samples_per_channel")
+        decoded_audio_rms = decoded_audio.get("rms")
+        decoded_audio_dominant_hz = decoded_audio.get("dominant_frequency_hz")
+        decoded_audio_ratio = decoded_audio.get("selected_power_ratio")
+        decoded_audio_power_fraction = decoded_audio.get("selected_power_fraction")
+        require(isinstance(decoded_audio_rtp_packets, int)
+                and decoded_audio_rtp_packets >= audio_min_packets,
+                "decoded_audio.rtp_packet_count must meet the independent packet floor")
+        require(isinstance(decoded_audio_packets, int)
+                and decoded_audio_packets >= audio_min_packets,
+                "decoded_audio.decoded_packet_count must meet the independent packet floor")
+        require(isinstance(decoded_audio_samples, int) and decoded_audio_samples > 0,
+                "decoded_audio.decoded_samples_per_channel must be positive")
+        require(isinstance(decoded_audio_rms, (int, float))
+                and decoded_audio_rms >= audio_min_rms,
+                "decoded_audio.rms must prove non-silent decoded application audio")
+        require(decoded_audio.get("expected_frequency_hz") == expected_audio_frequency_hz,
+                "decoded_audio expected frequency must match the selected fixture")
+        require(decoded_audio.get("unrelated_frequency_hz") == unrelated_audio_frequency_hz,
+                "decoded_audio unrelated frequency must match the unrelated fixture")
+        require(isinstance(decoded_audio_dominant_hz, (int, float))
+                and abs(decoded_audio_dominant_hz - expected_audio_frequency_hz)
+                    <= audio_frequency_tolerance_hz,
+                "decoded_audio dominant frequency must match the selected application tone")
+        require(isinstance(decoded_audio_ratio, (int, float))
+                and decoded_audio_ratio >= audio_selected_power_ratio,
+                "decoded selected-tone power must dominate the unrelated application tone")
+        require(isinstance(decoded_audio_power_fraction, (int, float))
+                and decoded_audio_power_fraction >= 0.05,
+                "decoded selected-tone power must materially explain total audio energy")
+        require(decoded_audio.get("selected_tone_present") is True,
+                "decoded_audio.selected_tone_present must be true")
+        require(decoded_audio.get("unrelated_tone_rejected") is True,
+                "decoded_audio.unrelated_tone_rejected must be true")
 require(isinstance(rtp_packet_count, int) and rtp_packet_count > 0,
         "decoded_frames.rtp_packet_count must be a positive integer")
 require(isinstance(decoded_frame_count, int) and decoded_frame_count > 0,
         "decoded_frames.count must be a positive integer")
+require(video_decode_error_count == 0,
+        "decoded_frames.decode_error_count must be zero for a dependency-complete H.264 stream")
 require(isinstance(decoded_width, int) and decoded_width > 0,
         "decoded_frames.width must be a positive integer")
 require(isinstance(decoded_height, int) and decoded_height > 0,
@@ -632,16 +779,23 @@ require(decoded_frame_sample,
         "evidence must include a decoded_frame_sample artifact path")
 require(isinstance(decoded_frame_sample, str) and os.path.isfile(decoded_frame_sample),
         "decoded_frame_sample artifact must exist on disk")
+secondary_selected_pixel_count = None
 if isinstance(decoded_frame_sample, str) and os.path.isfile(decoded_frame_sample):
     ppm_width, ppm_height, ppm_rgb = read_ppm_rgb(decoded_frame_sample)
     require(ppm_width == decoded_width and ppm_height == decoded_height,
             "decoded_frame_sample dimensions must match decoded_frames.width/height")
     selected_pixel_count = count_rgb_matches(ppm_rgb, selected_rgb, sentinel_tolerance)
     unrelated_pixel_count = count_rgb_matches(ppm_rgb, unrelated_rgb, sentinel_tolerance)
+    secondary_selected_pixel_count = count_rgb_matches(
+        ppm_rgb, selected_secondary_rgb, sentinel_tolerance
+    )
     require(selected_pixel_count >= selected_min_pixels,
             "decoded_frame_sample pixels must independently contain the selected target sentinel")
     require(unrelated_pixel_count == 0,
             "decoded_frame_sample pixels must independently exclude the unrelated sentinel")
+    if expected_kind == "application":
+        require(secondary_selected_pixel_count >= selected_min_pixels,
+                "decoded AppSurface must independently contain the secondary selected window sentinel")
     require(get("decoded_frames.selected_pixel_count") == selected_pixel_count,
             "decoded_frames.selected_pixel_count must match independent artifact scan")
     require(get("decoded_frames.unrelated_pixel_count") == unrelated_pixel_count,
@@ -760,10 +914,13 @@ report = {
         "production_readiness": production_readiness,
         "client_media_ready": client_media_ready,
         "rtp_packet_count": rtp_packet_count,
+        "audio_required": audio_required,
+        "decoded_audio": decoded_audio,
         "decoded_frame_count": decoded_frame_count,
         "decoded_width": decoded_width,
         "decoded_height": decoded_height,
         "selected_content_present": get("decoded_frames.selected_content_present"),
+        "secondary_selected_pixel_count": secondary_selected_pixel_count,
         "unrelated_sentinel_present": get("decoded_frames.unrelated_sentinel_present"),
         "full_display_leak_detected": get("decoded_frames.full_display_leak_detected"),
         "sentinel_fixture": sentinel_fixture,
@@ -786,6 +943,8 @@ if errors:
         print(error, file=sys.stderr)
     sys.exit(1)
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 if [[ "$SELF_TEST" == "1" ]]; then
@@ -812,8 +971,13 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "permission preflight must run before sentinel fixture" "$0"
   grep -q "EASYNET_REMOTEAPP_SENTINEL_FIXTURE" "$0"
   grep -q "cleanup.sh" "$0"
+  if [[ "$AUDIO_TONE" == "1" ]]; then
+    export EASYNET_REMOTEAPP_EXPECTED_AUDIO_FREQUENCY_HZ="523.25"
+    export EASYNET_REMOTEAPP_UNRELATED_AUDIO_FREQUENCY_HZ="880.0"
+  fi
   python3 - "$EVIDENCE_JSON" "$TARGET_KIND" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
@@ -825,8 +989,14 @@ if target_kind not in {"window", "application"}:
 resource_kind = target_kind
 resource_ura = f"easynet:///r/localhost/resource/device.dev/streams/{resource_kind}.test"
 capture_scope = "AppSurface" if target_kind == "application" else "WindowSurface"
+audio_required = bool(os.environ.get("EASYNET_REMOTEAPP_EXPECTED_AUDIO_FREQUENCY_HZ", "").strip())
 sample = path.parent / "sample-frame.ppm"
-sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
+if target_kind == "application":
+    sample.write_bytes(
+        b"P6\n6 3\n255\n" + b"\xff\x00\x00" * 9 + b"\x00\x00\xff" * 9
+    )
+else:
+    sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
 
 resolved_identity = (
     {
@@ -856,12 +1026,14 @@ target_binding = {
 if target_kind == "application":
     target_binding["app_window_set"] = {
         "display_id": 1,
+        "display_ids": [1],
         "window_set_epoch": 1,
-        "resolved_window_ids": [7],
+        "resolved_window_ids": [7, 8],
     }
 
 data = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
     "session_id": "rd-self-test",
     "selected_resource_ura": resource_ura,
@@ -882,6 +1054,12 @@ data = {
             "resource_ura": resource_ura,
             "rgb": [255, 0, 0],
             "target_kind": target_kind,
+            "surfaces": ([
+                {"role": "primary", "label": f"selected-{target_kind}-red", "rgb": [255, 0, 0]},
+                {"role": "secondary", "label": f"selected-{target_kind}-blue", "rgb": [0, 0, 255]},
+            ] if target_kind == "application" else [
+                {"role": "primary", "label": f"selected-{target_kind}-red", "rgb": [255, 0, 0]},
+            ]),
         },
         "unrelated": {
             "label": "unrelated-green",
@@ -901,7 +1079,8 @@ data = {
     "decoded_frames": {
         "count": 3,
         "rtp_packet_count": 10,
-        "width": 3,
+        "decode_error_count": 0,
+        "width": 6 if target_kind == "application" else 3,
         "height": 3,
         "selected_content_present": True,
         "unrelated_sentinel_present": False,
@@ -922,6 +1101,37 @@ data = {
         "capture_scope": capture_scope,
     },
 }
+if audio_required:
+    data["transport"].update({
+        "audio_codec": "opus",
+        "media_scope": "audio_video",
+    })
+    data["production_readiness"].update({
+        "media_scope": "audio_video",
+        "audio_required": True,
+        "audio_ready": True,
+    })
+    data["decoded_audio"] = {
+        "rtp_packet_count": 12,
+        "encoded_byte_count": 960,
+        "decoded_packet_count": 12,
+        "decoded_samples_per_channel": 11520,
+        "retained_analysis_samples": 11520,
+        "decode_error_count": 0,
+        "last_decode_error": None,
+        "rms": 0.11,
+        "dominant_frequency_hz": 523.3,
+        "expected_frequency_hz": 523.25,
+        "unrelated_frequency_hz": 880.0,
+        "selected_frequency_power": 0.006,
+        "unrelated_frequency_power": 0.00001,
+        "selected_power_ratio": 600.0,
+        "selected_power_fraction": 0.12,
+        "selected_tone_present": True,
+        "unrelated_tone_rejected": True,
+    }
+    data["sentinel_fixture"]["selected"]["audio_tone_frequency_hz"] = 523.25
+    data["sentinel_fixture"]["unrelated"]["audio_tone_frequency_hz"] = 880.0
 if target_kind == "window":
     data["lifecycle"] = {
         "scenario": "move-resize",
@@ -957,6 +1167,8 @@ PY
     export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="move-resize"
     export EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH="1"
   else
+    export EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_RGB="0,0,255"
+    export EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_LABEL="selected-application-blue"
     export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="none"
     export EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH="0"
   fi
@@ -1005,6 +1217,9 @@ if [[ "$SENTINEL_FIXTURE" == "1" ]]; then
   if [[ -z "$SENTINEL_FIXTURE_CMD" ]]; then
     [[ -x "$BUNDLED_SENTINEL_FIXTURE" ]] || die "missing executable bundled sentinel fixture: $BUNDLED_SENTINEL_FIXTURE"
     SENTINEL_FIXTURE_CMD="'$BUNDLED_SENTINEL_FIXTURE' --target-kind '$TARGET_KIND' --out-dir '$SENTINEL_FIXTURE_DIR'"
+    if [[ "$AUDIO_TONE" == "1" ]]; then
+      SENTINEL_FIXTURE_CMD+=" --audio-tone"
+    fi
   fi
   export EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR="$SENTINEL_FIXTURE_DIR"
   export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
@@ -1012,6 +1227,10 @@ if [[ "$SENTINEL_FIXTURE" == "1" ]]; then
   [[ -s "$SENTINEL_FIXTURE_DIR/env.sh" ]] || die "sentinel fixture did not write env.sh: $SENTINEL_FIXTURE_DIR/env.sh"
   # shellcheck disable=SC1091
   source "$SENTINEL_FIXTURE_DIR/env.sh"
+  if [[ "$AUDIO_TONE" == "1" ]]; then
+    [[ -n "${EASYNET_REMOTEAPP_EXPECTED_AUDIO_FREQUENCY_HZ:-}" ]] || die "audio fixture did not publish selected tone frequency"
+    [[ -n "${EASYNET_REMOTEAPP_UNRELATED_AUDIO_FREQUENCY_HZ:-}" ]] || die "audio fixture did not publish unrelated tone frequency"
+  fi
   trap cleanup_sentinel_fixture EXIT
 fi
 
