@@ -142,13 +142,21 @@ grep -a -q '/api/v1/devices/relay-leases/acquire' "$RUNTIME_DAEMON" || {
   exit 1
 }
 [[ -f "$BROWSER_RUNNER" ]] || { write_status failed "Browser runner missing: $BROWSER_RUNNER"; exit 1; }
+[[ -n "$DEVICE_ID" ]] || { write_status failed "--device-id is required"; exit 64; }
 [[ -f "$CREDENTIALS_PATH" ]] || { write_status failed "paired device credentials missing: $CREDENTIALS_PATH"; exit 1; }
+credential_node_id="$(jq -er '.node_id' "$CREDENTIALS_PATH")" || {
+  write_status failed "provider credentials do not contain node_id: $CREDENTIALS_PATH"
+  exit 1
+}
+[[ "$credential_node_id" == "$DEVICE_ID" ]] || {
+  write_status failed "relay terminal probe credentials belong to $credential_node_id, expected provider $DEVICE_ID"
+  exit 1
+}
 [[ -f "$COMPOSE_FILE" ]] || { write_status failed "EasyNet dev compose missing: $COMPOSE_FILE"; exit 1; }
 [[ -f "$PROJECTOR" && -f "$RELAY_REFRESH_VERIFIER" && -x "$VERIFIER" ]] || {
   write_status failed "network projector/verifier or relay-refresh verifier missing"
   exit 1
 }
-[[ -n "$DEVICE_ID" ]] || { write_status failed "--device-id is required"; exit 64; }
 : "${EASYNET_REMOTEAPP_BROWSER_EMAIL:?EASYNET_REMOTEAPP_BROWSER_EMAIL is required}"
 : "${EASYNET_REMOTEAPP_BROWSER_PASSWORD:?EASYNET_REMOTEAPP_BROWSER_PASSWORD is required}"
 [[ "$TARGET_KIND" == "window" || "$TARGET_KIND" == "application" ]] || {
@@ -321,15 +329,30 @@ release_probe_status="$({
         -H 'Content-Type: application/json' --data-binary @- \
         "http://127.0.0.1:$HUB_HTTP_PORT/api/v1/devices/relay-leases/acquire"
 })"
+release_probe_code="$(jq -r '.code // .error.code // empty' "$release_probe_body" 2>/dev/null || true)"
+release_probe_message="$(jq -r '.message // .msg // .error.message // empty' "$release_probe_body" 2>/dev/null || true)"
+jq -n \
+  --argjson status_code "$release_probe_status" \
+  --arg provider_device_id "$credential_node_id" \
+  --arg session_id "$session_id" \
+  --arg resource_ura "$resource_ura" \
+  --arg response_code "$release_probe_code" \
+  --arg response_message "$release_probe_message" \
+  --argjson observed_at_ms "$(python3 -c 'import time; print(int(time.time() * 1000))')" \
+  '{
+    status_code: $status_code,
+    terminal_reacquire_rejected: ($status_code == 409),
+    provider_device_id: $provider_device_id,
+    session_id: $session_id,
+    resource_ura: $resource_ura,
+    response_code: $response_code,
+    response_message: $response_message,
+    observed_at_ms: $observed_at_ms
+  }' >"$OUT_DIR/release-probe.json"
 [[ "$release_probe_status" == "409" ]] || {
   write_status failed "Hub accepted or misclassified lease reacquire after terminal release"
   exit 1
 }
-jq -n --argjson observed_at_ms "$(python3 -c 'import time; print(int(time.time() * 1000))')" '{
-  status_code: 409,
-  terminal_reacquire_rejected: true,
-  observed_at_ms: $observed_at_ms
-}' >"$OUT_DIR/release-probe.json"
 
 docker logs "$CONTAINER" >"$TEMP_DIR/coturn.log" 2>&1
 python3 "$PROJECTOR" \

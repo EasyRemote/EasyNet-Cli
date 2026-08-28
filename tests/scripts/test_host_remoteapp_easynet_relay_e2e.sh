@@ -24,6 +24,10 @@ jq -e '.status == "skipped" and .coverage.easynet_relay == false and
 jq -e '.status == "passed" and .coverage.easynet_relay == false and
   .coverage.relay_lease_refresh_resume == false' "$OUT_DIR/self-test/report.json" >/dev/null ||
   fail "contract self-test must not claim live relay coverage"
+grep -q 'relay terminal probe credentials belong to' "$HOST_RUNNER" ||
+  fail "host runner does not bind terminal probe credentials to the provider device"
+grep -q 'release-probe.json' "$HOST_RUNNER" ||
+  fail "host runner does not preserve a redacted terminal probe artifact"
 grep -q 'coturn_log_is_ready' "$HOST_RUNNER" ||
   fail "host relay runner must use a pipefail-safe coturn readiness parser"
 if grep -Eq 'docker logs .*\| *grep +-q' "$HOST_RUNNER"; then
