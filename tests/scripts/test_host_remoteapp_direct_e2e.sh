@@ -20,6 +20,12 @@ grep -q '"status": "skipped"' "$OUT_DIR/skip/report.json" || \
 "$HOST_RUNNER" --self-test --out-dir "$OUT_DIR/self-test" >/dev/null
 grep -q '"status": "passed"' "$OUT_DIR/self-test/report.json" || \
   fail "host runner self-test did not pass"
+grep -q 'EASYNET_REMOTEAPP_DIRECT_E2E_PROVIDER_STOP_ACTION' "$HOST_RUNNER" ||
+  fail "direct runner cannot target an external provider lifecycle"
+grep -q 'EASYNET_REMOTEAPP_DIRECT_E2E_BROWSER_DOCKER' "$HOST_RUNNER" ||
+  fail "direct runner cannot place Browser beside a container provider"
+grep -q 'remoteapp-browser-chrome/Dockerfile' "$HOST_RUNNER" ||
+  fail "direct runner does not build a pinned H.264-capable Browser image"
 (
   cd "$OUT_DIR"
   "$HOST_RUNNER" --self-test --out-dir relative-self-test >/dev/null
