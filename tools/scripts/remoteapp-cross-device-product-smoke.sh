@@ -198,6 +198,7 @@ coverage = {
 report = {
     "script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
     "status": effective_status,
+    "evidence_origin": "live_runner" if effective_status == "passed" else None,
     "reason": effective_reason,
     "product_complete_claim": False,
     "source": {
