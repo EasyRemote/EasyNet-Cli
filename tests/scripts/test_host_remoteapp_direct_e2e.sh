@@ -20,6 +20,12 @@ grep -q '"status": "skipped"' "$OUT_DIR/skip/report.json" || \
 "$HOST_RUNNER" --self-test --out-dir "$OUT_DIR/self-test" >/dev/null
 grep -q '"status": "passed"' "$OUT_DIR/self-test/report.json" || \
   fail "host runner self-test did not pass"
+(
+  cd "$OUT_DIR"
+  "$HOST_RUNNER" --self-test --out-dir relative-self-test >/dev/null
+)
+grep -q '"status": "passed"' "$OUT_DIR/relative-self-test/report.json" || \
+  fail "relative output directory was not anchored before the Browser working-directory change"
 
 python3 - "$OUT_DIR/browser.json" "$OUT_DIR/times.json" <<'PY'
 import json

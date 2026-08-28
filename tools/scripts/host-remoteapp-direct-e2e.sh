@@ -47,6 +47,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
 write_status() {
   local status="$1"
