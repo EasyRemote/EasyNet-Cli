@@ -8,10 +8,53 @@ Current conclusion:
 
 - Targeted-session architecture: implemented with source and host-E2E harnesses.
 - Full interactive RemoteApp product: incomplete.
+- 2026-08-27 live Linux/X11 application execution selected two exact windows,
+  rejected a black-gap centre probe, then passed pointer/key input when the
+  Browser chose a committed surface. Relay-only WebRTC, watch, rendered media,
+  no scope widening, and terminal cleanup were observed; formal verification
+  required removal of a macOS-only discovery-scope assumption.
 - RemoteApp implementation test evidence must come from the main EasyNet crate,
   not the standalone `easynet-plugin-remote-desktop` package. The standalone
   package is a provider/export shim whose zero-test result does not exercise
   the daemon-embedded implementation.
+- 2026-08-28 receiver readiness no longer treats Browser `presenting` as
+  decoded media proof. Product readiness requires a fresh, daemon-admitted
+  render tuple bound to the exact session, transport epoch, target binding,
+  media-source epoch, pipeline, codec and dimensions. The authored descriptor
+  and NativeStatic runtime schema are parity-tested.
+- 2026-08-28 host-audio offer readiness comes from a plugin-owned runtime
+  probe coordinator. Its wake queue has capacity one, refresh storms coalesce
+  into one bit, and invalidation is synchronous and source-scoped. Native
+  PipeWire/WASAPI discovery now runs in the independent one-shot
+  `easynet-remoteapp-media-host` capability mode: a result is committed only after exact
+  schema validation and successful child exit, while timeout/protocol failure
+  kills and reaps the process. This closes capability-probe thread leakage; it
+  does not isolate active PCM capture.
+- 2026-08-28 target inventory and per-input target guards no longer execute
+  native enumeration in an unkillable daemon thread. The plugin-private
+  `easynet-remoteapp-native-host` executable now serves two independently
+  supervised bounded lanes over a strict 4 MiB length-prefixed protocol.
+  Deadline, protocol, stale-generation, disconnect, and shutdown paths kill and
+  wait for the child before reuse. Unsolicited extra responses use non-blocking
+  bounded delivery and retire the generation instead of deadlocking its reader.
+  Local macOS real-process, injected-hang, and extra-response tests pass. Media
+  capture/encode/PCM streaming have not moved behind this boundary,
+  and Windows/Linux signed release execution remains unproved.
+- The target-observation helper no longer depends on the root `easynet` crate.
+  Its private protocol crate owns DTOs, validation, and framing; the native-host
+  library owns OS enumeration. A Cargo dependency-graph gate rejects Runtime,
+  Axon, and tonic reachability from the helper. This is target-observation
+  isolation only, not media data-plane isolation.
+- The media-host executable likewise has no Runtime/Axon/tonic dependency.
+  Its protocol carries only compiled/runtime/source readiness and bounded
+  diagnostics; daemon-owned generation, TTL, invalidation and admission state
+  do not cross the boundary. Real-process round-trip and injected-hang recovery
+  are covered locally, while signed Windows/Linux execution is still open.
+- Focused verification passes Rust compile, host-audio capability,
+  render-evidence, transport-state and product-readiness tests; frontend
+  typecheck and 105 focused tests; and the performance/frontend boundary gates
+  with their mutation suites. Live cross-platform and same-campaign product
+  evidence remain open.
 
 Current verified boundary gates:
 
@@ -42,8 +85,9 @@ Current frontend lifecycle evidence:
 - `tools/scripts/frontend-remoteapp-product-flow-e2e.sh` now provides the
   combined frontend/host product-flow harness entrypoint: explicit Hub API
   readiness preflight, product runtime readiness preflight, frontend typecheck,
-  `DeviceMediaAccess` UI flow, host permission-subject preflight, target picker
-  freshness, decoded-frame WebRTC, and view-only input safety. An explicit --run report remains required
+  `DeviceMediaAccess` UI flow, host permission-subject preflight, separate
+  window/application target picker freshness, decoded-frame WebRTC, and
+  view-only input safety. An explicit --run report remains required
   before treating it as environment evidence; the default skipped
   report only proves the harness contract exists.
 - `tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh` now provides the
@@ -56,7 +100,9 @@ Current frontend lifecycle evidence:
   and no product-complete claim. Self-test validates only the contract; a live
   Browser/Tauri artifact remains required.
 - `tools/scripts/remoteapp-product-completion-e2e.sh` now provides the single
-  aggregate product-completion evidence gate. It requires passed report JSONs
+  aggregate product-completion evidence gate. A passing aggregation emits only
+  an eligible candidate with `product_complete_claim=false`; it cannot mint a
+  final product claim. It requires passed report JSONs
   from frontend product-flow, Browser/Tauri lifecycle, cross-device smoke,
   cross-platform capture, input injection, media adaptation, multi-window
   tracking, network fallback, window/application session timeout,
@@ -72,13 +118,15 @@ Current frontend lifecycle evidence:
   platform summaries to be `passed` for macOS, Windows, and Linux instead of
   explicit `unsupported`, and requires explicit passed
   frontend product-flow steps for Browser/Tauri, cross-device,
-  permission-subject, target-picker, window/application decoded-frame, and
+  permission-subject, separate window/application target-picker freshness,
+  window/application decoded-frame, and
   window/application view-only-input coverage with `target_kind=both`, and
   traceable `result.json` step artifacts plus subreport/evidence artifacts for
   Browser/Tauri, cross-device, and host product-flow steps. Host product-flow
   verifier reports now expose stable `script` identity for permission-subject,
-  target-picker, decoded-frame, and view-only-input evidence; decoded-frame and
-  view-only-input subreports must also match the exact `target_kind` required
+  both target-picker variants, decoded-frame, and view-only-input evidence;
+  target-picker, decoded-frame, and view-only-input subreports must also match
+  the exact `target_kind` required
   by their frontend step, so window evidence and application evidence cannot be
   swapped. For every required report or product-flow subreport that names a
   live `evidence_json` artifact, the aggregate gate now parses that artifact
@@ -89,6 +137,20 @@ Current frontend lifecycle evidence:
   substitute for any live domain artifact, and it rejects target-narrowed,
   target-swapped, failed-evidence, or empty-shell frontend product-flow
   evidence.
+- `tools/scripts/remoteapp-product-finalize.py` is the only boundary that may
+  emit `product_complete_claim=true`. It verifies a dedicated independent
+  product-completion authority signature over the exact candidate and signed
+  campaign/source/build tuple before atomically consuming the campaign replay
+  id. Replay records bind the completion-statement and final-report digests, so
+  an exact crash-recovery retry is idempotent while an alternate decision fails
+  closed. Production trust and replay paths are fixed system authority and are
+  not caller-selectable. The final report includes the exact candidate bytes;
+  the same tool exposes standalone signature, canonical-projection, and replay
+  verification instead of asking consumers to trust a mutable claim label.
+  Its `prepare` command independently verifies the complete 19-domain matrix
+  and emits canonical DSSE PAE bytes for an external KMS/HSM. `assemble`
+  accepts only a valid 64-byte Ed25519 signature from a completion-role key;
+  private signing keys are never accepted by the tool.
 - 2026-08-22 local `--run` attempt reached frontend typecheck and
   `DeviceMediaAccess` UI flow successfully, then failed before host RemoteApp
   execution because daemon readiness was false:
@@ -171,6 +233,21 @@ Current frontend lifecycle evidence:
   application targets. This strengthens local macOS frontend + daemon + host
   evidence but does not prove cross-platform, cross-device, host-audio,
   real-input-injection, NAT/relay, or Browser/Tauri product completion.
+- Current-checkout target-picker freshness evidence on 2026-08-26 passed
+  separately for window and application targets:
+  `target/e2e/host-remoteapp-target-picker-freshness/20260826-073415-window-live/report.json`
+  binds `window_id + owner_pid`; and
+  `target/e2e/host-remoteapp-target-picker-freshness/20260826-073402-application-live/report.json`
+  binds the stable application identity, owner pid, two native window ids,
+  front-to-back surface membership, and `window_set_epoch` while proving the
+  target is process-scoped. These artifacts close E2E-01 picker selection for
+  both supported target kinds only; they do not prove capture or a session.
+- The AppKit fixture now stores LaunchServices executables and command/ack IPC
+  in a fixture-owned physical temporary directory, while reports remain in the
+  requested output directory. Cleanup validates both exact runtime path and
+  process command before termination/removal. This removes the macOS
+  `~/Documents` privacy seam that previously allowed application windows to
+  launch but prevented focus/control acknowledgement.
 - macOS ScreenCaptureKit application sessions now build the native
   `exceptingWindows` filter from same-application, same-display windows outside
   the committed `AppWindowSetProof`. This closes a concrete capture-scope seam:
@@ -426,6 +503,55 @@ Current frontend lifecycle evidence:
   selected Resource URA subject binding, redacted credentials, and visible
   terminal receipts. Self-test validates only the contract; a live network
   artifact remains required.
+- `tools/scripts/host-remoteapp-turn-relay-e2e.sh` now closes the focused TURN
+  child with a reproducible coturn fixture. The 2026-08-26 live run constrained
+  the real Browser to relay-only ICE, observed three server-side allocations,
+  selected a connected/nominated/succeeded relay route with positive
+  bidirectional bytes, presented three later frames, retained the canonical
+  User/SystemAgent/Device/Resource identity split, emitted a `caller_ended`
+  receipt, and restored the ordinary daemon. Direct and Hub-owned EasyNet relay
+  children have also passed; STUN srflx remains required for the aggregate
+  network matrix.
+- `tools/scripts/host-remoteapp-direct-e2e.sh` now makes the direct child
+  reproducible without treating a coincidental host candidate as proof. It
+  removes daemon STUN/TURN/EasyNet relay configuration, requires zero projected
+  ICE URLs and host-only local/remote SDP, validates the selected direct pair,
+  later media and terminal cleanup, then restores the ordinary daemon. The
+  2026-08-26 live macOS/window run passed with a connected/nominated/succeeded
+  UDP host/host pair, positive bidirectional bytes, three later frames, and a
+  `caller_ended` receipt. STUN srflx remains open.
+- The 2026-08-26 native decoded-frame rerun closed the macOS single-window and
+  single-application TURN children without conflating host audio capability
+  with negotiated media scope. The window move/resize proof at
+  `/tmp/remoteapp-window-move-resize-turn-live-20260826-v3/report.md` and the
+  application proof at `/tmp/remoteapp-application-turn-live-20260826-v5/report.md`
+  both report `media_scope=video_only`, `audio_required=false`, real coturn
+  relay selection, decoded selected sentinel pixels, zero unrelated sentinel
+  pixels, and `production_readiness.ready=true`. The application fixture now
+  uses independent LaunchServices-started `.app` bundles; its binding keeps
+  `display_id=null` and canonical `display_ids=[1]` instead of inventing a
+  display routing identity. The durable shape now uses recovery schema v2;
+  schema-v1 rows migrate only when the missing topology is derivable from a
+  positive committed `display_id`, while ambiguous process-scoped rows fail
+  closed. Recovery tests and the full RemoteApp Rust suite pass (492/492).
+  These children do not close the multi-window,
+  cross-display, real input, or cross-platform matrices.
+- `tools/scripts/host-remoteapp-stun-srflx-e2e.sh` now supplies the focused
+  STUN-only child contract without treating any reflexive-looking RTCStats row
+  as proof. It rejects the non-routable macOS Docker Desktop topology, runs an
+  address-redacted RFC 5389 Binding observer at the provider boundary, requires
+  an externally reachable VM-NAT Browser context, constrains Browser outbound
+  trickle and embedded offer SDP to `srflx`/`prflx` while retaining provider inbound
+  `host`/`srflx`/`prflx`, counts accepted and rejected candidates,
+  requires the selected Browser-local candidate to be reflexive and the
+  projected local SDP to contain no host candidate, requires a server-observed
+  binding in the correct time interval, bounds the Browser child, validates
+  later media/terminal evidence, and restores the ordinary daemon. The observer
+  passed an independent coturn client probe and returned a real VM-NAT
+  reflexive mapping. Focused positive and mutation gates pass, but the temporary
+  VM context was removed after topology proof and the exact active daemon still
+  lacks Screen Recording permission. No complete Browser child exists, so the
+  STUN route remains open.
 - Frontend session details now render a compact media quality summary from
   daemon/browser `mediaStats`: bitrate, outbound FPS, aggregate drops, and RTP
   sender backpressure appear as status such as
@@ -533,9 +659,15 @@ Current frontend lifecycle evidence:
   transport epoch, a newly connected PeerConnection, `watch_events`
   reattachment, a decoded frame after resume, and preserved input authority.
   The aggregate product gate rejects reports without this summary and its
-  self-test proves that reusing the old PeerConnection is rejected. This is an
-  executable evidence contract; a live Browser/Tauri run with a real network
-  fixture is still required.
+  self-test proves that reusing the old PeerConnection is rejected. A
+  2026-08-26 live Browser run now passed this contract across a real paired
+  daemon stop/start: the same window session survived, the old PeerConnection
+  closed, transport epoch increased from `1787686710123091` to
+  `1787686896984117`, a new PeerConnection and `watch_events` stream connected,
+  and a `1688x1080` frame rendered after resume. Input authority was preserved
+  but macOS Accessibility remained policy-blocked. This proves orderly daemon
+  restart recovery, not `kill -9`, plugin-worker-only failure, or
+  crash-during-close receipt replay.
 - Latest bounded local lifecycle live evidence on 2026-08-23 passed for both
   window and application targets using catalog-resolved full Ability URAs and
   the session approval receipt as scalar causal context:
@@ -561,6 +693,16 @@ Current frontend lifecycle evidence:
   session, original terminal receipt replay, endpoint readiness, and visible
   terminal receipts. Self-test validates only the contract; a live recovery
   artifact remains required.
+- `tools/scripts/host-remoteapp-target-monitor-worker-recovery-e2e.sh` now
+  closes the target-monitor worker-only child scenario with live macOS/window
+  evidence rather than a component fixture. The 2026-08-26 v4 campaign kept
+  exact feature daemon PID `62280` J800, preserved Browser session
+  `rdp-66843994a4396d038cc76b94` and all consent/binding/transport/media epochs,
+  bound public and durable ordered worker events from failed generation `1` to
+  replacement generation `2`, rendered a later frame, and ended the same
+  session with a visible `caller_ended` receipt. The report is
+  `/tmp/remoteapp-target-monitor-worker-live-20260826-v4/report.md`. This does
+  not close Windows named-pipe, cross-device, or aggregate recovery evidence.
 - Latest live crash/restart probe:
   `target/e2e/remoteapp-crash-restart-probe/20260822-223509-45956`.
   The probe killed the daemon with active RemoteApp session
@@ -601,6 +743,21 @@ Current frontend lifecycle evidence:
 
 Missing or insufficient product evidence:
 
+- 2026-08-28 red-team review found that Linux X11/XTest cannot isolate a whole
+  press-to-release lifecycle to one Window/Application target. A focus switch
+  between down and up could otherwise release into another application. The
+  resolver now models this explicitly: Linux display input remains
+  `display_global`, while Linux Window/Application sessions remain `view_only`
+  even after consent. `target_local` must not be restored until a target-bound
+  input device/session exists. The target-observation executor itself is now a
+  killable deadline-bounded helper process; that does not make XTest target
+  scoped.
+  Focus tests (4), target-local policy/guard tests (4), media-scope readiness
+  tests (2), the lifecycle/input checker, and its full mutation suite pass.
+  The Windows cross-target attempt remains environment-blocked in `ring` because
+  this macOS host has no `x86_64-w64-mingw32-gcc`; it is not pass evidence.
+  Real Windows/Linux pointer/key effects and Linux Wayland portal support remain
+  release-blocking.
 - Permission projection now reflects execution reality instead of a generic
   macOS-shaped contract. macOS reports Accessibility, Windows reports User32
   SendInput, and Linux reports X11/XTest. Linux Wayland and a daemon without an
@@ -662,6 +819,47 @@ Missing or insufficient product evidence:
   geometry revisions, same-display application window-set rebind, target loss
   rebind/failure behavior, multi-display application pass or explicit product
   unsupported state, and terminal receipts.
+  Current live progress on 2026-08-27: Linux/X11 application window-set churn
+  passed through the real Browser, Hub, paired provider, and relay-only WebRTC
+  path. One selected application session closed and recreated its secondary
+  native window, advanced binding/identity/geometry epochs, exposed the new
+  two-XID set through `show_session`, rendered another decoded frame, applied a
+  second pointer/key sequence, preserved `scope_widened=false` and
+  `display_fallback_used=false`, and ended with a visible terminal receipt.
+  Evidence:
+  `/tmp/remoteapp-linux-provider-probe.YkH7U3/browser-application-evidence-v40-window-set-churn.json`.
+  Formal Browser lifecycle verifier passed. This closes one application churn
+  scenario only; independent concurrent streams, move/resize event taxonomy,
+  target-loss deadline behavior, multi-display policy, macOS, and Windows
+  remain required by the aggregate multi-window gate.
+  A separate Linux/X11 focus-recovery live run also passed: an unrelated native
+  process displaced focus, the target monitor projected `target_blurred`, the
+  first Browser pointer intent invoked `remote_desktop.focus_target`, the
+  committed focus epoch advanced from 3 to 4, and pointer/key input was then
+  applied on the relay session. Evidence:
+  `/tmp/remoteapp-linux-provider-probe.YkH7U3/browser-application-evidence-v41-focus-recovery.json`.
+  The formal Browser verifier passed; this is not macOS/Windows focus evidence.
+  The Browser lifecycle product item now consumes a dedicated two-leaf matrix
+  instead of requiring one impossible single-target run to claim both kinds.
+  A real Linux window focus-recovery leaf and the application focus-recovery
+  leaf aggregated successfully at
+  `/tmp/remoteapp-linux-provider-probe.YkH7U3/v42-v41-browser-target-matrix/report.json`.
+  The product-completion audit accepted `browser_lifecycle` with zero item
+  errors while keeping the overall result failed with 19 missing/campaign
+  requirements. This is the intended fail-closed state.
+  A second live Linux/X11 application run then closed the move/resize taxonomy
+  seam. It kept the same two native XIDs and target-identity epoch, advanced
+  binding epoch 1→2 and geometry revision 1→2 only after the rebuilt media
+  source committed, emitted ordered `TARGET_MOVED` then `TARGET_RESIZED`,
+  rendered nine further frames, and applied another pointer/key sequence against
+  the new 840x500 committed application bounds. The selected route was
+  relay-only and neither scope widening nor display fallback occurred. Evidence:
+  `/tmp/remoteapp-linux-provider-probe.YkH7U3/browser-application-evidence-v46-geometry-events.json`.
+  Formal verifier report:
+  `/tmp/remoteapp-linux-provider-probe.YkH7U3/v46-geometry-formal-verifier/report.json`.
+  This closes the Linux application geometry-churn leaf; independent concurrent
+  sessions, target-loss deadlines, multi-display policy, and macOS/Windows
+  evidence remain open.
 - Crash/restart recovery E2E using
   `remoteapp-crash-restart-recovery-e2e.sh` with a live artifact proving
   daemon/plugin restart recovery, same-session `show_session`, watch/media
@@ -669,12 +867,22 @@ Missing or insufficient product evidence:
   terminal receipt replay, stale socket cleanup, endpoint readiness, and
   terminal receipts.
 - Session resume/reconnect/revoke/crash-restart recovery E2E.
-- Real direct/STUN/TURN/EasyNet relay reachability matrix using
+- Aggregate direct/STUN/TURN/EasyNet relay reachability matrix using
   `remoteapp-network-fallback-e2e.sh` with a live artifact.
-  Current source/product-path progress: daemon transport views now project
-  browser `client_ice_servers`, and the frontend WebRTC path consumes that
-  session-projected config instead of hard-coding an empty ICE server list.
-  This is required plumbing; it is not real relay reachability evidence.
+  The reproducible direct, TURN, and Hub-owned EasyNet relay children pass; the
+  constrained STUN harness is implemented but has no passing live child. No
+  single signed campaign yet aggregates all four routes.
+  Hub relay refresh and Browser transport resume now also have one composable
+  live gate instead of two unrelated source claims. The EasyNet relay runner's
+  `--refresh-resume` mode accelerates the real Hub TTL, waits across the
+  daemon-owned refresh threshold, restarts the paired daemon, and requires the
+  Browser to observe a distinct redacted lease while preserving the public
+  session and binding a newer WebRTC transport. A dedicated fail-closed
+  verifier binds both lease IDs, session, Resource, transport epochs,
+  reattached `watch_events`, post-resume media, terminal receipt, and redaction
+  into the canonical network scenario. Skip/self-test reports expose zero live
+  coverage. The harness integration tests pass; the live
+  `--run --refresh-resume` artifact remains required.
 - Frontend full lifecycle E2E across Browser/Tauri surfaces, using
   `frontend-remoteapp-browser-lifecycle-e2e.sh` with a live artifact proving
   visible media pipeline support in addition to picker/permission/consent,
@@ -682,3 +890,152 @@ Missing or insufficient product evidence:
 - RemoteApp-specific cross-device smoke/regression with remote target
   inventory, real display/window/application capture, input policy, and
   teardown.
+
+## 2026-08-28 — Linux exact host-effect evidence hardening
+
+- Window v63 preserved raw target-process observations instead of grafting
+  daemon event ids into the observer log. It proved exact XID input before and
+  after resize, stable observer identity, normal guarded release, and no input
+  on the second visible window.
+- Application v66 selected the committed two-XID set owned by PID `5110`,
+  recovered target focus from epoch `2` to `3`, and applied pointer/key down/up
+  with strictly increasing Runtime and client sequences. An independent PID
+  `5314` kept two visible windows and observed zero input events.
+- The formal Browser lifecycle verifier passed v66 with
+  `focus_recovery_verified=true`, `host_input_effects_verified=true`, and
+  `input_interaction_sequence_verified=true`.
+- This evidence remains one Linux/X11 leaf. The run itself reports missing media
+  adaptation evidence, non-negotiated production codec readiness, and
+  unavailable host audio. It cannot support a product-complete claim.
+- Three subsequent independent Application sessions, v70/v71/v72, passed the
+  real Browser runner and the formal lifecycle verifier with distinct session
+  ids. Each run displaced focus, committed a newer focus authority, applied
+  normal guarded pointer/key down/up frames to the selected two-XID
+  application, observed zero input in the independent PID, and completed
+  terminal cleanup. Evidence and reports are under
+  `/tmp/remoteapp-linux-provider-probe.YkH7U3/browser-application-evidence-v7{0,1,2}-v17-stability.json`
+  and the corresponding `browser-application-v7{0,1,2}-v17-stability-verifier/`
+  directories. All three retain `product_complete_claim=false`.
+
+## 2026-08-28 — Shared-lane dimension-convergence verification
+
+- `cargo test -p easynet-remoteapp-native-protocol shared_media_lane --
+  --nocapture` passed seven slot/state/lease tests, including the exact
+  `Bytes` owner lifetime and fixed-notification-to-WebRTC borrowed-view path.
+- The comparative 128×256 KiB fixture passed. Payload-pipe v1 recorded 1,280
+  allocation calls and 33,612,544 allocated bytes; shared-lane v2 recorded 128
+  owner allocations and 13,312 allocated bytes. This is same-process hot-path
+  evidence, not a cross-device zero-copy claim.
+- `cargo test --features axon-pb --lib
+  daemon::plugins::remote_desktop::transport::webrtc_hosted_media::tests --
+  --nocapture` passed all seven hosted-media tests. The new regression proves
+  that a committed 200×100 target remains 200×100 under a 1280×720
+  `scale_mode=native` upper bound.
+- A current native Linux artifact bundle was built at
+  `../EasyNet/target/dev-backend/cli-artifacts-v4` and verified by the artifact
+  bundle gate. The device/provider image was rebuilt from that exact manifest.
+- The first Browser rerun failed before media admission because
+  `remote_desktop.permission_status` exceeded the 90-second Browser deadline
+  while the Hub was serving several concurrent provider/catalog requests.
+- The immediate retry passed permission discovery but `create_session` rejected
+  the selected live inventory row as `target_stale`; the Hub delay outlived the
+  inventory freshness window. Evidence is under
+  `target/e2e/remoteapp-linux-provider-browser/native-dim-live/browser{,-retry}`.
+- These are correctly failed live artifacts. They do not prove sustained frame
+  delivery after the dimension fix, and product completion remains false.
+
+## 2026-08-28 — Real Browser sender-service failure and corrected diagnosis
+
+- The next live Linux/X11 window run reached the real Browser, selected an exact
+  480×320 native window, negotiated WebRTC, and rendered one 480×320 frame.
+  Evidence:
+  `target/e2e/remoteapp-linux-provider-browser/manual-schema3-window-recovery-fix/evidence.json`.
+- The run then stalled. The device was configured for 14,000 kbit/s but emitted
+  only about 132.5 kbit/s of encoded media. Its one-frame daemon queue dropped
+  the subsequent dependency chains and the Browser presented only one frame.
+  The only RTP-write latency sample was about 73 ms, slower than the configured
+  30 fps service interval. This contradicts sustained-media acceptance even
+  though the first-frame checkpoint passed.
+- The Browser also reported `availableOutgoingBitrate=300000` on its selected
+  candidate pair, but that field describes the Browser's outgoing/upload path,
+  not capacity for device-to-Browser video. Its `report_client_state` Ability
+  took about 12.8 seconds to complete, so it is directionally and temporally
+  invalid as an encoder control input. It remains diagnostic evidence only.
+- The device-local sender control loop is now implemented in source. Each
+  transport generation retains its negotiated video `RtpSender`, consumes only
+  fresh `remote-inbound-rtp` RTCP Receiver Reports, and combines that loss/RTT
+  pressure with measured RTP-writer p95 service time and bounded queue pressure.
+  Hosted and baseline paths share the same FPS policy; a 73 ms p95 sample maps
+  30 fps to 10 fps with 25% service headroom. Browser decode/freeze reports
+  remain useful for audit/readiness but are not the primary congestion loop.
+- The shared-lane microbenchmark remains valid only for media-host→daemon copy
+  and allocation pressure. It does not prove WebRTC throughput. RemoteApp media
+  is deliberately framed encoded media over RTP/SRTP, not an unstructured raw
+  byte pipe; bounded queues and transport-budgeted encoding are part of the
+  efficiency contract.
+- Focus recovery in the same run committed target focus, but Linux/X11 window
+  input remained explicitly `view_only` with
+  `target_scoped_keyboard_pointer_dispatch_unsafe`. The Browser runner now
+  re-reads post-focus input authority: diagnostic runs report
+  `focused_view_only`, while product runs requiring independent host effects
+  fail immediately instead of timing out waiting for an impossible applied
+  pointer frame.
+- The earlier selected-pair-budget implementation and its PERF-08 claim were
+  withdrawn after this directionality check. Local RTCP, sender-side TWCC, and
+  writer-service pacing now pass focused Rust and mutation gates. A rebuilt
+  artifact and sustained real-Browser rerun are still required before PERF-08
+  has live evidence. Product completion remains false.
+
+## 2026-08-28 — Shared-slot lifetime root cause and v10 live correction
+
+- A provenance-bound v9 Linux/X11 Browser run reproduced the one-frame stall.
+  At 2.115 seconds the media host had captured and encoded 30 frames, while the
+  daemon accepted only 2 and dropped 28. The Browser decoded one frame, the
+  shared lane entered GOP recovery, and the session failed because no recovery
+  IDR reached the daemon within two seconds.
+- The mapped payload owner had been passed directly into WebRTC. RTP
+  packetization/NACK retention could therefore hold the shared-memory lease
+  beyond daemon ingestion, pinning the single negotiated producer slot. This
+  was a lifetime-boundary defect, not JSON/base64 overhead and not RTP writer
+  service time; the recorded writer p95 was only 0.188 ms.
+- The daemon now validates the mapped frame in place, copies it exactly once
+  into transport-owned `Bytes`, and immediately releases the shared lease. The
+  comparative 128×256 KiB benchmark records 256 allocation calls and
+  33,567,744 allocated bytes for shared v2 versus 1,280 calls and 33,612,544
+  bytes for payload-pipe v1, with approximately 715.95 versus 714.81 MiB/s in
+  that run. The copy is intentional ownership detachment, not a zero-copy
+  claim.
+- The provenance-bound v10 rerun sustained 1,219 captured, encoded and
+  daemon-received frames across 93 seconds with zero daemon/shared-lane drops.
+  RTP writer p95 remained approximately 0.61 ms, and neither shared-lane
+  recovery nor media failure recurred. This closes the device-side binary-lane
+  lifetime defect.
+- The Browser product runner still failed independently: its periodic
+  `report_client_state` calls arrived after the session lease had expired and
+  the UI never exposed visible media-pipeline support. Therefore the run does
+  not yet close Browser sustained-decode/readiness acceptance, fresh RTCP
+  evidence, or product completion.
+
+## 2026-08-29 — Linux route rerun, platform matrix, and final aggregate
+
+- Direct application passed with 14 rendered frames. TURN passed for window
+  and application with relay-only Browser SDP/policy and server-observed
+  allocation. EasyNet relay passed for window and exact two-window application
+  with Hub-issued ephemeral leases. All accepted leaves used real Browser
+  lifecycle evidence and closed with terminal cleanup.
+- The EasyNet refresh/resume child passed a real lease rotation, same-session
+  daemon restart, replacement connected transport, watch reattachment, nine
+  rendered frames, and terminal cleanup.
+- Two real STUN binding attempts failed before selected-pair connection. The
+  Colima/Docker VM topologies could not provide a viable private return route,
+  so the aggregate route matrix still has no STUN srflx proof.
+- Linux capture is real for window and process-scoped application, but both
+  target kinds correctly remain `view_only`; X11/XTest does not provide the
+  target-isolated press-to-release semantics required for Window/Application
+  input. macOS is blocked by Screen & System Audio Recording permission for the
+  exact signed helper. Windows has no real-host evidence.
+- `target/e2e/remoteapp-product-completion/final-20260829/report.json` reports
+  `status=failed`, 20 errors, `product_complete_eligible=false`,
+  `finalization_state=not_eligible`, and `product_complete_claim=false`. The
+  missing authority/report set is explicit; this tree is not eligible for
+  merge review under the product-completion rule.
