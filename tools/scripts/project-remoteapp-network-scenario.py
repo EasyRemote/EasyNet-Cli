@@ -255,7 +255,7 @@ def project(args: argparse.Namespace) -> dict[str, Any]:
         fixture["relay_allocation"] = allocation
 
         if not isinstance(network.get("client_ice_url_count"), int) or network["client_ice_url_count"] <= 0:
-            raise ValueError(f"{route_kind} projection requires Hub-projected ICE server URLs")
+            raise ValueError(f"{route_kind} projection requires daemon-projected ICE server URLs")
         schemes = {
             str(value).lower()
             for value in network.get("client_ice_url_schemes", [])
