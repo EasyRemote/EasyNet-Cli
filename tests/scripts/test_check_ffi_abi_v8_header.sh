@@ -30,6 +30,7 @@ make_sandbox() {
     cp "$REPO_ROOT/sdk/python/easynet_sdk/providers/runtime/direct.py" \
         "$sandbox/sdk/python/easynet_sdk/providers/runtime/direct.py"
     cp "$REPO_ROOT/sdk/python/tests/test_stream.py" "$sandbox/sdk/python/tests/test_stream.py"
+    cp "$REPO_ROOT/sdk/python/tests/test_cabi.py" "$sandbox/sdk/python/tests/test_cabi.py"
     cp "$REPO_ROOT/sdk/go/cabi_runtime.go" "$sandbox/sdk/go/cabi_runtime.go"
     cp "$REPO_ROOT/sdk/go/cabi_callbacks.go" "$sandbox/sdk/go/cabi_callbacks.go"
     cp "$REPO_ROOT/sdk/go/cabi_runtime_test.go" "$sandbox/sdk/go/cabi_runtime_test.go"
@@ -72,7 +73,7 @@ expect_failure "v8 header symbol drift" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/JSON pointers and the v8 payload/JSON pointers/' \
+perl -0pi -e 's/JSON pointers, v8 frame pointers/JSON pointers/' \
     "$SB/include/easynet_cli.h"
 expect_failure "v8 borrowed payload ownership removed" "$SB"
 rm -rf "$SB"
@@ -84,7 +85,7 @@ expect_failure "v8 allowlist missing raw symbol" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/"stream_raw_payload": true/"stream_raw_payload": false/' \
+perl -0pi -e 's/"stream_binary_frame": true/"stream_binary_frame": false/' \
     "$SB/sdk/conformance/fixtures/feature-discovery.v7.json"
 expect_failure "v8 feature discovery disabled" "$SB"
 rm -rf "$SB"
@@ -96,14 +97,79 @@ expect_failure "Python ignores advertised v8 symbol" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's/return observed\n        sequence = self\._next_sequence/sequence = self._next_sequence\n        self._next_sequence += 1\n        return sequence\n        sequence = self._next_sequence/' \
+    "$SB/sdk/python/easynet_sdk/_cabi.py"
+expect_failure "Python rewrites observed Runtime sequence" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/test_stream_rejects_duplicate_runtime_sequence/test_stream_accepts_duplicate_runtime_sequence/' \
+    "$SB/sdk/python/tests/test_stream.py"
+expect_failure "Python StreamHandle duplicate-sequence proof removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/isinstance\(raw, RawStreamPacket\)/isinstance(raw, bytes)/' \
+    "$SB/sdk/python/easynet_sdk/_cabi.py"
+expect_failure "Python routes binary v8 frames through legacy JSON repair" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/test_v8_callback_rejects_incompatible_frame_layout/test_v8_callback_accepts_incompatible_frame_layout/' \
+    "$SB/sdk/python/tests/test_cabi.py"
+expect_failure "Python exact v8 EOF proof removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/test_v8_callback_queue_overflow_is_carrier_error_not_runtime_frame/test_v8_callback_queue_overflow_invents_runtime_frame/' \
+    "$SB/sdk/python/tests/test_cabi.py"
+expect_failure "Python v8 overflow carrier-error proof removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/test_raw_stream_packet_rejects_noncanonical_state_and_object_fields/test_raw_stream_packet_accepts_noncanonical_state_and_object_fields/' \
+    "$SB/sdk/python/tests/test_stream.py"
+expect_failure "Python canonical v8 metadata type proof removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
 perl -0pi -e 's/v8\["symbol"\] == "runtime_invocation_stream_open_v8"/true/' \
     "$SB/sdk/go/cabi_runtime.go"
 expect_failure "Go ignores advertised v8 symbol" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's/if !packet\.hasBinary/if false/' "$SB/sdk/go/cabi_runtime.go"
+expect_failure "Go accepts non-binary v8 callback packet" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/TestCABIV8TransportPreservesMalformedHeaderForFailClosedValidation/TestCABIV8TransportRepairsMalformedHeader/' \
+    "$SB/sdk/go/cabi_runtime_test.go"
+expect_failure "Go malformed v8 metadata proof removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/TestCABIV8CallbackRejectsIncompatibleFrameLayout/TestCABIV8CallbackAcceptsIncompatibleFrameLayout/' \
+    "$SB/sdk/go/cabi_runtime_test.go"
+expect_failure "Go exact v8 EOF proof removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
 perl -0pi -e 's/RemoteApp WebRTC/RemoteApp transport/' "$SB/docs/spec/ffi-abi-v8.md"
 expect_failure "v8 product transport boundary removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/stream_v8_header_uses_canonical_wire_types/stream_v8_header_accepts_ambiguous_wire_types/' \
+    "$SB/src/ffi/invocation/mod.rs"
+expect_failure "v8 canonical metadata wire-type proof removed" "$SB"
+rm -rf "$SB"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/stream_v8_header_rejects_noncanonical_state_name/stream_v8_header_accepts_noncanonical_state_name/' \
+    "$SB/src/ffi/invocation/mod.rs"
+expect_failure "v8 noncanonical state rejection proof removed" "$SB"
 rm -rf "$SB"
 
 if command -v cc >/dev/null 2>&1 && command -v nm >/dev/null 2>&1; then

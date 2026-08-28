@@ -46,9 +46,9 @@ typedef uint64_t RuntimeSignedInvocationId;
 typedef uint64_t RuntimeInvocationHandleId;
 
 /*
- * Callbacks run on library-owned threads. JSON pointers and the v8 payload
- * pointer are borrowed for the duration of the call and must be copied by
- * bindings that retain them.
+ * Callbacks run on library-owned threads. JSON pointers, v8 frame pointers,
+ * and every RuntimeBytesViewV8 member are borrowed for the duration of the
+ * call and must be copied or consumed before the callback returns.
  * `close_send` is a half-close; cancel/close/shutdown are terminal actions.
  */
 typedef void (*RuntimeInvocationStreamCallback)(
@@ -56,11 +56,55 @@ typedef void (*RuntimeInvocationStreamCallback)(
     const char *chunk_json
 );
 
+#define RUNTIME_STREAM_FRAME_V8_ABI_VERSION 8u
+
+#define RUNTIME_STREAM_FRAME_V8_KIND_DATA 1u
+#define RUNTIME_STREAM_FRAME_V8_KIND_TERMINAL 2u
+#define RUNTIME_STREAM_FRAME_V8_KIND_ERROR 3u
+#define RUNTIME_STREAM_FRAME_V8_KIND_CANCELLED 4u
+#define RUNTIME_STREAM_FRAME_V8_KIND_TIMEOUT 5u
+#define RUNTIME_STREAM_FRAME_V8_KIND_RECEIPT_VERIFICATION_ERROR 6u
+
+#define RUNTIME_STREAM_FRAME_V8_STATE_ACCEPTED 1u
+#define RUNTIME_STREAM_FRAME_V8_STATE_ADMITTED 2u
+#define RUNTIME_STREAM_FRAME_V8_STATE_DISPATCHED 3u
+#define RUNTIME_STREAM_FRAME_V8_STATE_RUNNING 4u
+#define RUNTIME_STREAM_FRAME_V8_STATE_COMPLETED 5u
+#define RUNTIME_STREAM_FRAME_V8_STATE_FAILED 6u
+#define RUNTIME_STREAM_FRAME_V8_STATE_TIMED_OUT 7u
+#define RUNTIME_STREAM_FRAME_V8_STATE_CANCELLED 8u
+
+#define RUNTIME_STREAM_FRAME_V8_FLAG_TERMINAL (1u << 0)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL (1u << 1)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_PAYLOAD (1u << 2)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE (1u << 3)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_ADMISSION_RECEIPT (1u << 4)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_TERMINAL_RECEIPT (1u << 5)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_ERROR (1u << 6)
+
+typedef struct RuntimeBytesViewV8 {
+    const uint8_t *data;
+    size_t len;
+} RuntimeBytesViewV8;
+
+typedef struct RuntimeInvocationStreamFrameV8 {
+    uint32_t struct_size;
+    uint16_t abi_version;
+    uint8_t kind;
+    uint8_t state;
+    uint32_t flags;
+    uint64_t sequence;
+    uint64_t elapsed_ms;
+    RuntimeBytesViewV8 payload_content_type;
+    RuntimeBytesViewV8 payload;
+    RuntimeBytesViewV8 admission_receipt_json;
+    RuntimeBytesViewV8 terminal_receipt_json;
+    RuntimeBytesViewV8 error_json;
+} RuntimeInvocationStreamFrameV8;
+
 typedef void (*RuntimeInvocationStreamV8Callback)(
     void *user_data,
-    const char *metadata_json,
-    const uint8_t *payload,
-    size_t payload_len
+    const RuntimeInvocationStreamFrameV8 *frame
 );
 
 typedef void (*RuntimeInvocationBidiCallback)(

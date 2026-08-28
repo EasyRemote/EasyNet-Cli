@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Additive contract gate for the libeasynet_cli C ABI v8 raw stream extension.
+# Additive contract gate for the libeasynet_cli C ABI v8 binary stream extension.
 
 set -euo pipefail
 
@@ -111,15 +111,18 @@ if require_file "$V8_ALLOWLIST"; then
         record_violation "v8 allowlist must include every v7 symbol" "$(cat "$tmp/v8-missing-v7")"
     fi
     if [[ "$(cat "$tmp/v8-additions")" != "$V8_SYMBOL" ]]; then
-        record_violation "v8 allowlist must add only the raw stream symbol" "$(cat "$tmp/v8-additions")"
+        record_violation "v8 allowlist must add only the binary stream symbol" "$(cat "$tmp/v8-additions")"
     fi
 fi
 
 if require_file "$HEADER"; then
     require_literal "$HEADER" "#define RUNTIME_ABI_VERSION 7u"
     require_literal "$HEADER" "#define RUNTIME_ABI_V8_EXTENSION_VERSION 8u"
+    require_literal "$HEADER" "#define RUNTIME_STREAM_FRAME_V8_ABI_VERSION 8u"
+    require_literal "$HEADER" "typedef struct RuntimeBytesViewV8"
+    require_literal "$HEADER" "typedef struct RuntimeInvocationStreamFrameV8"
     require_literal "$HEADER" "typedef void (*RuntimeInvocationStreamV8Callback)"
-    require_literal "$HEADER" "v8 payload"
+    require_literal "$HEADER" "v8 frame pointers"
     require_literal "$HEADER" "$V8_SYMBOL"
     extract_header_symbols "$HEADER" | LC_ALL=C sort >"$tmp/header.symbols"
     if ! diff -u "$V8_ALLOWLIST" "$tmp/header.symbols" >"$tmp/header.diff"; then
@@ -135,9 +138,9 @@ fi
 if require_file "$FEATURE_FIXTURE"; then
     require_literal "$FEATURE_FIXTURE" '"abi_version": 7'
     require_literal "$FEATURE_FIXTURE" '"abi_extensions"'
-    require_literal "$FEATURE_FIXTURE" '"stream_raw_payload": true'
+    require_literal "$FEATURE_FIXTURE" '"stream_binary_frame": true'
     require_literal "$FEATURE_FIXTURE" '"symbol": "runtime_invocation_stream_open_v8"'
-    require_literal "$FEATURE_FIXTURE" '"stream_raw_payload_v8": true'
+    require_literal "$FEATURE_FIXTURE" '"stream_binary_frame_v8": true'
 fi
 
 if require_file "$SPEC"; then
@@ -147,7 +150,10 @@ if require_file "$SPEC"; then
         "include/easynet_cli.exports.v8" \
         "runtime_invocation_stream_open_v8" \
         "runtime_feature_discovery" \
-        "all-null callback" \
+        'frame == NULL' \
+        "fixed-layout frame" \
+        "sparse" \
+        "Bindings MUST reject, not repair" \
         "RemoteApp WebRTC"
     do
         require_literal "$SPEC" "$literal"
@@ -161,38 +167,78 @@ if ! rg -q "StreamCallbackDelivery::V8" src/ffi/invocation/mod.rs; then
     record_violation "Rust stream delivery must have v8 raw payload variant" "src/ffi/invocation/mod.rs"
 fi
 if ! rg -q "RawStreamPacket" sdk/python/easynet_sdk/_cabi.py; then
-    record_violation "Python C ABI provider must expose raw packet bridge" "sdk/python/easynet_sdk/_cabi.py"
+    record_violation "Python C ABI provider must expose binary packet bridge" "sdk/python/easynet_sdk/_cabi.py"
 fi
-if ! rg -q "_require_raw_stream_metadata_contract" sdk/python/easynet_sdk/stream.py; then
-    record_violation "Python SDK raw stream packets must require canonical lifecycle metadata" \
+if ! rg -q "_RuntimeInvocationStreamFrameV8" sdk/python/easynet_sdk/_cabi.py; then
+    record_violation "Python SDK must bind the fixed v8 frame layout" \
         "sdk/python/easynet_sdk/stream.py"
 fi
-if ! rg -q '"admission_receipt"' sdk/python/easynet_sdk/stream.py; then
-    record_violation "Python SDK raw stream metadata contract must include admission_receipt" \
-        "sdk/python/easynet_sdk/stream.py"
-fi
-if ! rg -q '"terminal_receipt"' sdk/python/easynet_sdk/stream.py; then
-    record_violation "Python SDK raw stream metadata contract must include terminal_receipt" \
+if ! rg -q "_decode_binary_sidecar" sdk/python/easynet_sdk/stream.py; then
+    record_violation "Python SDK must decode only sparse receipt/error sidecars" \
         "sdk/python/easynet_sdk/stream.py"
 fi
 if ! rg -q 'v8.get\("symbol"\) == "runtime_invocation_stream_open_v8"' sdk/python/easynet_sdk/_cabi.py; then
     record_violation "Python SDK must bind the advertised v8 feature to the canonical symbol" \
         "sdk/python/easynet_sdk/_cabi.py"
 fi
-if ! rg -q 'symbols.get\("stream_raw_payload_v8"\) is True' sdk/python/easynet_sdk/_cabi.py; then
+if ! rg -q 'symbols.get\("stream_binary_frame_v8"\) is True' sdk/python/easynet_sdk/_cabi.py; then
     record_violation "Python SDK must require the v8 symbol feature bit" \
         "sdk/python/easynet_sdk/_cabi.py"
 fi
-if ! rg -q "test_raw_stream_packet_requires_canonical_metadata_fields" sdk/python/tests/test_stream.py; then
-    record_violation "Python stream tests must reject incomplete v8 raw metadata" \
+if ! rg -q "test_binary_stream_packet_requires_positive_sequence" sdk/python/tests/test_stream.py; then
+    record_violation "Python stream tests must reject malformed v8 binary headers" \
         "sdk/python/tests/test_stream.py"
 fi
-if ! rg -q "stream_receipt_verification_error_carries_v8_metadata_contract" src/ffi/invocation/mod.rs; then
-    record_violation "Rust FFI tests must pin v8 receipt-verification error metadata" \
+if ! rg -q "test_stream_adapter_preserves_runtime_sequence_for_fail_closed_validation" sdk/python/tests/test_cabi.py; then
+    record_violation "Python C ABI tests must prove Runtime sequence is not rewritten" \
+        "sdk/python/tests/test_cabi.py"
+fi
+if ! rg -Uq 'if isinstance\(raw, RawStreamPacket\):(.|\n){0,240}return raw' sdk/python/easynet_sdk/_cabi.py; then
+    record_violation "Python v8 binary packets must bypass legacy JSON repair" \
+        "sdk/python/easynet_sdk/_cabi.py"
+fi
+if ! rg -q "test_v8_callback_rejects_incompatible_frame_layout" sdk/python/tests/test_cabi.py; then
+    record_violation "Python C ABI tests must reject an incompatible v8 frame layout" \
+        "sdk/python/tests/test_cabi.py"
+fi
+if ! rg -q "test_raw_stream_packet_rejects_noncanonical_state_and_object_fields" sdk/python/tests/test_stream.py; then
+    record_violation "Python stream tests must reject noncanonical v8 state and receipt/error types" \
+        "sdk/python/tests/test_stream.py"
+fi
+if ! rg -q 'if not frame_pointer:' sdk/python/easynet_sdk/_cabi.py; then
+    record_violation "Python v8 callback must treat only a null frame pointer as EOF" \
+        "sdk/python/easynet_sdk/_cabi.py"
+fi
+if ! rg -q '_require_stream_v8_presence_flag' sdk/python/easynet_sdk/_cabi.py; then
+    record_violation "Python v8 callback must validate binary view presence flags" \
+        "sdk/python/easynet_sdk/_cabi.py"
+fi
+if ! rg -q "test_v8_callback_queue_overflow_is_carrier_error_not_runtime_frame" sdk/python/tests/test_cabi.py; then
+    record_violation "Python v8 callback overflow must remain a carrier error" \
+        "sdk/python/tests/test_cabi.py"
+fi
+if ! rg -q "test_stream_rejects_duplicate_runtime_sequence" sdk/python/tests/test_stream.py; then
+    record_violation "Python StreamHandle tests must reject duplicate Runtime sequence" \
+        "sdk/python/tests/test_stream.py"
+fi
+if ! rg -Uq 'if observed is not None:\n[[:space:]]+if observed >= self\._next_sequence:\n[[:space:]]+self\._next_sequence = observed \+ 1\n[[:space:]]+return observed' sdk/python/easynet_sdk/_cabi.py; then
+    record_violation "Python C ABI stream adapter must preserve observed Runtime sequence" \
+        "sdk/python/easynet_sdk/_cabi.py"
+fi
+if ! rg -q "struct BinaryStreamFrameV8" src/ffi/invocation/mod.rs; then
+    record_violation "Rust FFI must own the fixed v8 binary frame" \
         "src/ffi/invocation/mod.rs"
 fi
-if ! rg -q '"payload_content_type": ""' src/ffi/invocation/mod.rs; then
-    record_violation "Rust FFI transport-error metadata must include payload_content_type" \
+if ! rg -q "stream_v8_header_uses_canonical_wire_types" src/ffi/invocation/mod.rs; then
+    record_violation "Rust FFI tests must pin exact v8 binary header types" \
+        "src/ffi/invocation/mod.rs"
+fi
+if ! rg -q "stream_v8_header_rejects_noncanonical_state_name" src/ffi/invocation/mod.rs; then
+    record_violation "Rust FFI tests must reject noncanonical v8 state names" \
+        "src/ffi/invocation/mod.rs"
+fi
+if ! rg -q "optional_sidecar_json" src/ffi/invocation/mod.rs; then
+    record_violation "Rust FFI must serialize JSON only for sparse v8 sidecars" \
         "src/ffi/invocation/mod.rs"
 fi
 if ! rg -q "runtime_cabi_call_stream_open_v8" sdk/go/cabi_runtime.go; then
@@ -200,6 +246,35 @@ if ! rg -q "runtime_cabi_call_stream_open_v8" sdk/go/cabi_runtime.go; then
 fi
 if ! rg -q "easynetGoStreamV8Callback" sdk/go/cabi_callbacks.go; then
     record_violation "Go C ABI provider must expose v8 raw stream callback" "sdk/go/cabi_callbacks.go"
+fi
+if ! rg -q 'if !packet\.hasBinary' sdk/go/cabi_runtime.go \
+    || ! rg -q 'return packet\.binary, nil' sdk/go/cabi_runtime.go; then
+    record_violation "Go v8 binary packets must bypass legacy JSON repair" \
+        "sdk/go/cabi_runtime.go"
+fi
+if ! rg -q 'if frame == nil' sdk/go/cabi_callbacks.go; then
+    record_violation "Go v8 callback must treat only a null frame pointer as EOF" \
+        "sdk/go/cabi_callbacks.go"
+fi
+if ! rg -q "copyStreamV8View" sdk/go/cabi_callbacks.go; then
+    record_violation "Go v8 callback must validate and copy bounded binary views" \
+        "sdk/go/cabi_callbacks.go"
+fi
+if ! rg -q "TestCABIV8TransportPreservesMalformedHeaderForFailClosedValidation" sdk/go/cabi_runtime_test.go; then
+    record_violation "Go C ABI tests must prove malformed v8 headers are not repaired" \
+        "sdk/go/cabi_runtime_test.go"
+fi
+if ! rg -q "TestCABIV8CallbackRejectsIncompatibleFrameLayout" sdk/go/cabi_runtime_test.go; then
+    record_violation "Go C ABI tests must reject an incompatible v8 frame layout" \
+        "sdk/go/cabi_runtime_test.go"
+fi
+if ! rg -q "cabiCallbackBackpressureError" sdk/go/cabi_runtime.go; then
+    record_violation "Go v8 callback overflow must remain a carrier error" \
+        "sdk/go/cabi_runtime.go"
+fi
+if ! rg -q "canonicalRuntimeStreamStates" sdk/go/stream.go; then
+    record_violation "Go stream decoder must validate canonical v8 Runtime state names" \
+        "sdk/go/stream.go"
 fi
 if ! rg -q "func \\(e StreamEvent\\) PayloadBytes\\(\\) \\[\\]byte" sdk/go/stream.go; then
     record_violation "Go stream facade must expose raw payload bytes" "sdk/go/stream.go"
@@ -211,7 +286,7 @@ if ! rg -q 'v8\["symbol"\] == "runtime_invocation_stream_open_v8"' sdk/go/cabi_r
     record_violation "Go SDK must bind the advertised v8 feature to the canonical symbol" \
         "sdk/go/cabi_runtime.go"
 fi
-if ! rg -q 'featureSymbols\["stream_raw_payload_v8"\] == true' sdk/go/cabi_runtime.go; then
+if ! rg -q 'featureSymbols\["stream_binary_frame_v8"\] == true' sdk/go/cabi_runtime.go; then
     record_violation "Go SDK must require the v8 symbol feature bit" \
         "sdk/go/cabi_runtime.go"
 fi
@@ -247,4 +322,4 @@ if [[ "$violations" -ne 0 ]]; then
     exit 1
 fi
 
-echo "ok (generic C ABI v8 extension: raw stream transport symbol is additive)"
+echo "ok (generic C ABI v8 extension: binary stream transport symbol is additive)"

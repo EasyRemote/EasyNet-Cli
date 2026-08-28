@@ -1,3 +1,4 @@
+import json
 import threading
 import unittest
 from collections.abc import Callable
@@ -187,37 +188,33 @@ class StreamTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, ErrorCode.INVALID_ARGUMENT)
 
-    def test_raw_stream_packet_requires_canonical_metadata_fields(self) -> None:
+    def test_binary_stream_packet_requires_positive_sequence(self) -> None:
         with self.assertRaises(SDKError) as caught:
             StreamEvent.from_raw_packet(
                 RawStreamPacket(
-                    metadata_json=(
-                        b'{"sequence":1,"kind":"data","state":"Open",'
-                        b'"terminal":false,"payload_content_type":"video/h264"}'
-                    ),
+                    sequence=0,
+                    kind="data",
+                    state="Running",
+                    terminal=False,
+                    transport_terminal=False,
+                    elapsed_ms=0,
+                    payload_content_type="video/h264",
                     payload=b"\x00\x01",
                 )
             )
 
-        self.assertIn(
-            "raw stream packet metadata missing required canonical field",
-            str(caught.exception),
-        )
-        self.assertIn("transport_terminal", str(caught.exception))
-        self.assertIn("admission_receipt", str(caught.exception))
-        self.assertIn("terminal_receipt", str(caught.exception))
-        self.assertIn("error", str(caught.exception))
+        self.assertIn("sequence must be positive", str(caught.exception))
 
     def test_raw_stream_packet_projects_raw_payload_without_payload_aliases(self) -> None:
         event = StreamEvent.from_raw_packet(
             RawStreamPacket(
-                metadata_json=(
-                    b'{"sequence":1,"kind":"data","state":"Open",'
-                    b'"terminal":false,"transport_terminal":false,'
-                    b'"payload_content_type":"video/h264",'
-                    b'"admission_receipt":null,"terminal_receipt":null,'
-                    b'"error":null}'
-                ),
+                sequence=1,
+                kind="data",
+                state="Running",
+                terminal=False,
+                transport_terminal=False,
+                elapsed_ms=0,
+                payload_content_type="video/h264",
                 payload=b"\x00\x01\x02",
             )
         )
@@ -228,25 +225,40 @@ class StreamTests(unittest.TestCase):
         self.assertFalse(event.terminal)
         self.assertFalse(event.transport_terminal)
 
-    def test_raw_stream_packet_rejects_payload_projection_in_metadata(self) -> None:
+    def test_binary_stream_packet_rejects_non_object_sidecar(self) -> None:
         with self.assertRaises(SDKError) as caught:
             StreamEvent.from_raw_packet(
                 RawStreamPacket(
-                    metadata_json=(
-                        b'{"sequence":1,"kind":"data","state":"Open",'
-                        b'"terminal":false,"transport_terminal":false,'
-                        b'"payload_content_type":"video/h264",'
-                        b'"admission_receipt":null,"terminal_receipt":null,'
-                        b'"error":null,"payload_base64":"AAE="}'
-                    ),
+                    sequence=1,
+                    kind="data",
+                    state="Running",
+                    terminal=False,
+                    transport_terminal=False,
+                    elapsed_ms=0,
+                    payload_content_type="video/h264",
                     payload=b"\x00\x01",
+                    error_json=b"[]",
                 )
             )
 
-        self.assertIn(
-            "raw stream packet metadata must not duplicate payload fields",
-            str(caught.exception),
-        )
+        self.assertIn("error sidecar must be an object", str(caught.exception))
+
+    def test_raw_stream_packet_rejects_noncanonical_state_and_object_fields(self) -> None:
+        for field_name, value in (("state", "not-a-runtime-state"), ("kind", "chunk")):
+            with self.subTest(field=field_name):
+                fields = {
+                    "sequence": 1,
+                    "kind": "data",
+                    "state": "Running",
+                    "terminal": False,
+                    "transport_terminal": False,
+                    "elapsed_ms": 0,
+                    "payload_content_type": "video/h264",
+                    "payload": b"\x00",
+                }
+                fields[field_name] = value
+                with self.assertRaises(SDKError):
+                    StreamEvent.from_raw_packet(RawStreamPacket(**fields))
 
     def test_stream_terminal_event_projects_terminal_receipt(self) -> None:
         transport = MemoryStreamTransport(
@@ -311,6 +323,26 @@ class StreamTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(stream.state, StreamState.TERMINAL_FRAME_SEEN)
+
+    def test_stream_rejects_duplicate_runtime_sequence(self) -> None:
+        transport = MemoryStreamTransport(
+            [
+                b'{"sequence":2,"kind":"data","state":"Running","terminal":false}',
+                b'{"sequence":2,"kind":"data","state":"Running","terminal":false}',
+            ]
+        )
+        stream = StreamHandle.from_json(
+            transport,
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+
+        stream.next()
+        with self.assertRaises(SDKError) as caught:
+            stream.next()
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("strictly ordered", str(caught.exception))
+        self.assertEqual(stream.state, StreamState.FAILED)
 
     def test_transport_terminal_fails_stream_without_runtime_terminal(self) -> None:
         transport = MemoryStreamTransport(

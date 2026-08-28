@@ -2,7 +2,7 @@
   "abi_version": 7,
   "abi_extensions": {
     "v8": {
-      "stream_raw_payload": true,
+      "stream_binary_frame": true,
       "symbol": "runtime_invocation_stream_open_v8"
     }
   },
@@ -19,7 +19,7 @@
     "runtime_health": true,
     "runtime_diagnostics": true,
     "prepare_sign_submit": true,
-    "stream_raw_payload_v8": true,
+    "stream_binary_frame_v8": true,
     "typed_error_json": true
   },
   "axon_pb": true

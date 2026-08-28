@@ -11,16 +11,15 @@ import (
 
 const MaxStreamBufferedEvents = 1024
 
-var rawStreamRequiredMetadataFields = []string{
-	"sequence",
-	"kind",
-	"state",
-	"terminal",
-	"transport_terminal",
-	"payload_content_type",
-	"admission_receipt",
-	"terminal_receipt",
-	"error",
+var canonicalRuntimeStreamStates = map[string]struct{}{
+	"Accepted":   {},
+	"Admitted":   {},
+	"Dispatched": {},
+	"Running":    {},
+	"Completed":  {},
+	"Failed":     {},
+	"TimedOut":   {},
+	"Cancelled":  {},
 }
 
 // StreamState is the Runtime Core server-stream state.
@@ -45,8 +44,18 @@ type StreamTransport interface {
 }
 
 type rawStreamPacket struct {
-	metadataJSON []byte
-	payload      []byte
+	legacyMetadataJSON   []byte
+	sequence             uint64
+	kind                 string
+	state                string
+	terminal             bool
+	transportTerminal    bool
+	elapsedMS            uint64
+	payloadContentType   string
+	payload              []byte
+	admissionReceiptJSON []byte
+	terminalReceiptJSON  []byte
+	errorJSON            []byte
 }
 
 type streamRawTransport interface {
@@ -686,51 +695,71 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 }
 
 func NewStreamEventFromRawPacket(packet rawStreamPacket) (StreamEvent, error) {
-	if err := requireRawStreamMetadataContract(packet.metadataJSON); err != nil {
-		return StreamEvent{}, err
+	if packet.sequence == 0 {
+		return StreamEvent{}, invalidRuntimePayload("binary stream frame sequence must be positive", nil)
 	}
-	event, err := NewStreamEventFromJSON(packet.metadataJSON)
+	if _, ok := canonicalRuntimeStreamStates[packet.state]; !ok {
+		return StreamEvent{}, invalidRuntimePayload("binary stream frame state is not canonical: "+packet.state, nil)
+	}
+	if !canonicalBinaryStreamKind(packet.kind) {
+		return StreamEvent{}, invalidRuntimePayload("binary stream frame kind is not canonical: "+packet.kind, nil)
+	}
+	admissionReceipt, err := decodeBinaryStreamSidecar(packet.admissionReceiptJSON, "admission_receipt")
 	if err != nil {
 		return StreamEvent{}, err
 	}
-	if event.payloadBase64 != "" || len(event.payloadJSON) != 0 {
-		return StreamEvent{}, invalidRuntimePayload("raw stream packet metadata must not duplicate payload fields", nil)
+	terminalReceipt, err := decodeBinaryStreamSidecar(packet.terminalReceiptJSON, "terminal_receipt")
+	if err != nil {
+		return StreamEvent{}, err
+	}
+	errorJSON, err := decodeBinaryStreamSidecar(packet.errorJSON, "error")
+	if err != nil {
+		return StreamEvent{}, err
 	}
 	var payloadJSON json.RawMessage
-	if len(packet.payload) != 0 && stringsContainsFold(event.payloadContentType, "json") {
+	if len(packet.payload) != 0 && stringsContainsFold(packet.payloadContentType, "json") {
 		if !json.Valid(packet.payload) {
 			return StreamEvent{}, invalidRuntimePayload("decode raw JSON stream payload", nil)
 		}
-		payloadJSON = append(json.RawMessage(nil), packet.payload...)
+		payloadJSON = json.RawMessage(packet.payload)
 	}
-	event.payloadBytes = append([]byte(nil), packet.payload...)
-	event.payloadJSON = payloadJSON
-	return event, nil
+	return StreamEvent{
+		sequence:             packet.sequence,
+		kind:                 packet.kind,
+		state:                packet.state,
+		terminal:             packet.terminal,
+		transportTerminal:    packet.transportTerminal,
+		payloadContentType:   packet.payloadContentType,
+		payloadBytes:         packet.payload,
+		payloadJSON:          payloadJSON,
+		elapsedMS:            int64(packet.elapsedMS),
+		errorJSON:            errorJSON,
+		admissionReceiptJSON: admissionReceipt,
+		terminalReceiptJSON:  terminalReceipt,
+	}, nil
 }
 
-func requireRawStreamMetadataContract(raw []byte) error {
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return invalidRuntimePayload(fmt.Sprintf("decode stream event JSON: %v", err), err)
+func canonicalBinaryStreamKind(kind string) bool {
+	switch kind {
+	case "data", "terminal", "error", "cancelled", "timeout", "receipt_verification_error":
+		return true
+	default:
+		return false
 	}
-	for _, field := range rawStreamRequiredMetadataFields {
-		if _, ok := decoded[field]; !ok {
-			return invalidRuntimePayload("raw stream packet metadata missing required canonical field "+field, nil)
-		}
+}
+
+func decodeBinaryStreamSidecar(raw []byte, field string) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
 	}
-	if _, ok := decoded["state"].(string); !ok {
-		return invalidRuntimePayload("raw stream packet metadata state must be a string", nil)
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode binary stream %s sidecar: %v", field, err), err)
 	}
-	if _, ok := decoded["terminal"].(bool); !ok {
-		return invalidRuntimePayload("raw stream packet metadata terminal must be a boolean", nil)
+	if object == nil {
+		return nil, invalidRuntimePayload("binary stream "+field+" sidecar must be an object", nil)
 	}
-	if _, ok := decoded["transport_terminal"].(bool); !ok {
-		return invalidRuntimePayload("raw stream packet metadata transport_terminal must be a boolean", nil)
-	}
-	if _, ok := decoded["payload_content_type"].(string); !ok {
-		return invalidRuntimePayload("raw stream packet metadata payload_content_type must be a string", nil)
-	}
-	return nil
+	return json.RawMessage(raw), nil
 }
 
 func streamPayloadBase64Bytes(value string) ([]byte, error) {

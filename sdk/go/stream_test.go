@@ -174,70 +174,37 @@ func TestStreamEventRejectsLegacyChunkKind(t *testing.T) {
 	}
 }
 
-func TestRawStreamPacketRequiresCanonicalMetadataContract(t *testing.T) {
-	base := map[string]any{
-		"sequence":             1,
-		"kind":                 "data",
-		"state":                "Open",
-		"terminal":             false,
-		"transport_terminal":   false,
-		"payload_content_type": "application/json",
-		"admission_receipt":    nil,
-		"terminal_receipt":     nil,
-		"error":                nil,
-	}
-
-	for _, field := range rawStreamRequiredMetadataFields {
-		metadata := cloneMap(base)
-		delete(metadata, field)
-		raw, err := json.Marshal(metadata)
-		if err != nil {
-			t.Fatalf("marshal metadata without %s: %v", field, err)
-		}
-		_, err = NewStreamEventFromRawPacket(rawStreamPacket{
-			metadataJSON: raw,
-			payload:      []byte(`{"ok":true}`),
-		})
-		if err == nil || !strings.Contains(err.Error(), "missing required canonical field "+field) {
-			t.Fatalf("raw stream packet accepted metadata without %s: %v", field, err)
+func TestBinaryStreamPacketRequiresCanonicalHeader(t *testing.T) {
+	for name, mutation := range map[string]func(*rawStreamPacket){
+		"sequence": func(packet *rawStreamPacket) { packet.sequence = 0 },
+		"kind":     func(packet *rawStreamPacket) { packet.kind = "chunk" },
+		"state":    func(packet *rawStreamPacket) { packet.state = "Open" },
+	} {
+		packet := canonicalRawStreamPacket()
+		mutation(&packet)
+		if _, err := NewStreamEventFromRawPacket(packet); err == nil {
+			t.Fatalf("binary stream packet accepted invalid %s", name)
 		}
 	}
 }
 
-func TestRawStreamPacketRejectsInvalidMetadataTypesAndPayloadDuplication(t *testing.T) {
-	for name, mutation := range map[string]func(map[string]any){
-		"state":                func(metadata map[string]any) { metadata["state"] = 7 },
-		"terminal":             func(metadata map[string]any) { metadata["terminal"] = "false" },
-		"transport_terminal":   func(metadata map[string]any) { metadata["transport_terminal"] = "false" },
-		"payload_content_type": func(metadata map[string]any) { metadata["payload_content_type"] = nil },
-		"payload_base64":       func(metadata map[string]any) { metadata["payload_base64"] = "e30=" },
-		"payload_json":         func(metadata map[string]any) { metadata["payload_json"] = map[string]any{"dup": true} },
+func TestBinaryStreamPacketRejectsInvalidSidecars(t *testing.T) {
+	for name, mutation := range map[string]func(*rawStreamPacket){
+		"admission_receipt": func(packet *rawStreamPacket) { packet.admissionReceiptJSON = []byte(`[]`) },
+		"terminal_receipt":  func(packet *rawStreamPacket) { packet.terminalReceiptJSON = []byte(`7`) },
+		"error":             func(packet *rawStreamPacket) { packet.errorJSON = []byte(`"bad"`) },
 	} {
-		metadata := canonicalRawStreamMetadata()
-		mutation(metadata)
-		raw, err := json.Marshal(metadata)
-		if err != nil {
-			t.Fatalf("marshal %s metadata: %v", name, err)
-		}
-		_, err = NewStreamEventFromRawPacket(rawStreamPacket{
-			metadataJSON: raw,
-			payload:      []byte(`{"ok":true}`),
-		})
-		if err == nil {
-			t.Fatalf("raw stream packet accepted invalid %s metadata", name)
+		packet := canonicalRawStreamPacket()
+		mutation(&packet)
+		if _, err := NewStreamEventFromRawPacket(packet); err == nil {
+			t.Fatalf("binary stream packet accepted invalid %s sidecar", name)
 		}
 	}
 }
 
 func TestRawStreamPacketPreservesPayloadBytesAndProjectsJSON(t *testing.T) {
-	raw, err := json.Marshal(canonicalRawStreamMetadata())
-	if err != nil {
-		t.Fatalf("marshal canonical raw metadata: %v", err)
-	}
-	event, err := NewStreamEventFromRawPacket(rawStreamPacket{
-		metadataJSON: raw,
-		payload:      []byte(`{"ok":true}`),
-	})
+	packet := canonicalRawStreamPacket()
+	event, err := NewStreamEventFromRawPacket(packet)
 	if err != nil {
 		t.Fatalf("NewStreamEventFromRawPacket: %v", err)
 	}
@@ -246,17 +213,13 @@ func TestRawStreamPacketPreservesPayloadBytesAndProjectsJSON(t *testing.T) {
 	}
 }
 
-func canonicalRawStreamMetadata() map[string]any {
-	return map[string]any{
-		"sequence":             1,
-		"kind":                 "data",
-		"state":                "Open",
-		"terminal":             false,
-		"transport_terminal":   false,
-		"payload_content_type": "application/json",
-		"admission_receipt":    nil,
-		"terminal_receipt":     nil,
-		"error":                nil,
+func canonicalRawStreamPacket() rawStreamPacket {
+	return rawStreamPacket{
+		sequence:           1,
+		kind:               "data",
+		state:              "Running",
+		payloadContentType: "application/json",
+		payload:            []byte(`{"ok":true}`),
 	}
 }
 

@@ -921,16 +921,10 @@ func TestCABIRuntimeProviderEnforcesCallbackBackpressure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InvokeStream: %v", err)
 	}
-	event, err := stream.Next(context.Background())
-	if err != nil {
-		t.Fatalf("stream backpressure failure: %v", err)
-	}
-	assertCABIBackpressureError(t, event.ErrorJSON())
-	if event.Terminal() || !event.TransportTerminal() {
-		t.Fatalf("stream overflow event = %#v, want non-terminal transport failure", event)
-	}
-	if stream.State() != StreamFailed || stream.RuntimeState() != StreamOpen {
-		t.Fatalf("stream state=%s runtime=%s, want Failed/Open", stream.State(), stream.RuntimeState())
+	_, err = stream.Next(context.Background())
+	assertCABIBackpressureSDKError(t, err)
+	if stream.State() != StreamFailed || stream.RuntimeState() != StreamFailed {
+		t.Fatalf("stream state=%s runtime=%s, want Failed/Failed", stream.State(), stream.RuntimeState())
 	}
 	if err := stream.Close(context.Background()); err != nil {
 		t.Fatalf("close overflowed stream: %v", err)
@@ -955,6 +949,88 @@ func TestCABIRuntimeProviderEnforcesCallbackBackpressure(t *testing.T) {
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("close overflowed bidi: %v", err)
+	}
+}
+
+func TestCABIV8TransportPreservesMalformedHeaderForFailClosedValidation(t *testing.T) {
+	inbox := newCABICallbackInbox(1, true)
+	inbox.push(cabiBinaryCallbackPacket(rawStreamPacket{
+		sequence:           1,
+		kind:               "data",
+		state:              "4",
+		payloadContentType: "application/octet-stream",
+		payload:            []byte("payload"),
+	}))
+	transport := &cabiStreamTransport{inbox: inbox, rawStream: true, nextRecvSeq: 1}
+
+	packet, err := transport.RecvRaw(context.Background())
+	if err != nil {
+		t.Fatalf("RecvRaw: %v", err)
+	}
+	if packet.sequence != 1 || packet.state != "4" {
+		t.Fatalf("v8 header was repaired: %#v", packet)
+	}
+	if _, err := NewStreamEventFromRawPacket(packet); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("malformed v8 packet error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestCABIV8InboxTransfersOwnedPayloadWithoutBindingLocalCopy(t *testing.T) {
+	payload := []byte("owned-binary-payload")
+	inbox := newCABICallbackInbox(1, true)
+	inbox.push(cabiBinaryCallbackPacket(rawStreamPacket{
+		sequence:           1,
+		kind:               "data",
+		state:              "Running",
+		payloadContentType: "application/octet-stream",
+		payload:            payload,
+	}))
+	transport := &cabiStreamTransport{inbox: inbox, rawStream: true, nextRecvSeq: 1}
+
+	packet, err := transport.RecvRaw(context.Background())
+	if err != nil {
+		t.Fatalf("RecvRaw: %v", err)
+	}
+	if len(packet.payload) == 0 || &packet.payload[0] != &payload[0] {
+		t.Fatal("v8 callback inbox copied the Go-owned payload instead of transferring ownership")
+	}
+	event, err := NewStreamEventFromRawPacket(packet)
+	if err != nil {
+		t.Fatalf("NewStreamEventFromRawPacket: %v", err)
+	}
+	if len(event.payloadBytes) == 0 || &event.payloadBytes[0] != &payload[0] {
+		t.Fatal("raw stream projection copied the binding-owned payload")
+	}
+
+	publicCopy := event.PayloadBytes()
+	publicCopy[0] ^= 0xff
+	if event.PayloadBytes()[0] != payload[0] {
+		t.Fatal("public PayloadBytes accessor exposed mutable internal storage")
+	}
+}
+
+func TestCABICallbackInboxPropagatesV8ProtocolFailure(t *testing.T) {
+	inbox := newCABICallbackInbox(1, true)
+	want := invalidRuntimePayload("noncanonical v8 EOF", nil)
+	inbox.fail(want)
+
+	_, err := inbox.recv(context.Background())
+	if !errors.Is(err, want) {
+		t.Fatalf("protocol failure = %v, want %v", err, want)
+	}
+}
+
+func TestCABIV8CallbackRejectsIncompatibleFrameLayout(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+	draft := cabiDraftWithMetadata(t, map[string]any{"noncanonical_v8_eof": true})
+
+	stream, err := client.InvokeStream(context.Background(), draft)
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	_, err = stream.Next(context.Background())
+	if !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "incompatible layout") {
+		t.Fatalf("incompatible v8 frame error = %v", err)
 	}
 }
 
@@ -1224,6 +1300,20 @@ func assertCABIBackpressureError(t *testing.T, raw json.RawMessage) {
 	}
 }
 
+func assertCABIBackpressureSDKError(t *testing.T, err error) {
+	t.Helper()
+	var failure *SDKError
+	if !errors.As(err, &failure) {
+		t.Fatalf("backpressure error = %v, want SDKError", err)
+	}
+	if failure.Code != ErrAdmissionDenied || failure.Stage != "cabi_callback" || failure.Retry != RetryAfterBackoff {
+		t.Fatalf("unexpected backpressure SDK error: %#v", failure)
+	}
+	if failure.Details["wire_code"] != "RESOURCE_EXHAUSTED" || failure.Details["reason"] != "callback_queue_overflow" || failure.Details["bounded_queue"] != true {
+		t.Fatalf("unexpected backpressure SDK details: %#v", failure.Details)
+	}
+}
+
 func buildFakeCABIStreamLibrary(t *testing.T) string {
 	return buildFakeCABIStreamLibraryFromSource(t, fakeCABIStreamSource+fakeCABIStreamV8Extension)
 }
@@ -1235,8 +1325,8 @@ func buildFakeCABIStreamLibraryV7(t *testing.T) string {
 func buildFakeCABIStreamLibraryV8FeatureDisabled(t *testing.T) string {
 	source := strings.Replace(
 		fakeCABIStreamSource+fakeCABIStreamV8Extension,
-		"\\\"stream_raw_payload\\\":true",
-		"\\\"stream_raw_payload\\\":false",
+		"\\\"stream_binary_frame\\\":true",
+		"\\\"stream_binary_frame\\\":false",
 		1,
 	)
 	if source == fakeCABIStreamSource+fakeCABIStreamV8Extension {
@@ -1261,8 +1351,8 @@ func buildFakeCABIStreamLibraryV8WrongSymbol(t *testing.T) string {
 func buildFakeCABIStreamLibraryV8SymbolFeatureDisabled(t *testing.T) string {
 	source := strings.Replace(
 		fakeCABIStreamSource+fakeCABIStreamV8Extension,
-		"\\\"stream_raw_payload_v8\\\":true",
-		"\\\"stream_raw_payload_v8\\\":false",
+		"\\\"stream_binary_frame_v8\\\":true",
+		"\\\"stream_binary_frame_v8\\\":false",
 		1,
 	)
 	if source == fakeCABIStreamSource+fakeCABIStreamV8Extension {
@@ -1302,7 +1392,22 @@ const fakeCABIStreamSource = `
 #include <string.h>
 
 typedef void (*stream_callback_t)(void *user_data, const char *chunk_json);
-typedef void (*stream_v8_callback_t)(void *user_data, const char *metadata_json, const uint8_t *payload, size_t payload_len);
+typedef struct runtime_bytes_view_v8 { const uint8_t *data; size_t len; } runtime_bytes_view_v8;
+typedef struct runtime_invocation_stream_frame_v8 {
+	uint32_t struct_size;
+	uint16_t abi_version;
+	uint8_t kind;
+	uint8_t state;
+	uint32_t flags;
+	uint64_t sequence;
+	uint64_t elapsed_ms;
+	runtime_bytes_view_v8 payload_content_type;
+	runtime_bytes_view_v8 payload;
+	runtime_bytes_view_v8 admission_receipt_json;
+	runtime_bytes_view_v8 terminal_receipt_json;
+	runtime_bytes_view_v8 error_json;
+} runtime_invocation_stream_frame_v8;
+typedef void (*stream_v8_callback_t)(void *user_data, const runtime_invocation_stream_frame_v8 *frame);
 typedef void (*bidi_callback_t)(void *user_data, const char *frame_json);
 
 static stream_callback_t active_stream_callback = 0;
@@ -1325,7 +1430,7 @@ static char *dup_json(const char *s) {
 uint32_t runtime_abi_version(void) { return 7u; }
 void runtime_string_free(char *s) { free(s); }
 int32_t runtime_feature_discovery(char **out_features_json) {
-	*out_features_json = dup_json("{\"abi_version\":7,\"abi_extensions\":{\"v8\":{\"stream_raw_payload\":true,\"symbol\":\"runtime_invocation_stream_open_v8\"}},\"sdk_version\":\"0.91.30\",\"profiles\":{\"runtime_core\":\"provider-backed\"},\"symbols\":{\"generic_invocation\":true,\"stream_raw_payload_v8\":true},\"axon_pb\":true}");
+	*out_features_json = dup_json("{\"abi_version\":7,\"abi_extensions\":{\"v8\":{\"stream_binary_frame\":true,\"symbol\":\"runtime_invocation_stream_open_v8\"}},\"sdk_version\":\"0.91.30\",\"profiles\":{\"runtime_core\":\"provider-backed\"},\"symbols\":{\"generic_invocation\":true,\"stream_binary_frame_v8\":true},\"axon_pb\":true}");
 	return 0;
 }
 int32_t runtime_last_error_json(char **out_error_json) {
@@ -1448,7 +1553,14 @@ int32_t runtime_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
 		active_stream_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}");
 	}
 	if (stream_id == 404 && active_stream_v8_callback != 0) {
-		active_stream_v8_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"transport_terminal\":false,\"payload_content_type\":\"application/json\",\"admission_receipt\":null,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true},\"error\":null}", 0, 0);
+		const char *content_type = "application/json";
+		const char *terminal_receipt = "{\"state\":\"Cancelled\",\"cleanup_complete\":true}";
+		runtime_invocation_stream_frame_v8 frame = {
+			sizeof(runtime_invocation_stream_frame_v8), 8, 2, 8, (1u << 0) | (1u << 3) | (1u << 5), 2, 0,
+			{(const uint8_t *)content_type, strlen(content_type)}, {0, 0}, {0, 0},
+			{(const uint8_t *)terminal_receipt, strlen(terminal_receipt)}, {0, 0}
+		};
+		active_stream_v8_callback(active_stream_user_data, &frame);
 	}
 	return stream_id == 404 ? 0 : 4;
 }
@@ -1510,15 +1622,29 @@ int32_t runtime_invocation_stream_open_v8(uint64_t handle, const char *invocatio
 	active_stream_v8_callback = on_chunk;
 	active_stream_user_data = user_data;
 	active_stream_cancel_calls = 0;
-	if (strstr(invocation_json, "conformance_backpressure") != 0) {
-		char event[260];
+	if (strstr(invocation_json, "noncanonical_v8_eof") != 0) {
+		runtime_invocation_stream_frame_v8 invalid = {0};
+		invalid.struct_size = 1;
+		invalid.abi_version = 8;
+		on_chunk(user_data, &invalid);
+	} else if (strstr(invocation_json, "conformance_backpressure") != 0) {
+		const char *content_type = "application/json";
 		for (int sequence = 1; sequence <= 1025; sequence++) {
-			snprintf(event, sizeof(event), "{\"sequence\":%d,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"transport_terminal\":false,\"payload_content_type\":\"application/json\",\"admission_receipt\":null,\"terminal_receipt\":null,\"error\":null}", sequence);
-			on_chunk(user_data, event, 0, 0);
+			runtime_invocation_stream_frame_v8 frame = {
+				sizeof(runtime_invocation_stream_frame_v8), 8, 1, 4, (1u << 3), (uint64_t)sequence, 0,
+				{(const uint8_t *)content_type, strlen(content_type)}, {0, 0}, {0, 0}, {0, 0}, {0, 0}
+			};
+			on_chunk(user_data, &frame);
 		}
 	} else {
+		const char *content_type = "application/json";
 		const char *payload = "{\"step\":1}";
-		on_chunk(user_data, "{\"sequence\":1,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"transport_terminal\":false,\"payload_content_type\":\"application/json\",\"admission_receipt\":null,\"terminal_receipt\":null,\"error\":null}", (const uint8_t *)payload, strlen(payload));
+		runtime_invocation_stream_frame_v8 frame = {
+			sizeof(runtime_invocation_stream_frame_v8), 8, 1, 4, (1u << 2) | (1u << 3), 1, 0,
+			{(const uint8_t *)content_type, strlen(content_type)},
+			{(const uint8_t *)payload, strlen(payload)}, {0, 0}, {0, 0}, {0, 0}
+		};
+		on_chunk(user_data, &frame);
 	}
 	return 0;
 }

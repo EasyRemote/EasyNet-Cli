@@ -14,6 +14,7 @@ from easynet_sdk import (
     SDKError,
     StreamState,
 )
+from easynet_sdk.stream import RawStreamPacket
 from easynet_sdk._cabi import (
     CABIRuntimeLifecycleTransport,
     CABIRuntimeTransport,
@@ -22,9 +23,17 @@ from easynet_sdk._cabi import (
     MAX_CABI_CALLBACK_QUEUE,
     _CABIBidiFrameChainMAC,
     _CABIStreamTransport,
+    _CallbackInbox,
+    _RuntimeBytesViewV8,
+    _RuntimeInvocationStreamFrameV8,
+    _STREAM_V8_FLAG_HAS_CONTENT_TYPE,
+    _STREAM_V8_FLAG_HAS_PAYLOAD,
     _cabi_bidi_frame_json,
     _platform_library_candidates,
     _project_cabi_ordered_event,
+    _register_callback_inbox,
+    _release_callback_inbox,
+    _stream_v8_callback,
     _runtime_status_from_cabi,
     _runtime_start_config_for_cabi,
 )
@@ -127,17 +136,24 @@ class CABIEventProjectionTests(unittest.TestCase):
 
         self.assertEqual(json.loads(projected)["error"], {"code": "", "message": ""})
 
-    def test_stream_allocator_normalizes_zero_based_remote_sequences(self) -> None:
+    def test_stream_adapter_preserves_runtime_sequence_for_fail_closed_validation(self) -> None:
         transport = _CABIStreamTransport(None, 1, 1, None)
 
-        first = json.loads(
+        zero = json.loads(
             _project_cabi_ordered_event(
                 b'{"sequence":0,"kind":"data"}',
                 transport._allocate_sequence,
                 use_observed_sequence=True,
             )
         )
-        second = json.loads(
+        first = json.loads(
+            _project_cabi_ordered_event(
+                b'{"sequence":1,"kind":"data"}',
+                transport._allocate_sequence,
+                use_observed_sequence=True,
+            )
+        )
+        duplicate = json.loads(
             _project_cabi_ordered_event(
                 b'{"sequence":1,"kind":"data"}',
                 transport._allocate_sequence,
@@ -145,8 +161,65 @@ class CABIEventProjectionTests(unittest.TestCase):
             )
         )
 
+        self.assertEqual(zero["sequence"], 0)
         self.assertEqual(first["sequence"], 1)
-        self.assertEqual(second["sequence"], 2)
+        self.assertEqual(duplicate["sequence"], 1)
+
+    def test_v8_packet_bypasses_legacy_sequence_and_state_repair(self) -> None:
+        packet = RawStreamPacket(
+            sequence=7,
+            kind="data",
+            state="Running",
+            terminal=False,
+            transport_terminal=False,
+            elapsed_ms=0,
+            payload_content_type="application/octet-stream",
+            payload=b"payload",
+        )
+
+        projected = _project_cabi_ordered_event(
+            packet,
+            lambda observed: 99,
+            use_observed_sequence=True,
+        )
+
+        self.assertIs(projected, packet)
+
+    def test_v8_callback_rejects_incompatible_frame_layout(self) -> None:
+        inbox = _CallbackInbox(1, raw_stream=True)
+        token = _register_callback_inbox(inbox)
+        self.addCleanup(_release_callback_inbox, token)
+        frame = _RuntimeInvocationStreamFrameV8()
+        frame.struct_size = 1
+        frame.abi_version = 8
+
+        _stream_v8_callback(token, ctypes.pointer(frame))
+
+        with self.assertRaises(SDKError) as caught:
+            inbox.recv(0.01)
+        self.assertIn("struct_size", str(caught.exception))
+
+    def test_v8_callback_queue_overflow_is_carrier_error_not_runtime_frame(self) -> None:
+        inbox = _CallbackInbox(1, raw_stream=True)
+        packet = RawStreamPacket(
+            sequence=1,
+            kind="data",
+            state="Running",
+            terminal=False,
+            transport_terminal=False,
+            elapsed_ms=0,
+            payload_content_type="application/octet-stream",
+            payload=b"payload",
+        )
+        inbox.push(packet)
+        inbox.push(packet)
+
+        with self.assertRaises(SDKError) as caught:
+            inbox.recv(0.01)
+        self.assertEqual(caught.exception.stage, "cabi_callback")
+        self.assertEqual(
+            caught.exception.details.get("reason"), "callback_queue_overflow"
+        )
 
 
 class FakeRawCABI:
@@ -281,7 +354,7 @@ class FakeRawCABI:
                     "abi_version": EXPECTED_ABI_VERSION,
                     "abi_extensions": {
                         "v8": {
-                            "stream_raw_payload": self.stream_v8_feature,
+                            "stream_binary_frame": self.stream_v8_feature,
                             "symbol": self.stream_v8_symbol,
                         }
                     },
@@ -289,7 +362,7 @@ class FakeRawCABI:
                     "profiles": {"runtime_core": "provider-backed"},
                     "symbols": {
                         "generic_invocation": True,
-                        "stream_raw_payload_v8": self.stream_v8_symbol_feature,
+                        "stream_binary_frame_v8": self.stream_v8_symbol_feature,
                     },
                     "axon_pb": True,
                 },
@@ -549,22 +622,34 @@ class FakeRawCABI:
         self.callback_buffers.append(buffer)
         callback(user_data, ctypes.c_void_p(ctypes.addressof(buffer)))
 
-    def _v8_callback(self, callback, user_data, metadata: bytes, payload: bytes) -> None:
-        metadata_buffer = ctypes.create_string_buffer(metadata)
+    def _v8_callback(self, callback, user_data, payload: bytes) -> None:
+        content_type = b"application/json"
+        content_type_buffer = ctypes.create_string_buffer(content_type)
         payload_buffer = ctypes.create_string_buffer(payload) if payload else None
-        self.callback_buffers.append(metadata_buffer)
+        self.callback_buffers.append(content_type_buffer)
         if payload_buffer is not None:
             self.callback_buffers.append(payload_buffer)
-        callback(
-            user_data,
-            ctypes.c_void_p(ctypes.addressof(metadata_buffer)),
-            (
-                ctypes.c_void_p(ctypes.addressof(payload_buffer))
-                if payload_buffer is not None
-                else ctypes.c_void_p()
+        frame = _RuntimeInvocationStreamFrameV8(
+            struct_size=ctypes.sizeof(_RuntimeInvocationStreamFrameV8),
+            abi_version=8,
+            kind=1,
+            state=4,
+            flags=_STREAM_V8_FLAG_HAS_CONTENT_TYPE
+            | (_STREAM_V8_FLAG_HAS_PAYLOAD if payload else 0),
+            sequence=1,
+            elapsed_ms=0,
+            payload_content_type=_RuntimeBytesViewV8(
+                ctypes.addressof(content_type_buffer), len(content_type)
             ),
-            len(payload),
+            payload=_RuntimeBytesViewV8(
+                ctypes.addressof(payload_buffer) if payload_buffer is not None else None,
+                len(payload),
+            ),
+            admission_receipt_json=_RuntimeBytesViewV8(None, 0),
+            terminal_receipt_json=_RuntimeBytesViewV8(None, 0),
+            error_json=_RuntimeBytesViewV8(None, 0),
         )
+        callback(user_data, ctypes.pointer(frame))
 
     def _invocation_stream_open(
         self, handle, invocation_json, callback, user_data, out_stream_id
@@ -608,11 +693,6 @@ class FakeRawCABI:
         self._v8_callback(
             callback,
             user_data,
-            b'{"sequence":1,"kind":"data","state":"Open",'
-            b'"terminal":false,"transport_terminal":false,'
-            b'"payload_content_type":"application/json",'
-            b'"admission_receipt":null,"terminal_receipt":null,'
-            b'"error":null}',
             b'{"provider":"cabi"}',
         )
         return 0

@@ -16,17 +16,16 @@ from ._receipt_projection import reject_retired_top_level_receipt_alias
 
 MAX_STREAM_BUFFERED_EVENTS = 1024
 
-_RAW_STREAM_REQUIRED_METADATA_FIELDS = frozenset(
+_CANONICAL_RUNTIME_STATES = frozenset(
     (
-        "sequence",
-        "kind",
-        "state",
-        "terminal",
-        "transport_terminal",
-        "payload_content_type",
-        "admission_receipt",
-        "terminal_receipt",
-        "error",
+        "Accepted",
+        "Admitted",
+        "Dispatched",
+        "Running",
+        "Completed",
+        "Failed",
+        "TimedOut",
+        "Cancelled",
     )
 )
 
@@ -46,10 +45,19 @@ class StreamState(StrEnum):
 
 @dataclass(frozen=True)
 class RawStreamPacket:
-    """Provider packet with canonical metadata separated from raw payload bytes."""
+    """Typed ABI v8 frame with raw payload and sparse JSON sidecars."""
 
-    metadata_json: bytes
+    sequence: int
+    kind: str
+    state: str
+    terminal: bool
+    transport_terminal: bool
+    elapsed_ms: int
+    payload_content_type: str
     payload: bytes
+    admission_receipt_json: bytes = b""
+    terminal_receipt_json: bytes = b""
+    error_json: bytes = b""
 
 
 @runtime_checkable
@@ -162,19 +170,36 @@ class StreamEvent:
 
     @classmethod
     def from_raw_packet(cls, packet: RawStreamPacket) -> "StreamEvent":
-        if not isinstance(packet.metadata_json, bytes):
-            raise _invalid_stream("raw stream packet metadata_json must be bytes")
+        if not isinstance(packet.sequence, int) or isinstance(packet.sequence, bool) or packet.sequence <= 0:
+            raise _invalid_stream("binary stream frame sequence must be positive")
+        if not isinstance(packet.kind, str) or packet.kind not in {
+            "data",
+            "terminal",
+            "error",
+            "cancelled",
+            "timeout",
+            "receipt_verification_error",
+        }:
+            raise _invalid_stream("binary stream frame kind is not canonical")
+        if not isinstance(packet.state, str) or packet.state not in _CANONICAL_RUNTIME_STATES:
+            raise _invalid_stream("binary stream frame state is not canonical")
+        if not isinstance(packet.terminal, bool) or not isinstance(packet.transport_terminal, bool):
+            raise _invalid_stream("binary stream frame terminal flags must be booleans")
+        if not isinstance(packet.elapsed_ms, int) or isinstance(packet.elapsed_ms, bool) or packet.elapsed_ms < 0:
+            raise _invalid_stream("binary stream frame elapsed_ms must be non-negative")
+        if not isinstance(packet.payload_content_type, str):
+            raise _invalid_stream("binary stream frame content type must be a string")
         if not isinstance(packet.payload, bytes):
-            raise _invalid_stream("raw stream packet payload must be bytes")
-        decoded = _decode_stream_event_json(packet.metadata_json)
-        _require_raw_stream_metadata_contract(decoded)
-        event = cls.from_json(packet.metadata_json)
-        if event.payload_base64 or event.payload_json is not None:
-            raise _invalid_stream(
-                "raw stream packet metadata must not duplicate payload fields"
-            )
+            raise _invalid_stream("binary stream frame payload must be bytes")
+        admission_receipt = _decode_binary_sidecar(
+            packet.admission_receipt_json, "admission_receipt"
+        )
+        terminal_receipt = _decode_binary_sidecar(
+            packet.terminal_receipt_json, "terminal_receipt"
+        )
+        error = _decode_binary_sidecar(packet.error_json, "error")
         payload_json: Any = None
-        if packet.payload and "json" in event.payload_content_type.lower():
+        if packet.payload and "json" in packet.payload_content_type.lower():
             try:
                 payload_json = json.loads(packet.payload.decode("utf-8"))
             except Exception as exc:
@@ -182,44 +207,33 @@ class StreamEvent:
                     f"decode raw JSON stream payload: {exc}", exc
                 ) from exc
         return cls(
-            sequence=event.sequence,
-            kind=event.kind,
-            state=event.state,
-            terminal=event.terminal,
-            transport_terminal=event.transport_terminal,
-            payload_content_type=event.payload_content_type,
+            sequence=packet.sequence,
+            kind=packet.kind,
+            state=packet.state,
+            terminal=packet.terminal,
+            transport_terminal=packet.transport_terminal,
+            payload_content_type=packet.payload_content_type,
             payload_bytes=packet.payload,
             payload_json=payload_json,
-            elapsed_ms=event.elapsed_ms,
-            error=event.error,
-            admission_receipt=event.admission_receipt,
-            terminal_receipt=event.terminal_receipt,
+            elapsed_ms=packet.elapsed_ms,
+            error=error,
+            admission_receipt=admission_receipt,
+            terminal_receipt=terminal_receipt,
         )
 
 
-def _decode_stream_event_json(raw: bytes | str) -> dict[str, object]:
+def _decode_binary_sidecar(raw: bytes, field_name: str) -> dict[str, Any] | None:
+    if not isinstance(raw, bytes):
+        raise _invalid_stream(f"binary stream frame {field_name} sidecar must be bytes")
+    if not raw:
+        return None
     try:
-        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-        decoded = json.loads(text)
+        value = json.loads(raw.decode("utf-8"))
     except Exception as exc:
-        raise _invalid_stream(f"decode stream event JSON: {exc}", exc) from exc
-    if not isinstance(decoded, dict):
-        raise _invalid_stream("stream event JSON must be an object")
-    return decoded
-
-
-def _require_raw_stream_metadata_contract(decoded: dict[str, object]) -> None:
-    missing = sorted(_RAW_STREAM_REQUIRED_METADATA_FIELDS.difference(decoded))
-    if missing:
-        raise _invalid_stream(
-            "raw stream packet metadata missing required canonical field "
-            + ", ".join(missing)
-        )
-    _required_string(decoded, "state")
-    _required_bool(decoded, "terminal")
-    _required_bool(decoded, "transport_terminal")
-    if not isinstance(decoded.get("payload_content_type"), str):
-        raise _invalid_stream("payload_content_type is required")
+        raise _invalid_stream(f"decode binary stream {field_name} sidecar: {exc}", exc) from exc
+    if not isinstance(value, dict):
+        raise _invalid_stream(f"binary stream {field_name} sidecar must be an object")
+    return value
 
 
 @dataclass(frozen=True)
