@@ -11,6 +11,8 @@ VERIFIER="$SELF_DIR/remoteapp-network-fallback-e2e.sh"
 FIXTURE_DIR="$REPO_ROOT/tools/fixtures/remoteapp-turn-netem"
 RUNTIME_CLI="${EASYNET_REMOTEAPP_TURN_E2E_RUNTIME_CLI:-$REPO_ROOT/target/debug/easynet}"
 BROWSER_RUNNER="$FRONTEND_ROOT/scripts/remoteapp-browser-lifecycle.mjs"
+PROVIDER_STOP_ACTION="${EASYNET_REMOTEAPP_TURN_E2E_PROVIDER_STOP_ACTION:-}"
+PROVIDER_START_ACTION="${EASYNET_REMOTEAPP_TURN_E2E_PROVIDER_START_ACTION:-}"
 
 MODE=skip
 OUT_DIR="${EASYNET_REMOTEAPP_TURN_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/remoteapp-turn-relay/$(date -u +%Y%m%d-%H%M%S)-$$}"
@@ -36,6 +38,12 @@ daemon with temporary TURN configuration, drives the real Browser RemoteApp
 window flow with relay-only ICE policy, proves a server-observed allocation,
 then restores the standard local daemon. It emits a focused turn_relay child
 proof; it does not claim the complete four-route network matrix.
+
+For a provider on another host or in a container, set both
+EASYNET_REMOTEAPP_TURN_E2E_PROVIDER_STOP_ACTION and
+EASYNET_REMOTEAPP_TURN_E2E_PROVIDER_START_ACTION. The start action receives
+the temporary TURN variables in its environment; cleanup runs the same action
+with those variables removed to restore ordinary provider configuration.
 USAGE
 }
 
@@ -72,6 +80,10 @@ pathlib.Path(path).write_text(json.dumps({
 PY
 }
 
+coturn_log_is_ready() {
+  awk '/Relay ports initialization done/ { found = 1 } END { exit !found }'
+}
+
 if [[ "$MODE" == "skip" ]]; then
   write_status skipped "pass --run to execute the live TURN relay scenario"
   echo "[host-remoteapp-turn-relay-e2e] skipped: $OUT_DIR/report.json"
@@ -80,6 +92,10 @@ fi
 
 if [[ "$MODE" == "self-test" ]]; then
   bash -n "$0"
+  {
+    printf '%s\n' 'startup' 'Relay ports initialization done'
+    for _ in {1..256}; do printf '%s\n' 'post-ready coturn log line'; done
+  } | coturn_log_is_ready
   python3 -m py_compile "$PROJECTOR"
   "$VERIFIER" --self-test --out-dir "$OUT_DIR/verifier-self-test" >/dev/null
   write_status passed "script syntax, projector import, and network evidence contract passed"
@@ -94,7 +110,22 @@ for command in docker node python3 shasum openssl; do
     exit 1
   }
 done
-[[ -x "$RUNTIME_CLI" ]] || { write_status failed "runtime CLI missing: $RUNTIME_CLI"; exit 1; }
+EXTERNAL_PROVIDER=0
+if [[ -n "$PROVIDER_STOP_ACTION" || -n "$PROVIDER_START_ACTION" ]]; then
+  [[ -n "$PROVIDER_STOP_ACTION" && -n "$PROVIDER_START_ACTION" ]] || {
+    write_status failed "external provider requires both stop and start actions"
+    exit 64
+  }
+  for action in "$PROVIDER_STOP_ACTION" "$PROVIDER_START_ACTION"; do
+    [[ "$action" != *$'\n'* && "$action" != *$'\r'* ]] || {
+      write_status failed "provider lifecycle actions must be single-line shell commands"
+      exit 64
+    }
+  done
+  EXTERNAL_PROVIDER=1
+else
+  [[ -x "$RUNTIME_CLI" ]] || { write_status failed "runtime CLI missing: $RUNTIME_CLI"; exit 1; }
+fi
 [[ -f "$BROWSER_RUNNER" ]] || { write_status failed "Browser runner missing: $BROWSER_RUNNER"; exit 1; }
 [[ -f "$PROJECTOR" && -x "$VERIFIER" ]] || { write_status failed "network projector/verifier missing"; exit 1; }
 [[ -n "$DEVICE_ID" ]] || { write_status failed "--device-id is required"; exit 64; }
@@ -115,14 +146,26 @@ done
 TEMP_DIR="$(mktemp -d)"
 CONTAINER="easynet-remoteapp-turn-$$"
 DAEMON_WAS_RUNNING=0
-pgrep -f '/easynet-daemon$' >/dev/null 2>&1 && DAEMON_WAS_RUNNING=1
+if [[ "$EXTERNAL_PROVIDER" -eq 0 ]]; then
+  pgrep -f '/easynet-daemon$' >/dev/null 2>&1 && DAEMON_WAS_RUNNING=1
+fi
 RESTORE_FAILED=0
+PROVIDER_MUTATED=0
 
 cleanup() {
   local exit_code=$?
-  "$RUNTIME_CLI" runtime stop >/dev/null 2>&1 || true
+  if [[ "$EXTERNAL_PROVIDER" -eq 1 && "$PROVIDER_MUTATED" -eq 1 ]]; then
+    /bin/sh -lc "$PROVIDER_STOP_ACTION" >/dev/null 2>&1 || true
+    env -u EASYNET_REMOTE_DESKTOP_TURN_URLS \
+      -u EASYNET_REMOTE_DESKTOP_TURN_USERNAME \
+      -u EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL \
+      /bin/sh -lc "$PROVIDER_START_ACTION" >"$OUT_DIR/provider-restore.stdout.txt" \
+        2>"$OUT_DIR/provider-restore.stderr.txt" || RESTORE_FAILED=1
+  elif [[ "$EXTERNAL_PROVIDER" -eq 0 ]]; then
+    "$RUNTIME_CLI" runtime stop >/dev/null 2>&1 || true
+  fi
   docker stop "$CONTAINER" >/dev/null 2>&1 || true
-  if [[ "$DAEMON_WAS_RUNNING" -eq 1 ]]; then
+  if [[ "$EXTERNAL_PROVIDER" -eq 0 && "$DAEMON_WAS_RUNNING" -eq 1 ]]; then
     "$RUNTIME_CLI" runtime start >"$OUT_DIR/runtime-restore.stdout.txt" \
       2>"$OUT_DIR/runtime-restore.stderr.txt" || RESTORE_FAILED=1
   fi
@@ -155,7 +198,7 @@ docker run --rm -d --name "$CONTAINER" \
 
 ready=0
 for _ in {1..100}; do
-  if docker logs "$CONTAINER" 2>&1 | grep -q 'Relay ports initialization done'; then
+  if docker logs "$CONTAINER" 2>&1 | coturn_log_is_ready; then
     ready=1
     break
   fi
@@ -164,11 +207,22 @@ done
 [[ "$ready" -eq 1 ]] || { write_status failed "coturn fixture did not become ready"; exit 1; }
 
 constraints_applied_at_ms="$(python3 -c 'import time; print(int(time.time() * 1000))')"
-"$RUNTIME_CLI" runtime stop >"$OUT_DIR/runtime-stop.stdout.txt" 2>"$OUT_DIR/runtime-stop.stderr.txt" || true
-EASYNET_REMOTE_DESKTOP_TURN_URLS="turn:127.0.0.1:$TURN_PORT?transport=udp" \
-EASYNET_REMOTE_DESKTOP_TURN_USERNAME="$turn_user" \
-EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL="$turn_credential" \
-"$RUNTIME_CLI" runtime start >"$OUT_DIR/runtime-start.stdout.txt" 2>"$OUT_DIR/runtime-start.stderr.txt"
+if [[ "$EXTERNAL_PROVIDER" -eq 1 ]]; then
+  PROVIDER_MUTATED=1
+  /bin/sh -lc "$PROVIDER_STOP_ACTION" >"$OUT_DIR/provider-stop.stdout.txt" \
+    2>"$OUT_DIR/provider-stop.stderr.txt" || true
+  EASYNET_REMOTE_DESKTOP_TURN_URLS="turn:127.0.0.1:$TURN_PORT?transport=udp" \
+  EASYNET_REMOTE_DESKTOP_TURN_USERNAME="$turn_user" \
+  EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL="$turn_credential" \
+    /bin/sh -lc "$PROVIDER_START_ACTION" >"$OUT_DIR/provider-start.stdout.txt" \
+      2>"$OUT_DIR/provider-start.stderr.txt"
+else
+  "$RUNTIME_CLI" runtime stop >"$OUT_DIR/runtime-stop.stdout.txt" 2>"$OUT_DIR/runtime-stop.stderr.txt" || true
+  EASYNET_REMOTE_DESKTOP_TURN_URLS="turn:127.0.0.1:$TURN_PORT?transport=udp" \
+  EASYNET_REMOTE_DESKTOP_TURN_USERNAME="$turn_user" \
+  EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL="$turn_credential" \
+  "$RUNTIME_CLI" runtime start >"$OUT_DIR/runtime-start.stdout.txt" 2>"$OUT_DIR/runtime-start.stderr.txt"
+fi
 sleep 2
 
 browser_dir="$OUT_DIR/browser"

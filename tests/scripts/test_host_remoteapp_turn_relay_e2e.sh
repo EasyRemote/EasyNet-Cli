@@ -20,6 +20,12 @@ grep -q '"status": "skipped"' "$OUT_DIR/skip/report.json" || \
 "$HOST_RUNNER" --self-test --out-dir "$OUT_DIR/self-test" >/dev/null
 grep -q '"status": "passed"' "$OUT_DIR/self-test/report.json" || \
   fail "host runner self-test did not pass"
+grep -q 'EASYNET_REMOTEAPP_TURN_E2E_PROVIDER_STOP_ACTION' "$HOST_RUNNER" ||
+  fail "TURN runner cannot target an external provider lifecycle"
+grep -q 'provider-restore.stderr.txt' "$HOST_RUNNER" ||
+  fail "TURN runner does not restore external provider configuration"
+grep -q 'coturn_log_is_ready' "$HOST_RUNNER" ||
+  fail "TURN runner must use a pipefail-safe coturn readiness parser"
 
 python3 - "$OUT_DIR/browser.json" "$OUT_DIR/coturn.log" "$OUT_DIR/times.json" <<'PY'
 from datetime import datetime
