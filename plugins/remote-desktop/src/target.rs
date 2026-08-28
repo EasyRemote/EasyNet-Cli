@@ -681,6 +681,26 @@ pub(in crate::daemon::plugins::remote_desktop) struct AppSurfaceLayoutProof {
 }
 
 impl AppSurfaceLayoutProof {
+    fn from_entry(entry: &ResourceEntry) -> Option<Self> {
+        let surfaces = entry
+            .metadata
+            .get("front_to_back_surfaces")?
+            .as_array()?
+            .iter()
+            .map(|surface| {
+                Some(AppWindowSurfaceProof {
+                    window_id: surface.get("window_id")?.as_u64()?,
+                    x: surface.get("x")?.as_i64()?,
+                    y: surface.get("y")?.as_i64()?,
+                    width: surface.get("width")?.as_u64()?,
+                    height: surface.get("height")?.as_u64()?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let proof = Self::from_canonical_surfaces(surfaces)?;
+        (metadata_u64(entry, "surface_layout_epoch") == Some(proof.layout_epoch)).then_some(proof)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn from_front_to_back_geometries<'a>(
         surfaces: impl IntoIterator<Item = (u64, &'a TargetGeometry)>,
     ) -> Option<Self> {
@@ -1871,6 +1891,9 @@ impl RemoteAppTargetBinding {
         if let Some(window_set) = app_window_set.as_ref() {
             diagnostic_capture_subject.commit_application_window_set(window_set);
         }
+        if let Some(layout) = app_surface_layout.as_ref() {
+            diagnostic_capture_subject.commit_application_surface_layout(layout);
+        }
         Ok(Self {
             diagnostic_capture_subject,
             scope_audit: ScopeAudit {
@@ -2378,7 +2401,20 @@ mod platform_live_resolution {
                     "xcap application binding has no committed process-scoped window set",
                 )
             })?;
-            proof = proof.with_app_window_set(window_set);
+            let surface_layout =
+                binding
+                    .committed_app_surface_layout()
+                    .cloned()
+                    .ok_or_else(|| {
+                        RemoteAppTargetError::new(
+                            ability,
+                            TargetResolutionError::TargetMetadataIncomplete,
+                            "xcap application binding has no committed surface-layout proof",
+                        )
+                    })?;
+            proof = proof
+                .with_app_window_set(window_set)
+                .with_app_surface_layout(surface_layout);
         }
         Ok(proof)
     }
@@ -2522,6 +2558,7 @@ fn resolve_resource_entry_for_session(
     };
     let resolved_identity = TargetIdentity::from_entry(entry, display_id);
     let app_window_set = AppWindowSetProof::from_entry(entry, display_id);
+    let app_surface_layout = AppSurfaceLayoutProof::from_entry(entry);
     let binding_id = mint_binding_id(entry, &native_locator);
     let target_identity_epoch = metadata_u64(entry, "lifecycle_epoch")
         .or_else(|| metadata_u64(entry, "target_identity_epoch"))
@@ -2576,7 +2613,7 @@ fn resolve_resource_entry_for_session(
         native_locator,
         resolved_identity,
         app_window_set,
-        app_surface_layout: None,
+        app_surface_layout,
         geometry,
         scope_audit,
         diagnostic,
@@ -2750,6 +2787,13 @@ fn validate_required_identity(
                     ability,
                     TargetResolutionError::TargetMetadataIncomplete,
                     "application targets require resolved_window_ids and window_set_epoch so capture can prove the committed app window set",
+                ));
+            }
+            if AppSurfaceLayoutProof::from_entry(entry).is_none() {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetMetadataIncomplete,
+                    "application targets require a canonical front_to_back_surfaces layout and matching surface_layout_epoch",
                 ));
             }
             Ok(())
@@ -3127,6 +3171,24 @@ mod tests {
                 "source": "live_refresh",
             }),
         );
+        if !map.contains_key("front_to_back_surfaces") {
+            let window_ids = map
+                .get("resolved_window_ids")
+                .and_then(Value::as_array)
+                .map(|values| values.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if !window_ids.is_empty() {
+                let layout = application_layout(&window_ids);
+                map.insert(
+                    "front_to_back_surfaces".to_string(),
+                    layout.to_value()["front_to_back_surfaces"].clone(),
+                );
+                map.insert(
+                    "surface_layout_epoch".to_string(),
+                    json!(layout.layout_epoch()),
+                );
+            }
+        }
         metadata
     }
 
@@ -3287,6 +3349,16 @@ mod tests {
             binding.target_bound_event_payload()["target_model"],
             json!("process_scoped_application_window_set")
         );
+        assert_eq!(
+            projection["app_surface_layout"]["front_to_back_surfaces"]
+                .as_array()
+                .map(Vec::len),
+            Some(2),
+            "application binding must atomically own the inventory surface layout"
+        );
+        assert!(projection["app_surface_layout"]["layout_epoch"]
+            .as_u64()
+            .is_some_and(|epoch| epoch > 0));
         assert!(projection["native_locator"]["display_id"].is_null());
         assert_eq!(
             projection["app_window_set"]["resolved_window_ids"],
@@ -3695,6 +3767,28 @@ mod tests {
                     .contains("missing live inventory availability"),
             "unexpected error: {err}"
         );
+
+        let mut inconsistent_layout = live_metadata(json!({
+            "platform": "windows",
+            "backend": "xcap",
+            "primary_pid": 9001,
+            "resolved_window_ids": [10, 11],
+            "window_set_epoch": 77,
+        }));
+        inconsistent_layout["surface_layout_epoch"] = json!(1);
+        let err = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(ResourceType::Application, inconsistent_layout),
+                "view_only",
+                1,
+            )
+            .expect_err("application layout epoch drift must fail before session creation");
+        assert_eq!(
+            err.reason(),
+            TargetResolutionError::TargetMetadataIncomplete
+        );
+        assert!(err.to_string().contains("surface_layout_epoch"));
 
         let mut expired = resolver
             .resolve_for_session(

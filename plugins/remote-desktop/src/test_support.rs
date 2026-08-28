@@ -287,6 +287,44 @@ pub(in crate::daemon::plugins::remote_desktop) fn live_remote_target_metadata(
             "source": "live_refresh",
         }),
     );
+    if !map.contains_key("front_to_back_surfaces") {
+        let window_ids = map
+            .get("resolved_window_ids")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !window_ids.is_empty() {
+            let geometries = window_ids
+                .iter()
+                .enumerate()
+                .map(|(index, window_id)| {
+                    (
+                        *window_id,
+                        TargetGeometry {
+                            x: Some(index as f64 * 120.0),
+                            y: Some(0.0),
+                            width: Some(100.0),
+                            height: Some(80.0),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let layout = AppSurfaceLayoutProof::from_front_to_back_geometries(
+                geometries
+                    .iter()
+                    .map(|(window_id, geometry)| (*window_id, geometry)),
+            )
+            .expect("test application surface layout");
+            map.insert(
+                "front_to_back_surfaces".to_string(),
+                layout.to_value()["front_to_back_surfaces"].clone(),
+            );
+            map.insert(
+                "surface_layout_epoch".to_string(),
+                json!(layout.layout_epoch()),
+            );
+        }
+    }
     metadata
 }
 
