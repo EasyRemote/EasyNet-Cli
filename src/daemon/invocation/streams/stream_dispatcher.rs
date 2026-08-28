@@ -638,6 +638,7 @@ async fn project_forwarded_remote_stream(
                         invocation_id: receipt.invocation_id.clone(),
                         state: axon_sdk::invocation::InvocationState::Running,
                         payload: Vec::new(),
+                        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                         sequence,
                         terminal: false,
                         admission_receipt: Some(receipt),
@@ -681,6 +682,7 @@ async fn project_forwarded_remote_stream(
                         invocation_id,
                         state: axon_sdk::invocation::InvocationState::Running,
                         payload: chunk.payload,
+                        content_type: default_stream_content_type(chunk.content_type),
                         sequence,
                         terminal: false,
                         admission_receipt: None,
@@ -747,6 +749,7 @@ async fn project_forwarded_remote_stream(
                         invocation_id: finalized.terminal_receipt.invocation_id.clone(),
                         state: finalized.terminal_state,
                         payload: finalized.output,
+                        content_type: default_stream_content_type(finalized.output_content_type),
                         sequence,
                         terminal: true,
                         admission_receipt: None,
@@ -1481,6 +1484,7 @@ struct RemoteStreamChunkParts {
     invocation_id: String,
     state: axon_sdk::invocation::InvocationState,
     payload: Vec<u8>,
+    content_type: String,
     sequence: u64,
     terminal: bool,
     admission_receipt: Option<axon_sdk::pb::axon::v1::InvocationReceipt>,
@@ -1497,7 +1501,7 @@ fn remote_stream_chunk(parts: RemoteStreamChunkParts) -> InvokeStreamChunk {
         }),
         invocation_id: parts.invocation_id,
         state: parts.state.to_wire_i32(),
-        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        content_type: parts.content_type,
         payload: parts.payload,
         sequence: parts.sequence,
         terminal: parts.terminal,
@@ -1557,6 +1561,26 @@ mod tests {
         assert!(chunk.admission_receipt.is_some());
         assert!(chunk.terminal_receipt.is_none());
         assert!(chunk.error.is_none());
+    }
+
+    #[test]
+    fn forwarded_remote_stream_chunk_preserves_typed_payload_content_type() {
+        let chunk = remote_stream_chunk(RemoteStreamChunkParts {
+            invocation_id: "invocation-typed".to_string(),
+            state: InvocationState::Running,
+            payload: vec![0, 0, 0, 1, 0x67],
+            content_type: "video/h264".to_string(),
+            sequence: 3,
+            terminal: false,
+            admission_receipt: None,
+            terminal_receipt: None,
+            error: None,
+        });
+
+        assert_eq!(chunk.payload, vec![0, 0, 0, 1, 0x67]);
+        assert_eq!(chunk.content_type, "video/h264");
+        assert_eq!(chunk.sequence, 3);
+        assert!(!chunk.terminal);
     }
 
     fn forwarded_request_for_timeout_test() -> InvokeRequest {
