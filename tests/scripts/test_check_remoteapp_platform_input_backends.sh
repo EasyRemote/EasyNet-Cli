@@ -14,6 +14,7 @@ write_fixture() {
   cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SANDBOX/plugins/remote-desktop/src/input.rs"
   cp "$REPO_ROOT/plugins/remote-desktop/src/input/windows.rs" "$SANDBOX/plugins/remote-desktop/src/input/windows.rs"
   cp "$REPO_ROOT/plugins/remote-desktop/src/input/linux.rs" "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+  cp "$REPO_ROOT/plugins/remote-desktop/src/input/wheel.rs" "$SANDBOX/plugins/remote-desktop/src/input/wheel.rs"
   cp "$REPO_ROOT/plugins/remote-desktop/src/view_device.rs" "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 }
 
@@ -46,24 +47,40 @@ perl -0pi -e 's/MOUSEEVENTF_VIRTUALDESK/MOUSEEVENTF_ABSOLUTE_ONLY/g' "$SANDBOX/p
 run_fail 'Windows absolute pointer mapping must cover the virtual desktop'
 
 write_fixture
-perl -0pi -e 's/MAX_WHEEL_DELTA_PER_FRAME/UNBOUNDED_WHEEL_DELTA/g' "$SANDBOX/plugins/remote-desktop/src/input/windows.rs"
-run_fail 'Windows wheel injection must be bounded per input frame'
+perl -0pi -e 's/windows_native_units/windows_unbounded_units/g' "$SANDBOX/plugins/remote-desktop/src/input/windows.rs"
+run_fail 'Windows wheel injection must use the canonical bounded wheel translator'
 
 write_fixture
 perl -0pi -e 's/virtual_desktop_absolute_mapping_clamps_multi_monitor_coordinates/virtual_desktop_mapping_unchecked/g' "$SANDBOX/plugins/remote-desktop/src/input/windows.rs"
 run_fail 'Windows virtual-desktop normalization must retain an executable unit contract'
 
 write_fixture
-perl -0pi -e 's/XTestQueryExtension/XTestAssumeAvailable/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+perl -0pi -e 's/xtest::GetVersion/xtest::AssumeAvailable/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
 run_fail 'Linux input must prove XTest availability before advertising runtime readiness'
 
 write_fixture
-perl -0pi -e 's/MAX_WHEEL_STEPS_PER_AXIS/UNBOUNDED_WHEEL_STEPS/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
-run_fail 'Linux wheel injection expansion must be explicitly bounded'
+perl -0pi -e 's/x11_detent_steps/x11_unbounded_steps/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+run_fail 'Linux wheel injection must use the canonical bounded wheel translator'
 
 write_fixture
 perl -0pi -e 's/linux_dom_key_mapping_is_deterministic/linux_dom_key_mapping_unverified/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
 run_fail 'Linux DOM-key translation must retain an executable unit contract'
+
+write_fixture
+perl -0pi -e 's/rejected_pointer_operations_are_resolved_before_native_injection/rejected_pointer_operations_may_move_cursor/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+run_fail 'Linux rejected pointer frames must retain a side-effect-free executable contract'
+
+write_fixture
+perl -0pi -e 's/fn barrier\(/fn unchecked_flush\(/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+run_fail 'Linux applied input must wait for a checked X11 reply barrier'
+
+write_fixture
+perl -0pi -e 's/X11ServerGrab::begin/X11ServerGrab::assume/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+run_fail 'Linux target-local input must acquire one checked X11 server transaction'
+
+write_fixture
+perl -0pi -e 's/LinuxProcessInstance::resolve/LinuxProcessInstance::from_pid_only/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+run_fail 'Linux target-local input must reject PID reuse with a boot-scoped process identity'
 
 write_fixture
 perl -0pi -e 's/WAYLAND_DISPLAY/WAYLAND_IGNORED/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
@@ -74,7 +91,7 @@ perl -0pi -e 's/"macos", "linux", "windows"/"macos", "linux"/' "$SANDBOX/plugins
 run_fail 'RemoteApp plugin manifest must install on Windows as well as macOS/Linux'
 
 write_fixture
-perl -0pi -e 's/live_e2e_required/source_complete/' "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+perl -0pi -e 's/live_e2e_required/source_complete/g' "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must retain the live OS-effect certification requirement'
 
 printf 'test_check_remoteapp_platform_input_backends: all cases passed\n'
