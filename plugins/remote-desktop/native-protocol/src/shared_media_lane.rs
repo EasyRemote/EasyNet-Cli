@@ -1143,7 +1143,7 @@ impl Drop for SharedMediaPayload {
 ///
 /// A shared slot must be released as soon as its canonical frame has been
 /// validated, while RTP packetization and NACK history may retain the encoded
-/// payload for longer. `DetachedMediaPayloadPool` preserves that ownership
+/// payload for longer. `DetachedMediaBufferPool` preserves that ownership
 /// boundary: one copy moves the compressed payload into transport-owned
 /// memory, and the last transport-owner clone returns its backing allocation
 /// to this pool. Retention is bounded independently by buffer count and total
@@ -1507,7 +1507,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_notification_claim_and_webrtc_bytes_keep_one_mapped_payload() {
+    fn fixed_notification_can_project_one_mapped_payload_lease() {
         let fence = GenerationFence {
             process_generation: 7,
             build_id: "33".repeat(32),
@@ -1574,15 +1574,15 @@ mod tests {
         assert_eq!(decoded, metadata);
         assert_eq!(payload_view, codec_payload);
         let payload_offset = payload_view.as_ptr() as usize - frame.as_ptr() as usize;
-        let webrtc_bytes = frame.slice(payload_offset..payload_offset + payload_view.len());
-        assert_eq!(webrtc_bytes.as_ptr(), payload_view.as_ptr());
-        assert_eq!(&webrtc_bytes[..], codec_payload);
+        let projected_bytes = frame.slice(payload_offset..payload_offset + payload_view.len());
+        assert_eq!(projected_bytes.as_ptr(), payload_view.as_ptr());
+        assert_eq!(&projected_bytes[..], codec_payload);
         drop(frame);
         assert!(matches!(
             producer.publish_event(&metadata, codec_payload).unwrap(),
             SharedPublishOutcome::Dropped { .. }
         ));
-        drop(webrtc_bytes);
+        drop(projected_bytes);
         assert!(matches!(
             producer.publish_event(&metadata, codec_payload).unwrap(),
             SharedPublishOutcome::Published(_)

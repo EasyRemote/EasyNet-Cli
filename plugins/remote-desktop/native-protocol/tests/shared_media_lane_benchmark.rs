@@ -374,14 +374,14 @@ fn shared_lane_benchmark_emits_comparative_evidence() {
             .observe_binary_media(MediaLane::Video, &decoded, payload_view)
             .unwrap();
         let mapped_payload_pointer = payload_view.as_ptr();
-        let webrtc_bytes = Bytes::from_owner(transport_pool.copy_from_slice(payload_view));
-        assert_ne!(webrtc_bytes.as_ptr(), mapped_payload_pointer);
-        assert_eq!(webrtc_bytes.len(), PAYLOAD_BYTES);
+        let transport_bytes = Bytes::from_owner(transport_pool.copy_from_slice(payload_view));
+        assert_ne!(transport_bytes.as_ptr(), mapped_payload_pointer);
+        assert_eq!(transport_bytes.len(), PAYLOAD_BYTES);
         drop(frame);
         // Keep transport bytes alive across the next publish. The shared slot
         // must already be reusable because RTP/NACK ownership is detached from
         // the mapping lease.
-        retained_transport_bytes = Some(webrtc_bytes);
+        retained_transport_bytes = Some(transport_bytes);
         shared_latency_ns.push(frame_started.elapsed().as_nanos() as u64);
     }
     drop(retained_transport_bytes);

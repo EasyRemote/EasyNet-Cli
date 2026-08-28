@@ -20,18 +20,25 @@ changes where their bytes live; it does not create another media lifecycle.
   shared slot.
 - The notification pipe carries only a fixed slot ticket, never codec bytes.
 - The daemon validates the fixed header and codec payload in place, then makes
-  exactly one bounded detach copy into transport-owned `Bytes` before handing
-  the payload to WebRTC.
+  exactly one bounded detach copy into a reusable transport buffer before
+  handing transport-owned `Bytes` to WebRTC. The last RTP/NACK `Bytes` owner
+  returns that allocation to the pool.
 - Video and audio retain separate memory, notification, backpressure and
   failure domains.
-- Memory is fixed at generation creation and cannot grow with sender or
-  receiver delay.
+- Shared-ring memory is fixed at generation creation. Detached free-buffer
+  retention is independently capped at 32 video buffers/32 MiB and 64 audio
+  buffers/256 KiB; asynchronous network ownership never pins a shared slot.
 
 This is not an end-to-end zero-copy claim. Platform encoders may produce owned
 output, the host performs one copy into the shared slot, the daemon performs
 one ownership-detach copy, and RTP/SRTP/network stacks may packetize or copy
 later. The detach is required because packetization and NACK retransmission may
 retain payload bytes longer than a shared-ring producer can safely wait.
+
+The transport pool is not a second queue and does not retain frames by itself.
+It only recycles allocations after the final downstream owner releases them.
+This makes the hot path bounded-copy and amortized-allocation, not end-to-end
+zero-copy.
 
 ## Generation-owned layout
 
