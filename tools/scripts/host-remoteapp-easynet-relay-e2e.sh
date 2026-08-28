@@ -167,8 +167,8 @@ credential_node_id="$(jq -er '.node_id' "$CREDENTIALS_PATH")" || {
 }
 : "${EASYNET_REMOTEAPP_BROWSER_EMAIL:?EASYNET_REMOTEAPP_BROWSER_EMAIL is required}"
 : "${EASYNET_REMOTEAPP_BROWSER_PASSWORD:?EASYNET_REMOTEAPP_BROWSER_PASSWORD is required}"
-[[ "$TARGET_KIND" == "window" || "$TARGET_KIND" == "application" ]] || {
-  write_status failed "target kind must be window or application"
+[[ "$TARGET_KIND" == "display" || "$TARGET_KIND" == "window" || "$TARGET_KIND" == "application" ]] || {
+  write_status failed "target kind must be display, window, or application"
   exit 64
 }
 for value in "$TURN_PORT" "$TURN_MIN_PORT" "$TURN_MAX_PORT"; do

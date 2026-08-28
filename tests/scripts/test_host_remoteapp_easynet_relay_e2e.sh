@@ -36,6 +36,8 @@ grep -q 'provider-restore.stderr.txt' "$HOST_RUNNER" ||
   fail "host runner does not own provider recovery after lifecycle arming"
 grep -q 'resume-reconnect-complete' "$HOST_RUNNER" ||
   fail "host runner cannot distinguish completed reconnect from cleanup compensation"
+grep -q 'target kind must be display, window, or application' "$HOST_RUNNER" ||
+  fail "host relay runner cannot use a restart-safe display target for recovery proof"
 grep -q 'coturn_log_is_ready' "$HOST_RUNNER" ||
   fail "host relay runner must use a pipefail-safe coturn readiness parser"
 if grep -Eq 'docker logs .*\| *grep +-q' "$HOST_RUNNER"; then
