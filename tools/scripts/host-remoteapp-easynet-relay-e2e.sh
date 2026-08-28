@@ -16,6 +16,8 @@ RUNTIME_CLI="${EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RUNTIME_CLI:-$REPO_ROOT/targe
 RUNTIME_DAEMON="${EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RUNTIME_DAEMON:-$(dirname "$RUNTIME_CLI")/easynet-daemon}"
 BROWSER_RUNNER="$FRONTEND_ROOT/scripts/remoteapp-browser-lifecycle.mjs"
 CREDENTIALS_PATH="${EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_CREDENTIALS_PATH:-$HOME/.easynet/credentials.json}"
+RESUME_DISCONNECT_ACTION="${EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RESUME_DISCONNECT_ACTION:-}"
+RESUME_RECONNECT_ACTION="${EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RESUME_RECONNECT_ACTION:-}"
 
 MODE=skip
 RELAY_REFRESH_RESUME=0
@@ -50,6 +52,12 @@ relay-only ICE, and restores both Hub and daemon ordinary configuration.
 refresh state machine to rotate the lease, restarts the daemon, and requires
 the same public session to bind a newer WebRTC transport using the refreshed
 lease before terminal cleanup.
+
+When the provider daemon does not run on this host, set both
+EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RESUME_DISCONNECT_ACTION and
+EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RESUME_RECONNECT_ACTION to commands that
+stop and start the selected provider. The runner owns best-effort reconnect on
+cleanup after the Browser lifecycle has been armed.
 USAGE
 }
 
@@ -189,6 +197,18 @@ if [[ "$RELAY_REFRESH_RESUME" -eq 1 ]]; then
     write_status failed "accelerated relay refresh threshold must fit the Browser lifecycle command deadline"
     exit 64
   }
+  if [[ -z "$RESUME_DISCONNECT_ACTION" ]]; then
+    printf -v RESUME_DISCONNECT_ACTION '%q runtime stop' "$RUNTIME_CLI"
+  fi
+  if [[ -z "$RESUME_RECONNECT_ACTION" ]]; then
+    printf -v RESUME_RECONNECT_ACTION '%q runtime start' "$RUNTIME_CLI"
+  fi
+  for action in "$RESUME_DISCONNECT_ACTION" "$RESUME_RECONNECT_ACTION"; do
+    [[ "$action" != *$'\n'* && "$action" != *$'\r'* ]] || {
+      write_status failed "provider lifecycle actions must be single-line shell commands"
+      exit 64
+    }
+  done
 fi
 
 compose() {
@@ -210,9 +230,15 @@ CONTAINER="easynet-remoteapp-hub-relay-$$"
 DAEMON_WAS_RUNNING=0
 pgrep -f '/easynet-daemon$' >/dev/null 2>&1 && DAEMON_WAS_RUNNING=1
 RESTORE_FAILED=0
+RESUME_PROVIDER_LIFECYCLE_ARMED=0
+RESUME_RECONNECT_COMPLETE_FILE=""
 
 cleanup() {
   local exit_code=$?
+  if [[ "$RESUME_PROVIDER_LIFECYCLE_ARMED" -eq 1 && ! -e "$RESUME_RECONNECT_COMPLETE_FILE" ]]; then
+    /bin/sh -lc "$RESUME_RECONNECT_ACTION" >"$OUT_DIR/provider-restore.stdout.txt" \
+      2>"$OUT_DIR/provider-restore.stderr.txt" || RESTORE_FAILED=1
+  fi
   "$RUNTIME_CLI" runtime stop >/dev/null 2>&1 || true
   docker stop "$CONTAINER" >/dev/null 2>&1 || true
   if ! compose up -d --force-recreate hub >"$OUT_DIR/hub-restore.stdout.txt" 2>"$OUT_DIR/hub-restore.stderr.txt" || ! wait_for_hub; then
@@ -281,9 +307,18 @@ sleep 2
 browser_dir="$OUT_DIR/browser"
 mkdir -p "$browser_dir"
 relay_refresh_ready_file="$browser_dir/relay-refresh-ready.json"
+resume_reconnect_complete_file="$browser_dir/resume-reconnect-complete"
 if [[ "$RELAY_REFRESH_RESUME" -eq 1 && -e "$relay_refresh_ready_file" ]]; then
   write_status failed "refusing stale relay refresh coordination file: $relay_refresh_ready_file"
   exit 1
+fi
+if [[ "$RELAY_REFRESH_RESUME" -eq 1 && -e "$resume_reconnect_complete_file" ]]; then
+  write_status failed "refusing stale provider reconnect marker: $resume_reconnect_complete_file"
+  exit 1
+fi
+if [[ "$RELAY_REFRESH_RESUME" -eq 1 ]]; then
+  RESUME_RECONNECT_COMPLETE_FILE="$resume_reconnect_complete_file"
+  RESUME_PROVIDER_LIFECYCLE_ARMED=1
 fi
 (
   cd "$FRONTEND_ROOT"
@@ -294,11 +329,13 @@ fi
   export EASYNET_REMOTEAPP_BROWSER_ICE_TRANSPORT_POLICY=relay
   if [[ "$RELAY_REFRESH_RESUME" -eq 1 ]]; then
     export EASYNET_REMOTEAPP_BROWSER_REQUIRE_RELAY_LEASE_REFRESH=1
-    export EASYNET_REMOTEAPP_RELAY_REFRESH_RUNTIME_CLI="$RUNTIME_CLI"
     export EASYNET_REMOTEAPP_RELAY_REFRESH_READY_FILE="$relay_refresh_ready_file"
+    export EASYNET_REMOTEAPP_RELAY_REFRESH_RECONNECT_COMPLETE_FILE="$resume_reconnect_complete_file"
     export EASYNET_REMOTEAPP_BROWSER_RELAY_REFRESH_READY_FILE="$relay_refresh_ready_file"
-    export EASYNET_REMOTEAPP_BROWSER_RESUME_DISCONNECT_COMMAND='remaining=250; while [ ! -s "$EASYNET_REMOTEAPP_RELAY_REFRESH_READY_FILE" ]; do remaining=$((remaining - 1)); [ "$remaining" -gt 0 ] || exit 70; sleep 0.1; done; "$EASYNET_REMOTEAPP_RELAY_REFRESH_RUNTIME_CLI" runtime stop'
-    export EASYNET_REMOTEAPP_BROWSER_RESUME_RECONNECT_COMMAND='"$EASYNET_REMOTEAPP_RELAY_REFRESH_RUNTIME_CLI" runtime start'
+    export EASYNET_REMOTEAPP_RELAY_REFRESH_DISCONNECT_ACTION="$RESUME_DISCONNECT_ACTION"
+    export EASYNET_REMOTEAPP_RELAY_REFRESH_RECONNECT_ACTION="$RESUME_RECONNECT_ACTION"
+    export EASYNET_REMOTEAPP_BROWSER_RESUME_DISCONNECT_COMMAND='remaining=250; while [ ! -s "$EASYNET_REMOTEAPP_RELAY_REFRESH_READY_FILE" ]; do remaining=$((remaining - 1)); [ "$remaining" -gt 0 ] || exit 70; sleep 0.1; done; /bin/sh -lc "$EASYNET_REMOTEAPP_RELAY_REFRESH_DISCONNECT_ACTION"'
+    export EASYNET_REMOTEAPP_BROWSER_RESUME_RECONNECT_COMMAND='/bin/sh -lc "$EASYNET_REMOTEAPP_RELAY_REFRESH_RECONNECT_ACTION" && : > "$EASYNET_REMOTEAPP_RELAY_REFRESH_RECONNECT_COMPLETE_FILE"'
   fi
   node "$BROWSER_RUNNER"
 ) >"$browser_dir/runner.stdout.txt" 2>"$browser_dir/runner.stderr.txt"

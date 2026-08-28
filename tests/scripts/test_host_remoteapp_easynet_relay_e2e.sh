@@ -28,6 +28,14 @@ grep -q 'relay terminal probe credentials belong to' "$HOST_RUNNER" ||
   fail "host runner does not bind terminal probe credentials to the provider device"
 grep -q 'release-probe.json' "$HOST_RUNNER" ||
   fail "host runner does not preserve a redacted terminal probe artifact"
+grep -q 'EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RESUME_DISCONNECT_ACTION' "$HOST_RUNNER" ||
+  fail "host runner cannot target an external provider for resume disconnect"
+grep -q 'EASYNET_REMOTEAPP_EASYNET_RELAY_E2E_RESUME_RECONNECT_ACTION' "$HOST_RUNNER" ||
+  fail "host runner cannot target an external provider for resume reconnect"
+grep -q 'provider-restore.stderr.txt' "$HOST_RUNNER" ||
+  fail "host runner does not own provider recovery after lifecycle arming"
+grep -q 'resume-reconnect-complete' "$HOST_RUNNER" ||
+  fail "host runner cannot distinguish completed reconnect from cleanup compensation"
 grep -q 'coturn_log_is_ready' "$HOST_RUNNER" ||
   fail "host relay runner must use a pipefail-safe coturn readiness parser"
 if grep -Eq 'docker logs .*\| *grep +-q' "$HOST_RUNNER"; then
