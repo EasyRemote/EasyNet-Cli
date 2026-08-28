@@ -27,6 +27,7 @@ Options:
   -h, --help    Show this help.
 
 Required report environment:
+  EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_TRANSPORT_RESUME_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON
@@ -45,6 +46,16 @@ Required report environment:
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_WINDOW_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_JSON
   EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON
+
+Required signed-campaign environment for production --check:
+  EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CAMPAIGN_BUNDLE_JSON
+  EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CAMPAIGN_ROOT
+
+System-provisioned product authority (not caller-configurable):
+  Linux: /etc/easynet/remoteapp-attestation-trust.json
+         /var/lib/easynet/remoteapp-campaign-replay
+  macOS: /Library/Application Support/EasyNet/remoteapp/attestation-trust.json
+         /Library/Application Support/EasyNet/remoteapp/campaign-replay
 
 Evidence scope:
   This gate is a product-completion aggregator. It can pass only when every
@@ -65,16 +76,42 @@ done
 
 write_completion_report() {
   local mode="$1"
-  python3 - "$OUT_DIR" "$mode" <<'PY'
+  python3 - "$OUT_DIR" "$mode" "$REPO_ROOT" <<'PY'
+import importlib.util
+import hashlib
 import json
 import os
 import pathlib
+import subprocess
 import sys
+import tempfile
 
 out_dir = pathlib.Path(sys.argv[1])
 mode = sys.argv[2]
+repo_root = pathlib.Path(sys.argv[3])
 out_dir.mkdir(parents=True, exist_ok=True)
 
+LIVE_EVIDENCE_ORIGIN = "live_runner"
+CONTRACT_SELF_TEST_ORIGIN = "contract_self_test"
+contract_fixture_mode = (
+    os.environ.get("EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CONTRACT_FIXTURE_MODE") == "1"
+)
+provenance = None
+
+if sys.platform == "darwin":
+    system_trust_bundle = pathlib.Path(
+        "/Library/Application Support/EasyNet/remoteapp/attestation-trust.json"
+    )
+    system_replay_ledger = pathlib.Path(
+        "/Library/Application Support/EasyNet/remoteapp/campaign-replay"
+    )
+else:
+    system_trust_bundle = pathlib.Path(
+        "/etc/easynet/remoteapp-attestation-trust.json"
+    )
+    system_replay_ledger = pathlib.Path(
+        "/var/lib/easynet/remoteapp-campaign-replay"
+    )
 lifecycle_targets = ("window", "application")
 
 def lifecycle_required(item_prefix, env_prefix, expected_script):
@@ -115,6 +152,7 @@ required = [
             "cross-device-product-smoke",
             "host-permission-subject",
             "host-target-picker-freshness",
+            "host-target-picker-freshness-application",
             "host-decoded-frame-window",
             "host-decoded-frame-application",
             "host-view-only-input-window",
@@ -152,6 +190,14 @@ required = [
                 "name": "host-target-picker-freshness",
                 "report_json": "report.json",
                 "expected_script": "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh",
+                "expected_target_kind": "window",
+                "requires_evidence_json": True,
+            },
+            {
+                "name": "host-target-picker-freshness-application",
+                "report_json": "report.json",
+                "expected_script": "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh",
+                "expected_target_kind": "application",
                 "requires_evidence_json": True,
             },
             {
@@ -187,9 +233,11 @@ required = [
     {
         "id": "browser_lifecycle",
         "env": "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON",
-        "expected_script": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
+        "expected_script": "tools/scripts/frontend-remoteapp-browser-lifecycle-matrix-e2e.sh",
         "coverage_keys": [],
         "requires_evidence_json": True,
+        "requires_browser_interactive_input": True,
+        "requires_interactive_target_kinds": ["window", "application"],
     },
     {
         "id": "cross_device_smoke",
@@ -214,10 +262,10 @@ required = [
             "application",
             "remote_media_rendered",
             "input_policy_checked",
-            "distinct_device_uras_observed",
+            "remote_client_boundary_observed",
         ],
         "cross_device": True,
-        "requires_observed_device_pairs": True,
+        "requires_observed_remote_endpoints": True,
         "requires_evidence_json": True,
         "requires_cross_device_remoteapp_scenarios": True,
     },
@@ -311,9 +359,241 @@ errors = []
 def add_error(item_id, message):
     errors.append(f"{item_id}: {message}")
 
+def verify_campaign_receipts(verification):
+    verifier = repo_root / "target/release/easynet"
+    if sys.platform == "win32":
+        verifier = verifier.with_suffix(".exe")
+    if not verifier.is_file() or verifier.is_symlink():
+        raise ValueError(
+            f"release receipt verifier is not a regular non-symlink file: {verifier}"
+        )
+    verifier_body = verifier.read_bytes()
+    observed_verifier_digest = "sha256:" + hashlib.sha256(verifier_body).hexdigest()
+    expected_verifier_digest = verification["build"]["receipt_verifier_sha256"]
+    if observed_verifier_digest != expected_verifier_digest:
+        raise ValueError(
+            "release receipt verifier digest does not match signed campaign build"
+        )
+    with tempfile.TemporaryDirectory(prefix="remoteapp-receipt-verifier-") as directory:
+        verification_root = pathlib.Path(directory)
+        verifier_copy = verification_root / verifier.name
+        verifier_copy.write_bytes(verifier_body)
+        verifier_copy.chmod(0o500)
+        keyset_path = verification_root / "receipt-signers.json"
+        keyset_path.write_text(
+            json.dumps(verification["receipt_signer_keyset"], sort_keys=True),
+            encoding="utf-8",
+        )
+        verifier_home = verification_root / "home"
+        verifier_tmp = verification_root / "tmp"
+        verifier_home.mkdir(mode=0o700)
+        verifier_tmp.mkdir(mode=0o700)
+        verifier_environment = {
+            "HOME": str(verifier_home),
+            "TMPDIR": str(verifier_tmp),
+            "PATH": os.defpath,
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+        for domain_id, domain in verification["domains"].items():
+            proof_path = pathlib.Path(domain["receipt_proof_path"])
+            proof_copy = verification_root / f"{domain_id}-receipt-proof.json"
+            proof_copy.write_bytes(
+                provenance.read_verified_bytes(
+                    verification,
+                    proof_path,
+                    f"domain {domain_id!r} receipt proof",
+                )
+            )
+            completed = subprocess.run(
+                [
+                    str(verifier_copy),
+                    "invocation",
+                    "verify-finalization",
+                    "--proof-set",
+                    str(proof_copy),
+                    "--signer-keyset",
+                    str(keyset_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                cwd=verification_root,
+                env=verifier_environment,
+                close_fds=True,
+            )
+            if completed.returncode != 0:
+                detail = completed.stderr.strip() or completed.stdout.strip()
+                raise ValueError(
+                    f"domain {domain_id!r} Axon receipt verification failed: {detail}"
+                )
+            try:
+                result = json.loads(completed.stdout)
+            except Exception as exc:
+                raise ValueError(
+                    f"domain {domain_id!r} receipt verifier output is invalid JSON: {exc}"
+                ) from exc
+            if result.get("status") != "verified":
+                raise ValueError(
+                    f"domain {domain_id!r} receipt verifier did not return verified"
+                )
+            proofs = result.get("proofs")
+            expectations = domain["receipt_expectations"]
+            if not isinstance(proofs, list) or not proofs:
+                raise ValueError(f"domain {domain_id!r} verified no receipt proofs")
+            if result.get("campaign") != expectations["campaign"]:
+                raise ValueError(
+                    f"domain {domain_id!r} verified campaign binding does not match attestation"
+                )
+            expected_proofs = expectations["proofs"]
+            if len(proofs) != len(expected_proofs):
+                raise ValueError(
+                    f"domain {domain_id!r} verified proof count does not match attestation"
+                )
+            for index, (proof, expected) in enumerate(zip(proofs, expected_proofs)):
+                for field in (
+                    "proof_id",
+                    "invocation_ura",
+                    "descriptor_ref",
+                    "subject_ura",
+                    "caller_ura",
+                    "callee_ura",
+                    "session_id",
+                    "arguments_sha256",
+                    "campaign_invocation_nonce",
+                ):
+                    if proof.get(field) != expected[field]:
+                        raise ValueError(
+                            f"domain {domain_id!r} proof[{index}] verified {field} "
+                            "does not match signed proof expectation"
+                        )
+            required_abilities = {
+                "browser_lifecycle": {"remote_desktop.focus_target"},
+                "input_injection": {"remote_desktop.focus_target"},
+            }.get(domain_id, set())
+            observed_abilities = {
+                proof.get("ability_name")
+                for proof in proofs
+                if isinstance(proof.get("ability_name"), str)
+            }
+            missing_abilities = sorted(required_abilities - observed_abilities)
+            if missing_abilities:
+                raise ValueError(
+                    f"domain {domain_id!r} has no campaign-bound successful receipt "
+                    f"for required abilities {missing_abilities}"
+                )
+            domain["receipt_verification"] = result
+    verification["receipt_verifier_sha256"] = observed_verifier_digest
+    verification["all_receipts_verified"] = True
+    verification["status"] = "verified"
+
+campaign_verified = False
+campaign_verification = None
+if contract_fixture_mode:
+    campaign_verification = {
+        "status": "contract_fixture_bypass",
+        "product_complete_claim_allowed": False,
+    }
+else:
+    campaign_bundle_text = os.environ.get(
+        "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CAMPAIGN_BUNDLE_JSON", ""
+    )
+    campaign_root_text = os.environ.get(
+        "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CAMPAIGN_ROOT", ""
+    )
+    missing_campaign_env = [
+        name
+        for name, value in (
+            (
+                "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CAMPAIGN_BUNDLE_JSON",
+                campaign_bundle_text,
+            ),
+            ("EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CAMPAIGN_ROOT", campaign_root_text),
+        )
+        if not value
+    ]
+    if missing_campaign_env:
+        add_error(
+            "campaign_attestation",
+            "missing signed campaign environment: " + ", ".join(missing_campaign_env),
+        )
+    else:
+        try:
+            helper_path = repo_root / "tools/scripts/remoteapp-evidence-provenance.py"
+            spec = importlib.util.spec_from_file_location(
+                "remoteapp_evidence_provenance", helper_path
+            )
+            if spec is None or spec.loader is None:
+                raise ValueError("cannot load RemoteApp campaign verifier")
+            provenance = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(provenance)
+            provenance.validate_system_authority_path(
+                system_trust_bundle,
+                directory=False,
+                label="RemoteApp attestation trust bundle",
+            )
+            provenance.validate_system_authority_path(
+                system_replay_ledger,
+                directory=True,
+                label="RemoteApp campaign replay ledger",
+            )
+            expected_reports = {}
+            for item in required:
+                report_path_text = os.environ.get(item["env"], "")
+                if not report_path_text:
+                    raise ValueError(
+                        f"cannot bind campaign domain {item['id']!r}: missing {item['env']}"
+                    )
+                expected_reports[item["id"]] = pathlib.Path(report_path_text)
+            campaign_verification = provenance.verify_campaign_bundle(
+                pathlib.Path(campaign_bundle_text),
+                system_trust_bundle,
+                pathlib.Path(campaign_root_text),
+                expected_reports,
+            )
+            verify_campaign_receipts(campaign_verification)
+            campaign_verified = campaign_verification.get("status") == "verified"
+            if not campaign_verified:
+                raise ValueError("campaign verifier did not return verified status")
+        except Exception as exc:
+            campaign_verification = {
+                "status": "failed",
+                "error": str(exc),
+            }
+            add_error("campaign_attestation", str(exc))
+
+def read_product_json(path, label):
+    if campaign_verified:
+        return provenance.read_verified_json(campaign_verification, path, label)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must contain a JSON object")
+    return value
+
+def require_live_origin(item_id, check, payload, label):
+    observed = payload.get("evidence_origin") if isinstance(payload, dict) else None
+    if (
+        isinstance(payload, dict)
+        and payload.get("contract_fixture") is True
+        and not contract_fixture_mode
+    ):
+        message = f"{label} is a contract_fixture and cannot be accepted as live evidence"
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return False
+    if observed != LIVE_EVIDENCE_ORIGIN:
+        message = (
+            f"{label} evidence_origin is {observed!r}, "
+            f"expected {LIVE_EVIDENCE_ORIGIN!r}"
+        )
+        check["errors"].append(message)
+        add_error(item_id, message)
+        return False
+    return True
+
 def read_required_evidence_json(item_id, check, evidence_path, label):
     try:
-        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence = read_product_json(evidence_path, f"{label} evidence_json")
     except Exception as exc:
         message = f"{label} invalid evidence_json: {exc}"
         check["errors"].append(message)
@@ -328,6 +608,7 @@ def read_required_evidence_json(item_id, check, evidence_path, label):
         message = f"{label} evidence_json status is {evidence.get('status')!r}, expected 'passed'"
         check["errors"].append(message)
         add_error(item_id, message)
+    require_live_origin(item_id, check, evidence, f"{label} evidence_json")
     return evidence
 
 def lower(value):
@@ -338,6 +619,12 @@ def positive_int(value):
         return int(value) > 0
     except Exception:
         return False
+
+def is_ura(value):
+    return isinstance(value, str) and value.startswith("easynet:///")
+
+def has_ura_kind(value, kind):
+    return is_ura(value) and f"/{kind}/" in value
 
 def int_value(value):
     try:
@@ -382,6 +669,8 @@ def validate_frontend_flow_summary(item_id, check, report, required_steps):
         "cross_device_distinct_devices",
         "permission_subject_checked",
         "target_picker_fresh",
+        "window_target_picker_fresh",
+        "application_target_picker_fresh",
         "window_frame_rendered",
         "application_frame_rendered",
         "window_view_only_input_checked",
@@ -403,6 +692,7 @@ def validate_transport_resume_summary(item_id, check, report):
         add_error(item_id, message)
         return
     check["transport_resume_summary"] = summary
+
     if summary.get("proof_mode") != "real_browser_transport_resume":
         message = "transport_resume_summary.proof_mode must be real_browser_transport_resume"
         check["errors"].append(message)
@@ -449,6 +739,37 @@ def validate_transport_resume_summary(item_id, check, report):
         message = "transport_resume_summary must preserve input authority"
         check["errors"].append(message)
         add_error(item_id, message)
+
+def validate_browser_interactive_input(item_id, check, report, required_target_kinds):
+    if report.get("input_result") != "input_applied":
+        message = "browser lifecycle must prove input_result=input_applied"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if report.get("input_interaction_sequence_verified") is not True:
+        message = "browser lifecycle must verify pointer down/up and key down/up"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    if report.get("focus_recovery_verified") is not True:
+        message = "browser lifecycle must verify target_blurred focus recovery"
+        check["errors"].append(message)
+        add_error(item_id, message)
+    focus_kinds = report.get("focus_recovery_target_kinds")
+    focus_kind_set = ({kind for kind in focus_kinds if isinstance(kind, str)}
+                      if isinstance(focus_kinds, list) else set())
+    missing_focus_kinds = sorted(set(required_target_kinds) - focus_kind_set)
+    if missing_focus_kinds:
+        message = "browser lifecycle focus_recovery_target_kinds missing: " + ", ".join(missing_focus_kinds)
+        check["errors"].append(message)
+        add_error(item_id, message)
+    check["focus_recovery_target_kinds"] = sorted(focus_kind_set)
+    observed = report.get("interactive_target_kinds")
+    observed_set = {kind for kind in observed if isinstance(kind, str)} if isinstance(observed, list) else set()
+    missing = sorted(set(required_target_kinds) - observed_set)
+    if missing:
+        message = "browser lifecycle interactive_target_kinds missing: " + ", ".join(missing)
+        check["errors"].append(message)
+        add_error(item_id, message)
+    check["interactive_target_kinds"] = sorted(observed_set)
 
 def validate_media_scenarios(item_id, check, report):
     required_scenarios = {"baseline", "degraded_network", "backpressure"}
@@ -944,20 +1265,30 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
         seen_targets.add(target_kind)
         prefix = f"cross-device RemoteApp target {target_kind}"
 
-        caller_device_ura = scenario.get("caller_device_ura")
+        caller_ura = scenario.get("caller_ura")
+        callee_ura = scenario.get("callee_ura")
         provider_device_ura = scenario.get("provider_device_ura")
+        client_endpoint_id = scenario.get("client_endpoint_id")
         selected_resource_ura = scenario.get("selected_resource_ura")
         session_id = scenario.get("session_id")
-        if not isinstance(caller_device_ura, str) or not caller_device_ura.startswith("easynet:///"):
-            message = f"{prefix}: caller_device_ura must be canonical"
+        if not any(has_ura_kind(caller_ura, kind) for kind in ("user", "agent", "authority")):
+            message = f"{prefix}: caller_ura must identify an admitted principal"
             check["errors"].append(message)
             add_error(item_id, message)
-        if not isinstance(provider_device_ura, str) or not provider_device_ura.startswith("easynet:///"):
-            message = f"{prefix}: provider_device_ura must be canonical"
+        if not has_ura_kind(callee_ura, "agent"):
+            message = f"{prefix}: callee_ura must identify the Remote Desktop SystemAgent"
             check["errors"].append(message)
             add_error(item_id, message)
-        if caller_device_ura == provider_device_ura:
-            message = f"{prefix}: caller/provider device URAs must be distinct"
+        if not has_ura_kind(provider_device_ura, "device"):
+            message = f"{prefix}: provider_device_ura must identify the execution host"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(client_endpoint_id, str) or not client_endpoint_id:
+            message = f"{prefix}: client_endpoint_id must identify the Browser peer"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if scenario.get("remote_execution_boundary") is not True:
+            message = f"{prefix}: remote_execution_boundary must be true"
             check["errors"].append(message)
             add_error(item_id, message)
         if not isinstance(selected_resource_ura, str) or not selected_resource_ura.startswith("easynet:///"):
@@ -987,8 +1318,10 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
             add_error(item_id, message)
             continue
         for field, expected in (
-            ("caller_device_ura", caller_device_ura),
+            ("caller_ura", caller_ura),
+            ("callee_ura", callee_ura),
             ("provider_device_ura", provider_device_ura),
+            ("client_endpoint_id", client_endpoint_id),
             ("selected_resource_ura", selected_resource_ura),
             ("session_id", session_id),
         ):
@@ -997,9 +1330,11 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
                 check["errors"].append(message)
                 add_error(item_id, message)
         for field in (
-            "distinct_devices",
+            "remote_execution_boundary",
             "remote_target_inventory_seen",
             "abilities_bound",
+            "production_signaling_bound",
+            "diagnostic_attach_absent",
             "capture_provider_bound",
             "capture_resource_bound",
             "capture_target_kind_bound",
@@ -1007,11 +1342,16 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
             "media_provider_bound",
             "media_resource_bound",
             "media_session_bound",
-            "rendered_on_caller_device",
+            "production_media_pipeline",
+            "rendered_after_connected",
+            "rendered_on_client_endpoint",
+            "client_endpoint_bound",
             "input_policy_checked",
             "input_policy_session_bound",
             "terminal_receipt_visible",
             "terminal_receipt_session_bound",
+            "terminal_receipt_subject_bound",
+            "end_invocation_receipt_verified",
         ):
             if summary.get(field) is not True:
                 message = f"{prefix}: remoteapp_summary.{field} must be true"
@@ -1019,6 +1359,13 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
                 add_error(item_id, message)
         if not positive_int(summary.get("capture_frames_captured")):
             message = f"{prefix}: remoteapp_summary.capture_frames_captured must be positive"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("capture_counter_source") not in {
+            "provider_media_stats.frames_encoded",
+            "provider_capture_stats.frames_captured",
+        }:
+            message = f"{prefix}: remoteapp_summary.capture_counter_source must identify a provider-side frame counter"
             check["errors"].append(message)
             add_error(item_id, message)
         if not positive_int(summary.get("media_frames_rendered")):
@@ -1029,12 +1376,38 @@ def validate_cross_device_remoteapp_scenarios(item_id, check, report):
             message = f"{prefix}: remoteapp_summary.media_transport must be WebRTC"
             check["errors"].append(message)
             add_error(item_id, message)
+        if summary.get("peer_connection_state") != "connected":
+            message = f"{prefix}: remoteapp_summary.peer_connection_state must be connected"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if summary.get("ice_connection_state") not in {"connected", "completed"}:
+            message = f"{prefix}: remoteapp_summary.ice_connection_state must be connected or completed"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if not isinstance(summary.get("selected_candidate_pair_id"), str) or not summary.get("selected_candidate_pair_id"):
+            message = f"{prefix}: remoteapp_summary.selected_candidate_pair_id must be recorded"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        if str(summary.get("video_codec", "")).lower() != "h264":
+            message = f"{prefix}: remoteapp_summary.video_codec must be H264"
+            check["errors"].append(message)
+            add_error(item_id, message)
         if summary.get("input_policy_mode") not in {"interactive", "view_only", "policy_blocked"}:
             message = f"{prefix}: remoteapp_summary.input_policy_mode must be interactive, view_only, or policy_blocked"
             check["errors"].append(message)
             add_error(item_id, message)
         if summary.get("terminal_reason") not in {"caller_ended", "user_cancelled", "cross_device_remoteapp_e2e_cleanup"}:
             message = f"{prefix}: remoteapp_summary.terminal_reason must be a known cleanup/end reason"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        end_receipt_ura = summary.get("end_invocation_receipt_ura")
+        if not isinstance(end_receipt_ura, str) or not end_receipt_ura.startswith("easynet:///"):
+            message = f"{prefix}: remoteapp_summary.end_invocation_receipt_ura must be canonical"
+            check["errors"].append(message)
+            add_error(item_id, message)
+        end_receipt_hash = summary.get("end_invocation_receipt_hash")
+        if not isinstance(end_receipt_hash, str) or not end_receipt_hash:
+            message = f"{prefix}: remoteapp_summary.end_invocation_receipt_hash must be recorded"
             check["errors"].append(message)
             add_error(item_id, message)
 
@@ -1473,25 +1846,26 @@ def validate_crash_restart_recovery_scenarios(item_id, check, report):
             check["errors"].append(message)
             add_error(item_id, message)
 
-        recovery = scenario.get("recovery")
-        if not isinstance(recovery, dict):
-            message = f"{prefix}: recovery summary must be an object"
-            check["errors"].append(message)
-            add_error(item_id, message)
-            recovery = {}
-        for field in ("wal_replayed", "idempotency_state_recovered", "replay_guard_recovered", "lock_owner_recovered"):
-            if recovery.get(field) is not True:
-                message = f"{prefix}: recovery.{field} must be true"
+        if scenario_name != "plugin_worker_restart":
+            recovery = scenario.get("recovery")
+            if not isinstance(recovery, dict):
+                message = f"{prefix}: recovery summary must be an object"
                 check["errors"].append(message)
                 add_error(item_id, message)
-        if recovery.get("duplicate_invocation_replayed") is not False:
-            message = f"{prefix}: recovery.duplicate_invocation_replayed must be false"
-            check["errors"].append(message)
-            add_error(item_id, message)
-        if int_value(recovery.get("restart_epoch_after")) <= int_value(recovery.get("restart_epoch_before")):
-            message = f"{prefix}: recovery restart epoch must increase"
-            check["errors"].append(message)
-            add_error(item_id, message)
+                recovery = {}
+            for field in ("wal_replayed", "idempotency_state_recovered", "replay_guard_recovered", "lock_owner_recovered"):
+                if recovery.get(field) is not True:
+                    message = f"{prefix}: recovery.{field} must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
+            if recovery.get("duplicate_invocation_replayed") is not False:
+                message = f"{prefix}: recovery.duplicate_invocation_replayed must be false"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if int_value(recovery.get("restart_epoch_after")) <= int_value(recovery.get("restart_epoch_before")):
+                message = f"{prefix}: recovery restart epoch must increase"
+                check["errors"].append(message)
+                add_error(item_id, message)
 
         if scenario_name == "daemon_restart_active_session":
             for field in ("same_session_after_restart", "watch_events_reattached", "media_reattached", "terminal_receipt_visible"):
@@ -1517,10 +1891,20 @@ def validate_crash_restart_recovery_scenarios(item_id, check, report):
                 message = f"{prefix}: same_public_session must be true"
                 check["errors"].append(message)
                 add_error(item_id, message)
-            if scenario.get("media_source_epoch_increased") is not True:
-                message = f"{prefix}: media_source_epoch_increased must be true"
-                check["errors"].append(message)
-                add_error(item_id, message)
+            for field in (
+                "daemon_pid_preserved",
+                "worker_generation_increased",
+                "transport_epoch_preserved",
+                "target_binding_epoch_preserved",
+                "media_source_epoch_preserved",
+                "consent_epoch_preserved",
+                "desired_session_reseeded",
+                "target_monitor_poll_resumed",
+            ):
+                if scenario.get(field) is not True:
+                    message = f"{prefix}: {field} must be true"
+                    check["errors"].append(message)
+                    add_error(item_id, message)
             if not positive_int(scenario.get("frames_rendered_after_worker_restart")):
                 message = f"{prefix}: frames_rendered_after_worker_restart must be positive"
                 check["errors"].append(message)
@@ -1698,7 +2082,7 @@ for item in required:
         checks.append(check)
         continue
     try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report = read_product_json(report_path, f"report {item_id!r}")
     except Exception as exc:
         message = f"invalid report JSON: {exc}"
         check["errors"].append(message)
@@ -1707,6 +2091,8 @@ for item in required:
         continue
     status = report.get("status")
     check["status"] = status
+    check["evidence_origin"] = report.get("evidence_origin")
+    require_live_origin(item_id, check, report, "report")
     if status != "passed":
         message = f"status is {status!r}, expected 'passed'"
         check["errors"].append(message)
@@ -1754,6 +2140,13 @@ for item in required:
         validate_frontend_flow_summary(item_id, check, report, item.get("required_steps", []))
     if item.get("requires_transport_resume_summary"):
         validate_transport_resume_summary(item_id, check, report)
+    if item.get("requires_browser_interactive_input"):
+        validate_browser_interactive_input(
+            item_id,
+            check,
+            report,
+            item.get("requires_interactive_target_kinds", []),
+        )
     if item.get("requires_network_route_scenarios"):
         validate_network_route_scenarios(item_id, check, report)
     if item.get("requires_media_scenarios"):
@@ -1845,7 +2238,9 @@ for item in required:
                 artifact_checks.append(artifact_check)
                 continue
             try:
-                step_result = json.loads(result_path.read_text(encoding="utf-8"))
+                step_result = read_product_json(
+                    result_path, f"product-flow step {step_name!r} result"
+                )
             except Exception as exc:
                 message = f"invalid product-flow step result JSON {result_path}: {exc}"
                 artifact_check["errors"].append(message)
@@ -1855,6 +2250,16 @@ for item in required:
                 continue
             artifact_check["result_status"] = step_result.get("status")
             artifact_check["result_name"] = step_result.get("name")
+            artifact_check["result_evidence_origin"] = step_result.get("evidence_origin")
+            before_count = len(check["errors"])
+            require_live_origin(
+                item_id,
+                check,
+                step_result,
+                f"product-flow step {step_name!r} result",
+            )
+            if len(check["errors"]) > before_count:
+                artifact_check["errors"].extend(check["errors"][before_count:])
             if step_result.get("status") != "passed":
                 message = f"product-flow step {step_name!r} result status is {step_result.get('status')!r}, expected 'passed'"
                 artifact_check["errors"].append(message)
@@ -1876,7 +2281,10 @@ for item in required:
                     add_error(item_id, message)
                 else:
                     try:
-                        subreport = json.loads(subreport_path.read_text(encoding="utf-8"))
+                        subreport = read_product_json(
+                            subreport_path,
+                            f"product-flow subreport {step_name!r}",
+                        )
                     except Exception as exc:
                         message = f"invalid product-flow subreport JSON {subreport_path}: {exc}"
                         artifact_check["errors"].append(message)
@@ -1885,6 +2293,16 @@ for item in required:
                         subreport = None
                     if isinstance(subreport, dict):
                         artifact_check["subreport_status"] = subreport.get("status")
+                        artifact_check["subreport_evidence_origin"] = subreport.get("evidence_origin")
+                        before_count = len(check["errors"])
+                        require_live_origin(
+                            item_id,
+                            check,
+                            subreport,
+                            f"product-flow subreport {step_name!r}",
+                        )
+                        if len(check["errors"]) > before_count:
+                            artifact_check["errors"].extend(check["errors"][before_count:])
                         if subreport.get("status") != "passed":
                             message = f"product-flow subreport {step_name!r} status is {subreport.get('status')!r}, expected 'passed'"
                             artifact_check["errors"].append(message)
@@ -2002,14 +2420,6 @@ for item in required:
     if item.get("cross_device"):
         topology = report.get("topology") if isinstance(report.get("topology"), dict) else {}
         check["topology"] = topology
-        if topology.get("requires_distinct_devices") is not True:
-            message = "topology.requires_distinct_devices is not true"
-            check["errors"].append(message)
-            add_error(item_id, message)
-        if topology.get("distinct_device_uras_observed") is not True:
-            message = "topology.distinct_device_uras_observed is not true"
-            check["errors"].append(message)
-            add_error(item_id, message)
         if topology.get("local_provider_boundary_only") is not False:
             message = "topology.local_provider_boundary_only is not false"
             check["errors"].append(message)
@@ -2018,7 +2428,75 @@ for item in required:
             message = "coverage.local_provider_boundary_only is not false"
             check["errors"].append(message)
             add_error(item_id, message)
-        if item.get("requires_observed_device_pairs"):
+        if item.get("requires_observed_remote_endpoints"):
+            if topology.get("requires_remote_client_boundary") is not True:
+                message = "topology.requires_remote_client_boundary is not true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if topology.get("remote_client_boundary_observed") is not True:
+                message = "topology.remote_client_boundary_observed is not true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if coverage.get("remote_client_boundary_observed") is not True:
+                message = "coverage.remote_client_boundary_observed is not true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            observed_remote_endpoints = topology.get("observed_remote_endpoints")
+            if not isinstance(observed_remote_endpoints, list) or not observed_remote_endpoints:
+                message = "topology.observed_remote_endpoints must not be empty"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            else:
+                valid_bindings = []
+                for index, binding in enumerate(observed_remote_endpoints):
+                    prefix = f"topology.observed_remote_endpoints[{index}]"
+                    if not isinstance(binding, dict):
+                        message = f"{prefix} must be an object"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        continue
+                    caller_ura = binding.get("caller_ura")
+                    callee_ura = binding.get("callee_ura")
+                    provider_device_ura = binding.get("provider_device_ura")
+                    client_endpoint_id = binding.get("client_endpoint_id")
+                    binding_valid = True
+                    if not any(has_ura_kind(caller_ura, kind) for kind in ("user", "agent", "authority")):
+                        message = f"{prefix}.caller_ura must identify an admitted principal"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        binding_valid = False
+                    if not has_ura_kind(callee_ura, "agent"):
+                        message = f"{prefix}.callee_ura must identify the SystemAgent"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        binding_valid = False
+                    if not has_ura_kind(provider_device_ura, "device"):
+                        message = f"{prefix}.provider_device_ura must identify the execution host"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        binding_valid = False
+                    if not isinstance(client_endpoint_id, str) or not client_endpoint_id:
+                        message = f"{prefix}.client_endpoint_id must identify the Browser peer"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        binding_valid = False
+                    if binding.get("remote_execution_boundary") is not True:
+                        message = f"{prefix}.remote_execution_boundary must be true"
+                        check["errors"].append(message)
+                        add_error(item_id, message)
+                        binding_valid = False
+                    if binding_valid:
+                        valid_bindings.append(binding)
+                check["observed_remote_endpoint_count"] = len(valid_bindings)
+        elif item.get("requires_observed_device_pairs"):
+            if topology.get("requires_distinct_devices") is not True:
+                message = "topology.requires_distinct_devices is not true"
+                check["errors"].append(message)
+                add_error(item_id, message)
+            if topology.get("distinct_device_uras_observed") is not True:
+                message = "topology.distinct_device_uras_observed is not true"
+                check["errors"].append(message)
+                add_error(item_id, message)
             observed_device_pairs = topology.get("observed_device_pairs")
             if not isinstance(observed_device_pairs, list) or not observed_device_pairs:
                 message = "topology.observed_device_pairs must not be empty"
@@ -2053,12 +2531,39 @@ for item in required:
     checks.append(check)
 
 effective_status = "failed" if errors else "passed"
+evidence_origin = (
+    CONTRACT_SELF_TEST_ORIGIN if mode == "self-test" else LIVE_EVIDENCE_ORIGIN
+)
+product_complete_eligible = (
+    effective_status == "passed"
+    and mode == "check"
+    and not contract_fixture_mode
+    and campaign_verified
+)
+product_complete_claim = False
+if errors:
+    reason = "missing or failed required product evidence"
+elif mode == "self-test":
+    reason = "aggregate evidence contract self-test passed"
+elif product_complete_eligible:
+    reason = "all product evidence passed; completion authority signature pending"
+else:
+    reason = "product evidence passed without a claim-eligible signed campaign"
 report = {
+    "schema": "easynet.remoteapp.product-completion-candidate.v1",
     "script": "tools/scripts/remoteapp-product-completion-e2e.sh",
     "status": effective_status,
     "mode": mode,
-    "reason": "all product-completion evidence passed" if not errors else "missing or failed required product evidence",
-    "product_complete_claim": effective_status == "passed",
+    "reason": reason,
+    "evidence_origin": evidence_origin,
+    "product_complete_eligible": product_complete_eligible,
+    "product_complete_claim": product_complete_claim,
+    "finalization_state": (
+        "completion_signature_pending" if product_complete_eligible else "not_eligible"
+    ),
+    "contract_fixture_mode": contract_fixture_mode,
+    "campaign_verified": campaign_verified,
+    "campaign_verification": campaign_verification,
     "required_evidence_count": len(required),
     "checks": checks,
     "errors": errors,
@@ -2075,7 +2580,9 @@ report = {
 (out_dir / "report.md").write_text(
     "# RemoteApp Product Completion E2E\n\n"
     f"- Status: `{effective_status}`\n"
-    f"- Product complete claim: `{str(effective_status == 'passed').lower()}`\n"
+    f"- Evidence origin: `{evidence_origin}`\n"
+    f"- Product complete claim: `{str(product_complete_claim).lower()}`\n"
+    f"- Product complete eligible: `{str(product_complete_eligible).lower()}`\n"
     f"- Required evidence count: `{len(required)}`\n"
     f"- Reason: `{report['reason']}`\n",
     encoding="utf-8",
@@ -2111,7 +2618,7 @@ coverage_by_id = {
         "application": True,
         "remote_media_rendered": True,
         "input_policy_checked": True,
-        "distinct_device_uras_observed": True,
+        "remote_client_boundary_observed": True,
         "local_provider_boundary_only": False,
     },
     "cross_platform_capture": {"macos": True, "windows": True, "linux": True},
@@ -2140,7 +2647,7 @@ coverage_by_id = {
 script_by_id = {
     "browser_transport_resume": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
     "frontend_product_flow": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
-    "browser_lifecycle": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
+    "browser_lifecycle": "tools/scripts/frontend-remoteapp-browser-lifecycle-matrix-e2e.sh",
     "cross_device_smoke": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
     "cross_device_remoteapp": "tools/scripts/remoteapp-cross-device-remoteapp-e2e.sh",
     "cross_platform_capture": "tools/scripts/remoteapp-cross-platform-capture-e2e.sh",
@@ -2190,6 +2697,7 @@ lifecycle_target_by_id = {
 report = {
     "script": script_by_id[item_id],
     "status": "passed",
+    "evidence_origin": "live_runner",
     "product_complete_claim": False,
     "coverage": coverage_by_id.get(item_id, {}),
 }
@@ -2227,6 +2735,7 @@ if item_id == "frontend_product_flow":
         {"name": "cross-device-product-smoke", "status": "passed"},
         {"name": "host-permission-subject", "status": "passed"},
         {"name": "host-target-picker-freshness", "status": "passed"},
+        {"name": "host-target-picker-freshness-application", "status": "passed"},
         {"name": "host-decoded-frame-window", "status": "passed"},
         {"name": "host-decoded-frame-application", "status": "passed"},
         {"name": "host-view-only-input-window", "status": "passed"},
@@ -2244,12 +2753,21 @@ if item_id == "frontend_product_flow":
         "cross_device_distinct_devices": True,
         "permission_subject_checked": True,
         "target_picker_fresh": True,
+        "window_target_picker_fresh": True,
+        "application_target_picker_fresh": True,
         "window_frame_rendered": True,
         "application_frame_rendered": True,
         "window_view_only_input_checked": True,
         "application_view_only_input_checked": True,
         "end_session_lifecycle_verified": True,
     }
+if item_id == "browser_lifecycle":
+    report["target_kind"] = "both"
+    report["input_result"] = "input_applied"
+    report["input_interaction_sequence_verified"] = True
+    report["focus_recovery_verified"] = True
+    report["focus_recovery_target_kinds"] = ["application", "window"]
+    report["interactive_target_kinds"] = ["application", "window"]
 if item_id in lifecycle_target_by_id:
     report["target_kind"] = lifecycle_target_by_id[item_id]
     lifecycle_kind = item_id.rsplit("_", 1)[0]
@@ -2564,56 +3082,79 @@ if item_id == "cross_device_smoke":
         "local_provider_boundary_only": False,
     }
 if item_id == "cross_device_remoteapp":
-    caller = "easynet:///r/localhost/device/synthetic-caller"
+    caller = "easynet:///r/localhost/user/synthetic-caller"
+    callee = "easynet:///r/localhost/agent/device.synthetic-provider.remote-desktop"
     provider = "easynet:///r/localhost/device/synthetic-provider"
+    client_endpoint = "browser-peer-synthetic"
     def remoteapp_summary(target_kind):
         selected_resource_ura = f"easynet:///r/localhost/resource/device.synthetic-provider/{target_kind}.selected"
         session_id = f"rd-product-cross-device-{target_kind}"
         return {
-            "caller_device_ura": caller,
+            "caller_ura": caller,
+            "callee_ura": callee,
             "provider_device_ura": provider,
+            "client_endpoint_id": client_endpoint,
             "selected_resource_ura": selected_resource_ura,
             "session_id": session_id,
-            "distinct_devices": True,
+            "remote_execution_boundary": True,
             "remote_target_inventory_seen": True,
             "abilities_bound": True,
+            "production_signaling_bound": True,
+            "diagnostic_attach_absent": True,
             "capture_provider_bound": True,
             "capture_resource_bound": True,
             "capture_target_kind_bound": True,
             "capture_remote_target_inventory_seen": True,
             "capture_frames_captured": 12,
+            "capture_counter_source": "provider_media_stats.frames_encoded",
             "media_provider_bound": True,
             "media_resource_bound": True,
             "media_session_bound": True,
             "media_transport": "webrtc",
+            "production_media_pipeline": True,
+            "peer_connection_state": "connected",
+            "ice_connection_state": "connected",
+            "selected_candidate_pair_id": f"pair-{target_kind}",
+            "video_codec": "H264",
             "media_frames_rendered": 10,
-            "rendered_on_caller_device": True,
+            "rendered_after_connected": True,
+            "rendered_on_client_endpoint": True,
+            "client_endpoint_bound": True,
             "input_policy_checked": True,
             "input_policy_mode": "view_only",
             "input_policy_session_bound": True,
             "terminal_receipt_visible": True,
             "terminal_receipt_session_bound": True,
+            "terminal_receipt_subject_bound": True,
+            "end_invocation_receipt_verified": True,
+            "end_invocation_receipt_ura": f"easynet:///r/localhost/receipt/{session_id}",
+            "end_invocation_receipt_hash": f"hash-{session_id}",
             "terminal_reason": "cross_device_remoteapp_e2e_cleanup",
         }
     report["topology"] = {
-        "requires_distinct_devices": True,
-        "observed_device_pairs": [
+        "requires_remote_client_boundary": True,
+        "observed_remote_endpoints": [
             {
                 "step": "cross-device-remoteapp",
                 "caller_ura": caller,
-                "provider_ura": provider,
-                "distinct_device_uras": True,
+                "callee_ura": callee,
+                "provider_device_ura": provider,
+                "client_endpoint_id": client_endpoint,
+                "remote_execution_boundary": True,
             }
         ],
-        "distinct_device_uras_observed": True,
+        "remote_client_boundary_observed": True,
         "local_provider_boundary_only": False,
     }
     report["scenario_count"] = 3
     report["scenarios"] = [
         {
             "target_kind": target_kind,
-            "caller_device_ura": caller,
+            "caller_ura": caller,
+            "callee_ura": callee,
             "provider_device_ura": provider,
+            "client_endpoint_id": client_endpoint,
+            "remote_execution_boundary": True,
             "selected_resource_ura": f"easynet:///r/localhost/resource/device.synthetic-provider/{target_kind}.selected",
             "session_id": f"rd-product-cross-device-{target_kind}",
             "frames_captured": 12,
@@ -2656,17 +3197,15 @@ if item_id == "crash_restart_recovery":
             "session_id": "sess-plugin-restart",
             "descriptor_version": "1.0.0",
             "events": ["PLUGIN_WORKER_CRASHED", "PLUGIN_WORKER_RESTARTED", "TARGET_MONITOR_RESTARTED"],
-            "recovery": {
-                "wal_replayed": True,
-                "idempotency_state_recovered": True,
-                "replay_guard_recovered": True,
-                "lock_owner_recovered": True,
-                "duplicate_invocation_replayed": False,
-                "restart_epoch_before": 2,
-                "restart_epoch_after": 3,
-            },
             "same_public_session": True,
-            "media_source_epoch_increased": True,
+            "daemon_pid_preserved": True,
+            "worker_generation_increased": True,
+            "transport_epoch_preserved": True,
+            "target_binding_epoch_preserved": True,
+            "media_source_epoch_preserved": True,
+            "consent_epoch_preserved": True,
+            "desired_session_reseeded": True,
+            "target_monitor_poll_resumed": True,
             "frames_rendered_after_worker_restart": 31,
             "new_consent_required": False,
             "terminal_receipt_visible": True,
@@ -2722,19 +3261,29 @@ if item_id == "frontend_product_flow":
         step_dir = path.parent / step_name
         step_dir.mkdir(parents=True, exist_ok=True)
         (step_dir / "result.json").write_text(
-            json.dumps({"name": step_name, "status": "passed"}, indent=2, sort_keys=True) + "\n",
+            json.dumps({
+                "name": step_name,
+                "status": "passed",
+                "evidence_origin": "live_runner",
+            }, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         if step_name == "frontend-browser-lifecycle":
             evidence_path = step_dir / "evidence.json"
             evidence_path.write_text(
-                json.dumps({"status": "passed", "synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
+                json.dumps({
+                    "status": "passed",
+                    "evidence_origin": "live_runner",
+                    "contract_fixture": True,
+                    "step": step_name,
+                }, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             (step_dir / "report.json").write_text(
                 json.dumps({
                     "script": "tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh",
                     "status": "passed",
+                    "evidence_origin": "live_runner",
                     "product_complete_claim": False,
                     "evidence_json": str(evidence_path),
                 }, indent=2, sort_keys=True) + "\n",
@@ -2745,6 +3294,7 @@ if item_id == "frontend_product_flow":
                 json.dumps({
                     "script": "tools/scripts/remoteapp-cross-device-product-smoke.sh",
                     "status": "passed",
+                    "evidence_origin": "live_runner",
                     "product_complete_claim": False,
                     "topology": {
                         "requires_distinct_devices": True,
@@ -2771,18 +3321,26 @@ if item_id == "frontend_product_flow":
         elif step_name.startswith("host-"):
             evidence_path = step_dir / "evidence.json"
             evidence_path.write_text(
-                json.dumps({"status": "passed", "synthetic": True, "step": step_name}, indent=2, sort_keys=True) + "\n",
+                json.dumps({
+                    "status": "passed",
+                    "evidence_origin": "live_runner",
+                    "contract_fixture": True,
+                    "step": step_name,
+                }, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             script_by_step = {
                 "host-permission-subject": "tools/scripts/host-remoteapp-permission-subject-e2e.sh",
                 "host-target-picker-freshness": "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh",
+                "host-target-picker-freshness-application": "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh",
                 "host-decoded-frame-window": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh",
                 "host-decoded-frame-application": "tools/scripts/host-remoteapp-decoded-frame-e2e.sh",
                 "host-view-only-input-window": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
                 "host-view-only-input-application": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
             }
             target_kind_by_step = {
+                "host-target-picker-freshness": "window",
+                "host-target-picker-freshness-application": "application",
                 "host-decoded-frame-window": "window",
                 "host-decoded-frame-application": "application",
                 "host-view-only-input-window": "window",
@@ -2791,6 +3349,7 @@ if item_id == "frontend_product_flow":
             report_payload = {
                 "script": script_by_step[step_name],
                 "status": "passed",
+                "evidence_origin": "live_runner",
                 "product_complete_claim": False,
                 "evidence_json": str(evidence_path),
             }
@@ -2803,7 +3362,12 @@ if item_id == "frontend_product_flow":
 if item_id in evidence_json_ids:
     evidence_path = path.with_suffix(".evidence.json")
     evidence_path.write_text(
-        json.dumps({"status": "passed", "synthetic": True, "report_id": item_id}, indent=2, sort_keys=True) + "\n",
+        json.dumps({
+            "status": "passed",
+            "evidence_origin": "live_runner",
+            "contract_fixture": True,
+            "report_id": item_id,
+        }, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     report["evidence_json"] = str(evidence_path)
@@ -2849,6 +3413,16 @@ run_self_test() {
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_SESSION_RESUME_APPLICATION_REPORT_JSON="$tmp/session_resume_application.json"
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_REMOTEAPP_REPORT_JSON="$tmp/cross_device_remoteapp.json"
   export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_TRANSPORT_RESUME_REPORT_JSON="$tmp/browser_transport_resume.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_BROWSER_LIFECYCLE_REPORT_JSON="$tmp/browser_lifecycle.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_DEVICE_SMOKE_REPORT_JSON="$tmp/cross_device_smoke.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON="$tmp/cross_platform_capture.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON="$tmp/input_injection.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MEDIA_ADAPTATION_REPORT_JSON="$tmp/media_adaptation.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_MULTI_WINDOW_TRACKING_REPORT_JSON="$tmp/multi_window_tracking.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json"
+  export EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CONTRACT_FIXTURE_MODE=1
 
   env \
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_FRONTEND_PRODUCT_FLOW_REPORT_JSON="$tmp/frontend_product_flow.json" \
@@ -2861,7 +3435,76 @@ run_self_test() {
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_NETWORK_FALLBACK_REPORT_JSON="$tmp/network_fallback.json" \
     EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CRASH_RESTART_RECOVERY_REPORT_JSON="$tmp/crash_restart_recovery.json" \
     "$0" --check --out-dir "$tmp/pass" >/dev/null
-  grep -q '"product_complete_claim": true' "$tmp/pass/report.json"
+  grep -q '"product_complete_claim": false' "$tmp/pass/report.json"
+  grep -q '"evidence_origin": "live_runner"' "$tmp/pass/report.json"
+
+  if env -u EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CONTRACT_FIXTURE_MODE \
+      "$0" --check --out-dir "$tmp/fixture-laundering" \
+      >"$tmp/fixture-laundering.stdout" 2>"$tmp/fixture-laundering.stderr"; then
+    echo "self-test accepted contract_fixture as live product evidence" >&2
+    exit 1
+  fi
+  grep -q "contract_fixture and cannot be accepted as live evidence" \
+    "$tmp/fixture-laundering.stderr"
+
+  python3 - "$tmp/browser_lifecycle.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["evidence_origin"] = "contract_self_test"
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if "$0" --check --out-dir "$tmp/self-test-report-origin" \
+      >"$tmp/self-test-report-origin.stdout" 2>"$tmp/self-test-report-origin.stderr"; then
+    echo "self-test accepted contract_self_test report evidence_origin" >&2
+    exit 1
+  fi
+  grep -q "report evidence_origin is 'contract_self_test', expected 'live_runner'" \
+    "$tmp/self-test-report-origin.stderr"
+  write_synthetic_report "$tmp/browser_lifecycle.json" browser_lifecycle
+
+  python3 - "$tmp/browser_lifecycle.json" <<'PY'
+import json
+import pathlib
+import sys
+
+report_path = pathlib.Path(sys.argv[1])
+report = json.loads(report_path.read_text(encoding="utf-8"))
+evidence_path = pathlib.Path(report["evidence_json"])
+evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+del evidence["evidence_origin"]
+evidence_path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+PY
+  if "$0" --check --out-dir "$tmp/missing-evidence-origin" \
+      >"$tmp/missing-evidence-origin.stdout" 2>"$tmp/missing-evidence-origin.stderr"; then
+    echo "self-test accepted missing evidence_json evidence_origin" >&2
+    exit 1
+  fi
+  grep -q "evidence_json evidence_origin is None, expected 'live_runner'" \
+    "$tmp/missing-evidence-origin.stderr"
+  write_synthetic_report "$tmp/browser_lifecycle.json" browser_lifecycle
+
+  python3 - "$tmp/frontend-typecheck/result.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+result = json.loads(path.read_text(encoding="utf-8"))
+result["evidence_origin"] = "unknown"
+path.write_text(json.dumps(result) + "\n", encoding="utf-8")
+PY
+  if "$0" --check --out-dir "$tmp/unknown-step-origin" \
+      >"$tmp/unknown-step-origin.stdout" 2>"$tmp/unknown-step-origin.stderr"; then
+    echo "self-test accepted unknown product-flow step evidence_origin" >&2
+    exit 1
+  fi
+  grep -q "product-flow step 'frontend-typecheck' result evidence_origin is 'unknown'" \
+    "$tmp/unknown-step-origin.stderr"
+  write_synthetic_report "$tmp/frontend_product_flow.json" frontend_product_flow
 
   python3 - "$tmp/browser_transport_resume.json" <<'PY'
 import json
@@ -3334,6 +3977,22 @@ PY
   fi
   write_synthetic_report "$tmp/cross_device_remoteapp.json" cross_device_remoteapp
 
+  python3 - "$tmp/cross_device_remoteapp.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text(encoding="utf-8"))
+report["scenarios"][0]["remoteapp_summary"]["selected_candidate_pair_id"] = ""
+path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+PY
+  if "$0" --check --out-dir "$tmp/cross-device-remoteapp-no-selected-pair" >/dev/null 2>&1; then
+    echo "self-test accepted cross-device RemoteApp report without a selected WebRTC pair" >&2
+    exit 1
+  fi
+  write_synthetic_report "$tmp/cross_device_remoteapp.json" cross_device_remoteapp
+
   python3 - "$tmp/cross_platform_capture.json" <<'PY'
 import json
 import pathlib
@@ -3681,6 +4340,19 @@ PY
     exit 1
   fi
 
+  write_completion_report self-test
+  python3 - "$OUT_DIR/report.json" <<'PY'
+import json
+import pathlib
+import sys
+
+report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert report["status"] == "passed"
+assert report["mode"] == "self-test"
+assert report["evidence_origin"] == "contract_self_test"
+assert report["product_complete_claim"] is False
+PY
+
   echo "remoteapp-product-completion-e2e self-test ok"
 }
 
@@ -3744,6 +4416,7 @@ case "$MODE" in
     grep -q 'product-flow subreport evidence_json path does not exist' "$0"
     grep -q 'evidence_json path does not exist' "$0"
     grep -q "evidence_json status is" "$0"
+    grep -q "expected.*live_runner" "$0"
     grep -q 'required product-flow step' "$0"
     grep -q 'topology.observed_device_pairs must not be empty' "$0"
     grep -q 'report script is' "$0"
@@ -3771,6 +4444,9 @@ case "$MODE" in
     grep -q 'self-test accepted unsupported multi-display application as product completion' "$0"
     grep -q 'self-test accepted network fallback report without route scenarios' "$0"
     grep -q 'self-test accepted crash/restart recovery report without scenarios' "$0"
+    grep -q 'self-test accepted contract_self_test report evidence_origin' "$0"
+    grep -q 'self-test accepted missing evidence_json evidence_origin' "$0"
+    grep -q 'self-test accepted unknown product-flow step evidence_origin' "$0"
     grep -q 'child verifier must not claim product completion' "$0"
     run_self_test
     ;;

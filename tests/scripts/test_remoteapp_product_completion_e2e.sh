@@ -37,6 +37,14 @@ grep -q "cross-device RemoteApp target .* remoteapp_summary must be an object" "
   fail "completion gate must reject cross-device RemoteApp reports without per-target summaries"
 grep -q "self-test accepted cross-device RemoteApp report without summaries" "$SCRIPT" || \
   fail "completion gate self-test must cover missing cross-device RemoteApp summaries"
+grep -q '"production_signaling_bound"' "$SCRIPT" || \
+  fail "completion gate must require the production cross-device signaling path"
+grep -q '"diagnostic_attach_absent"' "$SCRIPT" || \
+  fail "completion gate must reject diagnostic attach in cross-device product evidence"
+grep -q "remoteapp_summary.selected_candidate_pair_id must be recorded" "$SCRIPT" || \
+  fail "completion gate must require a selected cross-device WebRTC pair"
+grep -q "self-test accepted cross-device RemoteApp report without a selected WebRTC pair" "$SCRIPT" || \
+  fail "completion gate self-test must cover missing selected cross-device pair evidence"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_CROSS_PLATFORM_CAPTURE_REPORT_JSON" "$SCRIPT" || \
   fail "completion gate must require cross-platform capture report"
 grep -q "EASYNET_REMOTEAPP_PRODUCT_COMPLETION_INPUT_INJECTION_REPORT_JSON" "$SCRIPT" || \
@@ -125,6 +133,12 @@ grep -q "target_kind is" "$SCRIPT" || \
   fail "completion gate must reject product-flow reports that are not target_kind=both"
 grep -q "host-decoded-frame-window" "$SCRIPT" || \
   fail "completion gate must require window decoded-frame product-flow evidence"
+grep -q "host-target-picker-freshness-application" "$SCRIPT" || \
+  fail "completion gate must require application target-picker freshness evidence"
+grep -q "window_target_picker_fresh" "$SCRIPT" || \
+  fail "completion gate must require window target-picker freshness summary"
+grep -q "application_target_picker_fresh" "$SCRIPT" || \
+  fail "completion gate must require application target-picker freshness summary"
 grep -q "host-decoded-frame-application" "$SCRIPT" || \
   fail "completion gate must require application decoded-frame product-flow evidence"
 grep -q "host-view-only-input-window" "$SCRIPT" || \
@@ -135,6 +149,39 @@ grep -q "product_flow_step_artifacts" "$SCRIPT" || \
   fail "completion gate must require product-flow step artifacts"
 grep -q "tools/scripts/host-remoteapp-permission-subject-e2e.sh" "$SCRIPT" || \
   fail "completion gate must pin permission-subject product-flow subreport identity"
+python3 - "$SCRIPT" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+usage_start = text.index("Required report environment:")
+usage_end = text.index("Required signed-campaign environment", usage_start)
+documented = set(
+    re.findall(
+        r"\bEASYNET_REMOTEAPP_PRODUCT_COMPLETION_[A-Z0-9_]+_REPORT_JSON\b",
+        text[usage_start:usage_end],
+    )
+)
+required = set(
+    re.findall(
+        r'"env":\s*"(EASYNET_REMOTEAPP_PRODUCT_COMPLETION_[A-Z0-9_]+_REPORT_JSON)"',
+        text[usage_end:],
+    )
+)
+for prefix in re.findall(
+    r'lifecycle_required\(\s*"[^"]+",\s*"(EASYNET_REMOTEAPP_PRODUCT_COMPLETION_[A-Z0-9_]+)"',
+    text[usage_end:],
+):
+    required.add(f"{prefix}_WINDOW_REPORT_JSON")
+    required.add(f"{prefix}_APPLICATION_REPORT_JSON")
+if documented != required:
+    raise SystemExit(
+        "product completion usage/report contract drift: "
+        f"missing={sorted(required - documented)}, "
+        f"obsolete={sorted(documented - required)}"
+    )
+PY
 grep -q "tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" "$SCRIPT" || \
   fail "completion gate must pin target-picker freshness product-flow subreport identity"
 grep -q "tools/scripts/host-remoteapp-decoded-frame-e2e.sh" "$SCRIPT" || \
@@ -155,6 +202,16 @@ grep -q "evidence_json path does not exist" "$SCRIPT" || \
   fail "completion gate must reject missing evidence_json artifacts"
 grep -q "evidence_json status is" "$SCRIPT" || \
   fail "completion gate must reject failed evidence_json artifacts"
+grep -q 'LIVE_EVIDENCE_ORIGIN = "live_runner"' "$SCRIPT" || \
+  fail "completion gate must define the live evidence origin"
+grep -q 'CONTRACT_SELF_TEST_ORIGIN = "contract_self_test"' "$SCRIPT" || \
+  fail "completion gate must define the contract self-test origin"
+grep -q "self-test accepted contract_self_test report evidence_origin" "$SCRIPT" || \
+  fail "completion gate self-test must reject self-test report provenance"
+grep -q "self-test accepted missing evidence_json evidence_origin" "$SCRIPT" || \
+  fail "completion gate self-test must reject missing evidence provenance"
+grep -q "self-test accepted unknown product-flow step evidence_origin" "$SCRIPT" || \
+  fail "completion gate self-test must reject unknown nested step provenance"
 grep -q "required product-flow step" "$SCRIPT" || \
   fail "completion gate must reject incomplete frontend product-flow reports"
 grep -q "topology.observed_device_pairs must not be empty" "$SCRIPT" || \
@@ -199,8 +256,18 @@ grep -q "tools/scripts/host-remoteapp-session-timeout-e2e.sh" "$SCRIPT" || \
   fail "completion gate must pin host timeout report identity"
 grep -q "tools/scripts/remoteapp-network-fallback-e2e.sh" "$SCRIPT" || \
   fail "completion gate must pin network fallback report identity"
-grep -q '"product_complete_claim": effective_status == "passed"' "$SCRIPT" || \
-  fail "completion gate must be the single aggregate product completion claim"
+grep -q 'and not contract_fixture_mode' "$SCRIPT" || \
+  fail "completion gate must reject contract fixtures from candidate eligibility"
+grep -q 'easynet.remoteapp.product-completion-candidate.v1' "$SCRIPT" || \
+  fail "completion gate must emit the non-claim candidate schema"
+grep -q 'product_complete_claim = False' "$SCRIPT" || \
+  fail "completion gate must never mint the final product-complete claim"
+grep -q 'completion_signature_pending' "$SCRIPT" || \
+  fail "eligible completion candidates must require independent authorization"
+grep -q 'contract_fixture and cannot be accepted as live evidence' "$SCRIPT" || \
+  fail "completion gate must reject synthetic fixtures in production check mode"
+grep -q 'self-test accepted contract_fixture as live product evidence' "$SCRIPT" || \
+  fail "completion gate self-test must reject fixture laundering"
 
 OUT_DIR="$(mktemp -d)"
 if "$SCRIPT" --check --out-dir "$OUT_DIR" >/tmp/remoteapp-product-completion-missing.out 2>/tmp/remoteapp-product-completion-missing.err; then
@@ -213,7 +280,11 @@ import sys
 
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["status"] == "failed"
+assert report["evidence_origin"] == "live_runner"
 assert report["product_complete_claim"] is False
+assert report["product_complete_eligible"] is False
+assert report["finalization_state"] == "not_eligible"
+assert report["schema"] == "easynet.remoteapp.product-completion-candidate.v1"
 assert report["required_evidence_count"] == 19
 assert any("missing required report env" in error for error in report["errors"])
 PY
