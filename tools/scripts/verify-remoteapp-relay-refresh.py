@@ -10,6 +10,12 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
+AUTHORITATIVE_RELAY_SESSION_VIEW_ABILITIES = frozenset({
+    "remote_desktop.show_session",
+    "remote_desktop.refresh_lease",
+    "remote_desktop.report_client_state",
+})
+
 
 def object_value(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -52,18 +58,19 @@ def matching_snapshot(
     snapshots: list[Any],
     *,
     lease_id: str,
-    ability: str,
+    abilities: str | frozenset[str],
     session_id: str,
     subject_ura: str,
     after_observed_at_ms: int = 0,
     expected_observed_at_ms: int | None = None,
 ) -> dict[str, Any]:
+    expected_abilities = frozenset({abilities}) if isinstance(abilities, str) else abilities
     for raw in snapshots:
         if not isinstance(raw, dict):
             continue
         if (
             raw.get("lease_id") == lease_id
-            and raw.get("source_ability") == ability
+            and raw.get("source_ability") in expected_abilities
             and raw.get("session_id") == session_id
             and raw.get("resource_ura") == subject_ura
             and isinstance(raw.get("observed_at_ms"), int)
@@ -74,7 +81,8 @@ def matching_snapshot(
             )
         ):
             return raw
-    raise ValueError(f"relay lease snapshot {lease_id} from {ability} is missing")
+    sources = ", ".join(sorted(expected_abilities))
+    raise ValueError(f"relay lease snapshot {lease_id} from one of [{sources}] is missing")
 
 
 def verify(browser: dict[str, Any], expected_origin: str) -> dict[str, Any]:
@@ -144,7 +152,7 @@ def verify(browser: dict[str, Any], expected_origin: str) -> dict[str, Any]:
     initial = matching_snapshot(
         snapshots,
         lease_id=initial_lease_id,
-        ability="remote_desktop.create_session",
+        abilities="remote_desktop.create_session",
         session_id=session_id,
         subject_ura=subject_ura,
         expected_observed_at_ms=initial_observed_at,
@@ -152,7 +160,7 @@ def verify(browser: dict[str, Any], expected_origin: str) -> dict[str, Any]:
     refreshed = matching_snapshot(
         snapshots,
         lease_id=refreshed_lease_id,
-        ability="remote_desktop.show_session",
+        abilities=AUTHORITATIVE_RELAY_SESSION_VIEW_ABILITIES,
         session_id=session_id,
         subject_ura=subject_ura,
         expected_observed_at_ms=refreshed_observed_at,
@@ -160,7 +168,7 @@ def verify(browser: dict[str, Any], expected_origin: str) -> dict[str, Any]:
     resumed = matching_snapshot(
         snapshots,
         lease_id=resumed_lease_id,
-        ability="remote_desktop.show_session",
+        abilities=AUTHORITATIVE_RELAY_SESSION_VIEW_ABILITIES,
         session_id=session_id,
         subject_ura=subject_ura,
         after_observed_at_ms=refreshed_observed_at,
@@ -272,7 +280,7 @@ def self_test_fixture() -> dict[str, Any]:
     refreshed = {
         **initial,
         "observed_at_ms": 200,
-        "source_ability": "remote_desktop.show_session",
+        "source_ability": "remote_desktop.refresh_lease",
         "lease_id": "lease-refreshed",
         "issued_at_ms": 70,
         "expires_at_ms": 170,
@@ -281,6 +289,7 @@ def self_test_fixture() -> dict[str, Any]:
     resumed = {
         **refreshed,
         "observed_at_ms": 260,
+        "source_ability": "remote_desktop.report_client_state",
     }
     return {
         "status": "passed",
@@ -371,6 +380,9 @@ def run_self_test() -> None:
     wrong_subject = copy.deepcopy(fixture)
     wrong_subject["relay_lease_snapshots"][1]["resource_ura"] = "easynet:///r/localhost/resource/display.other"
     mutations.append(wrong_subject)
+    non_authoritative_source = copy.deepcopy(fixture)
+    non_authoritative_source["relay_lease_snapshots"][1]["source_ability"] = "remote_desktop.set_description"
+    mutations.append(non_authoritative_source)
     stale_epoch = copy.deepcopy(fixture)
     stale_epoch["transport_resume"]["transport_epoch"] = 1
     mutations.append(stale_epoch)
