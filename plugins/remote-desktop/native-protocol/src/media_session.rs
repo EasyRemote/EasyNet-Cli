@@ -106,9 +106,12 @@ impl ApplicationWindowSet {
         validate_optional_string(&self.process_instance_id, "process instance")?;
         validate_optional_string(&self.app_identity, "application identity")?;
         validate_optional_string(&self.bundle_id, "bundle identity")?;
-        if self.app_identity.is_none() && self.bundle_id.is_none() {
+        if self.process_instance_id.is_none()
+            && self.app_identity.is_none()
+            && self.bundle_id.is_none()
+        {
             return Err(ValidationError::new(
-                "application target requires app_identity or bundle_id",
+                "application target requires process_instance_id, app_identity, or bundle_id",
             ));
         }
         validate_sorted_ids(
@@ -2679,6 +2682,25 @@ mod tests {
             .front_to_back_surfaces
             .clear();
         assert!(missing_layout.validate().is_err());
+    }
+
+    #[test]
+    fn application_accepts_process_scoped_identity_without_platform_app_identifier() {
+        let mut target = application_target();
+        target.app_identity = None;
+        target.bundle_id = None;
+        let application = target.application.as_mut().unwrap();
+        application.app_identity = None;
+        application.bundle_id = None;
+
+        target.validate().unwrap();
+
+        target.process_instance_id = None;
+        target.application.as_mut().unwrap().process_instance_id = None;
+        assert_eq!(
+            target.validate().unwrap_err().to_string(),
+            "application target requires process_instance_id, app_identity, or bundle_id"
+        );
     }
 
     #[test]
