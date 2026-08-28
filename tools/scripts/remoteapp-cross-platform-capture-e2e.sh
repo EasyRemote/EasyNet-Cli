@@ -14,6 +14,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 
 MODE=skip
 SELF_TEST=0
@@ -115,6 +116,7 @@ PY
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
 import pathlib
@@ -420,6 +422,8 @@ if errors:
         print(error, file=sys.stderr)
     raise SystemExit(1)
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 if [[ "$SELF_TEST" -eq 1 ]]; then
@@ -502,6 +506,7 @@ def unsupported(target_kind):
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "proof_mode": "real_cross_platform_capture_matrix",
     "component_mock": False,
     "real_backend_runtime": True,

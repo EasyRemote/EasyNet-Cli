@@ -14,6 +14,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 
 MODE=skip
 OUT_DIR="${EASYNET_REMOTEAPP_MULTI_WINDOW_TRACKING_OUT_DIR:-$REPO_ROOT/target/e2e/remoteapp-multi-window-tracking/$(date -u +%Y%m%d-%H%M%S)-$$}"
@@ -119,6 +120,7 @@ PY
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
 import pathlib
@@ -478,6 +480,8 @@ pathlib.Path(md_path).write_text(
     encoding="utf-8",
 )
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 write_self_test_evidence() {
@@ -631,6 +635,7 @@ multi = {
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "proof_mode": "real_multi_window_tracking_matrix",
     "component_mock": False,
     "real_backend_runtime": True,

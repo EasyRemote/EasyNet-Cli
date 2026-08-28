@@ -16,6 +16,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 
 MODE=skip
 SELF_TEST=0
@@ -116,6 +117,7 @@ PY
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
 import pathlib
@@ -340,6 +342,25 @@ for platform_name in sorted(required_platforms):
                         and result.get("host_received_at_ms", 0) <= snapshot_started_at_ms
                         <= validated_at_ms <= result.get("host_applied_at_ms", -1),
                         f"{result_prefix}: fresh target snapshot and validation must precede OS apply")
+                if platform_name == "linux":
+                    guard_acquired_at_ms = guard.get("guard_acquired_at_ms")
+                    injected_at_ms = guard.get("injected_at_ms")
+                    guard_released_at_ms = guard.get("guard_released_at_ms")
+                    require(guard.get("atomicity") == "x11_server_grab",
+                            f"{result_prefix}: Linux target-local input must prove one X11 server transaction")
+                    require(isinstance(guard.get("expected_pid"), int)
+                            and guard.get("expected_pid", 0) > 0
+                            and isinstance(guard.get("expected_process_instance_id"), str)
+                            and guard["expected_process_instance_id"].startswith("linux:"),
+                            f"{result_prefix}: Linux target-local input must bind the X11 owner to one boot-scoped process instance")
+                    require(isinstance(guard_acquired_at_ms, int)
+                            and isinstance(injected_at_ms, int)
+                            and isinstance(guard_released_at_ms, int)
+                            and snapshot_started_at_ms <= guard_acquired_at_ms
+                            <= validated_at_ms <= injected_at_ms
+                            <= guard_released_at_ms
+                            <= result.get("host_applied_at_ms", -1),
+                            f"{result_prefix}: Linux X11 guard, validation, injection and release must be ordered")
                 if target_kind == "window":
                     require(guard.get("window_id_exact") is True,
                             f"{result_prefix}: window guard must prove exact window id")
@@ -597,6 +618,8 @@ if errors:
         print(error, file=sys.stderr)
     raise SystemExit(1)
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 if [[ "$SELF_TEST" -eq 1 ]]; then
@@ -750,6 +773,7 @@ unsupported = lambda platform: {
 }
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "proof_mode": "real_input_injection_matrix",
     "component_mock": False,
     "real_backend_runtime": True,

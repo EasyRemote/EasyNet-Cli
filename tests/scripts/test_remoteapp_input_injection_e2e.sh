@@ -21,6 +21,21 @@ grep -q "skipped" /tmp/remoteapp-input-injection-skip.out || \
   fail "default output must be explicit skipped evidence"
 
 EASYNET_REMOTEAPP_INPUT_INJECTION_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/good/evidence.json" \
+    --out-dir "$OUT_DIR/self-test-as-live" >/tmp/remoteapp-input-injection-origin.out 2>&1; then
+  fail "verifier accepted contract self-test evidence in run mode"
+fi
+grep -q "evidence_origin must be live_runner" /tmp/remoteapp-input-injection-origin.out || \
+  fail "self-test provenance rejection was not explicit"
+python3 - "$OUT_DIR/good/evidence.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+evidence = json.load(open(path, encoding="utf-8"))
+evidence["evidence_origin"] = "live_runner"
+json.dump(evidence, open(path, "w", encoding="utf-8"), indent=2)
+PY
 
 python3 - "$OUT_DIR/good/report.json" <<'PY'
 import json
