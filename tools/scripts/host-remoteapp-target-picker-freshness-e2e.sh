@@ -3,7 +3,7 @@
 #
 # Boundary:
 # - This script proves SPEC E2E-01 at the daemon/frontend contract boundary:
-#   a known native window is opened after daemon boot, the picker inventory is
+#   a known native window/application is opened after daemon boot, the picker inventory is
 #   refreshed through resource.refresh_remote_targets, and the selected row is
 #   live, available, fresh, and addressable by Resource URA.
 # - It does not create a remote desktop session or validate media. Session
@@ -14,6 +14,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 BUNDLED_SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 
 MODE=run
@@ -31,9 +32,9 @@ Usage:
 Options:
   --run                 Execute against the local EasyNet daemon.
   --self-test           Validate the harness against synthetic positive evidence.
-  --target-kind KIND    Currently only window.
+  --target-kind KIND    window or application. Default: window.
   --sentinel-fixture    Launch the bundled native AppKit selected/unrelated
-                        window fixture and select the known selected window.
+                        fixture and select the known window/application.
   --sentinel-fixture-cmd CMD
                         Override fixture command. Receives
                         EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR and must write
@@ -54,7 +55,7 @@ while [[ $# -gt 0 ]]; do
     --self-test) MODE=self-test; shift ;;
     --target-kind)
       case "${2:?missing value for --target-kind}" in
-        window) TARGET_KIND="$2" ;;
+        window|application) TARGET_KIND="$2" ;;
         *) echo "invalid target picker freshness kind: $2" >&2; exit 64 ;;
       esac
       shift 2
@@ -167,6 +168,7 @@ PY
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
 import pathlib
@@ -200,7 +202,9 @@ runtime = evidence.get("runtime_before_fixture")
 timing = evidence.get("timing")
 
 require(evidence.get("status") == "passed", "evidence.status must be passed")
-require(evidence.get("target_kind") == "window", "target_kind must be window")
+target_kind = evidence.get("target_kind")
+require(target_kind in {"window", "application"},
+        "target_kind must be window or application")
 require(isinstance(runtime, dict), "runtime_before_fixture must be recorded")
 require(isinstance(fixture, dict), "sentinel_fixture must be recorded")
 require(isinstance(inventory, dict), "live_inventory must be recorded")
@@ -232,16 +236,63 @@ if refresh_started_at_ms is not None and refresh_completed_at_ms is not None and
 
 require(get("live_inventory.ability") == "resource.refresh_remote_targets",
         "live inventory must use resource.refresh_remote_targets")
-require(get("live_inventory.target_kind") == "window",
-        "live inventory target_kind must be window")
+require(get("live_inventory.target_kind") == target_kind,
+        "live inventory target_kind must match the requested target kind")
 require(int_value(get("live_inventory.freshness_ttl_ms")) is not None,
         "live inventory must report freshness_ttl_ms")
-require(get("sentinel_fixture.selected.pid") == get("selected_resource.metadata.pid"),
-        "selected resource metadata.pid must match selected sentinel pid")
-require(get("sentinel_fixture.selected.label") == get("selected_resource.display_name")
-        or get("sentinel_fixture.selected.label") == get("selected_resource.metadata.title"),
-        "selected resource display name/title must match the known sentinel label")
-require(get("selected_resource.type") == "window", "selected resource type must be window")
+owner_pid_field = "pid" if target_kind == "window" else "primary_pid"
+selected_owner_pid = get(f"selected_resource.metadata.{owner_pid_field}")
+require(get("sentinel_fixture.selected.pid") == selected_owner_pid,
+        f"selected resource metadata.{owner_pid_field} must match selected sentinel pid")
+require(get("sentinel_fixture.unrelated.pid") != selected_owner_pid,
+        f"selected resource metadata.{owner_pid_field} must not match the unrelated sentinel pid")
+require(get("selection_identity.owner_pid") == get("sentinel_fixture.selected.pid"),
+        "selection identity owner_pid must match the selected sentinel pid")
+if target_kind == "window":
+    require(get("selection_identity.kind") == "window_id_plus_owner_pid",
+            "window selection identity must use window_id_plus_owner_pid")
+    window_id = int_value(get("selected_resource.metadata.window_id"))
+    require(window_id is not None and window_id > 0,
+            "selected window metadata.window_id must be a positive native identifier")
+    require(get("selection_identity.window_id") == window_id,
+            "window selection identity must bind metadata.window_id")
+else:
+    require(get("selection_identity.kind") == "application_identity_plus_owner_pid_and_window_set",
+            "application selection identity must bind application identity, owner pid, and window set")
+    app_identity = get("selected_resource.metadata.app_identity")
+    bundle_id = get("selected_resource.metadata.bundle_id")
+    require(isinstance(app_identity, str) and app_identity,
+            "selected application metadata.app_identity must be non-empty")
+    require(app_identity == bundle_id == get("sentinel_fixture.selected.bundle_id"),
+            "selected application identity must match the sentinel bundle id")
+    require(get("selection_identity.app_identity") == app_identity,
+            "application selection identity must bind metadata.app_identity")
+    window_ids = get("selected_resource.metadata.resolved_window_ids")
+    valid_window_ids = window_ids if isinstance(window_ids, list) else []
+    require(len(valid_window_ids) >= 2
+            and all(int_value(item) is not None and item > 0 for item in valid_window_ids),
+            "selected application must expose at least two positive resolved_window_ids")
+    require(get("selected_resource.metadata.window_count") == len(valid_window_ids),
+            "selected application window_count must match resolved_window_ids")
+    require(get("selection_identity.resolved_window_ids") == valid_window_ids,
+            "application selection identity must bind the exact resolved_window_ids")
+    surface_ids = [
+        surface.get("window_id")
+        for surface in (get("selected_resource.metadata.front_to_back_surfaces") or [])
+        if isinstance(surface, dict) and int_value(surface.get("window_id")) is not None
+    ]
+    require(len(surface_ids) == len(valid_window_ids)
+            and sorted(surface_ids) == sorted(valid_window_ids),
+            "application front_to_back_surfaces must bind the resolved window set")
+    require(get("selected_resource.metadata.display_scoped") is False,
+            "application selection must remain process-scoped rather than display-scoped")
+    window_set_epoch = int_value(get("selected_resource.metadata.window_set_epoch"))
+    require(window_set_epoch is not None and window_set_epoch > 0,
+            "application window_set_epoch must be a positive JSON-safe identity")
+    require(get("selection_identity.window_set_epoch") == window_set_epoch,
+            "application selection identity must bind metadata.window_set_epoch")
+require(get("selected_resource.type") == target_kind,
+        "selected resource type must match the requested target kind")
 resource_ura = get("selected_resource.resource_ura")
 require(isinstance(resource_ura, str) and resource_ura.startswith("easynet:///"),
         "selected resource_ura must be a canonical EasyNet URA")
@@ -276,7 +327,9 @@ report = {
     "errors": errors,
     "evidence_json": evidence_path,
     "product_complete_claim": False,
+    "target_kind": target_kind,
     "selected_resource_ura": resource_ura,
+    "selection_identity_kind": get("selection_identity.kind"),
     "inventory_observed_at_ms": inventory_observed_at_ms,
 }
 pathlib.Path(report_path).write_text(
@@ -286,6 +339,7 @@ pathlib.Path(report_path).write_text(
 with open(md_path, "w", encoding="utf-8") as f:
     f.write("# RemoteApp target picker freshness E2E report\n\n")
     f.write(f"- Status: `{report['status']}`\n")
+    f.write(f"- Target kind: `{report['target_kind']}`\n")
     f.write(f"- Evidence: `{evidence_path}`\n")
     f.write(f"- Selected Resource URA: `{report['selected_resource_ura']}`\n")
     f.write(f"- Inventory observed_at_ms: `{report['inventory_observed_at_ms']}`\n")
@@ -298,16 +352,19 @@ if errors:
         print(error, file=sys.stderr)
     raise SystemExit(1)
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 if [[ "$MODE" == "self-test" ]]; then
-  python3 - "$EVIDENCE_JSON" <<'PY'
+  python3 - "$EVIDENCE_JSON" "$TARGET_KIND" <<'PY'
 import json
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-resource_ura = "easynet:///r/localhost/resource/device.dev/streams/window.fresh"
+target_kind = sys.argv[2]
+resource_ura = f"easynet:///r/localhost/resource/device.dev/streams/{target_kind}.fresh"
 runtime_started = 1787000000000
 fixture_started = runtime_started + 1000
 fixture_ready = fixture_started + 2000
@@ -315,10 +372,69 @@ refresh_started = fixture_ready + 100
 observed = refresh_started + 10
 refresh_done = observed + 80
 selected_pid = 4242
-selected_label = "EasyNet selected window sentinel fixture"
+selected_label = f"EasyNet selected {target_kind} sentinel fixture"
+bundle_id = "tech.silan.easynet.remoteapp.selectedsentinel.selftest"
+if target_kind == "window":
+    selected_metadata = {
+        "pid": selected_pid,
+        "window_id": 7001,
+        "title": selected_label,
+    }
+    selection_identity = {
+        "kind": "window_id_plus_owner_pid",
+        "owner_pid": selected_pid,
+        "window_id": 7001,
+        "diagnostic_label_observable": True,
+    }
+    selected_fixture = {
+        "label": selected_label,
+        "pid": selected_pid,
+    }
+else:
+    selected_metadata = {
+        "primary_pid": selected_pid,
+        "app_identity": bundle_id,
+        "bundle_id": bundle_id,
+        "resolved_window_ids": [7001, 7002],
+        "window_count": 2,
+        "front_to_back_surfaces": [
+            {"window_id": 7002, "x": 100, "y": 100, "width": 640, "height": 480},
+            {"window_id": 7001, "x": 0, "y": 0, "width": 640, "height": 480},
+        ],
+        "display_scoped": False,
+        "window_set_epoch": 101,
+    }
+    selection_identity = {
+        "kind": "application_identity_plus_owner_pid_and_window_set",
+        "owner_pid": selected_pid,
+        "app_identity": bundle_id,
+        "resolved_window_ids": [7001, 7002],
+        "window_set_epoch": 101,
+        "diagnostic_label_observable": True,
+    }
+    selected_fixture = {
+        "label": selected_label,
+        "pid": selected_pid,
+        "bundle_id": bundle_id,
+        "surfaces": [
+            {"label": selected_label, "role": "primary"},
+            {"label": f"{selected_label} secondary", "role": "secondary"},
+        ],
+    }
+selected_metadata.update({
+    "availability": "available",
+    "discovery_source": "resource.refresh_remote_targets",
+    "inventory_source": "daemon_resource_inventory",
+    "freshness": {
+        "observed_at_ms": observed,
+        "stale_after_ms": observed + 5000,
+        "source": "live_refresh",
+    },
+})
 evidence = {
     "status": "passed",
-    "target_kind": "window",
+    "evidence_origin": "contract_self_test",
+    "target_kind": target_kind,
     "selection_state": "selected_from_live_refresh",
     "runtime_before_fixture": {
         "state": "FRONTEND_CONNECTED",
@@ -331,36 +447,27 @@ evidence = {
         "refresh_completed_at_ms": refresh_done,
     },
     "sentinel_fixture": {
-        "target_kind": "window",
-        "selected": {
-            "label": selected_label,
-            "pid": selected_pid,
+        "target_kind": target_kind,
+        "selected": selected_fixture,
+        "unrelated": {
+            "label": f"EasyNet unrelated {target_kind} sentinel fixture",
+            "pid": selected_pid + 1,
         },
     },
     "live_inventory": {
         "ability": "resource.refresh_remote_targets",
-        "target_kind": "window",
+        "target_kind": target_kind,
         "observed_at_ms": observed,
         "freshness_ttl_ms": 5000,
         "resource_count": 1,
     },
     "selected_resource": {
         "resource_ura": resource_ura,
-        "type": "window",
+        "type": target_kind,
         "display_name": selected_label,
-        "metadata": {
-            "pid": selected_pid,
-            "title": selected_label,
-            "availability": "available",
-            "discovery_source": "resource.refresh_remote_targets",
-            "inventory_source": "daemon_resource_inventory",
-            "freshness": {
-                "observed_at_ms": observed,
-                "stale_after_ms": observed + 5000,
-                "source": "live_refresh",
-            },
-        },
+        "metadata": selected_metadata,
     },
+    "selection_identity": selection_identity,
 }
 path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -369,11 +476,12 @@ PY
   exit 0
 fi
 
-[[ "$TARGET_KIND" == "window" ]] || die "unsupported target kind: $TARGET_KIND"
+[[ "$TARGET_KIND" == "window" || "$TARGET_KIND" == "application" ]] || \
+  die "unsupported target kind: $TARGET_KIND"
 [[ "$SENTINEL_FIXTURE" == "1" ]] || die "--sentinel-fixture is required for live target picker freshness E2E"
 if [[ -z "$SENTINEL_FIXTURE_CMD" ]]; then
   [[ -x "$BUNDLED_SENTINEL_FIXTURE" ]] || die "missing bundled sentinel fixture: $BUNDLED_SENTINEL_FIXTURE"
-  SENTINEL_FIXTURE_CMD="$BUNDLED_SENTINEL_FIXTURE --target-kind window"
+  SENTINEL_FIXTURE_CMD="$BUNDLED_SENTINEL_FIXTURE --target-kind $TARGET_KIND"
 fi
 
 need_cmd python3
@@ -416,63 +524,17 @@ source "$SENTINEL_FIXTURE_DIR/env.sh"
 cp "$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_MANIFEST" "$SENTINEL_MANIFEST_JSON"
 
 REFRESH_STARTED_AT_MS="$(unix_ms_now)"
-run_easynet ability refresh-remote-targets --type window --format json >"$LIVE_INVENTORY_JSON"
+run_easynet ability refresh-remote-targets --type "$TARGET_KIND" --format json >"$LIVE_INVENTORY_JSON"
 REFRESH_COMPLETED_AT_MS="$(unix_ms_now)"
 
-python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$EASYNET_REMOTEAPP_TARGET_PID" "$EASYNET_REMOTEAPP_TARGET_HINT" <<'PY'
-import json
-import sys
+python3 "$SELF_DIR/remoteapp-select-live-target.py" \
+  --inventory "$LIVE_INVENTORY_JSON" \
+  --output "$SELECTED_RESOURCE_JSON" \
+  --kind "$TARGET_KIND" \
+  --pid "$EASYNET_REMOTEAPP_TARGET_PID" \
+  --hint "$EASYNET_REMOTEAPP_TARGET_HINT"
 
-inventory_path, selected_path, target_pid, target_hint = sys.argv[1:5]
-with open(inventory_path, encoding="utf-8") as f:
-    inventory = json.load(f)
-resources = inventory.get("resources")
-if not isinstance(resources, list):
-    raise SystemExit("resource.refresh_remote_targets response missing resources array")
-
-def metadata(resource):
-    return resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
-
-def text_matches(resource):
-    meta = metadata(resource)
-    fields = [
-        resource.get("display_name"),
-        meta.get("title"),
-        meta.get("app_name"),
-        meta.get("bundle_id"),
-        meta.get("app_identity"),
-    ]
-    return any(str(value) == target_hint for value in fields if value is not None)
-
-candidates = [
-    resource for resource in resources
-    if resource.get("type") == "window"
-    and metadata(resource).get("availability") == "available"
-    and str(metadata(resource).get("pid")) == str(target_pid)
-    and text_matches(resource)
-]
-if len(candidates) != 1:
-    sample = [
-        {
-            "resource_ura": resource.get("resource_ura"),
-            "display_name": resource.get("display_name"),
-            "pid": metadata(resource).get("pid"),
-            "title": metadata(resource).get("title"),
-            "availability": metadata(resource).get("availability"),
-            "freshness": metadata(resource).get("freshness"),
-        }
-        for resource in resources
-        if resource.get("type") == "window"
-    ][:12]
-    raise SystemExit(
-        f"known window target must resolve exactly once from live refresh; got {len(candidates)} sample={sample}"
-    )
-with open(selected_path, "w", encoding="utf-8") as f:
-    json.dump(candidates[0], f, indent=2, sort_keys=True)
-    f.write("\n")
-PY
-
-python3 - "$EVIDENCE_JSON" "$RUNTIME_STATUS_JSON" "$SENTINEL_MANIFEST_JSON" "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" \
+python3 - "$EVIDENCE_JSON" "$TARGET_KIND" "$RUNTIME_STATUS_JSON" "$SENTINEL_MANIFEST_JSON" "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" \
   "$RUNTIME_STARTED_AT_MS" "$FIXTURE_LAUNCH_STARTED_AT_MS" "$FIXTURE_READY_AT_MS" "$REFRESH_STARTED_AT_MS" "$REFRESH_COMPLETED_AT_MS" <<'PY'
 import json
 import pathlib
@@ -480,6 +542,7 @@ import sys
 
 (
     evidence_path,
+    target_kind,
     runtime_status_path,
     fixture_manifest_path,
     live_inventory_path,
@@ -489,7 +552,7 @@ import sys
     fixture_ready_at_ms,
     refresh_started_at_ms,
     refresh_completed_at_ms,
-) = sys.argv[1:11]
+) = sys.argv[1:12]
 
 with open(runtime_status_path, encoding="utf-8") as f:
     runtime_status = json.load(f)
@@ -500,9 +563,38 @@ with open(live_inventory_path, encoding="utf-8") as f:
 with open(selected_resource_path, encoding="utf-8") as f:
     selected = json.load(f)
 
+selected_metadata = selected.get("metadata") if isinstance(selected.get("metadata"), dict) else {}
+selected_label = fixture.get("selected", {}).get("label")
+diagnostic_values = (
+    selected.get("display_name"),
+    selected_metadata.get("title"),
+    selected_metadata.get("app_name"),
+)
+if target_kind == "window":
+    selection_identity = {
+        "kind": "window_id_plus_owner_pid",
+        "owner_pid": selected_metadata.get("pid"),
+        "window_id": selected_metadata.get("window_id"),
+        "diagnostic_label_observable": any(
+            value == selected_label for value in diagnostic_values if value is not None
+        ),
+    }
+else:
+    selection_identity = {
+        "kind": "application_identity_plus_owner_pid_and_window_set",
+        "owner_pid": selected_metadata.get("primary_pid"),
+        "app_identity": selected_metadata.get("app_identity"),
+        "resolved_window_ids": selected_metadata.get("resolved_window_ids"),
+        "window_set_epoch": selected_metadata.get("window_set_epoch"),
+        "diagnostic_label_observable": any(
+            value == selected_label for value in diagnostic_values if value is not None
+        ),
+    }
+
 evidence = {
     "status": "passed",
-    "target_kind": "window",
+    "evidence_origin": "live_runner",
+    "target_kind": target_kind,
     "selection_state": "selected_from_live_refresh",
     "runtime_before_fixture": {
         "state": runtime_status.get("connection", {}).get("state"),
@@ -519,7 +611,7 @@ evidence = {
     "sentinel_fixture": fixture,
     "live_inventory": {
         "ability": "resource.refresh_remote_targets",
-        "target_kind": "window",
+        "target_kind": target_kind,
         "observed_at_ms": live_inventory.get("observed_at_ms"),
         "freshness_ttl_ms": live_inventory.get("freshness_ttl_ms"),
         "retired_count": live_inventory.get("retired_count"),
@@ -529,6 +621,7 @@ evidence = {
         else None,
     },
     "selected_resource": selected,
+    "selection_identity": selection_identity,
 }
 pathlib.Path(evidence_path).write_text(
     json.dumps(evidence, indent=2, sort_keys=True) + "\n",

@@ -15,6 +15,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 BUNDLED_SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 
 MODE=run
@@ -116,6 +117,7 @@ run_easynet() {
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
 import pathlib
@@ -369,6 +371,8 @@ if errors:
         print(error, file=sys.stderr)
     raise SystemExit(1)
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 if [[ "$MODE" == "self-test" ]]; then
@@ -421,6 +425,7 @@ session = {
 }
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "target_kind": "window",
     "requested_input_mode": "interactive",
     "lease_ttl_ms": 5000,
@@ -530,66 +535,12 @@ source "$SENTINEL_FIXTURE_DIR/env.sh"
 cp "$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_MANIFEST" "$SENTINEL_MANIFEST_JSON"
 
 run_easynet ability refresh-remote-targets --type "$TARGET_KIND" --format json >"$LIVE_INVENTORY_JSON"
-python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$TARGET_KIND" "$EASYNET_REMOTEAPP_TARGET_PID" "$EASYNET_REMOTEAPP_TARGET_HINT" <<'PY'
-import json
-import sys
-
-inventory_path, selected_path, target_kind, target_pid, target_hint = sys.argv[1:6]
-with open(inventory_path, encoding="utf-8") as f:
-    inventory = json.load(f)
-resources = inventory.get("resources")
-if not isinstance(resources, list):
-    raise SystemExit("resource.refresh_remote_targets response missing resources array")
-
-def metadata(resource):
-    return resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
-
-def pid_matches(resource):
-    meta = metadata(resource)
-    values = [meta.get("pid"), meta.get("primary_pid")]
-    return any(str(value) == str(target_pid) for value in values if value is not None)
-
-def text_matches(resource):
-    meta = metadata(resource)
-    fields = [
-        resource.get("display_name"),
-        meta.get("title"),
-        meta.get("primary_title"),
-        meta.get("app_name"),
-        meta.get("bundle_id"),
-        meta.get("app_identity"),
-    ]
-    return any(str(value) == target_hint for value in fields if value is not None)
-
-candidates = [
-    resource for resource in resources
-    if resource.get("type") == target_kind
-    and metadata(resource).get("availability") == "available"
-    and pid_matches(resource)
-    and text_matches(resource)
-]
-if len(candidates) != 1:
-    sample = [
-        {
-            "resource_ura": resource.get("resource_ura"),
-            "type": resource.get("type"),
-            "display_name": resource.get("display_name"),
-            "pid": metadata(resource).get("pid"),
-            "primary_pid": metadata(resource).get("primary_pid"),
-            "title": metadata(resource).get("title"),
-            "app_name": metadata(resource).get("app_name"),
-            "availability": metadata(resource).get("availability"),
-        }
-        for resource in resources
-        if resource.get("type") == target_kind
-    ][:12]
-    raise SystemExit(
-        f"known {target_kind} target must resolve exactly once from live refresh; got {len(candidates)} sample={sample}"
-    )
-with open(selected_path, "w", encoding="utf-8") as f:
-    json.dump(candidates[0], f, indent=2, sort_keys=True)
-    f.write("\n")
-PY
+python3 "$SELF_DIR/remoteapp-select-live-target.py" \
+  --inventory "$LIVE_INVENTORY_JSON" \
+  --output "$SELECTED_RESOURCE_JSON" \
+  --kind "$TARGET_KIND" \
+  --pid "$EASYNET_REMOTEAPP_TARGET_PID" \
+  --hint "$EASYNET_REMOTEAPP_TARGET_HINT"
 
 SELECTED_RESOURCE_URA="$(python3 - "$SELECTED_RESOURCE_JSON" <<'PY'
 import json
@@ -788,6 +739,7 @@ if not isinstance(attach_frames, list):
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "target_kind": target_kind,
     "requested_input_mode": "interactive",
     "lease_ttl_ms": int(lease_ttl_ms),

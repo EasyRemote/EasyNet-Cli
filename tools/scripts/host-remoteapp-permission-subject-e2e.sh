@@ -13,6 +13,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 
 MODE=run
 OUT_DIR=""
@@ -40,8 +41,8 @@ Environment:
   EASYNET_REMOTEAPP_EASYNET_BIN
                  Optional easynet binary override.
   EASYNET_REMOTEAPP_PERMISSION_USER_URA
-                 Optional caller User URA override. Defaults to the unique
-                 role="user" entry in ~/.easynet/realm-trust.toml.
+                 Optional caller User URA override. Defaults to the current
+                 paired User identity projected by `runtime status --json`.
   EASYNET_REMOTEAPP_EASYNET_COMMAND_TIMEOUT_SEC
                  Outer watchdog for each easynet CLI call. Defaults to 45
                  seconds and prevents host permission/daemon preflights from
@@ -143,6 +144,7 @@ PY
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA" "$REQUIRE_SCREEN_CAPTURE_GRANTED" <<'PY'
 import json
 import pathlib
@@ -166,6 +168,17 @@ def get(path, default=None):
             return default
         value = value[part]
     return value
+
+caller_user_resolution_source = evidence.get("caller_user_resolution_source")
+require(
+    caller_user_resolution_source
+    in {
+        "contract_self_test",
+        "environment_override",
+        "runtime_status_pairing",
+    },
+    "caller_user_resolution_source must identify the authoritative caller identity source",
+)
 
 catalog = evidence.get("catalog")
 require(isinstance(catalog, dict), "catalog evidence must be an object")
@@ -299,6 +312,8 @@ if errors:
         print(error, file=sys.stderr)
     raise SystemExit(1)
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 write_preflight_failure() {
@@ -394,7 +409,9 @@ for ability in ["remote_desktop.permission_status", "remote_desktop.request_perm
         })
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "caller_user_ura": user,
+    "caller_user_resolution_source": "contract_self_test",
     "catalog": {
         "remote_desktop.permission_status": catalog_row,
         "remote_desktop.request_permission": catalog_row,
@@ -499,23 +516,38 @@ PY
 source "$OUT_DIR/ability-env.sh"
 
 CALLER_USER_URA="${EASYNET_REMOTEAPP_PERMISSION_USER_URA:-}"
+CALLER_USER_RESOLUTION_SOURCE="environment_override"
 if [[ -z "$CALLER_USER_URA" ]]; then
-  CALLER_USER_URA="$(python3 - <<'PY'
+  CALLER_IDENTITY_ENV="$OUT_DIR/caller-identity-env.sh"
+  python3 - "$RUNTIME_STATUS_JSON" <<'PY' >"$CALLER_IDENTITY_ENV"
+import json
 import pathlib
-import re
+import shlex
+import sys
 
-trust = pathlib.Path.home() / ".easynet" / "realm-trust.toml"
-text = trust.read_text(encoding="utf-8")
-matches = re.findall(
-    r'agent_ura\s*=\s*"(easynet:///r/[^"]+/user/[^"]+)"[\s\S]*?role\s*=\s*"user"',
-    text,
-)
-unique = sorted(set(matches))
-if len(unique) != 1:
-    raise SystemExit(f"expected exactly one trusted User URA in {trust}, got {len(unique)}")
-print(unique[0])
+runtime_status_path = sys.argv[1]
+runtime_status = json.loads(pathlib.Path(runtime_status_path).read_text(encoding="utf-8"))
+pairing = runtime_status.get("pairing") if isinstance(runtime_status, dict) else None
+if not isinstance(pairing, dict) or pairing.get("state") != "paired":
+    raise SystemExit(
+        "runtime status does not expose a paired identity; "
+        "re-pair the device or set EASYNET_REMOTEAPP_PERMISSION_USER_URA explicitly"
+    )
+current_user = pairing.get("current_user")
+if not isinstance(current_user, dict) or current_user.get("state") != "bound":
+    state = current_user.get("state") if isinstance(current_user, dict) else None
+    reason = current_user.get("reason") if isinstance(current_user, dict) else None
+    raise SystemExit(
+        "runtime status current User is not bound: "
+        f"state={state!r}, reason={reason!r}"
+    )
+user_ura = current_user.get("ura")
+if not isinstance(user_ura, str) or not user_ura.strip():
+    raise SystemExit("runtime status paired current User URA is empty")
+print(f"CALLER_USER_URA={shlex.quote(user_ura.strip())}")
+print("CALLER_USER_RESOLUTION_SOURCE=runtime_status_pairing")
 PY
-)"
+  source "$CALLER_IDENTITY_ENV"
 fi
 
 REALM="$(python3 - "$CALLER_USER_URA" <<'PY'
@@ -634,7 +666,7 @@ PY
 done
 printf '\n]\n' >>"$NEGATIVE_CASES_JSON"
 
-python3 - "$EVIDENCE_JSON" "$ABILITY_LIST_JSON" "$RUNTIME_STATUS_JSON" "$CALLER_USER_URA" \
+python3 - "$EVIDENCE_JSON" "$ABILITY_LIST_JSON" "$RUNTIME_STATUS_JSON" "$CALLER_USER_URA" "$CALLER_USER_RESOLUTION_SOURCE" \
   "$PERMISSION_STATUS_SUBJECT" "$POSITIVE_EXIT_CODE" "$POSITIVE_STDOUT" "$POSITIVE_STDERR" \
   "$REQUEST_PERMISSION_SUBJECT" "$REQUEST_PERMISSION_EXIT_CODE" "$REQUEST_PERMISSION_STDOUT" "$REQUEST_PERMISSION_STDERR" \
   "$AFTER_PERMISSION_EXIT_CODE" "$AFTER_PERMISSION_STDOUT" "$AFTER_PERMISSION_STDERR" \
@@ -648,6 +680,7 @@ import sys
     ability_list_path,
     runtime_status_path,
     caller_user_ura,
+    caller_user_resolution_source,
     permission_status_subject,
     positive_exit_code,
     positive_stdout_path,
@@ -662,7 +695,7 @@ import sys
     negative_cases_path,
     contract_ura,
     require_screen_capture_granted,
-) = sys.argv[1:19]
+) = sys.argv[1:20]
 
 def read_text(path):
     return pathlib.Path(path).read_text(errors="replace")
@@ -728,7 +761,9 @@ with open(negative_cases_path, encoding="utf-8") as f:
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "caller_user_ura": caller_user_ura,
+    "caller_user_resolution_source": caller_user_resolution_source,
     "runtime": {
         "device_ura": runtime_status.get("connection", {}).get("device_ura"),
         "node_id": runtime_status.get("connection", {}).get("node_id"),

@@ -442,6 +442,7 @@ def unsupported(platform):
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "proof_mode": "real_input_injection_matrix",
     "component_mock": False,
     "real_backend_runtime": True,
