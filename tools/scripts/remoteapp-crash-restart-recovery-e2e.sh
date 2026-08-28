@@ -14,6 +14,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 
 MODE=skip
 OUT_DIR="${EASYNET_REMOTEAPP_CRASH_RESTART_RECOVERY_OUT_DIR:-$REPO_ROOT/target/e2e/remoteapp-crash-restart-recovery/$(date -u +%Y%m%d-%H%M%S)-$$}"
@@ -116,12 +117,13 @@ PY
 }
 
 validate_evidence() {
-  python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
+  python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$MODE" <<'PY'
 import json
 import pathlib
 import sys
 
-evidence_path, report_path, md_path = sys.argv[1:4]
+evidence_path, report_path, md_path, mode = sys.argv[1:5]
 with open(evidence_path, encoding="utf-8") as f:
     evidence = json.load(f)
 
@@ -162,8 +164,11 @@ terminal_reasons = {
     "crash_restart_e2e_cleanup",
     "session_recovered_then_closed",
 }
+expected_origin = "contract_self_test" if mode == "self-test" else "live_runner"
 
 require(evidence.get("status") == "passed", "evidence.status must be passed")
+require(evidence.get("evidence_origin") == expected_origin,
+        f"evidence_origin must be {expected_origin}")
 require(evidence.get("proof_mode") == "real_crash_restart_recovery_matrix",
         "proof_mode must be real_crash_restart_recovery_matrix")
 require(evidence.get("component_mock") is False, "component_mock must be false")
@@ -237,7 +242,7 @@ def require_recovery_guards(prefix, recovery):
     require(integer(recovery.get("restart_epoch_after")) > integer(recovery.get("restart_epoch_before")),
             f"{prefix}: restart_epoch_after must increase")
 
-def require_terminal(prefix, terminal, session_id):
+def require_terminal(prefix, terminal, session_id, subject_ura):
     require(isinstance(terminal, dict), f"{prefix}: terminal_receipt must be visible")
     if not isinstance(terminal, dict):
         terminal = {}
@@ -247,8 +252,19 @@ def require_terminal(prefix, terminal, session_id):
             f"{prefix}: terminal_receipt must bind session_id")
     require(terminal.get("reason_code") in terminal_reasons,
             f"{prefix}: terminal_receipt.reason_code must be a known cleanup/end reason")
-    require(isinstance(terminal.get("receipt_id"), str) and terminal.get("receipt_id"),
-            f"{prefix}: terminal_receipt.receipt_id must be recorded")
+    require(terminal.get("receipt_type") == "remoteapp.session.terminal.v1",
+            f"{prefix}: terminal_receipt.receipt_type must be remoteapp.session.terminal.v1")
+    require(terminal.get("subject_ura") == subject_ura,
+            f"{prefix}: terminal_receipt must bind selected Resource URA")
+    terminal_event_id = terminal.get("terminal_event_id")
+    require(isinstance(terminal_event_id, str)
+            and terminal_event_id.startswith(session_id + ":"),
+            f"{prefix}: terminal_receipt.terminal_event_id must bind session_id")
+    require(integer(terminal.get("terminal_event_sequence")) > 0,
+            f"{prefix}: terminal_receipt.terminal_event_sequence must be positive")
+    require(terminal.get("terminal_event_type") in {
+                "SESSION_CLOSED", "SESSION_EXPIRED", "SESSION_FAILED"
+            }, f"{prefix}: terminal_receipt.terminal_event_type must be terminal")
 
 scenario_reports = []
 def recovery_summary(recovery):
@@ -269,8 +285,9 @@ def terminal_visible(terminal, session_id):
         isinstance(terminal, dict)
         and terminal.get("terminal") is True
         and terminal.get("session_id") == session_id
-        and isinstance(terminal.get("receipt_id"), str)
-        and bool(terminal.get("receipt_id"))
+        and isinstance(terminal.get("terminal_event_id"), str)
+        and terminal.get("terminal_event_id").startswith(session_id + ":")
+        and integer(terminal.get("terminal_event_sequence")) > 0
     )
 
 for scenario_name in sorted(required_scenarios):
@@ -358,7 +375,7 @@ for scenario_name in sorted(required_scenarios):
         require(integer(after.get("first_frame_rendered_after_restart_at_ms")) > media_reattached_at_ms,
                 f"{prefix}: first_frame_rendered_after_restart_at_ms must be after media_reattached_at_ms")
         require_recovery_guards(prefix, scenario.get("recovery"))
-        require_terminal(prefix, scenario.get("terminal_receipt"), session_id)
+        require_terminal(prefix, scenario.get("terminal_receipt"), session_id, subject_ura)
         scenario_reports.append({
             "scenario": scenario_name,
             "status": scenario.get("status"),
@@ -400,8 +417,25 @@ for scenario_name in sorted(required_scenarios):
                             "PLUGIN_WORKER_RESTARTED must occur before TARGET_MONITOR_RESTARTED")
         require(scenario.get("same_public_session") is True,
                 f"{prefix}: same_public_session must be true")
-        require(integer(scenario.get("media_source_epoch_after")) > integer(scenario.get("media_source_epoch_before")),
-                f"{prefix}: media_source_epoch_after must increase")
+        require(integer(scenario.get("daemon_pid_before")) > 1
+                and integer(scenario.get("daemon_pid_after"))
+                    == integer(scenario.get("daemon_pid_before")),
+                f"{prefix}: daemon pid must remain stable")
+        require(integer(scenario.get("worker_generation_after"))
+                > integer(scenario.get("worker_generation_before")),
+                f"{prefix}: worker generation must increase")
+        for epoch_name in (
+            "transport_epoch", "target_binding_epoch", "media_source_epoch", "consent_epoch",
+        ):
+            require(integer(scenario.get(f"{epoch_name}_before")) > 0,
+                    f"{prefix}: {epoch_name}_before must be positive")
+            require(integer(scenario.get(f"{epoch_name}_after"))
+                    == integer(scenario.get(f"{epoch_name}_before")),
+                    f"{prefix}: {epoch_name} must remain stable")
+        require(scenario.get("desired_session_reseeded") is True,
+                f"{prefix}: desired_session_reseeded must be true")
+        require(scenario.get("target_monitor_poll_resumed") is True,
+                f"{prefix}: target_monitor_poll_resumed must be true")
         require(integer(scenario.get("frames_rendered_after_worker_restart")) > 0,
                 f"{prefix}: frames_rendered_after_worker_restart must be positive")
         require(integer(scenario.get("first_frame_rendered_after_worker_restart_at_ms"))
@@ -409,8 +443,7 @@ for scenario_name in sorted(required_scenarios):
                 f"{prefix}: first_frame_rendered_after_worker_restart_at_ms must be after TARGET_MONITOR_RESTARTED")
         require(scenario.get("new_consent_required") is False,
                 f"{prefix}: plugin restart must not mint new consent")
-        require_recovery_guards(prefix, scenario.get("recovery"))
-        require_terminal(prefix, scenario.get("terminal_receipt"), session_id)
+        require_terminal(prefix, scenario.get("terminal_receipt"), session_id, subject_ura)
         scenario_reports.append({
             "scenario": scenario_name,
             "status": scenario.get("status"),
@@ -418,12 +451,33 @@ for scenario_name in sorted(required_scenarios):
             "session_id": session_id,
             "descriptor_version": scenario.get("descriptor_version"),
             "events": event_types,
-            "recovery": recovery_summary(scenario.get("recovery")),
             "same_public_session": scenario.get("same_public_session"),
-            "media_source_epoch_increased": (
-                integer(scenario.get("media_source_epoch_after"))
-                > integer(scenario.get("media_source_epoch_before"))
+            "daemon_pid_preserved": (
+                integer(scenario.get("daemon_pid_before"))
+                == integer(scenario.get("daemon_pid_after"))
             ),
+            "worker_generation_increased": (
+                integer(scenario.get("worker_generation_after"))
+                > integer(scenario.get("worker_generation_before"))
+            ),
+            "transport_epoch_preserved": (
+                integer(scenario.get("transport_epoch_before"))
+                == integer(scenario.get("transport_epoch_after"))
+            ),
+            "target_binding_epoch_preserved": (
+                integer(scenario.get("target_binding_epoch_before"))
+                == integer(scenario.get("target_binding_epoch_after"))
+            ),
+            "media_source_epoch_preserved": (
+                integer(scenario.get("media_source_epoch_before"))
+                == integer(scenario.get("media_source_epoch_after"))
+            ),
+            "consent_epoch_preserved": (
+                integer(scenario.get("consent_epoch_before"))
+                == integer(scenario.get("consent_epoch_after"))
+            ),
+            "desired_session_reseeded": scenario.get("desired_session_reseeded"),
+            "target_monitor_poll_resumed": scenario.get("target_monitor_poll_resumed"),
             "frames_rendered_after_worker_restart": scenario.get("frames_rendered_after_worker_restart"),
             "new_consent_required": scenario.get("new_consent_required"),
             "terminal_receipt_visible": terminal_visible(scenario.get("terminal_receipt"), session_id),
@@ -448,8 +502,17 @@ for scenario_name in sorted(required_scenarios):
             receipt_before = {}
         if not isinstance(receipt_after, dict):
             receipt_after = {}
-        require(receipt_before.get("receipt_id") == receipt_after.get("receipt_id"),
-                f"{prefix}: terminal receipt id must be replayed")
+        terminal_identity_fields = (
+            "terminal_event_id",
+            "terminal_event_sequence",
+            "terminal_event_type",
+            "reason_code",
+            "session_id",
+            "subject_ura",
+        )
+        require(all(receipt_before.get(field) == receipt_after.get(field)
+                    for field in terminal_identity_fields),
+                f"{prefix}: terminal event identity must be replayed")
         require(receipt_after.get("terminal") is True,
                 f"{prefix}: replayed receipt must be terminal")
         require(scenario.get("repeat_end_session_idempotent") is True,
@@ -460,7 +523,7 @@ for scenario_name in sorted(required_scenarios):
                 > find_event_at(event_times, "TERMINAL_RECEIPT_REPLAYED"),
                 f"{prefix}: show_session_after_restart_observed_at_ms must be after TERMINAL_RECEIPT_REPLAYED")
         require_recovery_guards(prefix, scenario.get("recovery"))
-        require_terminal(prefix, receipt_after, session_id)
+        require_terminal(prefix, receipt_after, session_id, subject_ura)
         scenario_reports.append({
             "scenario": scenario_name,
             "status": scenario.get("status"),
@@ -472,7 +535,8 @@ for scenario_name in sorted(required_scenarios):
             "terminal_receipt_replayed": (
                 isinstance(receipt_before, dict)
                 and isinstance(receipt_after, dict)
-                and receipt_before.get("receipt_id") == receipt_after.get("receipt_id")
+                and all(receipt_before.get(field) == receipt_after.get(field)
+                        for field in terminal_identity_fields)
             ),
             "repeat_end_session_idempotent": scenario.get("repeat_end_session_idempotent"),
             "show_session_after_restart_state": scenario.get("show_session_after_restart_state"),
@@ -502,7 +566,7 @@ for scenario_name in sorted(required_scenarios):
         require(scenario.get("manual_cleanup_required") is False,
                 f"{prefix}: manual_cleanup_required must be false")
         require_recovery_guards(prefix, scenario.get("recovery"))
-        require_terminal(prefix, scenario.get("terminal_receipt"), session_id)
+        require_terminal(prefix, scenario.get("terminal_receipt"), session_id, subject_ura)
         scenario_reports.append({
             "scenario": scenario_name,
             "status": scenario.get("status"),
@@ -522,6 +586,7 @@ if errors:
     report = {
         "script": "tools/scripts/remoteapp-crash-restart-recovery-e2e.sh",
         "status": "failed",
+        "evidence_origin": evidence.get("evidence_origin"),
         "errors": errors,
         "product_complete_claim": False,
     }
@@ -540,6 +605,7 @@ if errors:
 report = {
     "script": "tools/scripts/remoteapp-crash-restart-recovery-e2e.sh",
     "status": "passed",
+    "evidence_origin": evidence.get("evidence_origin"),
     "proof_mode": evidence.get("proof_mode"),
     "coverage": {name: name in scenario_by_name for name in sorted(required_scenarios)},
     "scenarios": scenario_reports,
@@ -555,6 +621,8 @@ pathlib.Path(md_path).write_text(
     encoding="utf-8",
 )
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 write_self_test_evidence() {
@@ -582,12 +650,16 @@ def recovery(before=1, after=2):
         "restart_epoch_after": after,
     }
 
-def terminal(session_id, receipt_id):
+def terminal(subject, session_id, sequence):
     return {
         "terminal": True,
         "session_id": session_id,
+        "subject_ura": subject,
         "reason_code": "crash_restart_e2e_cleanup",
-        "receipt_id": receipt_id,
+        "receipt_type": "remoteapp.session.terminal.v1",
+        "terminal_event_id": f"{session_id}:{sequence}",
+        "terminal_event_sequence": sequence,
+        "terminal_event_type": "SESSION_CLOSED",
     }
 
 def common(name, subject, session_id):
@@ -643,7 +715,7 @@ daemon["after_restart"] = {
     "first_frame_rendered_after_restart_at_ms": 1787333004300,
 }
 daemon["recovery"] = recovery(1, 2)
-daemon["terminal_receipt"] = terminal(daemon["session_id"], "receipt-daemon")
+daemon["terminal_receipt"] = terminal(subject, daemon["session_id"], 11)
 
 plugin = common("plugin_worker_restart", subject, "sess-plugin-restart")
 plugin["events"] = [
@@ -652,13 +724,24 @@ plugin["events"] = [
     event("TARGET_MONITOR_RESTARTED", subject, plugin["session_id"], 2400),
 ]
 plugin["same_public_session"] = True
+plugin["daemon_pid_before"] = 42
+plugin["daemon_pid_after"] = 42
+plugin["worker_generation_before"] = 4
+plugin["worker_generation_after"] = 5
+plugin["transport_epoch_before"] = 9
+plugin["transport_epoch_after"] = 9
+plugin["target_binding_epoch_before"] = 3
+plugin["target_binding_epoch_after"] = 3
 plugin["media_source_epoch_before"] = 4
-plugin["media_source_epoch_after"] = 5
+plugin["media_source_epoch_after"] = 4
+plugin["consent_epoch_before"] = 2
+plugin["consent_epoch_after"] = 2
+plugin["desired_session_reseeded"] = True
+plugin["target_monitor_poll_resumed"] = True
 plugin["frames_rendered_after_worker_restart"] = 31
 plugin["first_frame_rendered_after_worker_restart_at_ms"] = 1787333003100
 plugin["new_consent_required"] = False
-plugin["recovery"] = recovery(2, 3)
-plugin["terminal_receipt"] = terminal(plugin["session_id"], "receipt-plugin")
+plugin["terminal_receipt"] = terminal(subject, plugin["session_id"], 12)
 
 receipt = common("terminal_receipt_replay_after_crash", subject, "sess-receipt-replay")
 receipt["events"] = [
@@ -666,8 +749,8 @@ receipt["events"] = [
     event("PROCESS_STOPPED_UNCLEAN", subject, receipt["session_id"], 1300),
     event("TERMINAL_RECEIPT_REPLAYED", subject, receipt["session_id"], 2600),
 ]
-receipt["terminal_receipt_before_crash"] = terminal(receipt["session_id"], "receipt-replayed")
-receipt["terminal_receipt_after_restart"] = terminal(receipt["session_id"], "receipt-replayed")
+receipt["terminal_receipt_before_crash"] = terminal(subject, receipt["session_id"], 13)
+receipt["terminal_receipt_after_restart"] = terminal(subject, receipt["session_id"], 13)
 receipt["repeat_end_session_idempotent"] = True
 receipt["show_session_after_restart_state"] = "closed"
 receipt["show_session_after_restart_observed_at_ms"] = 1787333003100
@@ -685,10 +768,11 @@ socket["endpoint_ready_at_ms"] = 1787333002900
 socket["stale_socket_cleanup_explicit"] = True
 socket["manual_cleanup_required"] = False
 socket["recovery"] = recovery(4, 5)
-socket["terminal_receipt"] = terminal(socket["session_id"], "receipt-socket")
+socket["terminal_receipt"] = terminal(subject, socket["session_id"], 14)
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "proof_mode": "real_crash_restart_recovery_matrix",
     "component_mock": False,
     "real_backend_runtime": True,

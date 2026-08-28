@@ -21,6 +21,23 @@ grep -q "skipped" /tmp/remoteapp-crash-restart-recovery-skip.out || \
   fail "default output must be explicit skipped evidence"
 
 EASYNET_REMOTEAPP_CRASH_RESTART_RECOVERY_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/live-evidence.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+assert evidence["evidence_origin"] == "contract_self_test"
+evidence["evidence_origin"] = "live_runner"
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/good/evidence.json" \
+    --out-dir "$OUT_DIR/self-test-as-live" >/tmp/remoteapp-crash-restart-origin.out 2>&1; then
+  fail "verifier accepted contract self-test evidence in run mode"
+fi
+grep -q "evidence_origin must be live_runner" /tmp/remoteapp-crash-restart-origin.out || \
+  fail "self-test provenance rejection was not explicit"
+
 python3 - "$OUT_DIR/good/report.json" <<'PY'
 import json
 import sys
@@ -29,22 +46,26 @@ report = json.load(open(sys.argv[1], encoding="utf-8"))
 scenarios = {scenario["scenario"]: scenario for scenario in report["scenarios"]}
 assert scenarios["daemon_restart_active_session"]["same_session_after_restart"] is True
 assert scenarios["daemon_restart_active_session"]["frames_rendered_after_restart"] > 0
-assert scenarios["plugin_worker_restart"]["media_source_epoch_increased"] is True
+assert scenarios["plugin_worker_restart"]["daemon_pid_preserved"] is True
+assert scenarios["plugin_worker_restart"]["worker_generation_increased"] is True
+assert scenarios["plugin_worker_restart"]["media_source_epoch_preserved"] is True
+assert scenarios["plugin_worker_restart"]["target_monitor_poll_resumed"] is True
 assert scenarios["terminal_receipt_replay_after_crash"]["terminal_receipt_replayed"] is True
 assert scenarios["stale_socket_restart_cleanup"]["manual_cleanup_required"] is False
-for scenario in scenarios.values():
+for name, scenario in scenarios.items():
     assert scenario["selected_resource_ura"].startswith("easynet:///")
     assert scenario["session_id"]
     assert scenario["descriptor_version"]
-    assert scenario["recovery"]["wal_replayed"] is True
-    assert scenario["recovery"]["idempotency_state_recovered"] is True
-    assert scenario["recovery"]["replay_guard_recovered"] is True
-    assert scenario["recovery"]["lock_owner_recovered"] is True
-    assert scenario["recovery"]["duplicate_invocation_replayed"] is False
-    assert scenario["recovery"]["restart_epoch_after"] > scenario["recovery"]["restart_epoch_before"]
+    if name != "plugin_worker_restart":
+        assert scenario["recovery"]["wal_replayed"] is True
+        assert scenario["recovery"]["idempotency_state_recovered"] is True
+        assert scenario["recovery"]["replay_guard_recovered"] is True
+        assert scenario["recovery"]["lock_owner_recovered"] is True
+        assert scenario["recovery"]["duplicate_invocation_replayed"] is False
+        assert scenario["recovery"]["restart_epoch_after"] > scenario["recovery"]["restart_epoch_before"]
 PY
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-replay-guard.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/no-replay-guard.json" <<'PY'
 import json
 import sys
 
@@ -58,7 +79,7 @@ fi
 grep -q "replay_guard_recovered must be true" /tmp/remoteapp-crash-restart-no-replay-guard.out || \
   fail "replay guard failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/new-session.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/new-session.json" <<'PY'
 import json
 import sys
 
@@ -72,7 +93,7 @@ fi
 grep -q "session_id must remain stable across restart" /tmp/remoteapp-crash-restart-new-session.out || \
   fail "same-session failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-media.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/no-media.json" <<'PY'
 import json
 import sys
 
@@ -86,20 +107,22 @@ fi
 grep -q "frames_rendered_after_restart must be positive" /tmp/remoteapp-crash-restart-no-media.out || \
   fail "media reattach failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/new-receipt.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/new-receipt.json" <<'PY'
 import json
 import sys
 
 evidence = json.load(open(sys.argv[1], encoding="utf-8"))
 for scenario in evidence["scenarios"]:
     if scenario["scenario"] == "terminal_receipt_replay_after_crash":
-        scenario["terminal_receipt_after_restart"]["receipt_id"] = "replacement-receipt"
+        scenario["terminal_receipt_after_restart"]["terminal_event_id"] = (
+            scenario["session_id"] + ":999"
+        )
 json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
 PY
 if "$SCRIPT" --run --evidence-json "$OUT_DIR/new-receipt.json" --out-dir "$OUT_DIR/new-receipt" >/tmp/remoteapp-crash-restart-new-receipt.out 2>&1; then
   fail "verifier accepted terminal receipt replacement after crash"
 fi
-grep -q "terminal receipt id must be replayed" /tmp/remoteapp-crash-restart-new-receipt.out || \
-  fail "terminal receipt replay failure was not explicit"
+grep -q "terminal event identity must be replayed" /tmp/remoteapp-crash-restart-new-receipt.out || \
+  fail "terminal event replay failure was not explicit"
 
 echo "test_remoteapp_crash_restart_recovery_e2e: ok"
