@@ -1,0 +1,40 @@
+[package]
+name = "easynet-remoteapp-native-host"
+version = "0.139.14"
+edition = "2021"
+publish = false
+description = "Private killable native execution host for the EasyNet Remote Desktop plugin."
+
+[features]
+default = ["native-media"]
+native-media = ["dep:xcap", "dep:xcb", "dep:objc2-app-kit"]
+headless-media = []
+remoteapp-e2e-fault-injection = []
+
+[lib]
+name = "easynet_remoteapp_native_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "easynet-remoteapp-native-host"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+easynet-remoteapp-native-protocol = { path = "../native-protocol" }
+xcap = { version = "0.9", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+xcb = { version = "1.7", features = ["res"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "libc"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }

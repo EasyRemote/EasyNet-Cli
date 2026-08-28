@@ -1786,7 +1786,7 @@ dependencies = [
  "objc2-video-toolbox",
  "once_cell",
  "openh264",
- "opus",
+ "opus 0.3.1",
  "portable-pty",
  "prost",
  "prost-build",
@@ -1855,6 +1855,60 @@ name = "easynet-plugin-remote-desktop"
 version = "0.139.14"
 dependencies = [
  "easynet",
+]
+
+[[package]]
+name = "easynet-remoteapp-media-host"
+version = "0.139.14"
+dependencies = [
+ "anyhow",
+ "base64",
+ "block2",
+ "bytes",
+ "dispatch2",
+ "easynet-remoteapp-native-protocol",
+ "jpeg-encoder",
+ "libc",
+ "objc2",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation",
+ "objc2-screen-capture-kit",
+ "objc2-video-toolbox",
+ "openh264",
+ "opus 0.4.0",
+ "sha2",
+ "windows-sys 0.61.2",
+ "xcap",
+]
+
+[[package]]
+name = "easynet-remoteapp-native-host"
+version = "0.139.14"
+dependencies = [
+ "anyhow",
+ "easynet-remoteapp-native-protocol",
+ "libc",
+ "objc2-app-kit",
+ "windows-sys 0.61.2",
+ "xcap",
+ "xcb",
+]
+
+[[package]]
+name = "easynet-remoteapp-native-protocol"
+version = "0.139.14"
+dependencies = [
+ "bytes",
+ "memmap2",
+ "openh264",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3892,6 +3946,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d3809943dff6fbad5f0484449ea26bdb9cb7d8efdf26ed50d3c7f227f69eb5c"
 dependencies = [
  "audiopus_sys",
+]
+
+[[package]]
+name = "opus"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33718946cc77d4032911d4efe03a66dbcbfbd2bb16c3da06aaeadcc637c32216"
+dependencies = [
+ "opusic-sys",
+]
+
+[[package]]
+name = "opusic-sys"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d1ecdf206421bc74343ab3bb2f30ad2abbfee41fa341f7181fecbaf957769a"
+dependencies = [
+ "cmake",
 ]
 
 [[package]]

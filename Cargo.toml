@@ -14,6 +14,9 @@ members = [
     ".",
     "plugins/browser",
     "plugins/remote-desktop",
+    "plugins/remote-desktop/native-protocol",
+    "plugins/remote-desktop/native-host",
+    "plugins/remote-desktop/media-host",
     "tools/sdk-conformance-runner",
 ]
 

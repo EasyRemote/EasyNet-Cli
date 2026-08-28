@@ -1,0 +1,80 @@
+[package]
+name = "easynet-remoteapp-media-host"
+version = "0.139.14"
+edition = "2021"
+publish = false
+description = "Private killable native media process for EasyNet RemoteApp."
+
+[features]
+default = ["native-media"]
+native-media = [
+    "dep:openh264",
+    "dep:opus",
+    "dep:xcap",
+]
+headless-media = []
+remoteapp-e2e-fault-injection = []
+
+[lib]
+name = "easynet_remoteapp_media_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "easynet-remoteapp-media-host"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+easynet-remoteapp-native-protocol = { path = "../native-protocol" }
+sha2 = "0.10"
+
+[dev-dependencies]
+bytes = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+openh264 = { version = "0.9", optional = true }
+xcap = { version = "0.9", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+openh264 = { version = "0.9", optional = true }
+xcap = { version = "0.9", optional = true }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2 = "0.6"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-foundation = "0.3"
+jpeg-encoder = { version = "0.7", default-features = false }
+opus = { version = "0.4.0", optional = true }
+objc2-screen-capture-kit = { version = "0.3", features = [
+    "SCShareableContent",
+    "SCStream",
+    "SCError",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "objc2-core-media",
+    "block2",
+    "dispatch2",
+    "libc",
+] }
+objc2-video-toolbox = { version = "0.3", features = [
+    "VTCompressionSession",
+    "VTCompressionProperties",
+    "VTBase",
+    "VTErrors",
+    "objc2-core-media",
+    "objc2-core-video",
+] }
