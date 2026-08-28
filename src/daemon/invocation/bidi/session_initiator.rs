@@ -2475,7 +2475,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paired_user_trust_resolve_pins_presented_pubkey() {
+    async fn paired_user_trust_resolve_pins_only_the_managed_signer_pubkey() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, invokes, _server) = spawn_recording_prelude_hub().await;
@@ -2592,8 +2592,8 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
             user_resolves,
-            std::collections::BTreeSet::from([signer_pubkey_b64, user_pubkey_b64.to_string(),]),
-            "paired User trust bootstrap must pin the current signer and each locally known key"
+            std::collections::BTreeSet::from([signer_pubkey_b64]),
+            "paired User trust bootstrap must resolve only the managed signer; locally cached browser keys belong to the ephemeral Hub-attested caller projection"
         );
     }
 

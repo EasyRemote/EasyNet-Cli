@@ -1225,21 +1225,31 @@ fn daemon_route_outcome_response(
 pub(crate) fn runtime_status_to_axon_error(status: Status) -> AxonError {
     let code = status.code();
     let message = status.message().to_string();
-    let error = match code {
-        tonic::Code::Cancelled => AxonError::cancelled(message),
-        tonic::Code::DeadlineExceeded => AxonError::deadline_exceeded(message),
-        tonic::Code::Unavailable => AxonError::unavailable(message),
-        tonic::Code::InvalidArgument => AxonError::invalid_argument(message),
-        tonic::Code::ResourceExhausted => AxonError::resource_exhausted(message),
-        tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
-            AxonError::permission_denied(message)
-        }
-        tonic::Code::NotFound => AxonError::new(AxonErrorKind::InvalidArgument)
-            .with_code(ErrorCode::NotFound)
-            .with_message(message)
-            .with_security_class(SecurityClass::Resource),
-        _ => AxonError::internal(message),
-    };
+    let error =
+        if crate::daemon::invocation::admission::runtime_trust::is_user_pubkey_revoked_status(
+            &status,
+        ) {
+            AxonError::new(AxonErrorKind::PermissionDenied)
+                .with_code(ErrorCode::CallerKeyRevoked)
+                .with_message(message)
+                .with_security_class(SecurityClass::Identity)
+        } else {
+            match code {
+                tonic::Code::Cancelled => AxonError::cancelled(message),
+                tonic::Code::DeadlineExceeded => AxonError::deadline_exceeded(message),
+                tonic::Code::Unavailable => AxonError::unavailable(message),
+                tonic::Code::InvalidArgument => AxonError::invalid_argument(message),
+                tonic::Code::ResourceExhausted => AxonError::resource_exhausted(message),
+                tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
+                    AxonError::permission_denied(message)
+                }
+                tonic::Code::NotFound => AxonError::new(AxonErrorKind::InvalidArgument)
+                    .with_code(ErrorCode::NotFound)
+                    .with_message(message)
+                    .with_security_class(SecurityClass::Resource),
+                _ => AxonError::internal(message),
+            }
+        };
     error.with_stage(ErrorStage::Execution).with_context(
         PRODUCT_GRPC_CODE_CONTEXT,
         tonic_code_number(code).to_string(),
@@ -1295,6 +1305,28 @@ mod product_status_projection_tests {
         assert_eq!(
             wire.security_class,
             axon_sdk::pb::axon::v1::SecurityClass::Resource as i32
+        );
+    }
+
+    #[test]
+    fn tombstoned_user_key_projects_to_canonical_caller_key_revoked() {
+        let status = Status::with_details(
+            tonic::Code::FailedPrecondition,
+            "identity.register_pubkey rejected tombstoned key",
+            bytes::Bytes::from_static(
+                crate::daemon::invocation::admission::runtime_trust::USER_PUBKEY_REVOKED_STATUS_DETAIL,
+            ),
+        );
+
+        let error = runtime_status_to_axon_error(status);
+
+        assert_eq!(error.kind, AxonErrorKind::PermissionDenied);
+        assert_eq!(error.code, ErrorCode::CallerKeyRevoked);
+        assert_eq!(error.stage, Some(ErrorStage::Execution));
+        assert_eq!(error.security_class, Some(SecurityClass::Identity));
+        assert_eq!(
+            error.context.get(PRODUCT_GRPC_CODE_CONTEXT),
+            Some(&tonic_code_number(tonic::Code::FailedPrecondition).to_string())
         );
     }
 }

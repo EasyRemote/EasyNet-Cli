@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axon_sdk::invocation::ErrorCode;
 use axon_sdk::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tonic::{transport::Channel, Status};
@@ -1154,6 +1155,60 @@ impl PairedUserTrustSigner {
             }
         }
     }
+
+    async fn rotate_after_hub_revocation(
+        &self,
+        user_ura: &str,
+        rejected_public_key_b64: &str,
+    ) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
+        match &self.source {
+            PairedUserTrustSignerSource::RuntimeCaller => {
+                let user_ura = user_ura.to_string();
+                let event_user_ura = user_ura.clone();
+                let rejected_public_key_b64 = rejected_public_key_b64.to_string();
+                let (signer, rotated, rotation_epoch) = tokio::task::spawn_blocking(move || {
+                    let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
+                    let outcome = crate::daemon::identity::self_identity::rotate_user_runtime_signing_identity_after_revocation(
+                        &client,
+                        &user_ura,
+                        &rejected_public_key_b64,
+                    )?;
+                    let signer =
+                        crate::daemon::identity::self_identity::load_runtime_caller_signer(
+                            user_ura,
+                        )?;
+                    let loaded_public_key_b64 =
+                        BASE64_STANDARD.encode(signer.signing_public_key()?.to_bytes());
+                    if loaded_public_key_b64 != outcome.projection.public_key_b64 {
+                        return Err(SelfIdentityError::Rejected {
+                            kind: "lifecycle".into(),
+                            message: "managed User signer reload did not select the recovered active projection".into(),
+                        });
+                    }
+                    Ok((signer, outcome.rotated, outcome.projection.rotation_epoch))
+                })
+                .await
+                .map_err(|error| {
+                    SelfIdentityError::Transport(format!(
+                        "paired user signer rotation task failed: {error}"
+                    ))
+                })??;
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_signer_recovered,
+                    user_ura = event_user_ura,
+                    rotated = rotated,
+                    rotation_epoch = rotation_epoch,
+                );
+                Ok(signer)
+            }
+            #[cfg(test)]
+            PairedUserTrustSignerSource::Fixed(_) => Err(SelfIdentityError::Rejected {
+                kind: "policy".into(),
+                message: "fixed paired user signer does not support managed key rotation".into(),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1166,6 +1221,12 @@ pub enum UserTrustBootstrapError {
         user_ura: String,
         status: tonic::Status,
     },
+
+    #[error("paired user runtime signer for `{user_ura}` was revoked by the Hub")]
+    SignerRevoked { user_ura: String },
+
+    #[error("rotating paired user runtime signer for `{user_ura}` failed: {message}")]
+    SignerRotationFailed { user_ura: String, message: String },
 
     #[error("paired user runtime signer for `{user_ura}` is unavailable: {message}")]
     SignerUnavailable { user_ura: String, message: String },
@@ -1354,168 +1415,153 @@ async fn sync_paired_user_trust_prelude(
     if realm != sync.daemon_realm {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
     }
-    let user_signer = sync.user_signer.load(&user_ura).await.map_err(|error| {
+    let mut user_signer = sync.user_signer.load(&user_ura).await.map_err(|error| {
         UserTrustBootstrapError::SignerUnavailable {
             user_ura: user_ura.clone(),
             message: error.to_string(),
         }
     })?;
-    let signer_public_key_b64 =
-        paired_user_signer_public_key_b64(user_signer.as_ref()).map_err(|error| {
-            UserTrustBootstrapError::SignerUnavailable {
-                user_ura: user_ura.clone(),
-                message: error.to_string(),
-            }
+    let mut signer_public_key_b64 = paired_user_signer_public_key_b64(user_signer.as_ref())
+        .map_err(|error| UserTrustBootstrapError::SignerUnavailable {
+            user_ura: user_ura.clone(),
+            message: error.to_string(),
         })?;
-    let local_public_keys = paired_user_public_keys(sync, &user_ura);
-    let publish_public_keys = paired_user_publish_public_keys(&signer_public_key_b64);
-    publish_paired_user_keys_prelude(
+    let first_publish = publish_paired_user_keys_prelude(
         client,
         user_signer.as_ref(),
         &user_ura,
-        &publish_public_keys,
+        &paired_user_publish_public_keys(&signer_public_key_b64),
     )
-    .await?;
-
-    let resolve_inputs =
-        paired_user_resolve_public_keys(&signer_public_key_b64, &local_public_keys);
-    let mut pubkeys = Vec::new();
-    for presented_pubkey_b64 in &resolve_inputs {
-        let args =
-            paired_user_resolve_key_args(&user_ura, presented_pubkey_b64).map_err(|err| {
-                UserTrustBootstrapError::ResolveFailed {
+    .await;
+    match first_publish {
+        Ok(()) => {}
+        Err(UserTrustBootstrapError::SignerRevoked { .. }) => {
+            crate::op_event!(
+                component = session,
+                kind = user_trust_sync_signer_revoked,
+                user_ura = user_ura,
+                message = "Hub rejected the active managed User signer; rotating once before retry",
+            );
+            user_signer = sync
+                .user_signer
+                .rotate_after_hub_revocation(&user_ura, &signer_public_key_b64)
+                .await
+                .map_err(|error| UserTrustBootstrapError::SignerRotationFailed {
                     user_ura: user_ura.clone(),
-                    status: tonic::Status::internal(format!(
-                        "federation.resolve_key user args encode failed: {err}"
-                    )),
-                }
-            })?;
-        let request = match signed_prelude_request(
-            user_signer.as_ref(),
-            &user_ura,
-            crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
-            args,
-        )
-        .await
-        {
-            Ok(req) => req,
-            Err(status) => {
-                return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
-            }
-        };
-        let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
-            Ok(resp) => resp,
-            // A locally-trusted key the hub does not know is stale local
-            // state (hub-side cap eviction or debris from an earlier
-            // pairing), not a session-fatal condition. Only the active
-            // signer key is required to resolve; without this tolerance a
-            // single stale trust-anchor row keeps the device offline
-            // forever.
-            Err(status)
-                if status.code() == tonic::Code::NotFound
-                    && presented_pubkey_b64 != &signer_public_key_b64 =>
-            {
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_stale_local_key_skipped,
-                    user_ura = user_ura,
-                    presented_pubkey_b64 = presented_pubkey_b64.as_str(),
-                );
-                continue;
-            }
-            Err(status) => {
-                let code = status.code();
-                let msg = status.message();
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_resolve_failed,
-                    code = code,
-                    error = msg,
-                    user_ura = user_ura,
-                );
-                return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
-            }
-        };
-        let resolved = resolved_public_keys(&response.result).map_err(|error| {
+                    message: error.to_string(),
+                })?;
+            signer_public_key_b64 = paired_user_signer_public_key_b64(user_signer.as_ref())
+                .map_err(|error| UserTrustBootstrapError::SignerUnavailable {
+                    user_ura: user_ura.clone(),
+                    message: error.to_string(),
+                })?;
+            publish_paired_user_keys_prelude(
+                client,
+                user_signer.as_ref(),
+                &user_ura,
+                &paired_user_publish_public_keys(&signer_public_key_b64),
+            )
+            .await?;
+        }
+        Err(error) => return Err(error),
+    }
+
+    let resolve_args =
+        paired_user_resolve_key_args(&user_ura, &signer_public_key_b64).map_err(|error| {
             UserTrustBootstrapError::ResolveFailed {
                 user_ura: user_ura.clone(),
-                status: tonic::Status::failed_precondition(format!(
-                    "federation.resolve_key user response schema invalid: {error}"
+                status: tonic::Status::internal(format!(
+                    "federation.resolve_key user args encode failed: {error}"
                 )),
             }
         })?;
-        pubkeys.extend(resolved);
-    }
-    if pubkeys.is_empty() {
+    let resolve_request = signed_prelude_request(
+        user_signer.as_ref(),
+        &user_ura,
+        crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+        resolve_args,
+    )
+    .await
+    .map_err(|status| UserTrustBootstrapError::ResolveFailed {
+        user_ura: user_ura.clone(),
+        status,
+    })?;
+    let resolve_response = invoke_prelude_unary(client, resolve_request, "federation.resolve_key")
+        .await
+        .map_err(|status| {
+            crate::op_event!(
+                component = session,
+                kind = user_trust_sync_resolve_failed,
+                code = status.code(),
+                error = status.message(),
+                user_ura = user_ura,
+            );
+            UserTrustBootstrapError::ResolveFailed {
+                user_ura: user_ura.clone(),
+                status,
+            }
+        })?;
+    let resolved_public_keys = resolved_public_keys(&resolve_response.result).map_err(|error| {
+        UserTrustBootstrapError::ResolveFailed {
+            user_ura: user_ura.clone(),
+            status: tonic::Status::failed_precondition(format!(
+                "federation.resolve_key user response schema invalid: {error}"
+            )),
+        }
+    })?;
+    if !resolved_public_keys
+        .iter()
+        .any(|public_key_b64| public_key_b64 == &signer_public_key_b64)
+    {
         crate::op_event!(
             component = session,
             kind = user_trust_sync_resolve_empty,
             user_ura = user_ura,
-            message = "hub returned no user keys — user key not registered at hub yet",
+            message = "Hub response does not attest the active managed User signer",
         );
         return Err(UserTrustBootstrapError::MissingAtHub { user_ura });
     }
 
-    let mut accepted_key_count = 0_usize;
-    let mut last_import_error = None;
-    for pubkey_b64 in pubkeys {
-        let register_args =
-            match RegisterPubkeyRequest::new(user_ura.as_str(), pubkey_b64, TrustAnchorRole::User)
-                .to_arguments_bytes()
-            {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-        match crate::daemon::invocation::admission::register_device_pubkey::handle_protecting(
-            &register_args,
-            &sync.daemon_realm,
-            &sync.trust_anchor_path,
-            &sync.cell,
-            Some(signer_public_key_b64.as_str()),
-        ) {
-            Ok(_) => {
-                accepted_key_count += 1;
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_ok,
-                    user_ura = user_ura,
-                );
-            }
-            Err(status) if status.code() == tonic::Code::AlreadyExists => {
-                accepted_key_count += 1;
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_already_present,
-                    user_ura = user_ura,
-                );
-            }
-            Err(status) => {
-                let code = status.code();
-                let msg = status.message();
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_write_failed,
-                    code = code,
-                    error = msg,
-                    user_ura = user_ura,
-                );
-                last_import_error = Some(status);
-            }
-        }
-    }
-    if paired_user_trust_present(sync, &user_ura) {
-        return Ok(UserTrustBootstrapOutcome::Imported {
+    let register_args = RegisterPubkeyRequest::new(
+        user_ura.as_str(),
+        signer_public_key_b64.as_str(),
+        TrustAnchorRole::User,
+    )
+    .to_arguments_bytes()
+    .map_err(|error| UserTrustBootstrapError::ImportFailed {
+        user_ura: user_ura.clone(),
+        status: tonic::Status::internal(format!(
+            "encode active paired User signer for local trust: {error}"
+        )),
+    })?;
+    crate::daemon::invocation::admission::register_device_pubkey::handle_protecting(
+        &register_args,
+        &sync.daemon_realm,
+        &sync.trust_anchor_path,
+        &sync.cell,
+        Some(signer_public_key_b64.as_str()),
+    )
+    .map_err(|status| UserTrustBootstrapError::ImportFailed {
+        user_ura: user_ura.clone(),
+        status,
+    })?;
+    if !paired_user_signer_trust_present(sync, &user_ura, signer_public_key_b64.as_str()) {
+        return Err(UserTrustBootstrapError::ImportFailed {
             user_ura,
-            key_count: accepted_key_count,
+            status: tonic::Status::failed_precondition(
+                "active paired User signer was not committed to local trust",
+            ),
         });
     }
-    Err(UserTrustBootstrapError::ImportFailed {
+    crate::op_event!(
+        component = session,
+        kind = user_trust_sync_ok,
+        user_ura = user_ura,
+        key_source = "managed_runtime_signer",
+    );
+    Ok(UserTrustBootstrapOutcome::Imported {
         user_ura,
-        status: last_import_error.unwrap_or_else(|| {
-            tonic::Status::failed_precondition(
-                "federation.resolve_key returned no importable paired user keys",
-            )
-        }),
+        key_count: 1,
     })
 }
 
@@ -1555,19 +1601,15 @@ fn paired_user_resolve_key_args(
         .map_err(Into::into)
 }
 
-fn paired_user_trust_present(sync: &UserTrustSync, user_ura: &str) -> bool {
-    !paired_user_public_keys(sync, user_ura).is_empty()
-}
-
-fn paired_user_public_keys(sync: &UserTrustSync, user_ura: &str) -> Vec<String> {
+fn paired_user_signer_trust_present(
+    sync: &UserTrustSync,
+    user_ura: &str,
+    signer_public_key_b64: &str,
+) -> bool {
     sync.cell
         .snapshot()
-        .lookup_user_all(user_ura)
-        .iter()
-        .map(|entry| entry.public_key_b64.trim())
-        .filter(|key| !key.is_empty())
-        .map(ToString::to_string)
-        .collect()
+        .lookup_user_by_pubkey(user_ura, signer_public_key_b64)
+        .is_some()
 }
 
 fn paired_user_signer_public_key_b64(
@@ -1580,25 +1622,6 @@ fn paired_user_signer_public_key_b64(
 
 fn paired_user_publish_public_keys(signer_public_key_b64: &str) -> Vec<String> {
     vec![signer_public_key_b64.trim().to_string()]
-}
-
-fn paired_user_resolve_public_keys(
-    signer_public_key_b64: &str,
-    local_public_keys: &[String],
-) -> Vec<String> {
-    let mut keys = Vec::with_capacity(local_public_keys.len() + 1);
-    push_unique_public_key(&mut keys, signer_public_key_b64);
-    for public_key in local_public_keys {
-        push_unique_public_key(&mut keys, public_key);
-    }
-    keys
-}
-
-fn push_unique_public_key(keys: &mut Vec<String>, public_key_b64: &str) {
-    let public_key = public_key_b64.trim();
-    if !public_key.is_empty() && !keys.iter().any(|existing| existing == public_key) {
-        keys.push(public_key.to_string());
-    }
 }
 
 async fn publish_paired_user_keys_prelude(
@@ -1630,6 +1653,14 @@ async fn publish_paired_user_keys_prelude(
         match invoke_prelude_unary(client, request, "identity.register_pubkey").await {
             Ok(_) => {}
             Err(status) if status.code() == tonic::Code::AlreadyExists => {}
+            Err(status)
+                if prelude_invocation_error_code(&status)
+                    == Some(ErrorCode::CallerKeyRevoked.as_str()) =>
+            {
+                return Err(UserTrustBootstrapError::SignerRevoked {
+                    user_ura: user_ura.to_string(),
+                });
+            }
             Err(status) => {
                 crate::op_event!(
                     component = session,
@@ -1654,6 +1685,36 @@ async fn publish_paired_user_keys_prelude(
     Ok(())
 }
 
+const PRELUDE_INVOCATION_ERROR_CODE_METADATA_KEY: &str = "x-easynet-invocation-error-code";
+
+fn prelude_rejected_status(
+    ability_name: &str,
+    error: &axon_sdk::pb::axon::v1::Error,
+) -> tonic::Status {
+    let message = if error.code.is_empty() {
+        error.message.clone()
+    } else if error.message.is_empty() {
+        error.code.clone()
+    } else {
+        format!("{}: {}", error.code, error.message)
+    };
+    let mut status =
+        tonic::Status::failed_precondition(format!("{ability_name} prelude rejected: {message}"));
+    if let Ok(value) = tonic::metadata::MetadataValue::try_from(error.code.as_str()) {
+        status
+            .metadata_mut()
+            .insert(PRELUDE_INVOCATION_ERROR_CODE_METADATA_KEY, value);
+    }
+    status
+}
+
+fn prelude_invocation_error_code(status: &tonic::Status) -> Option<&str> {
+    status
+        .metadata()
+        .get(PRELUDE_INVOCATION_ERROR_CODE_METADATA_KEY)
+        .and_then(|value| value.to_str().ok())
+}
+
 pub(super) async fn invoke_prelude_unary(
     client: &mut InvocationClient<Channel>,
     request: axon_sdk::pb::axon::v1::InvokeRequest,
@@ -1661,16 +1722,7 @@ pub(super) async fn invoke_prelude_unary(
 ) -> Result<axon_sdk::pb::axon::v1::InvokeResponse, tonic::Status> {
     let response = client.invoke(request).await?.into_inner();
     if let Some(error) = response.error.as_ref() {
-        let message = if error.code.is_empty() {
-            error.message.clone()
-        } else if error.message.is_empty() {
-            error.code.clone()
-        } else {
-            format!("{}: {}", error.code, error.message)
-        };
-        return Err(tonic::Status::failed_precondition(format!(
-            "{ability_name} prelude rejected: {message}"
-        )));
+        return Err(prelude_rejected_status(ability_name, error));
     }
     Ok(response)
 }
@@ -1777,8 +1829,8 @@ mod tests {
         apply_federation_join_receipt, attach_owner_projection_authority,
         classify_user_service_advertise_abilities_response,
         committed_user_service_owner_descriptors, paired_user_publish_public_keys,
-        paired_user_resolve_key_args, paired_user_resolve_public_keys,
-        paired_user_signer_public_key_b64, paired_user_trust_present,
+        paired_user_resolve_key_args, paired_user_signer_public_key_b64,
+        paired_user_signer_trust_present, prelude_invocation_error_code, prelude_rejected_status,
         resolve_hosted_agent_user_segment, resolved_public_keys,
         run_hosted_agent_advertise_prelude, signed_prelude_request, sync_paired_user_trust_prelude,
         PairedUserTrustSigner, PreludeOwnerProjectionAuthority, RegisterPubkeyRequest,
@@ -1823,6 +1875,25 @@ mod tests {
         assert_eq!(
             resolved_public_keys(body).expect("schema-bound public keys"),
             vec!["key-a".to_string(), "key-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn prelude_rejection_preserves_canonical_invocation_error_code() {
+        let error = axon_sdk::pb::axon::v1::Error {
+            code: axon_sdk::invocation::ErrorCode::CallerKeyRevoked
+                .as_str()
+                .to_string(),
+            message: "managed User signing key is tombstoned".to_string(),
+            ..Default::default()
+        };
+
+        let status = prelude_rejected_status("identity.register_pubkey", &error);
+
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            prelude_invocation_error_code(&status),
+            Some(axon_sdk::invocation::ErrorCode::CallerKeyRevoked.as_str())
         );
     }
 
@@ -2091,14 +2162,19 @@ mod tests {
     }
 
     #[test]
-    fn paired_user_trust_present_reads_user_key_bucket() {
+    fn paired_user_signer_trust_requires_the_exact_managed_key() {
         let user_ura = "easynet:///r/realm/user/user-dev";
         let sync = user_trust_sync_with_key(user_ura);
 
-        assert!(paired_user_trust_present(&sync, user_ura));
-        assert!(!paired_user_trust_present(
+        assert!(paired_user_signer_trust_present(
             &sync,
-            "easynet:///r/realm/user/other"
+            user_ura,
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        ));
+        assert!(!paired_user_signer_trust_present(
+            &sync,
+            user_ura,
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=",
         ));
     }
 
@@ -2311,20 +2387,11 @@ mod tests {
         let user_ura = "easynet:///r/realm/user/user-dev";
         let signer = TestCanonicalSigner::new(user_ura, [0x33; 32]);
         let signer_key = paired_user_signer_public_key_b64(&signer).expect("signer key");
-        let stale_or_browser_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string();
 
         assert_eq!(
             paired_user_publish_public_keys(&signer_key),
-            vec![signer_key.clone()],
+            vec![signer_key],
             "current signer may only self-register its own public key"
-        );
-        assert_eq!(
-            paired_user_resolve_public_keys(
-                &signer_key,
-                &[stale_or_browser_key.clone(), signer_key.clone()],
-            ),
-            vec![signer_key, stale_or_browser_key],
-            "non-signer local user keys may be resolved/imported, but must not be signer-published"
         );
     }
 
