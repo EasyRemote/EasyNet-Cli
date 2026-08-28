@@ -1,5 +1,109 @@
 # Decisions and Deltas — RemoteApp Product Closure
 
+## 2026-08-28 — Session admission revalidates identity instead of racing picker TTL
+
+Decision:
+
+- `resource.refresh_remote_targets` owns discovery and a bounded picker cache;
+  its freshness timestamp is not capture authority.
+- `remote_desktop.create_session` owns admission. A provenance-complete row
+  that was `available` when discovered may be used as a selection handle after
+  its picker TTL, but only when the device immediately resolves the exact
+  platform target and commits a capture proof before inserting any session.
+- An explicitly unavailable row or a row without live-inventory provenance
+  remains rejected before native access. A failed native revalidation remains
+  terminal and consumes no session row.
+- Extending the 60-second TTL or retrying in the frontend is not the
+  architectural fix: neither makes identity authoritative and both retain a
+  race against Hub latency.
+
+Required proof:
+
+- An expired-but-provenance-complete row reaches the live verifier and succeeds
+  only when that verifier proves the same native identity.
+- A verifier rejection still prevents session construction.
+- The resulting target diagnostic distinguishes cache expiry from successful
+  live identity revalidation.
+
+## 2026-08-28 — Hosted media dimensions come from the committed capture proof
+
+Decision:
+
+- RemoteApp `scale_mode=native` treats the requested resolution as an upper
+  bound; it must not upscale a smaller selected window or application surface.
+- The media-host video contract derives its coded dimensions from the
+  session-owned, reverified capture proof. Frontend presentation limits cannot
+  replace native target facts.
+- This is independent of the public C ABI. RemoteApp media remains a bounded
+  shared-memory frame lease followed by RTP/SRTP, not an invocation callback
+  byte stream.
+
+Implemented product effect:
+
+- A 480×320 selected window requested with a 1280×720 native upper bound is
+  encoded at 480×320 rather than being inflated to 1280×720.
+- Capture, encoder allocation, shared-lane capacity and WebRTC bandwidth now
+  agree on the same target-bound coded raster.
+- This removes one observed cause of encoder/daemon drops. Live sustained-frame
+  evidence is still required before declaring the media path product-ready.
+
+## 2026-08-28 — Product readiness requires exact receiver decode evidence
+
+Decision:
+
+- `presenting` is a transport lifecycle state, not proof that the Browser
+  decoded the current target generation.
+- Receiver evidence is admitted only for the exact session, transport epoch,
+  target binding, media-source epoch, pipeline and negotiated codec tuple.
+- Browser wall time is audit metadata; daemon admission sequence and monotonic
+  receive time own replay ordering and freshness.
+
+Implemented product effect:
+
+- A stale report from a previous rebind/reconnect cannot make a new generation
+  product-ready.
+- Audio/video sessions additionally require operational sender/capture state
+  and positive decoded audio counters; video-only sessions do not wait for an
+  absent audio track.
+- The packaged TOML descriptor and compiled NativeStatic schema are guarded by
+  an equality test, preventing catalog/handler drift.
+
+## 2026-08-28 — Host-audio offer admission uses a bounded capability coordinator
+
+Decision:
+
+- Host audio is runtime capability state, not a static compile flag or an OS
+  probe performed under session serialization.
+- Refresh/invalidate/shutdown semantics live in fixed-size state; a capacity-1
+  channel carries only wake notifications.
+- At most one native probe attempt exists. Source-specific setup failures latch
+  synchronously and obsolete in-flight success, so process-loopback failure
+  does not erase system-loopback support.
+
+Implemented product effect:
+
+- Refresh storms and repeated failures cannot grow a command queue.
+- A blocked native call cannot prevent the joinable supervisor from shutting
+  down; its late result cannot resurrect readiness after invalidation/stop.
+- This is the minimal bounded containment model. A permanently blocked native
+  thread is not forcibly terminated; zero-leak automatic recovery requires a
+  cancellable platform API or killable helper process and remains open.
+
+## 2026-08-27 — Cross-platform application evidence preserves one scope invariant
+
+Windows/Linux xcap `process_window_set` and macOS
+`application_window_set` are both exact application window-set discovery
+modes. Evidence accepts only those modes and still requires non-empty committed
+window ids, no display id, `scope_widened=false`, and
+`display_fallback_used=false`. Windows/Linux inventory now also emits
+`display_scoped=false` and `display_id=null` explicitly.
+
+## 2026-08-27 — xcap owner identity is PID-bound
+
+An exact native PID is the owner identity. `app_name` is diagnostic picker text
+and cannot veto that PID merely because WM_CLASS/toolkit capitalization differs.
+PID drift still fails closed before capture.
+
 ## 2026-08-25 — Input frames and pressed state require one lifecycle contract
 
 Decision:
@@ -1422,3 +1526,153 @@ Product effect:
 - Recovery-store bounds do not replace the still-missing live daemon-crash,
   media-reattachment, rendered-frame, and input-after-restart evidence;
   product completion remains false.
+
+## 2026-08-27 — application churn evidence must mutate real native windows
+
+Decision:
+
+- A static two-window screenshot does not prove independent application
+  tracking. The Linux X11 sentinel accepts explicit move, resize, focus,
+  close-secondary, and reopen-secondary commands and records an acknowledgement
+  plus the resulting native window inventory.
+- The Browser churn scenario passes only when the same public session observes
+  newer binding, target-identity, and geometry epochs, the rebound two-window
+  set is visible through `show_session`, decoded media continues, target-local
+  input is applied again, and scope never widens to a display.
+
+Product effect:
+
+- Closing and recreating one real X11 window changed the native XID and the
+  daemon committed the new application window set without replacing the public
+  session. Relay media, pointer/key input, and terminal cleanup remained live.
+- This evidence is Linux application window-set churn, not the full
+  multi-window/cross-platform product matrix; product completion remains false.
+
+## 2026-08-27 — focus recovery requires a real competing native window
+
+Decision:
+
+- Initial target focus is not recovery evidence. The Browser runner may launch
+  an external focus-displacement command, then waits until the target monitor
+  commits `target_blurred` before issuing user input.
+- Recovery passes only when the pointer intent invokes the public
+  `remote_desktop.focus_target` Ability, the daemon commits a newer focus epoch,
+  and the original input is subsequently applied with that epoch.
+
+Product effect:
+
+- Linux/X11 application focus recovery passed with an unrelated `xmessage`
+  process, a focus epoch transition from 3 to 4, and daemon-applied pointer and
+  keyboard events. Other platforms remain outside this evidence scope.
+
+That historical run proves routing and observable host effects, not strict
+cross-application input isolation. The 2026-08-28 isolation audit therefore
+supersedes its target-local readiness implication: Linux X11 Window/Application
+input is now advertised and admitted as `view_only`; display-global interaction
+remains available.
+
+## 2026-08-27 — Browser target coverage is a matrix of leaf sessions
+
+Decision:
+
+- A Browser lifecycle leaf owns exactly one selected target and one public
+  session. It cannot truthfully report both window and application coverage.
+- The product gate consumes a matrix report that verifies one live window leaf
+  and one live application leaf. Each leaf must independently prove the full
+  pointer/key interaction sequence and target-blur focus recovery, and must
+  bind its own evidence hash, session, and Resource URA.
+
+Product effect:
+
+- The Browser lifecycle product requirement is now reachable through real
+  executions rather than only through a synthetic report. The first Linux
+  matrix passed and the aggregate product gate accepted that item while
+  continuing to reject the incomplete 19-item campaign.
+
+## 2026-08-27 — geometry events commit with the rebound media source
+
+Decision:
+
+- Application geometry observations that require a media-source rebuild remain
+  pending until the replacement source commits. The Runtime then publishes one
+  `TARGET_REBOUND` transition followed by the geometry taxonomy derived from the
+  previous and committed bounds.
+- A move and resize of the same native window set preserves the target-identity
+  epoch, advances the binding and geometry epochs, and emits ordered
+  `TARGET_MOVED`, `TARGET_RESIZED`. A window-set replacement follows the
+  separate identity-change contract.
+- A committed PID is the authoritative native owner identity. Backend-specific
+  casing of an application display name cannot veto the same local process;
+  app-name comparison is used only when no committed PID exists.
+
+Product effect:
+
+- The real Linux/X11 Browser run now receives the public move/resize events only
+  after media is rebound, then renders and accepts target-local input against the
+  new geometry. This avoids both premature lifecycle events and silent geometry
+  changes.
+- A deliberately duplicated overlapping sentinel was rejected by the host input
+  guard even after focus recovery, confirming that the test must retain a single
+  owner process and that input does not cross into an obscuring target.
+
+## 2026-08-28 — RemoteApp efficiency is locally paced framed media
+
+Decision:
+
+- v8 raw callbacks are an SDK/FFI transport representation and are not the
+  RemoteApp media data plane. RemoteApp video remains encoded access units over
+  RTP/SRTP/WebRTC so frame boundaries, keyframe recovery, pacing, congestion,
+  encryption, and browser decoding remain explicit.
+- The public requested-quality bitrate is a target, not an adaptive encoder
+  floor. A low but decodable private floor protects continuity.
+- `RTCIceCandidatePairStats.availableOutgoingBitrate` observed in the Browser is
+  a Browser-upload estimate. It MUST NOT control device-to-Browser video.
+- Real-time sender adaptation belongs beside the device `RtpSender`: local RTCP
+  Receiver Reports provide direction-correct loss/RTT, while measured RTP-write
+  service time and bounded queue occupancy govern safe frame pacing.
+- Browser decode/freeze reports remain session/epoch-bound readiness and audit
+  evidence. Their Hub Ability delivery latency excludes them from the primary
+  media congestion loop.
+
+Implementation delta:
+
+- The incorrect Browser-upload ceiling was removed from `ClientMediaFeedback`
+  and the shared encoder controller before it could be treated as product
+  evidence.
+- The media-host→daemon lane remains fixed-slot shared memory carrying raw H.264
+  and Opus payloads. The daemon validates the mapped frame through
+  `Bytes::from_owner`, then performs one bounded detach into transport-owned
+  bytes so RTP packetization/NACK history cannot retain the shared slot. No
+  JSON/base64 representation enters the media path.
+- PERF-08 now implements local RTCP receiver feedback and writer-service pacing
+  in both hosted and baseline paths. The source/mutation contract is closed;
+  live acceptance remains open until a rebuilt provider sustains Browser frames
+  and records fresh RTCP plus bounded writer-service telemetry.
+
+Product effect:
+
+- No completion claim is made. The evidence distinguishes an efficient private
+  binary lane from an incomplete end-to-end sender control loop and prevents a
+  reverse-direction browser statistic from masking the actual pacing defect.
+
+### Sender-feedback implementation invariants
+
+1. The negotiated video `RtpSender` is owned by the same transport generation
+   as its track and is never recovered by searching global peer state.
+2. Encoder pressure consumes only fresh `remote-inbound-rtp` reports generated
+   from Browser RTCP Receiver Reports for the video sender. Repeated stats
+   snapshots cannot replay pressure.
+3. Missing or temporarily unreadable stats do not terminate media; they produce
+   bounded diagnostics and cannot authorize an encoder upshift.
+4. A send-only RemoteApp endpoint advertises sender-side TWCC while retaining
+   NACK, PLI, RTCP sender/receiver reports, and the existing bounded queues.
+5. Hub `report_client_state` remains product readiness/audit evidence. It is not
+   part of the real-time sender feedback loop.
+
+### Shared-lane/WebRTC ownership invariant
+
+The shared-memory lease ends at daemon media ingress. WebRTC owns a detached
+payload whose lifetime may extend through packetization and retransmission.
+Passing the mapped `Bytes` owner directly into WebRTC is prohibited: with a
+one-slot real-time lane, an RTP/NACK retention window pins the producer slot and
+turns ordinary subsequent frames into backpressure drops.
