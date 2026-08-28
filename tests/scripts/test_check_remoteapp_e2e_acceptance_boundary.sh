@@ -5,6 +5,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh"
 HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE_HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+TARGET_SELECTOR="$REPO_ROOT/tools/scripts/remoteapp-select-live-target.py"
+EVIDENCE_PROVENANCE="$REPO_ROOT/tools/scripts/remoteapp-evidence-provenance.py"
 SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 TARGET_FRESHNESS="$REPO_ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 CREATE_FAILCLOSED="$REPO_ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
@@ -21,8 +23,12 @@ SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 mkdir -p "$SANDBOX/tools/scripts" "$SANDBOX/docs/design" "$SANDBOX/examples"
+mkdir -p "$SANDBOX/plugins/remote-desktop/src/media" "$SANDBOX/plugins/remote-desktop/src/transport"
+mkdir -p "$SANDBOX/plugins/remote-desktop/media-host/src"
 cp "$HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 cp "$PROBE_HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+cp "$TARGET_SELECTOR" "$SANDBOX/tools/scripts/remoteapp-select-live-target.py"
+cp "$EVIDENCE_PROVENANCE" "$SANDBOX/tools/scripts/remoteapp-evidence-provenance.py"
 cp "$SENTINEL_FIXTURE" "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 cp "$TARGET_FRESHNESS" "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 cp "$CREATE_FAILCLOSED" "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
@@ -37,6 +43,14 @@ cp "$SESSION_RESUME" "$SANDBOX/tools/scripts/host-remoteapp-session-resume-e2e.s
 cp "$LIFECYCLE_HARNESS_LIB" "$SANDBOX/tools/scripts/remoteapp-lifecycle-harness-lib.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/media-host/src/macos_multiapp.rs" \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_multiapp.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs" \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/native_host_process.rs" \
+  "$SANDBOX/plugins/remote-desktop/src/native_host_process.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/media-host/src/macos_videotoolbox.rs" \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_videotoolbox.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
@@ -63,9 +77,21 @@ cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-09 target loss vs transport failure | target loss is not transport failure |
 | E2E-10 weak identity ambiguity | weak native identity fails closed |
 | E2E-11 view-only input safety | input_mode=view_only and input_scope_unsupported |
+| E2E-14 guarded target-local input | interactive input reaches only the selected target |
 MD
 
 CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+cp "$SANDBOX/tools/scripts/remoteapp-select-live-target.py" \
+  "$SANDBOX/tools/scripts/remoteapp-select-live-target.py.good"
+perl -0pi -e 's/not resource_ura and target_pid is None and hint/hint/' \
+  "$SANDBOX/tools/scripts/remoteapp-select-live-target.py"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted diagnostic labels as authoritative target identity" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/remoteapp-select-live-target.py.good" \
+  "$SANDBOX/tools/scripts/remoteapp-select-live-target.py"
 
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --self-test \
@@ -78,7 +104,9 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh" \
   --self-test >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
-  --self-test >/dev/null
+  --self-test --target-kind window >/dev/null
+"$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
+  --self-test --target-kind application >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh" \
   --self-test >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh" \
@@ -239,6 +267,17 @@ fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 
+cp "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh.good"
+perl -0pi -e 's/application_identity_plus_owner_pid_and_window_set/application_identity_only/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted application freshness without owner/window-set identity" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+
 PROBE="$SANDBOX/fake_probe.py"
 cat >"$PROBE" <<'PY'
 import json
@@ -251,6 +290,7 @@ sample = out / "sample-frame.ppm"
 sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
     "session_id": "rd-e2e-test",
     "selected_resource_ura": subject,
@@ -306,6 +346,7 @@ evidence = {
     "decoded_frames": {
         "count": 2,
         "rtp_packet_count": 10,
+        "decode_error_count": 0,
         "width": 3,
         "height": 3,
         "selected_content_present": True,
@@ -460,6 +501,7 @@ sample = out / "sample-frame.ppm"
 sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
     "session_id": "rd-e2e-no-client-ready",
     "selected_resource_ura": subject,
@@ -514,6 +556,7 @@ evidence = {
     "decoded_frames": {
         "count": 2,
         "rtp_packet_count": 10,
+        "decode_error_count": 0,
         "width": 3,
         "height": 3,
         "selected_content_present": True,
@@ -592,6 +635,7 @@ selected_pid = int(os.environ["EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID"])
 unrelated_pid = int(os.environ["EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID"])
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
     "session_id": "rd-e2e-fixture-test",
     "selected_resource_ura": subject,
@@ -650,6 +694,7 @@ evidence = {
     "decoded_frames": {
         "count": 2,
         "rtp_packet_count": 10,
+        "decode_error_count": 0,
         "width": 3,
         "height": 3,
         "selected_content_present": True,
@@ -734,9 +779,12 @@ import pathlib
 subject = "easynet:///r/localhost/resource/device.dev/streams/application.test"
 out = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"]).parent
 sample = out / "sample-frame.ppm"
-sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
+sample.write_bytes(
+    b"P6\n6 3\n255\n" + b"\xff\x00\x00" * 9 + b"\x00\x00\xff" * 9
+)
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
     "session_id": "rd-e2e-app-test",
     "selected_resource_ura": subject,
@@ -766,6 +814,7 @@ evidence = {
         },
         "app_window_set": {
             "display_id": 1,
+            "display_ids": [1],
             "bundle_id": "com.example.SelectedApp",
             "primary_pid": 4242,
             "resolved_window_ids": [70, 71],
@@ -784,6 +833,10 @@ evidence = {
             "rgb": [255, 0, 0],
             "target_kind": "application",
             "pid": 4242,
+            "surfaces": [
+                {"role": "primary", "label": "selected-app-red", "rgb": [255, 0, 0]},
+                {"role": "secondary", "label": "selected-app-blue", "rgb": [0, 0, 255]},
+            ],
         },
         "unrelated": {
             "label": "unrelated-app-green",
@@ -804,7 +857,8 @@ evidence = {
     "decoded_frames": {
         "count": 2,
         "rtp_packet_count": 10,
-        "width": 3,
+        "decode_error_count": 0,
+        "width": 6,
         "height": 3,
         "selected_content_present": True,
         "unrelated_sentinel_present": False,
@@ -829,6 +883,8 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="ut
     json.dump(evidence, f)
 PY
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_RGB="0,0,255" \
+EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_LABEL="selected-app-blue" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-app-red" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-app-green" \
@@ -845,6 +901,8 @@ cp "$PROBE_APP" "$PROBE_APP_DISPLAY_MISMATCH"
 perl -0pi -e 's/"display_id": 1,\n            "pid": 4242/"display_id": 99,\n            "pid": 4242/' \
   "$PROBE_APP_DISPLAY_MISMATCH"
 if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_RGB="0,0,255" \
+  EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_LABEL="selected-app-blue" \
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
   EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-app-red" \
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-app-green" \
@@ -917,7 +975,19 @@ case "$*" in
   "connection": {
     "device_ura": "easynet:///r/localhost/device/dev",
     "node_id": "dev",
+    "realm": "localhost",
     "state": "online"
+  },
+  "pairing": {
+    "state": "paired",
+    "realm": "localhost",
+    "hub_ura": "easynet:///r/localhost/authority",
+    "current_user": {
+      "state": "bound",
+      "ura": "easynet:///r/localhost/user/current-user",
+      "reason": null
+    },
+    "device_ura": "easynet:///r/localhost/device/dev"
   }
 }
 JSON
@@ -1010,7 +1080,8 @@ JSON
         "availability": "available",
         "app_name": "EasyNetProbe",
         "title": "duplicate-sentinel",
-        "pid": 4242
+        "pid": 4242,
+        "window_id": 7
       }
     },
     {
@@ -1021,7 +1092,8 @@ JSON
         "availability": "available",
         "app_name": "EasyNetProbe",
         "title": "duplicate-sentinel",
-        "pid": 4243
+        "pid": 4243,
+        "window_id": 8
       }
     }
   ]
@@ -1075,6 +1147,39 @@ esac
 SH
 chmod +x "$FAKE_EASYNET"
 
+FAKE_EASYNET_HOME="$SANDBOX/fake-easynet-home"
+mkdir -p "$FAKE_EASYNET_HOME/.easynet"
+cat >"$FAKE_EASYNET_HOME/.easynet/credentials.json" <<'JSON'
+{
+  "node_id": "dev",
+  "realm": "localhost",
+  "user_id": "stale-file-user"
+}
+JSON
+cat >"$FAKE_EASYNET_HOME/.easynet/realm-trust.toml" <<'TOML'
+[[entries]]
+agent_ura = "easynet:///r/localhost/user/current-user"
+role = "user"
+
+[[entries]]
+agent_ura = "easynet:///r/localhost/user/stale-user"
+role = "user"
+TOML
+
+HOME="$FAKE_EASYNET_HOME" \
+EASYNET_REMOTEAPP_EASYNET_BIN="$FAKE_EASYNET" \
+"$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh" \
+  --run \
+  --require-screen-capture-granted \
+  --out-dir "$SANDBOX/permission-current-pairing" >/dev/null
+jq -e '
+  .caller_user_ura == "easynet:///r/localhost/user/current-user"
+  and .caller_user_resolution_source == "runtime_status_pairing"
+' "$SANDBOX/permission-current-pairing/evidence.json" >/dev/null || {
+  echo "remoteapp permission preflight did not bind the public Runtime status User when local identity files were stale" >&2
+  exit 1
+}
+
 FRAME_RECEIVER="$SANDBOX/fake_frame_receiver.py"
 cat >"$FRAME_RECEIVER" <<'PY'
 import json
@@ -1099,6 +1204,7 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
             "decoded_frames": {
                 "count": 2,
                 "rtp_packet_count": 10,
+                "decode_error_count": 0,
                 "width": 3,
                 "height": 3,
                 "selected_content_present": True,
@@ -1124,6 +1230,7 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
     )
 PY
 
+HOME="$FAKE_EASYNET_HOME" \
 EASYNET_REMOTEAPP_EASYNET_BIN="$FAKE_EASYNET" \
 EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD="python3 '$FRAME_RECEIVER'" \
 EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON="$SANDBOX/control.json" \
@@ -1192,6 +1299,61 @@ fi
 mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 
+cp "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good"
+perl -0pi -e 's/packet\.header\.marker/false/g' \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted receiver without RTP marker access-unit boundaries" >&2
+  exit 1
+fi
+mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+
+cp "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good"
+perl -0pi -e 's/dropped_access_unit_count/discarded_media_counter_omitted/g' \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted receiver without dropped access-unit evidence" >&2
+  exit 1
+fi
+mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+
+cp "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good"
+perl -0pi -e 's/Flush::NoFlush/Flush::Flush/g' \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted per-access-unit OpenH264 flushing" >&2
+  exit 1
+fi
+mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+
+cp "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good"
+perl -0pi -e 's/secondary_selected_content_present/second_surface_acceptance_omitted/g' \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted primary-only multi-window receiver success" >&2
+  exit 1
+fi
+mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/decoded_frames\.decode_error_count must be zero for a dependency-complete H\.264 stream/H.264 dependency errors were ignored/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted H.264 reference-chain decode errors" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
 perl -0pi -e 's/unrelated_sentinel_present/unrelated_sentinel_omitted/g' \
@@ -1213,6 +1375,50 @@ if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/application multi-window proof requires at least two positive resolved_window_ids/application proof accepted one resolved window/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted application proof without the two-window guard" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/secondary_selected_pixel_count/second_window_pixel_count_omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted application proof without independent secondary-window pixels" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh.good"
+perl -0pi -e 's/EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_RGB/EASYNET_REMOTEAPP_BLUE_WINDOW_RGB_OMITTED/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted fixture without a secondary selected application window" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh.good"
+perl -0pi -e 's/CGWindowListCopyWindowInfo/CGWindowInventoryProbeOmitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted fixture without WindowServer readiness" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
@@ -1324,5 +1530,93 @@ if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/decoded_audio\.unrelated_tone_rejected must be true/unrelated application audio was not checked/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted audio proof without unrelated-application rejection" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good"
+perl -0pi -e 's/OpusDecoder::new/OpusMetadataOnly::new/g' \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted audio evidence without Opus decoding" >&2
+  exit 1
+fi
+mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+
+cp "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good"
+perl -0pi -e 's/SessionArtifactBinding::from_session_value\(&session_view\)/config.session_artifact.clone()/g' \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted decoded artifacts labeled with the stale creation generation" >&2
+  exit 1
+fi
+mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh.good"
+perl -0pi -e 's/AVAudioSourceNode/DeterministicAudioSourceOmitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted audio fixture without host PCM generation" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+
+cp "$SANDBOX/plugins/remote-desktop/media-host/src/macos_multiapp.rs" \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_multiapp.rs.good"
+perl -0pi -e 's/initial_batch_prefers_all_surfaces_and_deferred_flush_preserves_static_updates/primary_surface_only_regression_allowed/g' \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_multiapp.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted compositor without static multi-window regression coverage" >&2
+  exit 1
+fi
+mv "$SANDBOX/plugins/remote-desktop/media-host/src/macos_multiapp.rs.good" \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_multiapp.rs"
+
+cp "$SANDBOX/plugins/remote-desktop/src/native_host_process.rs" \
+  "$SANDBOX/plugins/remote-desktop/src/native_host_process.rs.good"
+perl -0pi -e 's/video_backpressure_drops_dependency_chain_until_recovery_idr/video_backpressure_keeps_stale_delta_chain/g' \
+  "$SANDBOX/plugins/remote-desktop/src/native_host_process.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted newest-P-frame dependency corruption" >&2
+  exit 1
+fi
+mv "$SANDBOX/plugins/remote-desktop/src/native_host_process.rs.good" \
+  "$SANDBOX/plugins/remote-desktop/src/native_host_process.rs"
+
+cp "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs" \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs.good"
+perl -0pi -e 's/validate_reverified_capture_proof/accept_unverified_prepared_capture_proof/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted native startup without initial layout-generation reconciliation" >&2
+  exit 1
+fi
+mv "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs.good" \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs"
+
+cp "$SANDBOX/plugins/remote-desktop/media-host/src/macos_videotoolbox.rs" \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_videotoolbox.rs.good"
+perl -0pi -e 's/kVTEncodeFrameOptionKey_ForceKeyFrame/keyframe_recovery_option_omitted/g' \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_videotoolbox.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted encoder without forced-IDR recovery" >&2
+  exit 1
+fi
+mv "$SANDBOX/plugins/remote-desktop/media-host/src/macos_videotoolbox.rs.good" \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_videotoolbox.rs"
 
 echo "test_check_remoteapp_e2e_acceptance_boundary.sh: all cases passed"

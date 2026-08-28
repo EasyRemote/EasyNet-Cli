@@ -208,7 +208,7 @@ run_gate "retired edge-adapter policy absence" check_retired_edge_adapter_policy
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_sdk_conformance_live_gates "$CUTOVER_LIVE_RESULTS_DIR" || status=1
 run_gate "generic FFI ABI v7 exact surface" bash "$SELF_DIR/check-ffi-abi-v7-header.sh" || status=1
-run_gate "generic FFI ABI v8 raw stream extension" bash "$SELF_DIR/check-ffi-abi-v8-header.sh" || status=1
+run_gate "generic FFI ABI v8 binary stream extension" bash "$SELF_DIR/check-ffi-abi-v8-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1
 run_gate "canonical runtime convergence V2" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" || status=1
