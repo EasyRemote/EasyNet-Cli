@@ -44,6 +44,23 @@ pub enum InvocationAction {
     /// Watch an Invocation causal set live — by invocation URA, or a
     /// whole run via its trace anchor (seven-axes T2.4).
     Watch(crate::cli::commands::invocation_watch::WatchArgs),
+    /// Cryptographically verify a raw admission/terminal receipt proof set.
+    #[cfg(feature = "axon-pb")]
+    VerifyFinalization(VerifyFinalizationArgs),
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Args)]
+pub struct VerifyFinalizationArgs {
+    /// JSON proof set containing raw protobuf admission/terminal checkpoints.
+    #[arg(long = "proof-set")]
+    pub proof_set: std::path::PathBuf,
+    /// Daemon Invocation socket whose keyring/realm trust resolves receipt signers.
+    #[arg(long = "daemon-socket", conflicts_with = "signer_keyset")]
+    pub daemon_socket: Option<std::path::PathBuf>,
+    /// Campaign-authority-signed receipt signer keyset for offline verification.
+    #[arg(long = "signer-keyset", conflicts_with = "daemon_socket")]
+    pub signer_keyset: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -115,7 +132,43 @@ pub fn run(args: InvocationArgs) -> anyhow::Result<()> {
             Ok(())
         }
         InvocationAction::Watch(a) => crate::cli::commands::invocation_watch::run(a),
+        #[cfg(feature = "axon-pb")]
+        InvocationAction::VerifyFinalization(a) => run_verify_finalization(a),
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn run_verify_finalization(args: VerifyFinalizationArgs) -> anyhow::Result<()> {
+    let body = std::fs::read(&args.proof_set)
+        .with_context(|| format!("read receipt proof set {}", args.proof_set.display()))?;
+    let proof_set: crate::cli::commands::receipt_verification::FinalizationProofSet =
+        serde_json::from_slice(&body)
+            .with_context(|| format!("parse receipt proof set {}", args.proof_set.display()))?;
+    let verified = if let Some(keyset_path) = args.signer_keyset {
+        let keyset_body = std::fs::read(&keyset_path)
+            .with_context(|| format!("read receipt signer keyset {}", keyset_path.display()))?;
+        let keyset: crate::cli::commands::receipt_verification::ReceiptSignerKeyset =
+            serde_json::from_slice(&keyset_body).with_context(|| {
+                format!("parse receipt signer keyset {}", keyset_path.display())
+            })?;
+        let resolver =
+            crate::cli::commands::receipt_verification::CampaignReceiptKeyResolver::from_keyset(
+                keyset,
+            )?;
+        crate::cli::commands::receipt_verification::verify_finalization_proof_set_with_resolver(
+            proof_set, &resolver,
+        )?
+    } else {
+        let daemon_socket = args.daemon_socket.unwrap_or_else(
+            crate::daemon::persistence::daemon_config::resolved_local_uds_path_with_env_override,
+        );
+        crate::cli::commands::receipt_verification::verify_finalization_proof_set_at_daemon(
+            proof_set,
+            daemon_socket,
+        )?
+    };
+    println!("{}", serde_json::to_string_pretty(&verified)?);
+    Ok(())
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {

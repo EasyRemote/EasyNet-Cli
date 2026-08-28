@@ -1629,6 +1629,7 @@ struct SubmittedInvocationProjection {
     envelope: axon_sdk::pb::axon::v1::Envelope,
     function_name: String,
     arguments_json: serde_json::Value,
+    arguments_b64: String,
     input_hash: [u8; 32],
 }
 
@@ -1638,6 +1639,8 @@ impl SubmittedInvocationProjection {
         request: &axon_sdk::pb::axon::v1::InvokeRequest,
         ability: &str,
     ) -> anyhow::Result<Self> {
+        use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+
         let envelope = request
             .envelope
             .clone()
@@ -1654,6 +1657,7 @@ impl SubmittedInvocationProjection {
                 )?
                 .to_string(),
             arguments_json,
+            arguments_b64: B64_STANDARD.encode(&request.arguments),
             input_hash: axon_sdk::invocation::sha256(&request.arguments),
         })
     }
@@ -2309,6 +2313,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         "submitted_subject_ura": submitted_subject_ura,
         "ability": function_name,
         "args": submitted.arguments_json,
+        "arguments_b64": submitted.arguments_b64,
         "nonce": nonce_hex,
         "causal_context": { "parents": causal_parents },
         "receipt": terminal.receipt,
@@ -2711,6 +2716,8 @@ mod tests {
 
     #[test]
     fn submitted_invocation_projection_preserves_json_args_bound_by_input_hash() {
+        use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+
         let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
             "job.run",
             serde_json::json!({
@@ -2740,6 +2747,13 @@ mod tests {
         assert_eq!(
             submitted.input_hash,
             axon_sdk::invocation::sha256(&request.arguments)
+        );
+        assert_eq!(
+            B64_STANDARD
+                .decode(&submitted.arguments_b64)
+                .expect("arguments base64"),
+            request.arguments,
+            "product proof producers need the exact receipt-bound argument bytes"
         );
     }
 
