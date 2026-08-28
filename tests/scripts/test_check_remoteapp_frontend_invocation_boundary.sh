@@ -145,8 +145,12 @@ function startRemoteDesktopEventWatch(key: string, view: RemoteDesktopView) {
 function applyRemoteDesktopSessionEventEffect(key: string, sessionId: string, event: RemoteDesktopEvent) {
   const recovery = remoteDesktopSessionEventRecovery(event)
   if (!recovery) return
-  if (recovery.closeLocalTransport) stopRemoteDesktopEventWatch(key)
+  if (recovery.closeLocalTransport && !recovery.keepEventWatch) stopRemoteDesktopEventWatch(key)
   if (recovery.syncTerminalSession) syncRemoteDesktopTerminalSession(key, sessionId)
+  if (recovery.retrySameSession) {
+    const session = entries[key].session
+    void retryRemoteDesktopSessionTransport(key, session, 'permission_restored')
+  }
   patchEntry(key, {
     attached: false,
     webrtcStatus: recovery.status,
@@ -168,6 +172,20 @@ async function syncRemoteDesktopTerminalSession(key: string, sessionId: string) 
 }
 
 function remoteDesktopSessionEventRecovery(event: RemoteDesktopEvent) {
+  if (event.eventType === 'TARGET_PERMISSION_VERIFICATION_PENDING') {
+    return {
+      status: 'screen-capture permission is being verified',
+      closeLocalTransport: true,
+      keepEventWatch: true,
+    }
+  }
+  if (event.eventType === 'TARGET_PERMISSION_VERIFICATION_CLEARED') {
+    return {
+      status: 'screen-capture permission was restored',
+      closeLocalTransport: false,
+      retrySameSession: true,
+    }
+  }
   if (event.eventType === 'TARGET_PERMISSION_REVOKED') {
     return {
       status: 'remote desktop permission was revoked',
@@ -196,8 +214,8 @@ function remoteDesktopSessionEventRecovery(event: RemoteDesktopEvent) {
   return null
 }
 
-function closeAttach(key: string, reason: string, options?: { keepSessionPolling?: boolean }) {
-  refsFor(key).remoteDesktopEventsAbort?.abort()
+function closeAttach(key: string, reason: string, options?: { keepSessionPolling?: boolean; keepEventWatch?: boolean }) {
+  if (!options?.keepEventWatch) refsFor(key).remoteDesktopEventsAbort?.abort()
 }
 
 function patchPreview(key: string, patch: Record<string, unknown>) {
@@ -223,13 +241,20 @@ const resumeEntryFromOffline = (key: string) => {
   if (entry.channel === 'remoteDesktop') {
     const session = entry.session
     if (!session || remoteDesktopSessionTerminal(session)) return
-    void resumeRemoteDesktopSessionAfterOffline(key, session)
+    void retryRemoteDesktopSessionTransport(key, session, 'device_resume')
   }
 }
 
-const resumeRemoteDesktopSessionAfterOffline = async (key: string, session: RemoteDesktopView) => {
+const retryRemoteDesktopSessionTransport = async (
+  key: string,
+  session: RemoteDesktopView,
+  trigger: 'device_resume' | 'permission_restored',
+) => {
   const refs = refsFor(key)
-  refs.remoteDesktopResumeIdentity = `${session.sessionId}:${session.sessionToken}`
+  refs.remoteDesktopRetryIdentity = `${session.sessionId}:${session.sessionToken}`
+  refs.remoteDesktopRetryGeneration += 1
+  const retryGeneration = refs.remoteDesktopRetryGeneration
+  const retryIsCurrent = () => refsFor(key).remoteDesktopRetryGeneration === retryGeneration
   const result = await invokeMediaUnary('remote_desktop.show_session', {
     deviceUra: entries[key].deviceUra,
     subjectURA: session.subjectUra,
@@ -237,14 +262,17 @@ const resumeRemoteDesktopSessionAfterOffline = async (key: string, session: Remo
     args: { session_id: session.sessionId, session_token: session.sessionToken },
   })
   const view = projectRemoteDesktopView(result, session.sessionToken)
-  const negotiated = await startWebRtc(key, view, { endSessionOnTransportFailure: false })
+  const negotiated = await startWebRtc(key, view, {
+    endSessionOnTransportFailure: false,
+    isCurrent: retryIsCurrent,
+  })
   patchEntry(key, { session: negotiated, webrtcStatus: 'remote desktop transport reconnected' })
 }
 
 async function startWebRtc(
   key: string,
   view: RemoteDesktopView,
-  options: { endSessionOnTransportFailure?: boolean } = {},
+  options: { endSessionOnTransportFailure?: boolean; isCurrent?: () => boolean } = {},
 ) {
   const endSessionOnTransportFailure = options.endSessionOnTransportFailure ?? true
   const negotiatedTransportEpoch = view.transportEpoch
@@ -285,9 +313,10 @@ export const actions = {
       : refs.remoteDesktopInputSequence + 1
     channel.send(JSON.stringify({
       ...frame,
-      client_sequence: refs.remoteDesktopInputSequence,
+      client_sequence: nextSequence,
       sent_at_ms: Date.now(),
     }))
+    refs.remoteDesktopInputSequence = nextSequence
     return true
   },
   rdRequestPermission: async (key: string) => {
@@ -318,6 +347,10 @@ export const actions = {
   },
 }
 
+function validateRemoteDesktopInputFrame(frame: RemoteDesktopInputFrame) {
+  return frame
+}
+
 function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | 'detached') {
   const currentView = entries[key].session
   const epoch = currentView.transportEpoch
@@ -340,7 +373,34 @@ function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | '
 function collectRemoteDesktopClientEvidence(pc: RTCPeerConnection, refs: Refs, routeKind: string | undefined) {
   const clientTransport = remoteDesktopClientTransportReport(pc, routeKind)
   const browserStatsReport = remoteDesktopBrowserStatsReportArgs(refs.browserStats)
-  return { reportArgs: { client_transport: clientTransport, browser_stats: browserStatsReport } }
+  const renderProbe = remoteDesktopRenderProbeReportFromProbe({})
+  return { reportArgs: { client_transport: clientTransport, browser_stats: browserStatsReport, render_probe: renderProbe } }
+}
+
+function remoteDesktopAudioOfferReady(view: RemoteDesktopView): boolean {
+  return view.audio.supported === true && view.audio.offerReady === true
+}
+
+function remoteDesktopRenderProbeReportFromProbe(probe: RemoteDesktopRenderProbe) {
+  if (
+    probe.probeSource !== 'browser_webrtc_receiver'
+    || !Number.isSafeInteger(probe.decodedVideoFrames)
+    || view.productionReadiness?.mediaScope === 'audio_video'
+  ) return undefined
+  return {
+    selected_resource_ura: probe.selectedResourceUra,
+    session_id: probe.sessionId,
+    transport_epoch: probe.transportEpoch,
+    binding_id: probe.bindingId,
+    binding_epoch: probe.bindingEpoch,
+    media_source_epoch: probe.mediaSourceEpoch,
+    media_pipeline_id: probe.mediaPipelineId,
+    video_codec: probe.videoCodec,
+    video_transport: probe.videoTransport,
+    decoded_video_frames: probe.decodedVideoFrames,
+    frame_width: probe.frameWidth,
+    frame_height: probe.frameHeight,
+  }
 }
 
 function remoteDesktopClientTransportReport(pc: RTCPeerConnection, routeKind: string | undefined) {
@@ -451,6 +511,13 @@ function WebRtcVideoViewport({
   return <video />
 }
 
+const REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT = 2
+const REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_REASONS = new Set([
+  'stale_target_focus_epoch',
+  'target_input_guard_focus_not_committed',
+  'target_input_guard_not_focused',
+])
+
 export function DeviceMediaAccess() {
   const baseRuntimeReady = online === true && !resourceRuntimeOffline
   const remoteTargetReady = baseRuntimeReady && !remoteTargetError
@@ -468,6 +535,17 @@ export function DeviceMediaAccess() {
     type: 'pointer',
     target_geometry_revision: targetGeometryRevision,
   }
+  const releasePressedInputs = () => undefined
+  const inputHandlers = {
+    onPointerCancel: releasePressedInputs,
+    onBlur: releasePressedInputs,
+  }
+  const keyIntentRef = useRef(new Map())
+  const pointerIntentRef = useRef(new Map())
+  if (recoveryAttempts >= REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT) return null
+  if (!event.repeat && authority) rememberSubmittedInput()
+  if (!remoteDesktopInputAuthorityMatches(currentSession, pending.authority, pending.kind === 'pointer')) return null
+  if (!(currentAuthority.targetFocusEpoch > pending.authority.targetFocusEpoch)) return null
   const remoteTargetData = listRemoteDesktopTargets()
   const result = invokeMediaUnary('resource.refresh_remote_targets', {})
   const screenResources = remoteTargetData.resources
@@ -487,7 +565,11 @@ export function DeviceMediaAccess() {
       onStalled={reportStalled}
     />
   )
-  return remoteTargetReady && screenResource ? <div>{inputReadinessDetails}{terminalReceiptDetails}</div> : null
+  return remoteTargetReady && screenResource ? (
+    <div onPointerCancel={inputHandlers.onPointerCancel} onBlur={inputHandlers.onBlur}>
+      {inputReadinessDetails}{terminalReceiptDetails}
+    </div>
+  ) : null
 }
 
 function remoteDesktopInputReadinessLabel(view: RemoteDesktopView) {
@@ -531,6 +613,10 @@ export type RemoteDesktopInputReadiness = {
   pointerEnabled: boolean
   keyboardEnabled: boolean
 }
+
+export type RemoteDesktopInputFrame =
+  | { type: 'pointer'; action: 'move' | 'down' | 'up'; x?: number; y?: number; button?: number }
+  | { type: 'key'; action: 'down' | 'up'; key: string; code?: string }
 
 export type RemoteDesktopTerminalReceipt = {
   receiptType: string
@@ -631,6 +717,17 @@ export function remoteDesktopInputFrameAllowed(view: RemoteDesktopView, frame: R
     return false
   }
   return frame.type !== 'blocked'
+}
+
+export function remoteDesktopInputAuthorityMatches(current: any, expected: any): boolean {
+  return current.sessionId === expected.sessionId
+    && current.subjectUra === expected.subjectUra
+    && current.transportEpoch === expected.transportEpoch
+    && current.consentEpoch === expected.consentEpoch
+    && current.bindingId === expected.bindingId
+    && current.bindingEpoch === expected.bindingEpoch
+    && current.targetIdentityEpoch === expected.targetIdentityEpoch
+    && current.targetGeometryRevision === expected.targetGeometryRevision
 }
 
 export function remoteDesktopProductionBlockedMessage(view: RemoteDesktopView): string {
@@ -802,9 +899,11 @@ it('fails closed instead of queueing RemoteApp input behind RTC data-channel bac
 
 it('includes RemoteApp input client sequence telemetry', async () => {
   expect(JSON.parse(inputChannel.sent[0])).toMatchObject({ client_sequence: 1 })
+  expect(JSON.parse(inputChannel.sent[0])).not.toHaveProperty('buttons')
+  expect(JSON.parse(inputChannel.sent[0])).not.toHaveProperty('pointer_type')
 })
 
-it('preserves and rebinds remote desktop sessions across device offline resume', async () => {
+it('preserves one remote desktop session across device resume and explicit retry', async () => {
   expect(useMediaChannelStore.getState().entries[key].session.sessionId).toBe('rd-1')
   expect(useMediaChannelStore.getState().entries[key].session.sessionToken).toBe('session-token')
   expect(mocks.invokeMediaUnary).toHaveBeenCalledWith('remote_desktop.show_session', expect.anything())
@@ -814,6 +913,10 @@ it('preserves and rebinds remote desktop sessions across device offline resume',
     expect.objectContaining({ args: expect.objectContaining({ transport_epoch: 3 }) }),
   )
   expect(mocks.invokeMediaStream).toHaveBeenCalledWith('remote_desktop.watch_events', expect.anything(), expect.anything())
+})
+
+it('fences a stale transport retry when the device goes offline during session lookup', async () => {
+  expect(useMediaChannelStore.getState().entries[key].session.sessionId).toBe('rd-1')
 })
 TS
 
@@ -853,6 +956,8 @@ it('runs the remote desktop UI flow from target picker through session end', asy
     ability: 'remote_desktop.end_session',
     subject_ura: screenResource.resource_ura,
   }))
+  expect(pointerFrame).not.toHaveProperty('buttons')
+  expect(pointerFrame).not.toHaveProperty('pointer_type')
 })
 
 it('surfaces daemon remote desktop input readiness in session details', async () => {
@@ -865,6 +970,30 @@ it('surfaces daemon remote desktop terminal receipts in session details', async 
 
 it('does not end a remote desktop session when device presence drops offline', async () => {
   expect(rdEnd).not.toHaveBeenCalled()
+})
+
+it('bounds stale focus-authority recovery without replaying beyond two retries', async () => {
+  expect(rdSendInput).toHaveBeenCalledTimes(3)
+})
+
+it('does not replay rejected input into a replacement RemoteApp session', async () => {
+  expect(rdSendInput).toHaveBeenCalledTimes(1)
+})
+
+it('does not resurrect a released key when recovery focus completes after a failed release send', async () => {
+  expect(rdSendInput).toHaveBeenCalledTimes(2)
+})
+
+it('does not authority-recover keyboard auto-repeat as a second physical intent', async () => {
+  expect(rdFocusTarget).not.toHaveBeenCalled()
+})
+
+it('does not replay pointer input after the session target identity is rebound', async () => {
+  expect(rdSendInput).toHaveBeenCalledTimes(1)
+})
+
+it('does not send an old held-key release into a replacement RemoteApp session', async () => {
+  expect(rdSendInput).toHaveBeenCalledTimes(1)
 })
 TSX
 
@@ -1081,6 +1210,42 @@ fi
 perl -0pi -e "s/event\\.eventType === 'TARGET_PERMISSION_IGNORED'/event.eventType === 'TARGET_PERMISSION_REVOKED'/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
+perl -0pi -e "s/TARGET_PERMISSION_VERIFICATION_PENDING/TARGET_PERMISSION_VERIFICATION_IGNORED/g" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing pending permission-verification handling" >&2
+  exit 1
+fi
+perl -0pi -e "s/TARGET_PERMISSION_VERIFICATION_IGNORED/TARGET_PERMISSION_VERIFICATION_PENDING/g" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/TARGET_PERMISSION_VERIFICATION_CLEARED/TARGET_PERMISSION_VERIFICATION_IGNORED/g" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing permission-restored handling" >&2
+  exit 1
+fi
+perl -0pi -e "s/TARGET_PERMISSION_VERIFICATION_IGNORED/TARGET_PERMISSION_VERIFICATION_CLEARED/g" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/keepEventWatch/dropEventWatch/g' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted permission pause that drops the durable event watch" >&2
+  exit 1
+fi
+perl -0pi -e 's/dropEventWatch/keepEventWatch/g' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/'permission_restored'/'permission_replaced'/g" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted permission restoration outside same-session transport retry" >&2
+  exit 1
+fi
+perl -0pi -e "s/'permission_replaced'/'permission_restored'/g" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
 perl -0pi -e "s/event\\.eventType === 'INPUT_FRAME_REJECTED'/event.eventType === 'INPUT_FRAME_IGNORED'/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
@@ -1126,13 +1291,13 @@ fi
 perl -0pi -e "s/subjectURA: entry\\.subjectUra,/subjectURA: session.subjectUra,/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
-perl -0pi -e "s/startWebRtc\\(key, view, \\{ endSessionOnTransportFailure: false \\}\\)/startWebRtc(key, view, { endSessionOnTransportFailure: true })/" \
+perl -0pi -e "s/endSessionOnTransportFailure: false,/endSessionOnTransportFailure: true,/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted offline resume transport failure ending the daemon session" >&2
   exit 1
 fi
-perl -0pi -e "s/startWebRtc\\(key, view, \\{ endSessionOnTransportFailure: true \\}\\)/startWebRtc(key, view, { endSessionOnTransportFailure: false })/" \
+perl -0pi -e "s/endSessionOnTransportFailure: true,/endSessionOnTransportFailure: false,/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e "s/  return remoteTargetReady/  if (online === false) rdEnd(channelKey)\\n  return remoteTargetReady/" \
@@ -1143,6 +1308,42 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
 fi
 perl -0pi -e "s/  if \\(online === false\\) rdEnd\\(channelKey\\)\\n//" \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e 's/REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT = 2/REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT = 200/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted unbounded rejected-input authority recovery" >&2
+  exit 1
+fi
+perl -0pi -e 's/REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT = 200/REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT = 2/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e "s/'stale_target_focus_epoch'/'stale_target_focus_epoch_ignored'/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing stale focus-epoch recovery" >&2
+  exit 1
+fi
+perl -0pi -e "s/'stale_target_focus_epoch_ignored'/'stale_target_focus_epoch'/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e 's/remoteDesktopInputAuthorityMatches\(currentSession/remoteDesktopInputAuthorityMatches(currentReplacement/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted rejected-input replay without full authority fencing" >&2
+  exit 1
+fi
+perl -0pi -e 's/remoteDesktopInputAuthorityMatches\(currentReplacement/remoteDesktopInputAuthorityMatches(currentSession/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e 's/bounds stale focus-authority recovery without replaying beyond two retries/allows repeated stale focus-authority recovery/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing bounded authority-recovery regression test" >&2
+  exit 1
+fi
+perl -0pi -e 's/allows repeated stale focus-authority recovery/bounds stale focus-authority recovery without replaying beyond two retries/' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
 
 perl -0pi -e "s/runs the remote desktop UI flow from target picker through session end/runs an incomplete remote desktop UI flow/" \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"

@@ -171,6 +171,20 @@ require 'candidate_pair_id' "$STORE" \
   'frontend selected candidate-pair evidence must expose candidate_pair_id for network fallback verification'
 require 'browser_stats: browserStatsReport' "$STORE" \
   'frontend client media report must include browser decode/render stats'
+require 'remoteDesktopRenderProbeReportFromProbe' "$STORE" \
+  'frontend must construct one closed receiver render-evidence report'
+for field in selected_resource_ura session_id transport_epoch binding_id binding_epoch media_source_epoch media_pipeline_id video_codec video_transport decoded_video_frames frame_width frame_height; do
+  require "$field" "$STORE" \
+    "frontend receiver render evidence must bind required field $field"
+done
+require "probe\.probeSource !== 'browser_webrtc_receiver'" "$STORE" \
+  'frontend render evidence must reject non-browser receiver probe sources'
+require '!Number\.isSafeInteger\(probe\.decodedVideoFrames\)' "$STORE" \
+  'frontend render evidence must reject missing or malformed decoded-frame counters'
+require "view\.productionReadiness\?\.mediaScope === 'audio_video'" "$STORE" \
+  'frontend audio-video render evidence must require decoded audio proof'
+require 'view\.audio\.offerReady === true' "$STORE" \
+  'frontend must offer host audio only when the daemon marks the exact runtime snapshot offer-ready'
 require 'remoteDesktopSelectedCandidatePairReport' "$STORE" \
   'frontend must derive selected WebRTC candidate-pair evidence from RTCStatsReport'
 require 'candidateType' "$STORE" \
@@ -203,6 +217,14 @@ require 'SESSION_DEGRADED' "$STORE" \
   'frontend must surface degraded client/media sessions as retryable recovery state'
 require 'TARGET_PERMISSION_REVOKED' "$STORE" \
   'frontend must surface permission revocation from watch_events'
+require 'TARGET_PERMISSION_VERIFICATION_PENDING' "$STORE" \
+  'frontend must pause local media while daemon permission verification is pending'
+require 'TARGET_PERMISSION_VERIFICATION_CLEARED' "$STORE" \
+  'frontend must consume positive daemon permission restoration evidence'
+require 'keepEventWatch' "$STORE" \
+  'frontend must separate durable session event ownership from a permission-paused PeerConnection'
+require "retryRemoteDesktopSessionTransport\(key, session, 'permission_restored'\)" "$STORE" \
+  'frontend permission restoration must reuse the canonical same-session transport retry state machine'
 require 'INPUT_FRAME_REJECTED' "$STORE" \
   'frontend must surface daemon input frame rejection events from watch_events'
 require 'INPUT_CHANNEL_OPENED' "$STORE" \
@@ -249,8 +271,10 @@ require 'channel\.bufferedAmount > REMOTE_DESKTOP_INPUT_MAX_BUFFERED_BYTES' "$ST
   'frontend RemoteApp input must fail closed when RTC data-channel backlog exceeds the bound'
 require 'remoteDesktopInputSequence' "$STORE" \
   'frontend RemoteApp input frames must carry monotonic client sequence telemetry'
-require 'client_sequence: refs\.remoteDesktopInputSequence' "$STORE" \
-  'frontend RemoteApp input send must attach the client sequence to the data-channel frame'
+require 'client_sequence: nextSequence' "$STORE" \
+  'frontend RemoteApp input send must attach the reserved client sequence to the data-channel frame'
+require 'refs\.remoteDesktopInputSequence = nextSequence' "$STORE" \
+  'frontend RemoteApp input sequencing must commit only the successfully submitted sequence'
 require 'input backpressure' "$STORE" \
   'frontend RemoteApp input backpressure must be user-visible instead of silently queueing stale frames'
 require 'fails closed instead of queueing RemoteApp input behind RTC data-channel backpressure' "$STORE_TEST" \
@@ -298,10 +322,47 @@ require 'onBlur=\{inputHandlers\.onBlur\}' "$ACCESS" \
   'frontend input surface must release pressed input state on focus loss'
 require 'releasePressedInputs' "$ACCESS" \
   'frontend input lifecycle must centralize prompt key/button release'
+require 'REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT = 2$' "$ACCESS" \
+  'frontend rejected-input authority recovery must have a finite retry limit'
+for reason in \
+  stale_target_focus_epoch \
+  target_input_guard_focus_not_committed \
+  target_input_guard_not_focused; do
+  require "'$reason'" "$ACCESS" \
+    "frontend rejected-input authority recovery must recognize $reason"
+done
+require 'recoveryAttempts >= REMOTE_DESKTOP_INPUT_AUTHORITY_RECOVERY_LIMIT' "$ACCESS" \
+  'frontend rejected-input authority recovery must enforce its retry limit'
+require 'keyIntentRef' "$ACCESS" \
+  'frontend key recovery must be bound to one live physical input intent'
+require 'pointerIntentRef' "$ACCESS" \
+  'frontend pointer recovery must be bound to one live physical input intent'
+require 'if \(!event\.repeat && authority\)' "$ACCESS" \
+  'frontend keyboard auto-repeat must not create independent authority-recovery work'
+require 'remoteDesktopInputAuthorityMatches\(currentSession, pending\.authority, pending\.kind === '\''pointer'\''\)' "$ACCESS" \
+  'frontend rejected-input recovery must fence the original session, transport, binding, target identity, and pointer geometry'
+require 'currentAuthority\.targetFocusEpoch > pending\.authority\.targetFocusEpoch' "$ACCESS" \
+  'frontend stale focus recovery must require a strictly newer committed focus epoch'
+for field in sessionId subjectUra transportEpoch consentEpoch bindingId bindingEpoch targetIdentityEpoch targetGeometryRevision; do
+  require "current\\.$field === expected\\.$field" "$PROTOCOL" \
+    "frontend input authority fence must preserve $field"
+done
 require "not\.toHaveProperty\('buttons'\)" "$ACCESS_TEST" \
   'frontend tests must prove pointer frames omit parser-unknown DOM buttons state'
 require "not\.toHaveProperty\('pointer_type'\)" "$ACCESS_TEST" \
   'frontend tests must prove pointer frames omit parser-unknown pointer_type state'
+require 'bounds stale focus-authority recovery without replaying beyond two retries' "$ACCESS_TEST" \
+  'frontend tests must prove stale focus-authority recovery is bounded'
+require 'does not replay rejected input into a replacement RemoteApp session' "$ACCESS_TEST" \
+  'frontend tests must prove rejected input cannot cross a session replacement'
+require 'does not resurrect a released key when recovery focus completes after a failed release send' "$ACCESS_TEST" \
+  'frontend tests must prove physical release invalidates asynchronous receipt recovery'
+require 'does not authority-recover keyboard auto-repeat as a second physical intent' "$ACCESS_TEST" \
+  'frontend tests must prove keyboard repeat cannot create parallel recovery'
+require 'does not replay pointer input after the session target identity is rebound' "$ACCESS_TEST" \
+  'frontend tests must prove recovery cannot cross a target rebind'
+require 'does not send an old held-key release into a replacement RemoteApp session' "$ACCESS_TEST" \
+  'frontend tests must prove held-input cleanup cannot cross a session replacement'
 require 'remoteDesktopInputReadinessLabel\(session\)' "$ACCESS" \
   'frontend session details must render daemon input_readiness instead of only requested input policy'
 require 'const readiness = view\.inputReadiness' "$ACCESS" \

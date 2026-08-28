@@ -105,7 +105,7 @@ done
 write_json_report() {
   local status="$1"
   local reason="$2"
-  python3 - "$OUT_DIR" "$status" "$reason" "$TARGET_KIND" <<'PY'
+  python3 - "$OUT_DIR" "$status" "$reason" "$TARGET_KIND" "$RUN" <<'PY'
 import json
 import pathlib
 import sys
@@ -114,6 +114,7 @@ out_dir = pathlib.Path(sys.argv[1])
 status = sys.argv[2]
 reason = sys.argv[3]
 target_kind = sys.argv[4]
+run_requested = sys.argv[5] == "1"
 out_dir.mkdir(parents=True, exist_ok=True)
 steps = []
 failed_step = None
@@ -127,6 +128,7 @@ step_order = [
     "cross-device-product-smoke",
     "host-permission-subject",
     "host-target-picker-freshness",
+    "host-target-picker-freshness-application",
     "host-decoded-frame-window",
     "host-decoded-frame-application",
     "host-view-only-input-window",
@@ -172,7 +174,22 @@ frontend_flow_summary = {
     "browser_lifecycle_verified": "frontend-browser-lifecycle" in passed_steps,
     "cross_device_distinct_devices": "cross-device-product-smoke" in passed_steps,
     "permission_subject_checked": "host-permission-subject" in passed_steps,
-    "target_picker_fresh": "host-target-picker-freshness" in passed_steps,
+    "window_target_picker_fresh": (
+        target_kind != "application"
+        and "host-target-picker-freshness" in passed_steps
+    ),
+    "application_target_picker_fresh": (
+        "host-target-picker-freshness-application" in passed_steps
+        if target_kind == "both"
+        else target_kind == "application" and "host-target-picker-freshness" in passed_steps
+    ),
+    "target_picker_fresh": (
+        "host-target-picker-freshness" in passed_steps
+        and (
+            target_kind != "both"
+            or "host-target-picker-freshness-application" in passed_steps
+        )
+    ),
     "window_frame_rendered": "host-decoded-frame-window" in passed_steps,
     "application_frame_rendered": "host-decoded-frame-application" in passed_steps,
     "window_view_only_input_checked": "host-view-only-input-window" in passed_steps,
@@ -182,6 +199,7 @@ frontend_flow_summary = {
 report = {
     "script": "tools/scripts/frontend-remoteapp-product-flow-e2e.sh",
     "status": status,
+    "evidence_origin": "live_runner" if run_requested else None,
     "reason": reason,
     "target_kind": target_kind,
     "step_order": step_order,
@@ -197,7 +215,7 @@ report = {
         "hub api readiness preflight",
         "product runtime readiness preflight",
         "host permission subject preflight",
-        "host target picker freshness",
+        "host window/application target picker freshness",
         "host decoded-frame WebRTC",
         "host view-only input safety",
     ],
@@ -221,10 +239,10 @@ run_step() {
   mkdir -p "$step_dir"
   echo "[frontend-remoteapp-product-flow-e2e] running $name"
   if "$@" >"$step_dir/stdout.txt" 2>"$step_dir/stderr.txt"; then
-    printf '{"status":"passed","name":"%s"}\n' "$name" >"$step_dir/result.json"
+    printf '{"status":"passed","name":"%s","evidence_origin":"live_runner"}\n' "$name" >"$step_dir/result.json"
     return 0
   fi
-  printf '{"status":"failed","name":"%s"}\n' "$name" >"$step_dir/result.json"
+  printf '{"status":"failed","name":"%s","evidence_origin":"live_runner"}\n' "$name" >"$step_dir/result.json"
   echo "[frontend-remoteapp-product-flow-e2e] FAIL: $name" >&2
   cat "$step_dir/stderr.txt" >&2 || true
   write_json_report "failed" "step $name failed"
@@ -274,6 +292,8 @@ coverage = report.get("coverage") if isinstance(report, dict) else None
 errors = []
 if report.get("status") != "passed":
     errors.append(f"cross-device smoke status is {report.get('status')!r}, expected 'passed'")
+if report.get("evidence_origin") != "live_runner":
+    errors.append("cross-device smoke evidence_origin must be live_runner")
 if report.get("product_complete_claim") is not False:
     errors.append("cross-device smoke must not claim product completion")
 if not isinstance(topology, dict):
@@ -460,6 +480,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 path.write_text(json.dumps({
     "status": "passed",
+    "evidence_origin": "live_runner",
     "product_complete_claim": False,
     "topology": {
         "requires_distinct_devices": True,
@@ -483,6 +504,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 path.write_text(json.dumps({
     "status": "passed",
+    "evidence_origin": "live_runner",
     "product_complete_claim": False,
     "topology": {
         "requires_distinct_devices": True,
@@ -529,7 +551,7 @@ fi
 [[ -d "$FRONTEND_ROOT" ]] || {
   mkdir -p "$OUT_DIR/frontend-root"
   printf '[frontend-remoteapp-product-flow-e2e] missing frontend root: %s\n' "$FRONTEND_ROOT" >"$OUT_DIR/frontend-root/stderr.txt"
-  printf '{"status":"failed","name":"frontend-root"}\n' >"$OUT_DIR/frontend-root/result.json"
+  printf '{"status":"failed","name":"frontend-root","evidence_origin":"live_runner"}\n' >"$OUT_DIR/frontend-root/result.json"
   write_json_report "failed" "missing frontend root"
   cat "$OUT_DIR/frontend-root/stderr.txt" >&2
   exit 1
@@ -542,7 +564,22 @@ run_step frontend-remoteapp-ui-flow run_frontend_ui_flow
 run_step frontend-browser-lifecycle run_frontend_browser_lifecycle
 run_step cross-device-product-smoke run_cross_device_product_smoke
 run_step host-permission-subject "$PERMISSION_SUBJECT" --run --require-screen-capture-granted --out-dir "$OUT_DIR/host-permission-subject"
-run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture --target-kind window --out-dir "$OUT_DIR/host-target-picker-freshness"
+case "$TARGET_KIND" in
+  window)
+    run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture \
+      --target-kind window --out-dir "$OUT_DIR/host-target-picker-freshness"
+    ;;
+  application)
+    run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture \
+      --target-kind application --out-dir "$OUT_DIR/host-target-picker-freshness"
+    ;;
+  both)
+    run_step host-target-picker-freshness "$TARGET_FRESHNESS" --run --sentinel-fixture \
+      --target-kind window --out-dir "$OUT_DIR/host-target-picker-freshness"
+    run_step host-target-picker-freshness-application "$TARGET_FRESHNESS" --run --sentinel-fixture \
+      --target-kind application --out-dir "$OUT_DIR/host-target-picker-freshness-application"
+    ;;
+esac
 
 case "$TARGET_KIND" in
   window)

@@ -38,6 +38,8 @@ for field in (
     "cross_device_distinct_devices",
     "permission_subject_checked",
     "target_picker_fresh",
+    "window_target_picker_fresh",
+    "application_target_picker_fresh",
     "window_frame_rendered",
     "application_frame_rendered",
     "window_view_only_input_checked",
@@ -56,7 +58,9 @@ trap 'rm -rf "$SB"' EXIT
 mkdir -p \
   "$SB/tools/scripts" \
   "$SB/docs/design" \
+  "$SB/src/daemon/plugins" \
   "$SB/plugins/remote-desktop/src" \
+  "$SB/plugins/browser/src" \
   "$SB/pr/20260822-remoteapp-product-closure" \
   "$SB/Frontend/src/components/easynet" \
   "$SB/Frontend/src/lib/api" \
@@ -66,6 +70,8 @@ mkdir -p \
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh"
 cp "$HARNESS" "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 cp "$BROWSER_LIFECYCLE" "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+cp "$REPO_ROOT/tools/scripts/remoteapp-evidence-provenance.py" \
+  "$SB/tools/scripts/remoteapp-evidence-provenance.py"
 cp "$CROSS_DEVICE_SMOKE" "$SB/tools/scripts/remoteapp-cross-device-product-smoke.sh"
 cp "$REPO_ROOT/tools/scripts/hub-api-readiness-preflight.sh" \
   "$SB/tools/scripts/hub-api-readiness-preflight.sh"
@@ -81,6 +87,12 @@ cp "$REPO_ROOT/plugins/remote-desktop/src/network.rs" \
   "$SB/plugins/remote-desktop/src/network.rs"
 cp "$REPO_ROOT/plugins/remote-desktop/src/view_transport.rs" \
   "$SB/plugins/remote-desktop/src/view_transport.rs"
+cp "$REPO_ROOT/src/daemon/plugins/package.rs" \
+  "$SB/src/daemon/plugins/package.rs"
+cp "$REPO_ROOT/plugins/remote-desktop/src/registration.rs" \
+  "$SB/plugins/remote-desktop/src/registration.rs"
+cp "$REPO_ROOT/plugins/browser/src/registration.rs" \
+  "$SB/plugins/browser/src/registration.rs"
 cp "$REPO_ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md" \
   "$SB/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
 cp "$REPO_ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md" \
@@ -107,6 +119,54 @@ CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
 
 cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
+perl -0pi -e 's/run_step host-target-picker-freshness-application/# application target freshness removed/' \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted product-flow harness without application target freshness"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+
+cp "$SB/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
+  "$SB/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh.good"
+perl -0pi -e 's/application_identity_plus_owner_pid_and_window_set/application_identity_only/g' \
+  "$SB/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted application target freshness without exact owner/window-set identity"
+fi
+mv "$SB/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh.good" \
+  "$SB/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+
+cp "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs" \
+  "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs.good"
+perl -0pi -e 's/selectedCandidatePairId/nominatedCandidatePairId/g' \
+  "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Browser network evidence without the RTCStats-selected candidate pair"
+fi
+mv "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs.good" \
+  "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs"
+
+cp "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs" \
+  "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs.good"
+perl -0pi -e 's/post-focus input authority projection/post-focus target status only/g' \
+  "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Browser focus recovery without post-focus input authority revalidation"
+fi
+mv "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs.good" \
+  "$SB/Frontend/scripts/remoteapp-browser-lifecycle.mjs"
+
+cp "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh.good"
 perl -0pi -e 's/frontend_flow_summary/frontend_step_summary/g' \
   "$SB/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
@@ -125,6 +185,18 @@ if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
   bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
   fail "checker accepted Browser/Tauri lifecycle verifier without real lifecycle proof mode"
+fi
+mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+
+cp "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh" \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good"
+perl -0pi -e 's/permission_requested must be host-local and not target-scoped/permission_requested may be target-scoped/g' \
+  "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
+  CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
+  bash "$SB/tools/scripts/check-remoteapp-frontend-product-flow-e2e.sh" >/dev/null 2>&1; then
+  fail "checker accepted Browser/Tauri lifecycle verifier without host-local request_permission guard"
 fi
 mv "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh.good" \
   "$SB/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
@@ -527,7 +599,7 @@ mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
 
 cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"
-perl -0pi -e 's/media 18000kbps · 52\.5fps · drops 15 · backpressure 3/media 18000kbps/g' \
+perl -0pi -e 's/media 18000kbps · 52\.5fps · route direct · drops 15 · backpressure 3/media 18000kbps/g' \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
@@ -539,7 +611,7 @@ mv "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good" \
 
 cp "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx" \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx.good"
-perl -0pi -e 's/pipeline video_only · h264 · bounded_queue_drop_stale_frames · host_audio_not_implemented/pipeline video_only/g' \
+perl -0pi -e 's/pipeline capability video_only · h264 · bounded_queue_drop_stale_frames · host_audio_not_implemented/pipeline capability video_only/g' \
   "$SB/Frontend/src/components/easynet/DeviceMediaAccess.test.tsx"
 if CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT="$SB" \
   CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT="$SB/Frontend" \
