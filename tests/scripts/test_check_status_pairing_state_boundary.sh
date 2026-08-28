@@ -30,10 +30,23 @@ impl StatusPairingState {
             Err(error) => Self::Invalid { reason: format!("{error:#}") },
         }
     }
+
+    fn to_json(&self) -> Value {
+        json!({"state": "paired", "current_user": {"state": "bound", "ura": "easynet:///r/localhost/user/alice"}})
+    }
+}
+
+fn run_json() {
+    let pairing = StatusPairingState::load().to_json();
+    let mut payload = json!({});
+    payload["pairing"] = pairing;
 }
 
 #[test]
 fn status_pairing_state_reports_paired_credentials() {}
+
+#[test]
+fn status_pairing_json_projects_bound_current_user_identity() {}
 
 #[test]
 fn status_pairing_state_reports_unpaired_only_for_missing_credentials() {}

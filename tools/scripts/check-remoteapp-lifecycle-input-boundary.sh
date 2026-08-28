@@ -49,6 +49,7 @@ TARGET_TRACKING="$REMOTE_ROOT/target_tracking.rs"
 TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
 TARGET_MONITOR="$REMOTE_ROOT/target_monitor.rs"
 TARGET_SNAPSHOT="$REMOTE_ROOT/target_snapshot.rs"
+NATIVE_HOST="$ROOT/plugins/remote-desktop/native-host/src/lib.rs"
 LEASE_MONITOR="$REMOTE_ROOT/lease_monitor.rs"
 LIFECYCLE_WORKER="$REMOTE_ROOT/lifecycle_worker.rs"
 SESSION="$REMOTE_ROOT/session.rs"
@@ -65,10 +66,11 @@ VIEW_TRANSPORT="$REMOTE_ROOT/view_transport.rs"
 VIEW="$REMOTE_ROOT/view.rs"
 VIEW_DEVICE="$REMOTE_ROOT/view_device.rs"
 INPUT="$REMOTE_ROOT/input.rs"
+LINUX_INPUT="$REMOTE_ROOT/input/linux.rs"
 TARGET="$REMOTE_ROOT/target.rs"
 CONSTANTS="$REMOTE_ROOT/constants.rs"
 NETWORK="$REMOTE_ROOT/network.rs"
-SCK="$REMOTE_ROOT/screencapturekit_capture.rs"
+MEDIA_HOST_MAC_SCK="$ROOT/plugins/remote-desktop/media-host/src/macos_sck.rs"
 REQUEST="$REMOTE_ROOT/request.rs"
 SESSION_STORE="$REMOTE_ROOT/session_store.rs"
 CREATE_SESSION="$REMOTE_ROOT/handlers/create_session.rs"
@@ -78,12 +80,17 @@ SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 WEBRTC_ENDPOINT="$REMOTE_ROOT/transport/webrtc_endpoint.rs"
 WEBRTC_MEDIA="$REMOTE_ROOT/transport/webrtc_media.rs"
-WEBRTC_NATIVE="$REMOTE_ROOT/transport/webrtc_native_media.rs"
+WEBRTC_HOSTED="$REMOTE_ROOT/transport/webrtc_hosted_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$TARGET_SNAPSHOT" "$LEASE_MONITOR" "$LIFECYCLE_WORKER" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$NETWORK" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$TARGET_SNAPSHOT" "$NATIVE_HOST" "$LEASE_MONITOR" "$LIFECYCLE_WORKER" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$LINUX_INPUT" "$TARGET" "$CONSTANTS" "$NETWORK" "$MEDIA_HOST_MAC_SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_HOSTED" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
+done
+for obsolete in \
+  "$REMOTE_ROOT/screencapturekit_capture.rs" \
+  "$REMOTE_ROOT/transport/webrtc_native_media.rs"; do
+  [[ ! -e "$obsolete" ]] || fail "obsolete daemon-local media implementation remains: ${obsolete#"$ROOT/"}"
 done
 
 require 'target_field\("consent_epoch"\)' "$EVENT_LOG" \
@@ -179,10 +186,12 @@ require 'observer_stops_tracking_missing_or_terminal_sessions_without_polling_pr
   'target observer tests must prove missing/terminal sessions stop tracking without polling host state'
 require 'stale_observation_cannot_commit_after_session_binding_reuse' "$TARGET_OBSERVER" \
   'stale observations must not advance a reused session binding'
-require 'XcapHostTargetSnapshotProvider' "$TARGET_OBSERVER" \
-  'non-macOS target observation must use the xcap host snapshot provider'
-require_multiline 'm/#\[cfg\(all\(not\(target_os = .macos.\), feature = .native-media.\)\)\]\s*mod platform.+?sample_host_target_observations\(&XcapHostTargetSnapshotProvider\)/s' "$TARGET_OBSERVER" \
-  'native-media non-macOS target observation must sample live xcap windows'
+require 'fn sample_xcap_target_observations' "$NATIVE_HOST" \
+  'native target observation must execute in the plugin-private native host'
+require 'xcap::Window::all\(\)' "$NATIVE_HOST" \
+  'native host must sample live xcap windows on compiled desktop platforms'
+reject 'xcap::|CGWindowListCopyWindowInfo|NSWorkspace' "$TARGET_OBSERVER" \
+  'daemon-side target observation must not retain native platform enumeration'
 require 'process_scoped_application_observer_tracks_window_set_without_display_identity' "$TARGET_OBSERVER" \
   'target observer tests must prove Windows/Linux process-scoped application window-set tracking'
 require 'RemoteDesktopTargetMonitor' "$RUNTIME" \
@@ -433,8 +442,8 @@ require 'Self::MediaSourceLost => "MEDIA_SOURCE_LOST"' "$SESSION_EVENTS" \
   'WebRTC target/media-source failures must project MEDIA_SOURCE_LOST'
 require 'Self::TransportFailed => "TRANSPORT_FAILED"' "$SESSION_EVENTS" \
   'WebRTC transport failures must project TRANSPORT_FAILED'
-reject '"SESSION_FAILED"' "$SESSION_EVENTS" \
-  'remote desktop event stream must not collapse typed WebRTC failures into SESSION_FAILED'
+reject_multiline '/enum WebRtcFailureEventKind(?:(?!pub\(in crate::daemon::plugins::remote_desktop\) fn session_created).)*"SESSION_FAILED"/s' "$SESSION_EVENTS" \
+  'typed WebRTC failures must not collapse into SESSION_FAILED; terminal settlement failure remains a distinct session event'
 require 'WebRtcFailureEventKind::MediaSourceLost' "$WEBRTC_MEDIA" \
   'native target failures must be projected as media-source loss, not generic session failure'
 require 'WebRtcFailureEventKind::TransportFailed' "$SESSION_STORE" \
@@ -635,8 +644,12 @@ require 'supersede_pending_media_rebind_for_session' "$SESSION_STORE" \
   'session store must expose the aggregate-owned supersession path for rejected native rebind candidates'
 require 'pending_media_rebind_candidate_failure_restores_active_session' "$SESSION" \
   'session aggregate must preserve the committed media generation when a pending candidate fails'
-require 'native_media_rebind_candidate_failure_preserves_active_generation' "$WEBRTC_NATIVE" \
-  'native WebRTC media path must test rejected candidate supersession without degrading active media'
+require 'supersede_pending_media_rebind_for_session' "$WEBRTC_HOSTED" \
+  'hosted WebRTC must reject an invalid replacement generation through the session aggregate'
+require 'restart_generation\(' "$WEBRTC_HOSTED" \
+  'hosted WebRTC must restore the committed active generation after replacement rejection'
+require_multiline 'm/supersede_pending_media_rebind_for_session\([\s\S]+?generation\s*=\s*restart_generation\([\s\S]+?&active_binding/s' "$WEBRTC_HOSTED" \
+  'hosted WebRTC replacement failure must restore media from the still-committed active binding'
 require 'AppWindowSetProof::new' "$TARGET_OBSERVER" \
   'application observer must rederive the current global app window-set proof'
 require 'AppSurfaceLayoutProof::from_front_to_back_geometries' "$TARGET_OBSERVER" \
@@ -703,6 +716,8 @@ require 'fn production_scope_ready\(' "$TARGET" \
   'target binding must own the production scope readiness predicate'
 require 'self\.target\.binding\(\)\.production_scope_ready\(\)' "$SESSION" \
   'production media readiness must be gated by target binding scope readiness'
+require '&& self\.signaling\.production_backend_ready\(\)' "$SESSION" \
+  'production media readiness must distinguish negotiated codec from backend product readiness'
 require '&& self\.transport\.client_media_ready\(\)' "$SESSION" \
   'production media readiness must wait for client presenting evidence, not only device sender readiness'
 require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
@@ -711,8 +726,12 @@ require '"ready": ready' "$VIEW" \
   'public production readiness ready predicate must use the route-gated transport production predicate'
 require 'let video_ready = transport_view\.production_ready\(session\)' "$VIEW" \
   'public production readiness must bind video readiness to media plus route readiness'
-require 'let ready = video_ready && audio_ready' "$VIEW" \
-  'public production readiness must require both production video and host audio'
+require 'let negotiated_media_scope = session\.negotiated_media_scope\(\)' "$VIEW" \
+  'public production readiness must derive media requirements from the negotiated session scope'
+require 'let audio_required = negotiated_media_scope\.is_some_and\(\|scope\| scope\.requires_audio\(\)\)' "$VIEW" \
+  'public production readiness must require host audio only for audio-video negotiation'
+require_multiline 'm/let ready = video_ready\s*&& negotiated_media_scope_ready\s*&& client_decode_ready\s*&& \(!audio_required \|\| audio_ready\)/s' "$VIEW" \
+  'public production readiness must require bound client decode, accept video-only sessions, and require audio evidence for audio-video sessions'
 require_multiline 'm/"blocked_reason": production_readiness_blocked_reason\(\s*session,\s*transport_view,/s' "$VIEW" \
   'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 require 'fn production_readiness_blocked_reason\(' "$VIEW" \
@@ -720,13 +739,21 @@ require 'fn production_readiness_blocked_reason\(' "$VIEW" \
 require '"target_scope_not_ready"' "$VIEW" \
   'production readiness must distinguish target scope/fallback blockers'
 require '"production_codec_not_negotiated"' "$VIEW" \
-  'production readiness must distinguish non-production or missing codec blockers'
+  'production readiness must distinguish missing codec negotiation'
+require '"production_backend_not_ready"' "$VIEW" \
+  'production readiness must distinguish backend product readiness from negotiated codec format'
+require '"media_scope_not_negotiated"' "$VIEW" \
+  'production readiness must reject sessions before their media scope is negotiated'
 require '"media_transport_not_ready"' "$VIEW" \
   'production readiness must distinguish media transport blockers'
 require '"client_media_not_presenting"' "$VIEW" \
   'production readiness must distinguish missing client presenting/decoded evidence'
 require '"production_route_not_ready"' "$VIEW" \
   'production readiness must distinguish route blockers after media and client presentation are ready'
+require 'video_only_negotiation_requires_bound_decode_but_not_audio_runtime_stats' "$VIEW" \
+  'session view tests must prove video-only readiness requires bound decode without fabricating an audio requirement'
+require 'audio_video_negotiation_requires_live_audio_runtime_stats' "$VIEW" \
+  'session view tests must prove audio-video readiness requires live host-audio evidence'
 require 'production_media_ready_requires_target_scope_ready' "$SESSION" \
   'production online predicate must test scope fallback/widening rejection'
 require 'scope widening or display fallback must prevent production online' "$SESSION" \
@@ -861,8 +888,8 @@ reject 'fn direct_webrtc_udp_addrs' "$NETWORK" \
   'direct WebRTC route discovery must not regress to an untyped UDP address helper'
 require 'route_candidate_evidence' "$WEBRTC_ENDPOINT" \
   'direct WebRTC answer must publish route candidate evidence for frontend/backend diagnosis'
-require 'ConfiguredDirectWebRtcRouteProvider::from_env\(\)' "$WEBRTC_ENDPOINT" \
-  'direct WebRTC endpoint must consume the configured typed route provider'
+require 'ConfiguredDirectWebRtcRouteProvider::from_env_with_relay_lease\(' "$WEBRTC_ENDPOINT" \
+  'direct WebRTC endpoint must consume the configured typed route provider with the session-bound relay lease'
 require 'with_ice_servers\(ice_servers\)' "$WEBRTC_ENDPOINT" \
   'direct WebRTC endpoint must wire provider-backed ICE servers into RTC configuration'
 require 'RTCIceServer' "$WEBRTC_ENDPOINT" \
@@ -936,6 +963,18 @@ require 'if !self\.consent\.permits_media_input\(\)' "$SESSION" \
   'input activation must require active consent'
 require 'TargetObservation::PermissionRevoked' "$SESSION" \
   'session aggregate must consume permission revocation observations'
+require 'TargetObservation::PermissionVerificationRequired' "$SESSION" \
+  'session aggregate must consume fail-closed permission verification observations before confirmed revocation'
+require 'PermissionVerificationPending' "$TARGET_TRACKING" \
+  'target state machine must persist an explicit recoverable permission verification phase'
+require '"TARGET_PERMISSION_VERIFICATION_PENDING"' "$TARGET_TRACKING" \
+  'first negative permission sample must emit a typed pending-verification event'
+require '"TARGET_PERMISSION_VERIFICATION_CLEARED"' "$TARGET_TRACKING" \
+  'positive permission evidence must emit a typed verification-cleared event'
+require 'first_permission_denial_suspends_media_without_revoking_consent_or_session' "$SESSION" \
+  'session tests must prove the first negative permission sample is fail-closed without revoking consent or closing the session'
+require 'permission_verification_is_fail_closed_recoverable_and_durable' "$TARGET_TRACKING" \
+  'target tests must prove pending permission verification survives recovery and can clear'
 require 'self\.consent\.revoke\(\)' "$SESSION" \
   'consent revocation must advance the consent state machine'
 require '"TARGET_PERMISSION_REVOKED"' "$TARGET_TRACKING" \
@@ -946,12 +985,14 @@ require 'self\.consent\.expire\(\)' "$SESSION" \
   'terminal session lifecycle must expire active consent'
 require 'REASON_TARGET_PERMISSION_REVOKED' "$CONSTANTS" \
   'permission revocation must use a stable terminal reason code'
-require 'fn close_after_permission_revoked\(&mut self\)' "$SESSION" \
+require 'fn begin_close_after_permission_revoked\(&mut self\)' "$SESSION" \
   'permission revocation must close through a dedicated aggregate terminal path'
-require_multiline 'm/self\.lifecycle\s*\.\s*terminate_closed\(REASON_TARGET_PERMISSION_REVOKED\)/s' "$SESSION" \
-  'permission revocation must terminate the RemoteApp session with the stable reason'
-require_multiline 'm/self\.terminal_receipt\s*=\s*Some\(\s*self\.project_terminal_receipt\(REASON_TARGET_PERMISSION_REVOKED/s' "$SESSION" \
-  'permission revocation must publish a RemoteApp terminal receipt'
+require_multiline 'm/fn begin_close_after_permission_revoked\(&mut self\)[\s\S]*begin_termination\(REASON_TARGET_PERMISSION_REVOKED\)/s' "$SESSION" \
+  'confirmed permission revocation must durably enter Closing with the stable reason before transport settlement'
+require_multiline 'm/fn finish_close\(&mut self, reason: &str\)[\s\S]*terminate_closed\(reason\)[\s\S]*project_terminal_receipt\(reason,/s' "$SESSION" \
+  'the common settled terminal path must publish a reason-bound RemoteApp terminal receipt'
+require 'session\.finish_close\(REASON_TARGET_PERMISSION_REVOKED\)' "$SESSION" \
+  'permission revocation tests must prove the stable reason reaches settled terminal completion'
 require 'consent_revocation_terminates_session_and_blocks_input_activation' "$SESSION" \
   'consent revocation must have session-level terminal media/input regression coverage'
 require 'permission_revoked_index < media_source_lost_index' "$SESSION" \
@@ -996,7 +1037,7 @@ require 'target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>' "$RUN
   'remote desktop runtime must own target binding verification as an injected platform service'
 require 'Arc::new\(PlatformRemoteAppTargetBindingVerifier\)' "$RUNTIME" \
   'production remote desktop runtime must default to the platform target binding verifier'
-require 'RemoteDesktopSession::new\(workflow\.into_session_init\(\)\?\)' "$CREATE_SESSION" \
+require_multiline 'm/let init = workflow\.into_session_init\(\)\?;[\s\S]*RemoteDesktopSession::new\(init\)/s' "$CREATE_SESSION" \
   'create_session must construct the session only after fallible ready-to-insert conversion'
 require 'RemoteDesktopSessionCreationState::ReadyToInsert' "$SESSION_CREATION" \
   'creation workflow must have an explicit ready-to-insert state'
@@ -1010,20 +1051,36 @@ require 'ready-to-insert workflow is missing consent' "$SESSION_CREATION" \
   'ready-to-insert conversion must surface missing consent as an invocation error'
 require 'ready-to-insert workflow is missing target binding' "$SESSION_CREATION" \
   'ready-to-insert conversion must surface missing target binding as an invocation error'
-require 'TargetResolutionError::TargetIdentityAmbiguous' "$SCK" \
-  'ScreenCaptureKit binding must fail closed on native identity ambiguity'
-require 'requested ScreenCaptureKit window identity is ambiguous' "$SCK" \
-  'window selection ambiguity must be typed'
-require 'requested ScreenCaptureKit application identity is ambiguous' "$SCK" \
-  'application selection ambiguity must be typed'
+require 'target_invalidated\(' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit media-host must report native target ambiguity through the typed target-invalidated failure domain'
+require 'ScreenCaptureKit window id \{expected\} is ambiguous' "$MEDIA_HOST_MAC_SCK" \
+  'window selection ambiguity must fail closed in the media-host'
+require 'ScreenCaptureKit application identity is ambiguous' "$MEDIA_HOST_MAC_SCK" \
+  'application selection ambiguity must fail closed in the media-host'
 
 # E2E-11: capture/session consent is not input consent. Every target remains
-# view-only until explicit input consent exists. macOS app/window input then
-# requires the target-local guard immediately before every OS event.
+# view-only until explicit input consent exists. macOS/Windows app/window paths
+# require a target-local guard immediately before every OS event. Linux XTest is
+# desktop-global and remains view-only for Window/Application sessions until a
+# press-to-release target-bound input device exists.
 require 'fn input_scope_for_request\(' "$TARGET" \
   'target resolver must centralize requested mode to input scope'
 require 'InputScopeDecision' "$TARGET" \
   'target resolver must return an explicit input scope decision, not a bare scope'
+require 'enum TargetScopedInputIsolation' "$TARGET" \
+  'target resolver must model target input isolation explicitly'
+require 'MacosAccessibilityCoreGraphics' "$TARGET" \
+  'target input admission must retain the macOS exact-target guard implementation'
+require 'WindowsXcapUser32' "$TARGET" \
+  'target input admission must make the Windows xcap/User32 guard reachable'
+require 'LinuxX11Unisolated' "$TARGET" \
+  'target input admission must explicitly model Linux XTest as unisolated'
+require 'cfg!\(all\(target_os = "windows", feature = "native-media"\)\)' "$TARGET" \
+  'Windows target-local admission must require the compiled native xcap observer'
+require 'cfg!\(all\(target_os = "linux", feature = "native-media"\)\)' "$TARGET" \
+  'Linux input isolation decision must remain explicit when native X11 support is compiled'
+reject_multiline 'm/fn input_scope_for_request[\s\S]{0,2400}!cfg!\(target_os = "macos"\)/s' "$TARGET" \
+  'target-local input admission must not strand Windows/Linux behind a macOS-only predicate'
 require 'RemoteDesktopTargetKind::Window \| RemoteDesktopTargetKind::Application' "$TARGET" \
   'window/application targets must share one target-local input scope branch'
 require 'InputScope::ViewOnly' "$TARGET" \
@@ -1034,6 +1091,10 @@ require 'display_interactive_downgrades_until_input_consent_exists' "$TARGET" \
   'target binding tests must prove display interactive does not imply input consent'
 require 'TargetScopedInputGuarded' "$TARGET" \
   'target binding must distinguish guarded target-local input from global input'
+require 'linux_x11_window_and_application_input_remain_view_only_without_press_release_isolation' "$TARGET" \
+  'Linux X11 Window/Application sessions must prove fail-closed view-only admission'
+require 'fresh X11 window-generation lease; recreate the session from fresh inventory' "$TARGET" \
+  'Linux Window/Application restart recovery must fail closed without an XID generation lease'
 require 'target_scoped_input_guarded' "$TARGET" \
   'target binding must publish the stable guarded target-local scope reason'
 require 'validate_target_input_observation' "$TARGET_OBSERVER" \
@@ -1062,6 +1123,14 @@ require 'target_pointer_mapping_clamps_raw_coordinates_inside_bound_surface' "$I
   'target-local pointer mapping must prove raw coordinates cannot escape the target surface'
 require '"target_guard_validation"' "$INPUT" \
   'applied target-local input events must publish host guard execution evidence'
+require 'X11ServerGrab::begin' "$LINUX_INPUT" \
+  'Linux target-local input must acquire the X server before final validation'
+require 'self\.validate_target\(target_guard, pointer\)' "$LINUX_INPUT" \
+  'Linux target-local input must perform final validation inside the X server transaction'
+require 'grab\.release\(\)' "$LINUX_INPUT" \
+  'Linux target-local input must explicitly release its X server transaction after injection'
+require '"x11_server_grab"' "$TARGET_OBSERVER" \
+  'Linux applied-event proof must expose atomic X11 validation/injection semantics'
 require '"input_scope_reason": self\.scope_audit\.input_scope_reason\.as_str\(\)' "$TARGET" \
   'target binding and TARGET_BOUND projection must expose the committed input scope reason'
 require 'binding\.scope_audit_value\(\)\["input_scope_reason"\]' "$TARGET" \
@@ -1072,6 +1141,10 @@ require 'binding\.target_bound_event_payload\(\)\["consent_epoch"\]' "$TARGET" \
   'target binding tests must prove consent epoch is externally visible in TARGET_BOUND'
 require 'application_interactive_with_input_consent_projects_guarded_target_scope' "$TARGET" \
   'target binding tests must prove explicit consent projects guarded target-local scope'
+require 'supported_platform_guards_admit_window_and_application_target_local_input' "$TARGET" \
+  'target binding tests must prove macOS, Windows, and Linux compiled guards all admit target-local input'
+require 'unsupported_platform_guard_keeps_target_local_input_fail_closed' "$TARGET" \
+  'target binding tests must prove unsupported builds remain view-only'
 require '"input_readiness": input_readiness\.clone\(\)' "$VIEW" \
   'session view must expose a single machine-readable input readiness projection'
 require '"readiness": input_readiness' "$VIEW" \
@@ -1214,8 +1287,8 @@ require 'input_reject_diagnostics_are_coalesced_across_interleaved_signatures' "
   'PERF-07 must prove alternating invalid input signatures do not produce one diagnostic per frame'
 require 'InputTransportGuard::DirectWebRtc\(epoch\)' "$INPUT" \
   'production input path must guard frames by the current WebRTC transport epoch'
-require 'current_session_effective_input_policy\(' "$INVOKE_BIDI" \
-  'diagnostic bidi input path must re-read session readiness for each input frame'
+require 'admit_input_host_effective_policy\(' "$INVOKE_BIDI" \
+  'diagnostic bidi input path must atomically re-read readiness and admit each input frame'
 require 'InputTransportGuard::DiagnosticPreview' "$INVOKE_BIDI" \
   'diagnostic bidi input path must guard frames by preview attachment state'
 require 'handle_parsed_bidi_input_frame_with_policy\(&effective_input_policy' "$INVOKE_BIDI" \
@@ -1292,8 +1365,8 @@ require '"input_control_support": input_control_support' "$VIEW_DEVICE" \
   'device capabilities must expose product-visible input control support matrix'
 require 'platform_support_view\(production_ready, &production_backend\)' "$VIEW_DEVICE" \
   'device capabilities must derive platform support from runtime production readiness'
-require 'input_control_support_view\(input_available\)' "$VIEW_DEVICE" \
-  'device capabilities must derive input control support from runtime input permission'
+require_multiline 'm/input_control_support_view\(\s*input_available,\s*target_local_guard_available\s*\)/s' "$VIEW_DEVICE" \
+  'device capabilities must derive input control support from runtime input permission and compiled target guard'
 require '"linux_xcap_target_baseline_ready"' "$VIEW_DEVICE" \
   'device capabilities must expose Linux exact-target xcap baseline readiness'
 require '"windows_xcap_target_baseline_ready"' "$VIEW_DEVICE" \
@@ -1304,14 +1377,22 @@ require '"requires_input_control_consent": true' "$VIEW_DEVICE" \
   'device capabilities must expose explicit input-control consent requirement'
 require '"macos_target_input_guard_ready"' "$VIEW_DEVICE" \
   'device capabilities must expose guarded macOS window/application input readiness'
-require '"linux_x11_xtest_target_guard_ready"' "$VIEW_DEVICE" \
-  'device capabilities must expose the guarded Linux X11 input baseline'
+require '"linux_x11_xcb_atomic_display_global_ready"' "$VIEW_DEVICE" \
+  'device capabilities must expose Linux X11 display-global input readiness'
+require '"linux_x11_xtest_cannot_isolate_press_release_to_target"' "$VIEW_DEVICE" \
+  'device capabilities must expose the Linux target-isolation limitation'
 require '"windows_sendinput_target_guard_ready"' "$VIEW_DEVICE" \
   'device capabilities must expose the guarded Windows SendInput baseline'
 require '"runtime_backend": runtime_backend' "$VIEW_DEVICE" \
   'device capabilities must distinguish current-host input runtime from platform implementation state'
 require '"runtime_blocked_reason": runtime_blocked_reason' "$VIEW_DEVICE" \
   'device capabilities must expose current-host input backend failure reason'
+require '"target_local_guard_compiled": target_local_guard_available' "$VIEW_DEVICE" \
+  'device capabilities must expose compiled exact-target guard availability separately'
+require '"target_local_runtime_available": input_available && target_local_guard_available' "$VIEW_DEVICE" \
+  'device capabilities must not advertise current-host target-local input unless guard and injector are ready'
+require 'input_capability_keeps_display_global_but_blocks_target_local_without_guard' "$VIEW_DEVICE" \
+  'device capability tests must prove a missing target guard cannot be hidden by an available global injector'
 require '"certification": "live_e2e_required"' "$VIEW_DEVICE" \
   'device capabilities must not promote executable input backends without live OS-effect evidence'
 require '"multi_surface_application_window_set"' "$VIEW_DEVICE" \

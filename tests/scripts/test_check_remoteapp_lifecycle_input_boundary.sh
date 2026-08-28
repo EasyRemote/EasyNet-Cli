@@ -8,13 +8,19 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 mkdir -p "$SANDBOX/docs/design"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
+mkdir -p "$SANDBOX/plugins/remote-desktop/src/input"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
+mkdir -p "$SANDBOX/plugins/remote-desktop/native-host/src"
+mkdir -p "$SANDBOX/plugins/remote-desktop/media-host/src"
 
 write_fixture() {
   rm -rf "$SANDBOX/docs" "$SANDBOX/plugins"
   mkdir -p "$SANDBOX/docs/design"
   mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
+  mkdir -p "$SANDBOX/plugins/remote-desktop/src/input"
   mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
+  mkdir -p "$SANDBOX/plugins/remote-desktop/native-host/src"
+  mkdir -p "$SANDBOX/plugins/remote-desktop/media-host/src"
 
   cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-08 move/resize tracking | move and resize events advance target geometry revision and input consumes that revision |
@@ -53,6 +59,9 @@ fn commit_geometry() {
     geometry_event_types();
     ApplicationSurfaceChanged;
     "TARGET_PERMISSION_REVOKED";
+    "TARGET_PERMISSION_VERIFICATION_PENDING";
+    "TARGET_PERMISSION_VERIFICATION_CLEARED";
+    PermissionVerificationPending;
     "target_title_after_loss";
     "target_focus_after_loss";
     "target_loss_pending";
@@ -163,6 +172,9 @@ mod tests {
         assert_eq!(blurred.payload()["input_blocked_reason"], json!("target_blurred"));
         assert_eq!(hidden.payload()["frontend_action"], json!("retry_session"));
     }
+
+    #[test]
+    fn permission_verification_is_fail_closed_recoverable_and_durable() {}
 }
 RS
 
@@ -179,6 +191,7 @@ fn new() {
 fn record_target_observation() {
     let target_loss_reason = match &observation {
         TargetObservation::Lost { reason, .. } => Some(*reason),
+        TargetObservation::PermissionVerificationRequired { .. } => Some(TargetResolutionError::TargetPermissionMissing),
         TargetObservation::PermissionRevoked { .. } => Some(TargetResolutionError::TargetPermissionMissing),
         _ => None,
     };
@@ -194,7 +207,7 @@ fn record_target_observation() {
     }
     self.push_target_tracking_event(event);
     if permission_revoked {
-        self.close_after_permission_revoked();
+        self.begin_close_after_permission_revoked();
     }
 }
 
@@ -215,6 +228,7 @@ fn report_client_media_state() {
 fn production_media_ready() -> bool {
     self.target.binding().production_scope_ready()
         && self.signaling.production_codec_negotiated()
+        && self.signaling.production_backend_ready()
         && self.transport.media_transport_ready()
         && self.transport.client_media_ready()
 }
@@ -243,10 +257,14 @@ fn revoke_consent() {
     media_source_lost = self.mark_active_media_source_lost(reason);
 }
 
-fn close_after_permission_revoked(&mut self) {
-    self.lifecycle.terminate_closed(REASON_TARGET_PERMISSION_REVOKED);
+fn begin_close_after_permission_revoked(&mut self) {
+    self.lifecycle.begin_termination(REASON_TARGET_PERMISSION_REVOKED);
+}
+
+fn finish_close(&mut self, reason: &str) {
+    self.lifecycle.terminate_closed(reason);
     self.terminal_receipt = Some(
-        self.project_terminal_receipt(REASON_TARGET_PERMISSION_REVOKED, &terminal_event),
+        self.project_terminal_receipt(reason, &terminal_event),
     );
 }
 
@@ -406,7 +424,8 @@ mod tests {
     }
 
     #[test]
-    fn consent_revocation_terminates_session_and_blocks_input_activation() {
+fn consent_revocation_terminates_session_and_blocks_input_activation() {
+        session.finish_close(REASON_TARGET_PERMISSION_REVOKED);
         assert!(permission_revoked_index < media_source_lost_index);
         assert!(media_source_lost_index < session_closed_index);
         assert_eq!(
@@ -419,6 +438,8 @@ mod tests {
         );
     }
 }
+
+fn first_permission_denial_suspends_media_without_revoking_consent_or_session() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_recovery.rs" <<'RS'
@@ -970,7 +991,7 @@ fn expire_target_rebind_deadline_for_session() {}
 mod tests {
     #[test]
     fn production_media_ready_requires_production_codec_and_sender_ready() {
-        assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_codec_not_negotiated"));
+        assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_backend_not_ready"));
         assert_eq!(view["production_readiness"]["client_media_ready"], json!(false));
         assert!(session.report_client_media_state(TransportEpoch::new(1), "presenting", None));
         assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_route_not_ready"));
@@ -991,17 +1012,17 @@ mod tests {
 }
 RS
 
-  cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs" <<'RS'
-fn apply_pending_media_rebind() {}
-fn fail_pending_media_rebind() {}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn native_media_rebind_failure_projects_typed_target_lifecycle() {}
-
-    #[test]
-    fn native_media_rebind_candidate_failure_preserves_active_generation() {}
+  cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs" <<'RS'
+fn apply_pending_media_rebind() {
+    sessions.supersede_pending_media_rebind_for_session(
+        session_id,
+        epoch,
+        attempt_token,
+    );
+    generation = restart_generation(
+        execution,
+        &active_binding,
+    );
 }
 RS
 
@@ -1009,7 +1030,7 @@ RS
 struct RTCIceServer;
 
 fn answer(endpoint_config: EndpointConfig) {
-    let route_candidate_provider = ConfiguredDirectWebRtcRouteProvider::from_env();
+    let route_candidate_provider = ConfiguredDirectWebRtcRouteProvider::from_env_with_relay_lease(relay_lease);
     let route_candidates = route_candidate_provider.route_candidates();
     let ice_servers = vec![RTCIceServer];
     RTCConfigurationBuilder::new().with_ice_servers(ice_servers);
@@ -1061,8 +1082,15 @@ fn serialize_session() {
     let transport_route_state = transport_view.route_state();
     let input_readiness = input_readiness_view(session, &effective_input_policy);
     let video_ready = transport_view.production_ready(session);
+    let negotiated_media_scope = session.negotiated_media_scope();
+    let audio_required = negotiated_media_scope.is_some_and(|scope| scope.requires_audio());
     let audio_ready = session.media_stats()["audio_ready"].as_bool().unwrap_or(false);
-    let ready = video_ready && audio_ready;
+    let negotiated_media_scope_ready = negotiated_media_scope.is_some();
+    let client_decode_ready = session.client_decode_ready();
+    let ready = video_ready
+        && negotiated_media_scope_ready
+        && client_decode_ready
+        && (!audio_required || audio_ready);
     json!({
         "consent": session.consent_state().to_value(),
         "input_readiness": input_readiness.clone(),
@@ -1081,6 +1109,7 @@ fn serialize_session() {
                 &Value::Null,
             ),
             "target_scope_ready": session.target_scope_ready(),
+            "production_backend_ready": session.production_backend_ready(),
             "production_route_ready": transport_view.production_route_ready(),
             "route_readiness_blocker": transport_view.readiness_blocker(),
             "route_state": transport_route_state.clone(),
@@ -1095,6 +1124,10 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport
         json!("target_scope_not_ready")
     } else if !session.production_codec_negotiated() {
         json!("production_codec_not_negotiated")
+    } else if !session.production_backend_ready() {
+        json!("production_backend_not_ready")
+    } else if !negotiated_media_scope_ready {
+        json!("media_scope_not_negotiated")
     } else if !session.media_transport_ready() {
         json!("media_transport_not_ready")
     } else if !session.client_media_ready() {
@@ -1105,6 +1138,10 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport
         json!("production_readiness_incomplete")
     }
 }
+
+fn video_only_negotiation_requires_bound_decode_but_not_audio_runtime_stats() {}
+
+fn audio_video_negotiation_requires_live_audio_runtime_stats() {}
 
 fn input_readiness_view(session: &RemoteDesktopSession, input_policy: &EffectiveRemoteDesktopInputPolicy) -> Value {
     let blocked_reason = if let Some(reason) = session.input_runtime_block_reason() {
@@ -1145,7 +1182,8 @@ fn device_capabilities_view() {
     let diagnostic_target_subjects = XCAP_OPENH264_WEBRTC_BACKEND.supported_subjects_value();
     let platform_support = platform_support_view(production_ready, &production_backend);
     let input_available = input_injection_available();
-    let input_control_support = input_control_support_view(input_available);
+    let target_local_guard_available = target_scoped_input_guard_available();
+    let input_control_support = input_control_support_view(input_available, target_local_guard_available);
     json!({
         "unsupported_input_types": unsupported_input_channel_types_value(),
         "unsupported_capabilities": [
@@ -1184,12 +1222,14 @@ fn device_capabilities_view() {
     });
 }
 
-fn input_control_support_view(input_available: bool) {
+fn input_control_support_view(input_available: bool, target_local_guard_available: bool) {
     let runtime_backend = input_injection_backend();
     let runtime_blocked_reason = input_injection_unavailable_reason();
     json!({
         "runtime_backend": runtime_backend,
         "runtime_blocked_reason": runtime_blocked_reason,
+        "target_local_guard_compiled": target_local_guard_available,
+        "target_local_runtime_available": input_available && target_local_guard_available,
         "certification": "live_e2e_required",
         "requires_input_control_consent": true,
         "input_transport": "webrtc_data_channel",
@@ -1200,9 +1240,9 @@ fn input_control_support_view(input_available: bool) {
                 "application": {"status": "available", "reason": "macos_target_input_guard_ready", "scope": "target_local"}
             },
             "linux": {
-                "display": {"status": "x11_baseline_ready", "reason": "linux_x11_xtest_target_guard_ready"},
-                "window": {"status": "x11_baseline_ready", "reason": "linux_x11_xtest_target_guard_ready"},
-                "application": {"status": "x11_baseline_ready", "reason": "linux_x11_xtest_target_guard_ready"}
+                "display": {"status": "x11_display_global_ready", "reason": "linux_x11_xcb_atomic_display_global_ready"},
+                "window": {"status": "view_only_only", "reason": "linux_x11_xtest_cannot_isolate_press_release_to_target", "scope": "view_only"},
+                "application": {"status": "view_only_only", "reason": "linux_x11_xtest_cannot_isolate_press_release_to_target", "scope": "view_only"}
             },
             "windows": {
                 "display": {"status": "baseline_ready", "reason": "windows_sendinput_target_guard_ready"},
@@ -1260,6 +1300,9 @@ mod tests {
 
     #[test]
     fn device_capabilities_project_input_control_support_matrix() {}
+
+    #[test]
+    fn input_capability_keeps_display_global_but_blocks_target_local_without_guard() {}
 }
 RS
 
@@ -1593,7 +1636,31 @@ fn target_bound_event_payload() {
 
 struct InputScopeDecision;
 
+enum TargetScopedInputIsolation {
+    MacosAccessibilityCoreGraphics,
+    WindowsXcapUser32,
+    LinuxX11Unisolated,
+    Unsupported,
+}
+
+impl TargetScopedInputIsolation {
+    const CURRENT: Self = if cfg!(target_os = "macos") {
+        Self::MacosAccessibilityCoreGraphics
+    } else if cfg!(all(target_os = "windows", feature = "native-media")) {
+        Self::WindowsXcapUser32
+    } else if cfg!(all(target_os = "linux", feature = "native-media")) {
+        Self::LinuxX11Unisolated
+    } else {
+        Self::Unsupported
+    };
+}
+
 struct AppWindowSetProof;
+
+fn linux_x11_window_and_application_input_remain_view_only_without_press_release_isolation() {}
+
+const LINUX_RECOVERY_GUARD: &str =
+    "fresh X11 window-generation lease; recreate the session from fresh inventory";
 
 struct AppSurfaceLayoutProof;
 
@@ -1605,16 +1672,18 @@ impl AppWindowSetProof {
 
 fn application_surface_rebind_candidate() {}
 
-fn input_scope_for_request() -> InputScopeDecision {
+fn input_scope_for_request(target_isolation: TargetScopedInputIsolation) -> InputScopeDecision {
     match kind {
         RemoteDesktopTargetKind::Display => {
             let reason = "input_consent_required";
             InputScope::ViewOnly
         }
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
-            // target-scoped keyboard/pointer dispatch is unsafe until a focus-safe validator exists.
-            let reason = "target_scoped_keyboard_pointer_dispatch_unsafe";
-            InputScope::ViewOnly
+            if !target_isolation.is_safe() {
+                let reason = "target_scoped_keyboard_pointer_dispatch_unsafe";
+                return InputScope::ViewOnly;
+            }
+            InputScope::TargetLocal
         }
     }
 }
@@ -1655,6 +1724,12 @@ mod tests {
     fn application_interactive_with_input_consent_projects_guarded_target_scope() {}
 
     #[test]
+    fn supported_platform_guards_admit_window_and_application_target_local_input() {}
+
+    #[test]
+    fn unsupported_platform_guard_keeps_target_local_input_fail_closed() {}
+
+    #[test]
     fn display_interactive_downgrades_until_input_consent_exists() {
         assert_eq!(
             binding.scope_audit_value()["input_scope_reason"],
@@ -1674,7 +1749,8 @@ fn handle() {
     let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?
         .consume_consent(&registry, &env)?
         .resolve_target_with_verifier(target_binding_verifier.as_ref())?;
-    let session = RemoteDesktopSession::new(workflow.into_session_init()?);
+    let init = workflow.into_session_init()?;
+    let session = RemoteDesktopSession::new(init);
     if let Err(err) =
         RemoteDesktopPlugin::schedule_session_lease(&plugin, watchdog_session_id.clone(), lease_expires_at_ms)
     {
@@ -1733,7 +1809,7 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs" <<'RS'
 fn handle_bidi_input_frame_for_session() {
-    current_session_effective_input_policy(
+    admit_input_host_effective_policy(
         session_store,
         session_id,
         InputTransportGuard::DiagnosticPreview,
@@ -1766,17 +1842,17 @@ mod tests {
 }
 RS
 
-  cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
+  cat >"$SANDBOX/plugins/remote-desktop/media-host/src/macos_sck.rs" <<'RS'
+fn target_invalidated(detail: impl Into<String>) -> BackendFailure {
+    BackendFailure::new(FailureReason::TargetInvalidated, detail)
+}
+
 fn select_window_for_binding() {
-    Err(TargetResolutionError::TargetIdentityAmbiguous(
-        "requested ScreenCaptureKit window identity is ambiguous",
-    ))
+    target_invalidated(format!("ScreenCaptureKit window id {expected} is ambiguous"));
 }
 
 fn select_application_for_binding() {
-    Err(TargetResolutionError::TargetIdentityAmbiguous(
-        "requested ScreenCaptureKit application identity is ambiguous",
-    ))
+    target_invalidated("ScreenCaptureKit application identity is ambiguous");
 }
 RS
 
@@ -1791,7 +1867,19 @@ fn request_projection() {
 fn input_policy_reports_clipboard_and_file_drop_unsupported_even_when_requested() {}
 RS
 
+  cat >"$SANDBOX/plugins/remote-desktop/src/input/linux.rs" <<'RS'
+fn execute(target_guard: TargetInputGuardProof, pointer: Option<(i16, i16)>) {
+    let grab = X11ServerGrab::begin(&self.connection)?;
+    self.validate_target(target_guard, pointer)?;
+    inject(self)?;
+    self.barrier()?;
+    grab.release()?;
+}
+RS
+
   cat >"$SANDBOX/plugins/remote-desktop/src/target_observer.rs" <<'RS'
+const X11_ATOMICITY: &str = "x11_server_grab";
+
 fn observe_bound_session_target_once() {
     let Some(inputs) = sessions.target_observation_inputs_for_session(session_id) else {
         return TargetObservationPollResult::stop_tracking();
@@ -1899,13 +1987,11 @@ mod tests {
     fn process_scoped_application_observer_tracks_window_set_without_display_identity() {}
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "native-media"))]
-mod platform {
-    struct XcapHostTargetSnapshotProvider;
+RS
 
-    fn sample_platform_target_observations() -> PlatformTargetObservationSample {
-        sample_host_target_observations(&XcapHostTargetSnapshotProvider)
-    }
+  cat >"$SANDBOX/plugins/remote-desktop/native-host/src/lib.rs" <<'RS'
+fn sample_xcap_target_observations() {
+    let windows = xcap::Window::all();
 }
 RS
 
@@ -2167,6 +2253,36 @@ perl -0pi -e 's/tracker_debounces_single_transient_lost_observation/tracker_debo
 run_fail 'target tracker must test pending-loss debounce input safety'
 
 write_fixture
+perl -0pi -e 's/TargetObservation::PermissionVerificationRequired/TargetObservation::PermissionRevoked/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must consume fail-closed permission verification observations before confirmed revocation'
+
+write_fixture
+perl -0pi -e 's/PermissionVerificationPending/PermissionDenied/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target state machine must persist an explicit recoverable permission verification phase'
+
+write_fixture
+perl -0pi -e 's/TARGET_PERMISSION_VERIFICATION_PENDING/TARGET_PERMISSION_REVOKED_PENDING/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'first negative permission sample must emit a typed pending-verification event'
+
+write_fixture
+perl -0pi -e 's/TARGET_PERMISSION_VERIFICATION_CLEARED/TARGET_PERMISSION_RESTORED_UNTYPED/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'positive permission evidence must emit a typed verification-cleared event'
+
+write_fixture
+perl -0pi -e 's/first_permission_denial_suspends_media_without_revoking_consent_or_session/first_permission_denial_revokes_consent/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session tests must prove the first negative permission sample is fail-closed without revoking consent or closing the session'
+
+write_fixture
+perl -0pi -e 's/permission_verification_is_fail_closed_recoverable_and_durable/permission_verification_is_terminal/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target tests must prove pending permission verification survives recovery and can clear'
+
+write_fixture
 perl -0pi -e 's/pending_target_loss_deactivates_input_before_media_loss_debounce/pending_target_loss_keeps_input_active/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'session aggregate must deactivate input during target-loss debounce before media loss commits'
@@ -2198,14 +2314,14 @@ perl -0pi -e 's/REASON_TARGET_PERMISSION_REVOKED/REASON_PERMISSION_STILL_SUSPEND
 run_fail 'permission revocation must use a stable terminal reason code'
 
 write_fixture
-perl -0pi -e 's/fn close_after_permission_revoked/fn suspend_after_permission_revoked/' \
+perl -0pi -e 's/fn begin_close_after_permission_revoked/fn suspend_after_permission_revoked/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'permission revocation must close through a dedicated aggregate terminal path'
 
 write_fixture
 perl -0pi -e 's/terminal_receipt/revoked_terminal_receipt/g' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
-run_fail 'permission revocation must publish a RemoteApp terminal receipt'
+run_fail 'the common settled terminal path must publish a reason-bound RemoteApp terminal receipt'
 
 write_fixture
 perl -0pi -e 's/consent_revocation_terminates_session_and_blocks_input_activation/consent_revocation_suspends_media_and_blocks_input_activation/' \
@@ -2293,14 +2409,14 @@ perl -0pi -e 's/window_observation_prioritizes_visibility_loss_over_title_or_foc
 run_fail 'target observer tests must prove hidden/minimized availability outranks title/focus updates'
 
 write_fixture
-perl -0pi -e 's/XcapHostTargetSnapshotProvider/UnsupportedHostTargetSnapshotProvider/g' \
-  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'non-macOS target observation must use the xcap host snapshot provider'
+perl -0pi -e 's/sample_xcap_target_observations/sample_stub_target_observations/g' \
+  "$SANDBOX/plugins/remote-desktop/native-host/src/lib.rs"
+run_fail 'native target observation must execute in the plugin-private native host'
 
 write_fixture
-perl -0pi -e 's/sample_host_target_observations\(&XcapHostTargetSnapshotProvider\)/PlatformTargetObservationSample::unsupported_platform()/' \
-  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'native-media non-macOS target observation must sample live xcap windows'
+perl -0pi -e 's/xcap::Window::all\(\)/Vec::new()/' \
+  "$SANDBOX/plugins/remote-desktop/native-host/src/lib.rs"
+run_fail 'native host must sample live xcap windows on compiled desktop platforms'
 
 write_fixture
 perl -0pi -e 's/process_scoped_application_observer_tracks_window_set_without_display_identity/process_scoped_application_observer_ignores_window_set/' \
@@ -2508,9 +2624,14 @@ perl -0pi -e 's/supersede_pending_media_rebind_for_session/native_rebind_superse
 run_fail 'session store must expose the aggregate-owned supersession path for rejected native rebind candidates'
 
 write_fixture
-perl -0pi -e 's/native_media_rebind_candidate_failure_preserves_active_generation/native_media_rebind_candidate_failure_degrades_active_generation/' \
-  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs"
-run_fail 'native WebRTC media path must test rejected candidate supersession without degrading active media'
+perl -0pi -e 's/supersede_pending_media_rebind_for_session/accept_invalid_pending_media_rebind/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs"
+run_fail 'hosted WebRTC must reject an invalid replacement generation through the session aggregate'
+
+write_fixture
+perl -0pi -e 's/&active_binding/&pending.binding/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs"
+run_fail 'hosted WebRTC replacement failure must restore media from the still-committed active binding'
 
 write_fixture
 perl -0pi -e 's/TARGET_CHANGED_EVENT_TYPES\.contains\(&event_type\)/TARGET_CHANGED_EVENT_TYPES.is_empty()/' \
@@ -2853,7 +2974,7 @@ perl -0pi -e 's/"route_candidate_evidence": route_candidate_evidence,//' \
 run_fail 'direct WebRTC answer must publish route candidate evidence for frontend/backend diagnosis'
 
 write_fixture
-perl -0pi -e 's/ConfiguredDirectWebRtcRouteProvider::from_env\(\)/LocalInterfaceRouteCandidateProvider/g' \
+perl -0pi -e 's/ConfiguredDirectWebRtcRouteProvider::from_env_with_relay_lease\(relay_lease\)/LocalInterfaceRouteCandidateProvider/g' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
 run_fail 'direct WebRTC endpoint must consume the configured typed route provider'
 
@@ -2946,6 +3067,26 @@ write_fixture
 perl -0pi -e 's/let video_ready = transport_view\.production_ready\(session\);//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must bind video readiness to media plus route readiness'
+
+write_fixture
+perl -0pi -e 's/let audio_required = negotiated_media_scope\.is_some_and\(\|scope\| scope\.requires_audio\(\)\);/let audio_required = true;/' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'public production readiness must require host audio only for audio-video negotiation'
+
+write_fixture
+perl -0pi -e 's/let ready = video_ready\s*&& negotiated_media_scope_ready\s*&& client_decode_ready\s*&& \(!audio_required \|\| audio_ready\);/let ready = video_ready;/s' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'public production readiness must require bound client decode, accept video-only sessions, and require audio evidence for audio-video sessions'
+
+write_fixture
+perl -0pi -e 's/video_only_negotiation_requires_bound_decode_but_not_audio_runtime_stats/video_only_negotiation_waits_for_unrequested_audio/' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'session view tests must prove video-only readiness requires bound decode without fabricating an audio requirement'
+
+write_fixture
+perl -0pi -e 's/audio_video_negotiation_requires_live_audio_runtime_stats/audio_video_negotiation_ignores_audio_runtime_stats/' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'session view tests must prove audio-video readiness requires live host-audio evidence'
 
 write_fixture
 perl -0pi -e 's/"ready": ready,//' \
@@ -3063,9 +3204,9 @@ perl -0pi -e 's/parse_input_frame_rejects_clipboard_and_file_drop_before_policy_
 run_fail 'input parser tests must prove clipboard/file-drop fail before policy application'
 
 write_fixture
-perl -0pi -e 's/current_session_effective_input_policy/static_input_policy/' \
+perl -0pi -e 's/admit_input_host_effective_policy/static_input_policy/' \
   "$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs"
-run_fail 'diagnostic bidi input path must re-read session readiness for each input frame'
+run_fail 'diagnostic bidi input path must atomically re-read readiness and admit each input frame'
 
 write_fixture
 perl -0pi -e 's/apply_input_frame_with_effective_policy\(input_policy, frame\)/input_policy_reject_reason(input_policy, kind)/' \
@@ -3078,9 +3219,9 @@ perl -0pi -e 's/json!\(false\)/json!(true)/' \
 run_fail 'E2E-09 must assert target loss disables input'
 
 write_fixture
-perl -0pi -e 's/TargetResolutionError::TargetIdentityAmbiguous/TargetResolutionError::TargetNotFound/g' \
-  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
-run_fail 'ScreenCaptureKit binding must fail closed on native identity ambiguity'
+perl -0pi -e 's/target_invalidated/target_failure_without_domain/g' \
+  "$SANDBOX/plugins/remote-desktop/media-host/src/macos_sck.rs"
+run_fail 'ScreenCaptureKit media-host must report native target ambiguity through the typed target-invalidated failure domain'
 
 write_fixture
 perl -0pi -e 's/target_identity_ambiguous/target_metadata_incomplete/' \
@@ -3193,9 +3334,29 @@ perl -0pi -e 's/platform_support_view\(production_ready, &production_backend\)/p
 run_fail 'device capabilities must derive platform support from runtime production readiness'
 
 write_fixture
-perl -0pi -e 's/input_control_support_view\(input_available\)/input_control_support_view(true)/' \
+perl -0pi -e 's/input_control_support_view\(input_available, target_local_guard_available\)/input_control_support_view(true, false)/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must derive input control support from runtime input permission'
+run_fail 'device capabilities must derive input control support from runtime input permission and compiled target guard'
+
+write_fixture
+perl -0pi -e 's/WindowsXcapUser32/WindowsUnavailable/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+run_fail 'target input admission must make the Windows xcap/User32 guard reachable'
+
+write_fixture
+perl -0pi -e 's/supported_platform_guards_admit_window_and_application_target_local_input/supported_platform_guards_leave_target_input_unreachable/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+run_fail 'target binding tests must prove macOS, Windows, and Linux compiled guards all admit target-local input'
+
+write_fixture
+perl -0pi -e 's/"target_local_guard_compiled": target_local_guard_available,//' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose compiled exact-target guard availability separately'
+
+write_fixture
+perl -0pi -e 's/input_capability_keeps_display_global_but_blocks_target_local_without_guard/input_capability_hides_missing_target_guard/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capability tests must prove a missing target guard cannot be hidden by an available global injector'
 
 write_fixture
 perl -0pi -e 's/linux_xcap_target_baseline_ready/linux_capture_unknown/g' \
@@ -3223,9 +3384,14 @@ perl -0pi -e 's/macos_target_input_guard_ready/macos_input_unknown/g' \
 run_fail 'device capabilities must expose guarded macOS window/application input readiness'
 
 write_fixture
-perl -0pi -e 's/linux_x11_xtest_target_guard_ready/linux_input_unknown/g' \
+perl -0pi -e 's/linux_x11_xcb_atomic_display_global_ready/linux_input_unknown/g' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
-run_fail 'device capabilities must expose the guarded Linux X11 input baseline'
+run_fail 'device capabilities must expose Linux X11 display-global input readiness'
+
+write_fixture
+perl -0pi -e 's/fresh X11 window-generation lease; recreate the session from fresh inventory/Linux recovery accepted stale XID/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+run_fail 'Linux Window/Application restart recovery must fail closed without an XID generation lease'
 
 write_fixture
 perl -0pi -e 's/windows_sendinput_target_guard_ready/windows_input_unknown/g' \
