@@ -221,10 +221,14 @@ pub struct CreateRemoteDesktopSessionArgs {
     /// Deterministic session id for host E2E failure-path probes.
     #[arg(long, value_name = "SESSION_ID", hide = true)]
     pub session_id: Option<String>,
+    /// Explicit campaign-derived nonce for signed product evidence.
+    #[arg(long = "nonce-hex", value_name = "HEX", hide = true)]
+    pub nonce_hex: Option<String>,
     /// Remote desktop session mode.
     #[arg(long, value_parser = ["view_only", "interactive"])]
     pub mode: Option<String>,
-    /// Explicitly grant keyboard/pointer control for an interactive session.
+    /// Explicitly grant keyboard/pointer control and audited selected-target
+    /// focus for an interactive session.
     #[arg(long, default_value_t = false)]
     pub input_control: bool,
     /// Preferred transport, in priority order.
@@ -571,7 +575,19 @@ fn stream_frames_to_json(frames: &[LocalStreamFrame]) -> Value {
 #[cfg(feature = "remote-desktop")]
 fn run_create_remote_desktop_session(args: CreateRemoteDesktopSessionArgs) -> anyhow::Result<()> {
     let request = create_remote_desktop_session_request(&args);
-    let issued = if args.input_control {
+    let explicit_nonce = args
+        .nonce_hex
+        .as_deref()
+        .map(crate::cli::commands::invocation_tuple::parse_invocation_nonce_hex)
+        .transpose()?;
+    let issued = if let Some(invocation_nonce) = explicit_nonce {
+        LocalRemoteDesktopSessionIssuer::create_session_with_input_control_and_nonce(
+            &args.subject,
+            request,
+            args.input_control,
+            invocation_nonce,
+        )
+    } else if args.input_control {
         LocalRemoteDesktopSessionIssuer::create_session_with_input_control(
             &args.subject,
             request,
@@ -975,6 +991,7 @@ mod tests {
         let request = create_remote_desktop_session_request(&CreateRemoteDesktopSessionArgs {
             subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
             session_id: None,
+            nonce_hex: None,
             mode: Some("view_only".to_string()),
             input_control: true,
             transport_preferences: vec!["webrtc".to_string()],
@@ -1004,6 +1021,7 @@ mod tests {
         let request = create_remote_desktop_session_request(&CreateRemoteDesktopSessionArgs {
             subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
             session_id: Some("rd-stale-window-e2e".to_string()),
+            nonce_hex: None,
             mode: Some("view_only".to_string()),
             input_control: false,
             transport_preferences: vec!["webrtc".to_string()],

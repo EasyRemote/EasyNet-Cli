@@ -1395,6 +1395,28 @@ impl LocalRemoteDesktopSessionIssuer {
             selected_resource_ura,
             create_session_args,
             input_control,
+            None,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    }
+
+    pub fn create_session_with_input_control_and_nonce(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        input_control: bool,
+        invocation_nonce: [u8; 16],
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout_with_input_control(
+            selected_resource_ura,
+            create_session_args,
+            input_control,
+            Some(invocation_nonce),
             crate::support::platform::timeouts::remote_system_transport_guard(0)
                 .map_err(anyhow::Error::msg)?,
             None,
@@ -1415,6 +1437,7 @@ impl LocalRemoteDesktopSessionIssuer {
             selected_resource_ura,
             create_session_args,
             false,
+            None,
             timeout,
             trace_id,
         )
@@ -1424,6 +1447,7 @@ impl LocalRemoteDesktopSessionIssuer {
         selected_resource_ura: &str,
         create_session_args: Value,
         input_control: bool,
+        create_invocation_nonce: Option<[u8; 16]>,
         timeout: std::time::Duration,
         trace_id: Option<&str>,
     ) -> anyhow::Result<(
@@ -1463,12 +1487,21 @@ impl LocalRemoteDesktopSessionIssuer {
         let create_target = local_remote_desktop_ability_target(
             crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
         )?;
-        let create_context = LocalSystemInvocationIssuer::root_context(
-            selected_resource_ura,
-            &causal_parents,
-            timeout,
-            trace_id,
-        )?;
+        let create_context = match create_invocation_nonce {
+            Some(invocation_nonce) => LocalSystemInvocationIssuer::root_context_with_nonce(
+                selected_resource_ura,
+                invocation_nonce,
+                &causal_parents,
+                timeout,
+                trace_id,
+            )?,
+            None => LocalSystemInvocationIssuer::root_context(
+                selected_resource_ura,
+                &causal_parents,
+                timeout,
+                trace_id,
+            )?,
+        };
         let (session, create_meta) =
             invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)?;
         Ok((session, create_meta, grant_meta))
@@ -1949,6 +1982,22 @@ impl<'a> LocalSystemInvocationContext<'a> {
 pub struct LocalSystemInvocationIssuer;
 
 impl LocalSystemInvocationIssuer {
+    pub fn root_context_with_nonce<'a>(
+        subject_ura: impl Into<String>,
+        invocation_nonce: [u8; 16],
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<LocalSystemInvocationContext<'a>> {
+        LocalSystemInvocationContext::new(
+            subject_ura,
+            invocation_nonce,
+            causal_parents,
+            step_timeout,
+            trace_id,
+        )
+    }
+
     pub fn root_context<'a>(
         subject_ura: impl Into<String>,
         causal_parents: &'a [Value],
@@ -2587,6 +2636,21 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn local_system_issuer_preserves_campaign_selected_nonce() {
+        let context = LocalSystemInvocationIssuer::root_context_with_nonce(
+            "easynet:///r/acme/resource/device.local/streams/window.7",
+            [0x5a; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            Some("remoteapp-campaign"),
+        )
+        .expect("campaign-selected context");
+
+        assert_eq!(context.invocation_nonce, [0x5a; 16]);
+        assert_eq!(context.trace_id, Some("remoteapp-campaign"));
     }
 
     #[test]
