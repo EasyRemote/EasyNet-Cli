@@ -11,6 +11,8 @@ VERIFIER="$SELF_DIR/remoteapp-network-fallback-e2e.sh"
 STUN_SERVER="$SELF_DIR/remoteapp-stun-binding-server.py"
 RUNTIME_CLI="${EASYNET_REMOTEAPP_STUN_E2E_RUNTIME_CLI:-$REPO_ROOT/target/debug/easynet}"
 BROWSER_RUNNER="$FRONTEND_ROOT/scripts/remoteapp-browser-lifecycle.mjs"
+PROVIDER_STOP_ACTION="${EASYNET_REMOTEAPP_STUN_E2E_PROVIDER_STOP_ACTION:-}"
+PROVIDER_START_ACTION="${EASYNET_REMOTEAPP_STUN_E2E_PROVIDER_START_ACTION:-}"
 
 MODE=skip
 OUT_DIR="${EASYNET_REMOTEAPP_STUN_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/remoteapp-stun-srflx/$(date -u +%Y%m%d-%H%M%S)-$$}"
@@ -19,7 +21,9 @@ TARGET_KIND="${EASYNET_REMOTEAPP_STUN_E2E_TARGET_KIND:-window}"
 STUN_PORT="${EASYNET_REMOTEAPP_STUN_E2E_PORT:-3482}"
 STUN_HOST="${EASYNET_REMOTEAPP_STUN_E2E_HOST:-}"
 FRONTEND_PORT="${EASYNET_REMOTEAPP_STUN_E2E_FRONTEND_PORT:-3011}"
-BROWSER_IMAGE="${EASYNET_REMOTEAPP_STUN_E2E_BROWSER_IMAGE:-mcr.microsoft.com/playwright:v1.62.0-noble}"
+BROWSER_IMAGE="${EASYNET_REMOTEAPP_STUN_E2E_BROWSER_IMAGE:-easynet/remoteapp-browser-chrome:e2e-152.0.7977.54}"
+BROWSER_PLATFORM="${EASYNET_REMOTEAPP_STUN_E2E_BROWSER_PLATFORM:-linux/amd64}"
+BROWSER_DOCKERFILE="$REPO_ROOT/tools/fixtures/remoteapp-browser-chrome/Dockerfile"
 BROWSER_RUN_DEADLINE_SECONDS="${EASYNET_REMOTEAPP_STUN_E2E_BROWSER_RUN_DEADLINE_SECONDS:-240}"
 BROWSER_DOCKER_CONTEXT="${EASYNET_REMOTEAPP_STUN_E2E_BROWSER_DOCKER_CONTEXT:-}"
 
@@ -46,6 +50,11 @@ Environment:
                 Docker context for an externally reachable VM-NAT peer. On
                 macOS, Docker Desktop is rejected because its hidden VM NAT
                 does not expose a return route for reflexive-only ICE.
+  EASYNET_REMOTEAPP_STUN_E2E_PROVIDER_STOP_ACTION
+  EASYNET_REMOTEAPP_STUN_E2E_PROVIDER_START_ACTION
+                Single-line lifecycle actions for the external provider. The
+                start action receives EASYNET_REMOTE_DESKTOP_STUN_URLS and must
+                explicitly pass it into the provider process.
 USAGE
 }
 
@@ -109,6 +118,8 @@ fi
 
 if [[ "$MODE" == "self-test" ]]; then
   bash -n "$0"
+  grep -q 'CHROME_VERSION=152.0.7977.54' "$BROWSER_DOCKERFILE"
+  grep -q '88af83664e1e5f79dc1c1378d0699b98dddd69690a748addf4ccbe322bfacedf' "$BROWSER_DOCKERFILE"
   python3 -m py_compile "$PROJECTOR"
   python3 -m py_compile "$STUN_SERVER"
   verify_browser_candidate_boundary
@@ -125,7 +136,22 @@ for command in curl docker node npm python3; do
     exit 1
   }
 done
-[[ -x "$RUNTIME_CLI" ]] || { write_status failed "runtime CLI missing: $RUNTIME_CLI"; exit 1; }
+EXTERNAL_PROVIDER=0
+if [[ -n "$PROVIDER_STOP_ACTION" || -n "$PROVIDER_START_ACTION" ]]; then
+  [[ -n "$PROVIDER_STOP_ACTION" && -n "$PROVIDER_START_ACTION" ]] || {
+    write_status failed "external provider requires both stop and start actions"
+    exit 64
+  }
+  for action in "$PROVIDER_STOP_ACTION" "$PROVIDER_START_ACTION"; do
+    [[ "$action" != *$'\n'* && "$action" != *$'\r'* ]] || {
+      write_status failed "provider lifecycle actions must be single-line shell commands"
+      exit 64
+    }
+  done
+  EXTERNAL_PROVIDER=1
+else
+  [[ -x "$RUNTIME_CLI" ]] || { write_status failed "runtime CLI missing: $RUNTIME_CLI"; exit 1; }
+fi
 verify_browser_candidate_boundary
 [[ -f "$PROJECTOR" && -x "$VERIFIER" && -x "$STUN_SERVER" ]] || {
   write_status failed "network projector/verifier or native STUN fixture missing"
@@ -177,8 +203,11 @@ fi
 TEMP_DIR="$(mktemp -d)"
 BROWSER_CONTAINER="easynet-remoteapp-stun-browser-$$"
 DAEMON_WAS_RUNNING=0
-pgrep -f '/easynet-daemon$' >/dev/null 2>&1 && DAEMON_WAS_RUNNING=1
+if [[ "$EXTERNAL_PROVIDER" -eq 0 ]]; then
+  pgrep -f '/easynet-daemon$' >/dev/null 2>&1 && DAEMON_WAS_RUNNING=1
+fi
 RESTORE_FAILED=0
+PROVIDER_MUTATED=0
 FRONTEND_PID=""
 BROWSER_DOCKER_PID=""
 STUN_SERVER_PID=""
@@ -212,7 +241,9 @@ PY
 
 cleanup() {
   local exit_code=$?
-  "$RUNTIME_CLI" runtime stop >/dev/null 2>&1 || true
+  if [[ "$EXTERNAL_PROVIDER" -eq 0 ]]; then
+    "$RUNTIME_CLI" runtime stop >/dev/null 2>&1 || true
+  fi
   if [[ -n "$BROWSER_DOCKER_PID" ]] && kill -0 "$BROWSER_DOCKER_PID" >/dev/null 2>&1; then
     kill "$BROWSER_DOCKER_PID" >/dev/null 2>&1 || true
     wait "$BROWSER_DOCKER_PID" >/dev/null 2>&1 || true
@@ -226,7 +257,12 @@ cleanup() {
     kill "$FRONTEND_PID" >/dev/null 2>&1 || true
     wait "$FRONTEND_PID" >/dev/null 2>&1 || true
   fi
-  if [[ "$DAEMON_WAS_RUNNING" -eq 1 ]]; then
+  if [[ "$EXTERNAL_PROVIDER" -eq 1 && "$PROVIDER_MUTATED" -eq 1 ]]; then
+    /bin/sh -lc "$PROVIDER_STOP_ACTION" >/dev/null 2>&1 || true
+    EASYNET_REMOTE_DESKTOP_STUN_URLS= \
+      /bin/sh -lc "$PROVIDER_START_ACTION" >"$OUT_DIR/provider-restore.stdout.txt" \
+      2>"$OUT_DIR/provider-restore.stderr.txt" || RESTORE_FAILED=1
+  elif [[ "$DAEMON_WAS_RUNNING" -eq 1 ]]; then
     "$RUNTIME_CLI" runtime start >"$OUT_DIR/runtime-restore.stdout.txt" \
       2>"$OUT_DIR/runtime-restore.stderr.txt" || RESTORE_FAILED=1
   fi
@@ -240,10 +276,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if ! browser_docker image inspect "$BROWSER_IMAGE" >/dev/null 2>&1; then
-  browser_docker pull "$BROWSER_IMAGE" \
-    >"$OUT_DIR/browser-image-pull.stdout.txt" 2>"$OUT_DIR/browser-image-pull.stderr.txt"
+  browser_docker build --platform "$BROWSER_PLATFORM" --tag "$BROWSER_IMAGE" \
+    --file "$BROWSER_DOCKERFILE" "$REPO_ROOT" \
+    >"$OUT_DIR/browser-image-build.stdout.txt" 2>"$OUT_DIR/browser-image-build.stderr.txt"
 fi
-
 STUN_EVENT_LOG="$OUT_DIR/stun-binding-events.jsonl"
 STUN_READY_FILE="$TEMP_DIR/stun-ready.json"
 "$STUN_SERVER" \
@@ -268,13 +304,26 @@ done
 [[ "$ready" -eq 1 ]] || { write_status failed "native STUN fixture did not become ready"; exit 1; }
 
 constraints_applied_at_ms="$(python3 -c 'import time; print(int(time.time() * 1000))')"
-"$RUNTIME_CLI" runtime stop >"$OUT_DIR/runtime-stop.stdout.txt" 2>"$OUT_DIR/runtime-stop.stderr.txt" || true
-env \
-  -u EASYNET_REMOTE_DESKTOP_TURN_URLS \
-  -u EASYNET_REMOTE_DESKTOP_TURN_USERNAME \
-  -u EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL \
-  EASYNET_REMOTE_DESKTOP_STUN_URLS="stun:$STUN_HOST:$STUN_PORT" \
-  "$RUNTIME_CLI" runtime start >"$OUT_DIR/runtime-start.stdout.txt" 2>"$OUT_DIR/runtime-start.stderr.txt"
+if [[ "$EXTERNAL_PROVIDER" -eq 1 ]]; then
+  PROVIDER_MUTATED=1
+  /bin/sh -lc "$PROVIDER_STOP_ACTION" >"$OUT_DIR/provider-stop.stdout.txt" \
+    2>"$OUT_DIR/provider-stop.stderr.txt" || true
+  env \
+    -u EASYNET_REMOTE_DESKTOP_TURN_URLS \
+    -u EASYNET_REMOTE_DESKTOP_TURN_USERNAME \
+    -u EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL \
+    EASYNET_REMOTE_DESKTOP_STUN_URLS="stun:$STUN_HOST:$STUN_PORT" \
+    /bin/sh -lc "$PROVIDER_START_ACTION" >"$OUT_DIR/provider-start.stdout.txt" \
+      2>"$OUT_DIR/provider-start.stderr.txt"
+else
+  "$RUNTIME_CLI" runtime stop >"$OUT_DIR/runtime-stop.stdout.txt" 2>"$OUT_DIR/runtime-stop.stderr.txt" || true
+  env \
+    -u EASYNET_REMOTE_DESKTOP_TURN_URLS \
+    -u EASYNET_REMOTE_DESKTOP_TURN_USERNAME \
+    -u EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL \
+    EASYNET_REMOTE_DESKTOP_STUN_URLS="stun:$STUN_HOST:$STUN_PORT" \
+    "$RUNTIME_CLI" runtime start >"$OUT_DIR/runtime-start.stdout.txt" 2>"$OUT_DIR/runtime-start.stderr.txt"
+fi
 sleep 2
 
 (
@@ -309,6 +358,8 @@ EASYNET_REMOTEAPP_BROWSER_ICE_TRANSPORT_POLICY=all \
 EASYNET_REMOTEAPP_BROWSER_ALLOWED_OUTBOUND_ICE_CANDIDATE_TYPES=srflx,prflx \
 EASYNET_REMOTEAPP_BROWSER_ALLOWED_INBOUND_ICE_CANDIDATE_TYPES=host,srflx,prflx \
 browser_docker run --rm --name "$BROWSER_CONTAINER" \
+  --platform "$BROWSER_PLATFORM" \
+  --add-host host.docker.internal:host-gateway \
   --volume "$FRONTEND_ROOT:/workspace/frontend:ro" \
   --volume "$browser_dir:/out" \
   --workdir /workspace/frontend \
@@ -316,13 +367,15 @@ browser_docker run --rm --name "$BROWSER_CONTAINER" \
   --env EASYNET_REMOTEAPP_BROWSER_PASSWORD \
   --env EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_EVIDENCE_JSON \
   --env EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_FRONTEND_URL \
+  --env EASYNET_REMOTEAPP_BROWSER_INSECURE_ORIGIN_AS_SECURE="http://$STUN_HOST:$FRONTEND_PORT" \
+  --env EASYNET_REMOTEAPP_BROWSER_DISABLE_GPU=1 \
   --env EASYNET_REMOTEAPP_BROWSER_DEVICE_ID \
   --env EASYNET_REMOTEAPP_BROWSER_TARGET_KIND \
   --env EASYNET_REMOTEAPP_BROWSER_ICE_TRANSPORT_POLICY \
   --env EASYNET_REMOTEAPP_BROWSER_ALLOWED_OUTBOUND_ICE_CANDIDATE_TYPES \
   --env EASYNET_REMOTEAPP_BROWSER_ALLOWED_INBOUND_ICE_CANDIDATE_TYPES \
   "$BROWSER_IMAGE" \
-  bash -lc 'chrome_path="$(find /ms-playwright -type f -path "*/chrome-linux/chrome" | head -n 1)"; test -n "$chrome_path"; EASYNET_REMOTEAPP_BROWSER_CHROME_PATH="$chrome_path" node scripts/remoteapp-browser-lifecycle.mjs' \
+  bash -lc 'chrome_path="${EASYNET_REMOTEAPP_BROWSER_CHROME_PATH:-$(find /ms-playwright -type f -path "*/chrome-linux/chrome" | head -n 1)}"; test -n "$chrome_path"; EASYNET_REMOTEAPP_BROWSER_CHROME_PATH="$chrome_path" node scripts/remoteapp-browser-lifecycle.mjs' \
   >"$browser_dir/runner.stdout.txt" 2>"$browser_dir/runner.stderr.txt" &
 BROWSER_DOCKER_PID=$!
 browser_deadline_epoch=$(( $(date +%s) + BROWSER_RUN_DEADLINE_SECONDS ))
