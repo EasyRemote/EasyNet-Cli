@@ -254,6 +254,60 @@ impl StatusPairingState {
         }
     }
 
+    fn to_json(&self) -> Value {
+        match self {
+            Self::Paired(credentials) => {
+                let realm = credentials.realm_str();
+                let current_user = match credentials.runtime_user_binding() {
+                    Ok(config::RuntimeUserBinding::Bound { user_ura }) => json!({
+                        "state": "bound",
+                        "ura": user_ura,
+                        "reason": null,
+                    }),
+                    Ok(config::RuntimeUserBinding::Unbound { reason }) => json!({
+                        "state": "unbound",
+                        "ura": null,
+                        "reason": reason.to_string(),
+                    }),
+                    Err(error) => json!({
+                        "state": "invalid",
+                        "ura": null,
+                        "reason": format!("{error:#}"),
+                    }),
+                };
+                json!({
+                    "state": "paired",
+                    "realm": realm,
+                    "hub_ura": ura::hub_ura(realm),
+                    "current_user": current_user,
+                    "device_ura": ura::device_ura(realm, &credentials.node_id),
+                })
+            }
+            Self::Unpaired => json!({
+                "state": "unpaired",
+                "realm": null,
+                "hub_ura": null,
+                "current_user": {
+                    "state": "unavailable",
+                    "ura": null,
+                    "reason": "credentials_missing",
+                },
+                "device_ura": null,
+            }),
+            Self::Invalid { reason } => json!({
+                "state": "invalid",
+                "realm": null,
+                "hub_ura": null,
+                "current_user": {
+                    "state": "unavailable",
+                    "ura": null,
+                    "reason": reason,
+                },
+                "device_ura": null,
+            }),
+        }
+    }
+
     #[cfg(test)]
     fn label(&self) -> &'static str {
         match self {
@@ -356,9 +410,11 @@ fn render_connection_state() {
 
 fn run_json() -> anyhow::Result<()> {
     let connection = join_connection_state::latest_snapshot();
-    let payload = RuntimeLifecycleService::new()
+    let pairing = StatusPairingState::load().to_json();
+    let mut payload = RuntimeLifecycleService::new()
         .status()?
         .to_json(json!(connection));
+    payload["pairing"] = pairing;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
@@ -428,10 +484,36 @@ mod tests {
     }
 
     #[test]
+    fn status_pairing_json_projects_bound_current_user_identity() {
+        let state = StatusPairingState::from_credentials_result(Ok(Some(complete_credentials())));
+
+        let pairing = state.to_json();
+
+        assert_eq!(pairing["state"], "paired");
+        assert_eq!(pairing["realm"], "localhost");
+        assert_eq!(pairing["hub_ura"], "easynet:///r/localhost/authority");
+        assert_eq!(
+            pairing["device_ura"],
+            "easynet:///r/localhost/device/device-a"
+        );
+        assert_eq!(pairing["current_user"]["state"], "bound");
+        assert_eq!(
+            pairing["current_user"]["ura"],
+            "easynet:///r/localhost/user/user-alice"
+        );
+        assert!(pairing["current_user"]["reason"].is_null());
+    }
+
+    #[test]
     fn status_pairing_state_reports_unpaired_only_for_missing_credentials() {
         let state = StatusPairingState::from_credentials_result(Ok(None));
 
         assert_eq!(state.label(), "unpaired");
+        let pairing = state.to_json();
+        assert_eq!(pairing["state"], "unpaired");
+        assert_eq!(pairing["current_user"]["state"], "unavailable");
+        assert_eq!(pairing["current_user"]["reason"], "credentials_missing");
+        assert!(pairing["current_user"]["ura"].is_null());
     }
 
     #[test]
@@ -447,6 +529,16 @@ mod tests {
                     reason.contains("parse credentials"),
                     "invalid state must preserve reason: {reason}"
                 );
+                let pairing = StatusPairingState::Invalid {
+                    reason: reason.clone(),
+                }
+                .to_json();
+                assert_eq!(pairing["state"], "invalid");
+                assert_eq!(pairing["current_user"]["state"], "unavailable");
+                assert!(pairing["current_user"]["ura"].is_null());
+                assert!(pairing["current_user"]["reason"]
+                    .as_str()
+                    .is_some_and(|value| value.contains("parse credentials")));
             }
             other => panic!("expected invalid state, got {other:?}"),
         }
