@@ -6,11 +6,14 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::daemon::ability::dispatch::BidiOutputFrame;
+
+const BIDI_TERMINAL_SEND_DEADLINE: Duration = Duration::from_millis(250);
 
 /// Single-terminal guard for one remote desktop Bidi invocation.
 ///
@@ -35,13 +38,17 @@ impl BidiTerminalGuard {
         if self.sent.swap(true, Ordering::AcqRel) {
             return false;
         }
-        let _ = to_client
-            .send(BidiOutputFrame::json(json!({
-                "type": "closed",
-                "reason": reason,
-            })))
-            .await;
-        true
+        matches!(
+            tokio::time::timeout(
+                BIDI_TERMINAL_SEND_DEADLINE,
+                to_client.send(BidiOutputFrame::json(json!({
+                    "type": "closed",
+                    "reason": reason,
+                }))),
+            )
+            .await,
+            Ok(Ok(()))
+        )
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn send_blocking_closed(
@@ -52,11 +59,12 @@ impl BidiTerminalGuard {
         if self.sent.swap(true, Ordering::AcqRel) {
             return false;
         }
-        let _ = to_client.blocking_send(BidiOutputFrame::json(json!({
-            "type": "closed",
-            "reason": reason,
-        })));
-        true
+        to_client
+            .try_send(BidiOutputFrame::json(json!({
+                "type": "closed",
+                "reason": reason,
+            })))
+            .is_ok()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) async fn send_error(
@@ -68,14 +76,18 @@ impl BidiTerminalGuard {
         if self.sent.swap(true, Ordering::AcqRel) {
             return false;
         }
-        let _ = to_client
-            .send(BidiOutputFrame::json(json!({
-                "type": "error",
-                "code": code,
-                "message": message.into(),
-            })))
-            .await;
-        true
+        matches!(
+            tokio::time::timeout(
+                BIDI_TERMINAL_SEND_DEADLINE,
+                to_client.send(BidiOutputFrame::json(json!({
+                    "type": "error",
+                    "code": code,
+                    "message": message.into(),
+                }))),
+            )
+            .await,
+            Ok(Ok(()))
+        )
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn send_blocking_error(
@@ -87,12 +99,13 @@ impl BidiTerminalGuard {
         if self.sent.swap(true, Ordering::AcqRel) {
             return false;
         }
-        let _ = to_client.blocking_send(BidiOutputFrame::json(json!({
-            "type": "error",
-            "code": code,
-            "message": message.into(),
-        })));
-        true
+        to_client
+            .try_send(BidiOutputFrame::json(json!({
+                "type": "error",
+                "code": code,
+                "message": message.into(),
+            })))
+            .is_ok()
     }
 }
 
@@ -159,6 +172,25 @@ mod tests {
         assert!(
             rx.recv().await.is_none(),
             "closed frame must be suppressed after terminal error"
+        );
+    }
+
+    #[tokio::test]
+    async fn bidi_terminal_guard_does_not_block_shutdown_on_full_client_queue() {
+        let guard = BidiTerminalGuard::new();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        tx.send(BidiOutputFrame::json(json!({"type": "frame"})))
+            .await
+            .expect("test queue fills");
+
+        let started = tokio::time::Instant::now();
+        assert!(
+            !guard.send_closed(&tx, "session_closing").await,
+            "full client queue cannot claim terminal frame delivery"
+        );
+        assert!(
+            started.elapsed() <= BIDI_TERMINAL_SEND_DEADLINE + Duration::from_millis(100),
+            "client backpressure must not own worker settlement"
         );
     }
 }

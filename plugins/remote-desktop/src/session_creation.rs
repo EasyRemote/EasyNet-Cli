@@ -255,6 +255,7 @@ mod tests {
                         None,
                         locator.bundle_id().map(ToOwned::to_owned),
                     )
+                    .with_process_instance_id(locator.process_instance_id().map(ToOwned::to_owned))
                     .with_native_dimensions(Some((1280, 720))),
             )
         }

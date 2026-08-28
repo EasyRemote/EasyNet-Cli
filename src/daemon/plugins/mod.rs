@@ -23,6 +23,9 @@ pub mod sidecar;
 pub mod surface;
 pub mod wire;
 
+#[cfg(feature = "remote-desktop")]
+mod remoteapp_relay;
+
 #[cfg(feature = "browser-cdp")]
 #[path = "../../../plugins/browser/src/embedded.rs"]
 pub mod browser;
@@ -99,7 +102,11 @@ pub fn builtin_bindings() -> Vec<BuiltinPluginBinding> {
         .expect("browser provider registration is static and unique");
     #[cfg(feature = "remote-desktop")]
     registry
-        .register(crate::daemon::plugins::remote_desktop::provider())
+        .register(
+            crate::daemon::plugins::remote_desktop::provider_with_relay_lease_provider(Arc::new(
+                remoteapp_relay::HubRemoteDesktopRelayLeaseProvider,
+            )),
+        )
         .expect("remote desktop provider registration is static and unique");
     registry
         .into_builtin_bindings()

@@ -40,11 +40,20 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         .into());
     }
     let input_control = optional_bool(&args, "input_control", ABILITY_GRANT_CONSENT)?;
+    let allow_remote_focus = optional_bool(&args, "allow_remote_focus", ABILITY_GRANT_CONSENT)?;
+    if allow_remote_focus && !input_control {
+        return Err(RemoteDesktopError::InvalidArgument {
+            ability: ABILITY_GRANT_CONSENT,
+            detail: "allow_remote_focus requires input_control consent".to_string(),
+        }
+        .into());
+    }
     let issued = plugin.consent_registry().issue_with_grants(
         env.caller(),
         &entry.resource_ura,
         intent,
         input_control,
+        allow_remote_focus,
     )?;
     Ok(json!({
         "consent": "granted",
@@ -53,6 +62,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         "grant_scope": {
             "media": true,
             "input_control": input_control,
+            "remote_focus": allow_remote_focus,
         },
         "approval_actor_ura": env.caller(),
         "subject_ura": entry.resource_ura,

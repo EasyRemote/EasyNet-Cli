@@ -168,3 +168,94 @@ type = "number"
 
 [input_schema.properties.browser_stats.properties.pause_count]
 type = "number"
+
+[input_schema.properties.render_probe]
+type = "object"
+required = ["probe_source", "selected_resource_ura", "session_id", "transport_epoch", "binding_id", "binding_epoch", "media_source_epoch", "media_pipeline_id", "video_codec", "video_transport", "observed_at_ms", "decoded_video_frames", "frame_width", "frame_height"]
+additionalProperties = false
+
+[input_schema.properties.render_probe.properties.probe_source]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.selected_resource_ura]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.session_id]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.transport_epoch]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.binding_id]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.binding_epoch]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.media_source_epoch]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.media_pipeline_id]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.video_codec]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.video_transport]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.audio_codec]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.observed_at_ms]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.decoded_video_frames]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.decoded_audio_packets]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.render_probe.properties.decoded_audio_samples]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.render_probe.properties.video_payload_hash]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.audio_payload_hash]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.frame_width]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.frame_height]
+type = "integer"
+minimum = 1

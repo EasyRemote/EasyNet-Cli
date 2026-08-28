@@ -4,6 +4,16 @@
 // File: plugins/remote-desktop/src/permissions.rs
 // Description: Host-local screen capture and input permission probes.
 
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+use easynet_remoteapp_native_protocol::screen_capture_permission::{
+    Operation as ScreenCapturePermissionOperation, Request as ScreenCapturePermissionRequest,
+    Response as ScreenCapturePermissionResponse,
+};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
@@ -13,6 +23,8 @@ use crate::daemon::plugins::remote_desktop::input::{
     input_injection_available, input_injection_backend, input_injection_unavailable_reason,
     request_input_injection_permission,
 };
+#[cfg(target_os = "macos")]
+use crate::daemon::plugins::remote_desktop::native_host_process::execute_one_shot_native_host;
 
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_permission_probe_access(
     ability: &'static str,
@@ -161,33 +173,29 @@ pub(in crate::daemon::plugins::remote_desktop) fn host_local_permission_subject_
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn screen_capture_permission_status() -> Value {
-    let granted = platform_screen_capture_permission_granted();
+    let capture = PlatformScreenCapturePermission::status();
     json!({
         "permission": "screen_capture",
         "subject_contract": host_local_permission_subject_contract(),
         "platform": std::env::consts::OS,
-        "granted": granted,
-        "requestable": platform_screen_capture_permission_requestable(),
+        "granted": capture.granted,
+        "requestable": capture.requestable,
         "capture_backend": platform_screen_capture_backend(),
-        "unavailable_reason": if granted {
+        "unavailable_reason": if capture.granted {
             Value::Null
         } else {
-            json!(platform_screen_capture_unavailable_reason())
+            json!(platform_screen_capture_unavailable_reason(capture.granted))
         },
+        "permission_probe_error": capture.error,
         "input_permission": InputPermissionProbe::current().to_value(None, None),
-        "process_path": std::env::current_exe()
-            .ok()
-            .map(|path| path.display().to_string()),
+        "process_path": capture.process_path,
         "restart_recommended_after_grant": cfg!(target_os = "macos"),
         "settings_hint": platform_screen_capture_settings_hint(),
     })
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn request_screen_capture_permission() -> Value {
-    let before = platform_screen_capture_permission_granted();
-    let requestable = platform_screen_capture_permission_requestable();
-    let requested = !before && requestable;
-    let after = before || (requested && platform_request_screen_capture_permission());
+    let capture = PlatformScreenCapturePermission::request();
     let input_before = InputPermissionProbe::current();
     let input_requested = !input_before.granted && input_before.requestable;
     let input_after = if input_before.granted {
@@ -201,26 +209,52 @@ pub(in crate::daemon::plugins::remote_desktop) fn request_screen_capture_permiss
         "permission": "screen_capture",
         "subject_contract": host_local_permission_subject_contract(),
         "platform": std::env::consts::OS,
-        "granted": after,
-        "previously_granted": before,
-        "requested": requested,
-        "requestable": requestable,
+        "granted": capture.granted,
+        "previously_granted": capture.previously_granted,
+        "requested": capture.requested,
+        "requestable": capture.requestable,
         "capture_backend": platform_screen_capture_backend(),
-        "unavailable_reason": if after {
+        "unavailable_reason": if capture.granted {
             Value::Null
         } else {
-            json!(platform_screen_capture_unavailable_reason())
+            json!(platform_screen_capture_unavailable_reason(capture.granted))
         },
+        "permission_probe_error": capture.error,
         "input_permission": input_after.to_value(
             Some(input_before.granted),
             Some(input_requested),
         ),
-        "process_path": std::env::current_exe()
-            .ok()
-            .map(|path| path.display().to_string()),
-        "restart_recommended_after_grant": cfg!(target_os = "macos") && !before && after,
+        "process_path": capture.process_path,
+        "restart_recommended_after_grant": cfg!(target_os = "macos")
+            && !capture.previously_granted
+            && capture.granted,
         "settings_hint": platform_screen_capture_settings_hint(),
     })
+}
+
+struct PlatformScreenCapturePermission {
+    granted: bool,
+    requestable: bool,
+    previously_granted: bool,
+    requested: bool,
+    process_path: Option<String>,
+    error: Option<String>,
+}
+
+impl PlatformScreenCapturePermission {
+    fn status() -> Self {
+        platform_screen_capture_permission(ScreenCapturePermissionIntent::Status)
+    }
+
+    fn request() -> Self {
+        platform_screen_capture_permission(ScreenCapturePermissionIntent::Request)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ScreenCapturePermissionIntent {
+    Status,
+    Request,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,8 +339,78 @@ fn platform_input_permission_requestable() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn platform_screen_capture_permission_granted() -> bool {
-    crate::daemon::plugins::remote_desktop::screencapturekit_capture::screen_capture_permission_granted()
+static NEXT_MEDIA_HOST_PERMISSION_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "macos")]
+fn platform_screen_capture_permission(
+    intent: ScreenCapturePermissionIntent,
+) -> PlatformScreenCapturePermission {
+    let generation = match NEXT_MEDIA_HOST_PERMISSION_GENERATION.fetch_update(
+        Ordering::AcqRel,
+        Ordering::Acquire,
+        |value| value.checked_add(1),
+    ) {
+        Ok(previous) => previous.saturating_add(1),
+        Err(_) => return failed_screen_capture_permission("media-host generation exhausted"),
+    };
+    let operation = match intent {
+        ScreenCapturePermissionIntent::Status => ScreenCapturePermissionOperation::Status,
+        ScreenCapturePermissionIntent::Request => ScreenCapturePermissionOperation::Request,
+    };
+    let request = ScreenCapturePermissionRequest::new(generation, generation, operation);
+    let deadline = match intent {
+        ScreenCapturePermissionIntent::Status => Duration::from_millis(2_500),
+        ScreenCapturePermissionIntent::Request => Duration::from_secs(30),
+    };
+    let response: ScreenCapturePermissionResponse = match execute_one_shot_native_host(
+        generation,
+        crate::daemon::plugins::remote_desktop::MEDIA_HOST_EXECUTABLE,
+        "screen-capture-permission",
+        &[],
+        &request,
+        deadline,
+    ) {
+        Ok(response) => response,
+        Err(error) => return failed_screen_capture_permission(&error),
+    };
+    if !response.matches_request(&request) {
+        return failed_screen_capture_permission(
+            "media-host returned an invalid screen-capture permission response",
+        );
+    }
+    PlatformScreenCapturePermission {
+        granted: response.granted,
+        requestable: response.requestable,
+        previously_granted: response.previously_granted,
+        requested: response.requested,
+        process_path: response.executable_path,
+        error: None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn failed_screen_capture_permission(detail: &str) -> PlatformScreenCapturePermission {
+    let mut detail = detail.replace('\0', "");
+    if detail.len() > 2_048 {
+        let mut boundary = 2_048;
+        while !detail.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        detail.truncate(boundary);
+    }
+    PlatformScreenCapturePermission {
+        granted: false,
+        requestable: true,
+        previously_granted: false,
+        requested: false,
+        process_path:
+            crate::daemon::plugins::remote_desktop::native_host_process::sibling_executable(
+                crate::daemon::plugins::remote_desktop::MEDIA_HOST_EXECUTABLE,
+            )
+            .ok()
+            .map(|path| path.display().to_string()),
+        error: Some(detail),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -327,24 +431,21 @@ fn platform_screen_capture_permission_granted() -> bool {
     )
 }
 
-#[cfg(target_os = "macos")]
-fn platform_request_screen_capture_permission() -> bool {
-    crate::daemon::plugins::remote_desktop::screencapturekit_capture::request_screen_capture_permission()
-}
-
 #[cfg(not(target_os = "macos"))]
-fn platform_request_screen_capture_permission() -> bool {
-    platform_screen_capture_permission_granted()
-}
-
-#[cfg(target_os = "macos")]
-fn platform_screen_capture_permission_requestable() -> bool {
-    true
-}
-
-#[cfg(not(target_os = "macos"))]
-fn platform_screen_capture_permission_requestable() -> bool {
-    false
+fn platform_screen_capture_permission(
+    _: ScreenCapturePermissionIntent,
+) -> PlatformScreenCapturePermission {
+    let granted = platform_screen_capture_permission_granted();
+    PlatformScreenCapturePermission {
+        granted,
+        requestable: false,
+        previously_granted: granted,
+        requested: false,
+        process_path: std::env::current_exe()
+            .ok()
+            .map(|path| path.display().to_string()),
+        error: None,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -397,8 +498,8 @@ fn platform_screen_capture_backend() -> &'static str {
     "unsupported"
 }
 
-fn platform_screen_capture_unavailable_reason() -> Option<&'static str> {
-    if platform_screen_capture_permission_granted() {
+fn platform_screen_capture_unavailable_reason(granted: bool) -> Option<&'static str> {
+    if granted {
         return None;
     }
     #[cfg(target_os = "linux")]

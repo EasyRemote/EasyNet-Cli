@@ -55,6 +55,65 @@ pub enum PluginRealtimeTransport {
     Webrtc,
 }
 
+/// Startup ownership for a plugin-private native helper.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRuntimeHelperLifecycle {
+    OnDemand,
+    PerGeneration,
+}
+
+/// Failure-domain shape of a plugin-private native helper.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRuntimeHelperIsolation {
+    PerLane,
+    PerSession,
+    ControlVideoAudioLanes,
+}
+
+/// A private executable dependency used inside a plugin implementation.
+///
+/// Runtime helpers are not plugin kinds, public providers, Agents, Services,
+/// callees, or Ability sidecars. The owning plugin remains responsible for
+/// supervising them and projecting failures into its own state machine.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginRuntimeHelperManifest {
+    name: String,
+    executable: String,
+    protocol: String,
+    lifecycle: PluginRuntimeHelperLifecycle,
+    isolation: PluginRuntimeHelperIsolation,
+    required: bool,
+}
+
+impl PluginRuntimeHelperManifest {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn executable(&self) -> &str {
+        &self.executable
+    }
+
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+
+    pub const fn lifecycle(&self) -> PluginRuntimeHelperLifecycle {
+        self.lifecycle
+    }
+
+    pub const fn isolation(&self) -> PluginRuntimeHelperIsolation {
+        self.isolation
+    }
+
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+}
+
 /// Package-level realtime capability declaration.
 ///
 /// This is activation metadata, not an AbilityDescriptor replacement. Concrete
@@ -441,6 +500,7 @@ pub struct PluginPackageManifest {
     limits: PluginRuntimeLimits,
     declarative: Option<PluginDeclarativeBinding>,
     companion: Option<PluginCompanionManifest>,
+    runtime_helpers: Vec<PluginRuntimeHelperManifest>,
     abilities: Vec<PluginAbilityManifest>,
     realtime_capabilities: Vec<PluginRealtimeCapability>,
 }
@@ -517,6 +577,11 @@ impl PluginPackageManifest {
         self.companion.as_ref()
     }
 
+    /// Private executable dependencies supervised by this plugin.
+    pub fn runtime_helpers(&self) -> &[PluginRuntimeHelperManifest] {
+        &self.runtime_helpers
+    }
+
     /// Ability manifests exported by this package.
     pub fn abilities(&self) -> &[PluginAbilityManifest] {
         &self.abilities
@@ -560,6 +625,8 @@ struct RawPluginToml {
     declarative: Option<PluginDeclarativeBinding>,
     #[serde(default)]
     companion: Option<PluginCompanionManifest>,
+    #[serde(default)]
+    runtime_helper: Vec<PluginRuntimeHelperManifest>,
     #[serde(default)]
     ability_metadata: Vec<RawPluginAbilityMetadata>,
     #[serde(default)]
@@ -617,6 +684,7 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
     }
     validate_declarative_binding(&raw)?;
     validate_companion_manifest(&raw)?;
+    validate_runtime_helpers(&raw.id, &raw.runtime_helper)?;
     validate_realtime_capabilities(&raw.id, &raw.realtime_capability)?;
 
     let mut seen = std::collections::BTreeSet::new();
@@ -652,9 +720,62 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
         limits: raw.limits,
         declarative: raw.declarative,
         companion: raw.companion,
+        runtime_helpers: raw.runtime_helper,
         abilities,
         realtime_capabilities: raw.realtime_capability,
     })
+}
+
+fn validate_runtime_helpers(id: &str, helpers: &[PluginRuntimeHelperManifest]) -> Result<()> {
+    let mut names = std::collections::BTreeSet::new();
+    let mut executables = std::collections::BTreeSet::new();
+    for helper in helpers {
+        if helper.name.trim().is_empty() {
+            return Err(invalid_runtime_helper(id, "name must not be empty"));
+        }
+        if !names.insert(helper.name.as_str()) {
+            return Err(invalid_runtime_helper(id, "helper names must be unique"));
+        }
+        if !executables.insert(helper.executable.as_str()) {
+            return Err(invalid_runtime_helper(
+                id,
+                "helper executable declarations must be unique",
+            ));
+        }
+        let executable = Path::new(helper.executable.trim());
+        if executable.as_os_str().is_empty()
+            || executable.is_absolute()
+            || executable.components().count() != 1
+            || executable.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(invalid_runtime_helper(
+                id,
+                "executable must be one sibling artifact filename",
+            ));
+        }
+        if helper.protocol.trim().is_empty() {
+            return Err(invalid_runtime_helper(id, "protocol must not be empty"));
+        }
+        if !helper.required {
+            return Err(invalid_runtime_helper(
+                id,
+                "optional helper fallback is forbidden; required must be true",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalid_runtime_helper(id: &str, reason: &str) -> PluginHostError {
+    PluginHostError::InvalidRuntimeHelperManifest {
+        id: id.to_string(),
+        reason: reason.to_string(),
+    }
 }
 
 fn validate_companion_manifest(raw: &RawPluginToml) -> Result<()> {
@@ -1527,6 +1648,33 @@ session = "aqua"
         )
         .expect("remote desktop plugin manifest");
         assert_eq!(remote_desktop.kind(), PluginKind::Builtin);
+        let helper = remote_desktop
+            .runtime_helpers()
+            .iter()
+            .find(|helper| helper.name() == "native_target_observation")
+            .expect("Remote Desktop native host declaration");
+        assert_eq!(helper.name(), "native_target_observation");
+        assert_eq!(helper.executable(), "easynet-remoteapp-native-host");
+        assert_eq!(helper.protocol(), "remoteapp_native_host_v1");
+        assert_eq!(helper.lifecycle(), PluginRuntimeHelperLifecycle::OnDemand);
+        assert_eq!(helper.isolation(), PluginRuntimeHelperIsolation::PerLane);
+        assert!(helper.required());
+        let media_host = remote_desktop
+            .runtime_helpers()
+            .iter()
+            .find(|helper| helper.name() == "native_media")
+            .expect("Remote Desktop media-host declaration");
+        assert_eq!(media_host.executable(), "easynet-remoteapp-media-host");
+        assert_eq!(media_host.protocol(), "remoteapp_media_host_v1");
+        assert_eq!(
+            media_host.lifecycle(),
+            PluginRuntimeHelperLifecycle::PerGeneration
+        );
+        assert_eq!(
+            media_host.isolation(),
+            PluginRuntimeHelperIsolation::ControlVideoAudioLanes
+        );
+        assert!(media_host.required());
 
         let desktop_menubar = PluginPackageManifest::parse(
             "plugins/desktop-menubar/plugin.toml",
@@ -1534,6 +1682,36 @@ session = "aqua"
         )
         .expect("desktop menubar plugin manifest");
         assert_eq!(desktop_menubar.kind(), PluginKind::DesktopCompanion);
+    }
+
+    #[test]
+    fn runtime_helper_manifest_rejects_optional_fallback_and_path_lookup() {
+        for (executable, required) in [
+            ("../easynet-remoteapp-native-host", true),
+            ("bin/easynet-remoteapp-native-host", true),
+            ("easynet-remoteapp-native-host", false),
+        ] {
+            let body = test_manifest(&format!(
+                r#"
+[[runtime_helper]]
+name = "native_capture"
+executable = "{executable}"
+protocol = "remoteapp_native_host_v1"
+lifecycle = "on_demand"
+isolation = "per_lane"
+required = {required}
+
+[[ability_metadata]]
+name = "test.rpc"
+layer = "control"
+call_mode = "rpc"
+"#
+            ));
+            assert!(matches!(
+                PluginPackageManifest::parse("plugins/test/plugin.toml", &body),
+                Err(PluginHostError::InvalidRuntimeHelperManifest { .. })
+            ));
+        }
     }
 
     fn test_manifest(extra: &str) -> String {

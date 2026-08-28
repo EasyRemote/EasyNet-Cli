@@ -13,10 +13,11 @@ use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteDesktopSessionCreationWorkflow;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::{
-    prune_inactive_sessions, RemoteDesktopSessionPrune,
+    expire_inactive_sessions_by_id, prune_terminal_sessions_locked, RemoteDesktopSessionPrune,
 };
 use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
-use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
+use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;
+use crate::daemon::plugins::remote_desktop::transport::TransportSettlementAdmissionPermit;
 
 /// Handle `remote_desktop.create_session`.
 pub(in crate::daemon::plugins::remote_desktop) fn handle(
@@ -38,28 +39,50 @@ fn insert_created_session(
     workflow: RemoteDesktopSessionCreationWorkflow,
 ) -> anyhow::Result<Value> {
     let session_id = workflow.session_id().to_string();
-    let session = RemoteDesktopSession::new(workflow.into_session_init()?);
+    let init = workflow.into_session_init()?;
+    let relay_lease = plugin
+        .relay_lease_provider()
+        .acquire(&session_id, init.target_binding.subject_ura())?;
+    let unattached_relay_lease = relay_lease.active().cloned();
+    let mut session = RemoteDesktopSession::new(init);
+    session.install_relay_lease(relay_lease);
     let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)?;
     let now = now_ms();
+    expire_inactive_sessions_by_id(&plugin, now);
+    // This permit is the admission linearization boundary. Hold it only through
+    // the bounded map insert; quarantine projection and recovery I/O remain
+    // outside both the permit and the global session-map mutex.
+    let transport_manager = plugin.transport_manager();
+    let admission = acquire_transport_settlement_admission(&transport_manager)?;
+    let insert = plugin
+        .session_store()
+        .with_sessions(|sessions| -> anyhow::Result<_> {
+            let recovery_prune = prune_terminal_sessions_locked(sessions);
+            ensure_session_insertable(plugin.config().max_sessions(), sessions, &session_id)?;
+            let watchdog_session_id = session_id.clone();
+            let tracker_session_id = session_id.clone();
+            let lease_expires_at_ms = session.lease_expires_at_ms();
+            let view = plugin.session_view_with_token(&session);
+            sessions.insert(session_id, session);
+            Ok((
+                recovery_prune,
+                watchdog_session_id,
+                tracker_session_id,
+                lease_expires_at_ms,
+                view,
+            ))
+        });
     let (recovery_prune, watchdog_session_id, tracker_session_id, lease_expires_at_ms, view) =
-        plugin
-            .session_store()
-            .with_sessions(|sessions| -> anyhow::Result<_> {
-                let recovery_prune = prune_inactive_sessions(&plugin, sessions, now);
-                ensure_session_insertable(plugin.config().max_sessions(), sessions, &session_id)?;
-                let watchdog_session_id = session_id.clone();
-                let tracker_session_id = session_id.clone();
-                let lease_expires_at_ms = session.lease_expires_at_ms();
-                let view = serialize_session_with_token(&session);
-                sessions.insert(session_id, session);
-                Ok((
-                    recovery_prune,
-                    watchdog_session_id,
-                    tracker_session_id,
-                    lease_expires_at_ms,
-                    view,
-                ))
-            })?;
+        match insert {
+            Ok(inserted) => inserted,
+            Err(error) => {
+                if let Some(lease) = unattached_relay_lease.as_ref() {
+                    release_relay_lease_after_cleanup(&plugin, lease);
+                }
+                return Err(error);
+            }
+        };
+    drop(admission);
     if let Err(err) = apply_recovery_prune(&plugin, &recovery_prune) {
         remove_inserted_session(&plugin, &tracker_session_id);
         return Err(err);
@@ -71,6 +94,17 @@ fn insert_created_session(
     ) {
         remove_inserted_session(&plugin, &tracker_session_id);
         return Err(err);
+    }
+    if let Some(relay_lease) = unattached_relay_lease.as_ref() {
+        if let Err(err) = RemoteDesktopPlugin::schedule_relay_lease_refresh(
+            &plugin,
+            tracker_session_id.clone(),
+            relay_lease.refresh_after_ms(),
+        ) {
+            plugin.cancel_session_lease(&tracker_session_id);
+            remove_inserted_session(&plugin, &tracker_session_id);
+            return Err(err);
+        }
     }
     if let Err(err) = RemoteDesktopPlugin::track_session_target(&plugin, tracker_session_id.clone())
     {
@@ -91,9 +125,6 @@ fn apply_recovery_prune(
     plugin: &RemoteDesktopPlugin,
     prune: &RemoteDesktopSessionPrune,
 ) -> anyhow::Result<()> {
-    for snapshot in &prune.recovery_snapshots {
-        plugin.persist_recovery_snapshot(snapshot)?;
-    }
     for session_id in &prune.removed_session_ids {
         plugin.recovery_store().delete(session_id)?;
     }
@@ -101,24 +132,62 @@ fn apply_recovery_prune(
 }
 
 fn remove_inserted_session(plugin: &RemoteDesktopPlugin, session_id: &str) {
-    plugin.session_store().with_sessions(|sessions| {
-        sessions.remove(session_id);
+    let relay_lease = plugin.session_store().with_sessions(|sessions| {
+        sessions
+            .remove(session_id)
+            .and_then(|session| session.active_relay_lease().cloned())
     });
+    if let Some(lease) = relay_lease.as_ref() {
+        release_relay_lease_after_cleanup(plugin, lease);
+    }
+}
+
+fn release_relay_lease_after_cleanup(
+    plugin: &RemoteDesktopPlugin,
+    lease: &crate::daemon::plugins::remote_desktop::relay_lease::RemoteDesktopRelayLease,
+) {
+    if let Err(error) = plugin.relay_lease_provider().release(lease) {
+        eprintln!(
+            "[remote-desktop] failed to release unattached relay lease {}: {error}",
+            lease.lease_id()
+        );
+    }
 }
 
 fn preflight_session_insert(
     plugin: &Arc<RemoteDesktopPlugin>,
     session_id: &str,
 ) -> anyhow::Result<()> {
+    let transport_manager = plugin.transport_manager();
+    let admission = acquire_transport_settlement_admission(&transport_manager)?;
+    drop(admission);
     let now = now_ms();
+    expire_inactive_sessions_by_id(plugin, now);
     let (recovery_prune, insertable) = plugin.session_store().with_sessions(|sessions| {
-        let recovery_prune = prune_inactive_sessions(plugin, sessions, now);
+        let recovery_prune = prune_terminal_sessions_locked(sessions);
         let insertable =
             ensure_session_insertable(plugin.config().max_sessions(), sessions, session_id);
         (recovery_prune, insertable)
     });
     apply_recovery_prune(plugin, &recovery_prune)?;
     insertable
+}
+
+fn acquire_transport_settlement_admission(
+    transport_manager: &RemoteDesktopTransportManager,
+) -> anyhow::Result<TransportSettlementAdmissionPermit<'_>> {
+    let quarantined_jobs = match transport_manager.acquire_session_admission() {
+        Ok(admission) => return Ok(admission),
+        Err(quarantined_jobs) => quarantined_jobs,
+    };
+    Err(RemoteDesktopError::ResourceExhausted {
+        ability: ABILITY_CREATE_SESSION,
+        detail: format!(
+            "transport settlement is quarantined for {} owned job(s); restart the runtime after inspecting transport_settlement_health",
+            quarantined_jobs
+        ),
+    }
+    .into())
 }
 
 fn ensure_session_insertable(
@@ -150,16 +219,59 @@ fn ensure_session_insertable(
 mod tests {
     use super::*;
 
+    use std::time::{Duration, Instant};
+
     use serde_json::json;
 
     use crate::daemon::persistence::{
         resources,
         resources::{ResourceBinding, ResourceType, ResourceUpsert, ResourcesFile},
     };
+    use crate::daemon::plugins::remote_desktop::constants::REASON_RESOURCE_EXHAUSTED;
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, reset_store, seed_display, test_lock, test_plugin, with_consent_ticket,
         with_input_control_consent_ticket,
     };
+    use crate::daemon::plugins::remote_desktop::transport::{
+        TransportSettlementJob, TransportSettlementStatus,
+    };
+
+    struct FailedAdmissionSettlementJob;
+
+    impl TransportSettlementJob for FailedAdmissionSettlementJob {
+        fn settlement_status_until(&mut self, _deadline: Instant) -> TransportSettlementStatus {
+            TransportSettlementStatus::Failed
+        }
+    }
+
+    #[test]
+    fn create_session_fails_closed_while_transport_quarantine_owns_resources() {
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        plugin
+            .transport_manager()
+            .settlement_queue()
+            .enqueue(FailedAdmissionSettlementJob);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while plugin
+            .transport_manager()
+            .settlement_health()
+            .admission_open()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "failed transport owner did not close RemoteApp admission"
+            );
+            std::thread::yield_now();
+        }
+
+        let error = preflight_session_insert(&plugin, "rd-blocked-by-quarantine")
+            .expect_err("new session admission must fail closed during quarantine");
+        assert!(error.to_string().contains(REASON_RESOURCE_EXHAUSTED));
+        assert!(error
+            .to_string()
+            .contains("transport settlement is quarantined"));
+    }
 
     #[test]
     fn create_session_requires_subject() {
@@ -307,7 +419,8 @@ mod tests {
             let session = sessions
                 .get_mut("rd-recovery-pruned")
                 .expect("first session exists");
-            session.close("test_terminal");
+            assert!(session.begin_close("test_terminal"));
+            session.finish_close("test_terminal");
             RemoteDesktopRecoverySnapshot::from_session(session).expect("terminal snapshot derives")
         });
         plugin
@@ -546,6 +659,71 @@ mod tests {
             assert!(
                 !sessions.contains_key("rd-stale-window"),
                 "stale target failure must not insert a session row"
+            );
+        });
+    }
+
+    #[test]
+    fn create_session_live_revalidates_an_expired_picker_row_before_insert() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = resources::upsert_resource(
+            &mut file,
+            ResourceUpsert {
+                realm: "acme",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
+                kind: ResourceType::Window,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: "remote-desktop-expired-picker-window",
+                display_name: "Still-live selected window",
+                metadata: json!({
+                    "availability": "available",
+                    "freshness": {
+                        "observed_at_ms": 1,
+                        "stale_after_ms": 1,
+                        "source": "live_refresh",
+                    },
+                    "window_id": 7,
+                    "pid": 4242,
+                    "app_name": "Editor",
+                    "x": 0,
+                    "y": 0,
+                    "width": 800,
+                    "height": 600,
+                }),
+            },
+        )
+        .unwrap();
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+        let response = handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            with_consent_ticket(
+                &plugin,
+                &env,
+                json!({"session_id": "rd-expired-picker-window", "mode": "view_only"}),
+            ),
+        )
+        .expect("device-side live verifier, not picker TTL, owns session admission");
+
+        assert_eq!(
+            response["latest_target_diagnostic"]
+                ["inventory_cache_expired_before_live_verification"],
+            json!(true)
+        );
+        assert_eq!(
+            response["latest_target_diagnostic"]["live_identity_reverified"],
+            json!(true)
+        );
+        assert!(response["target_binding"]["capture_proof"].is_object());
+        plugin.session_store().with_sessions(|sessions| {
+            assert!(
+                sessions.contains_key("rd-expired-picker-window"),
+                "session row may exist only after the matching live proof commits"
             );
         });
     }

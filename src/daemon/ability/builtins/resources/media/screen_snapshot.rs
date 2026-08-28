@@ -81,14 +81,27 @@ pub struct EncodedFrame {
 #[derive(Debug, Clone)]
 pub struct RawRgbFrame {
     pub rgb_bytes: Vec<u8>,
+    /// Dimensions of the RGB payload after region/resolution processing.
     pub width: u32,
     pub height: u32,
+    /// Dimensions of the native capture surface before presentation-domain
+    /// crop/scale. Target identity proofs must use these dimensions; `width`
+    /// and `height` belong to the encoded/presentation frame contract.
+    pub native_width: u32,
+    pub native_height: u32,
+}
+
+impl RawRgbFrame {
+    pub fn native_dimensions(&self) -> (usize, usize) {
+        (self.native_width as usize, self.native_height as usize)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenCaptureOptions {
     pub fps: u32,
     pub resolution: Option<VideoResolution>,
+    pub resize_mode: CaptureResizeMode,
     pub region: Option<CaptureRegion>,
 }
 
@@ -97,7 +110,32 @@ impl Default for ScreenCaptureOptions {
         Self {
             fps: DEFAULT_SCREEN_FPS,
             resolution: None,
+            resize_mode: CaptureResizeMode::Exact,
             region: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureResizeMode {
+    /// Produce the explicitly requested coded dimensions. This is retained for
+    /// snapshot/diagnostic callers that request an exact raster size.
+    Exact,
+    /// Treat the requested dimensions as upper bounds. Preserve aspect ratio
+    /// and never upscale a native target merely to fill the codec canvas.
+    FitWithin,
+}
+
+impl ScreenCaptureOptions {
+    pub fn output_dimensions(&self, source_width: u32, source_height: u32) -> (u32, u32) {
+        let Some(requested) = self.resolution else {
+            return (source_width, source_height);
+        };
+        match self.resize_mode {
+            CaptureResizeMode::Exact => (requested.width, requested.height),
+            CaptureResizeMode::FitWithin => {
+                fit_dimensions_within(source_width, source_height, requested)
+            }
         }
     }
 }
@@ -295,6 +333,7 @@ fn capture_window_rgb_with_xcap(
              reason={REASON_RESOURCE_UNAVAILABLE}"
         )
     })?;
+    ensure_xcap_window_owner(entry, &window)?;
     rgba_image_to_rgb_frame(rgba, options)
 }
 
@@ -397,6 +436,7 @@ fn capture_application_rgb_with_xcap(
                  reason={REASON_RESOURCE_UNAVAILABLE}"
             )
         })?;
+        ensure_xcap_window_owner(entry, window)?;
         captured.push(CapturedApplicationWindow {
             window_id,
             z,
@@ -529,15 +569,18 @@ pub fn rgba_bytes_to_rgb_frame(
     let mut rgb = rgba_region_to_rgb(rgba, source_width, region);
     let mut width = region.w;
     let mut height = region.h;
-    if let Some(target) = options.resolution {
-        rgb = resize_rgb_nearest(&rgb, width, height, target.width, target.height);
-        width = target.width;
-        height = target.height;
+    let (output_width, output_height) = options.output_dimensions(width, height);
+    if (output_width, output_height) != (width, height) {
+        rgb = resize_rgb_nearest(&rgb, width, height, output_width, output_height);
+        width = output_width;
+        height = output_height;
     }
     Ok(RawRgbFrame {
         rgb_bytes: rgb,
         width,
         height,
+        native_width: source_width,
+        native_height: source_height,
     })
 }
 
@@ -582,15 +625,18 @@ pub fn bgra_bytes_to_rgb_frame(
 
     let mut width = region.w;
     let mut height = region.h;
-    if let Some(target) = options.resolution {
-        rgb = resize_rgb_nearest(&rgb, width, height, target.width, target.height);
-        width = target.width;
-        height = target.height;
+    let (output_width, output_height) = options.output_dimensions(width, height);
+    if (output_width, output_height) != (width, height) {
+        rgb = resize_rgb_nearest(&rgb, width, height, output_width, output_height);
+        width = output_width;
+        height = output_height;
     }
     Ok(RawRgbFrame {
         rgb_bytes: rgb,
         width,
         height,
+        native_width: source_width,
+        native_height: source_height,
     })
 }
 
@@ -758,7 +804,51 @@ fn select_window_by_exact_identity(
     Ok(window)
 }
 
-#[cfg(feature = "native-media")]
+#[cfg(all(feature = "native-media", target_os = "linux"))]
+fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> anyhow::Result<()> {
+    let expected_pid = entry
+        .metadata
+        .get("pid")
+        .or_else(|| entry.metadata.get("primary_pid"))
+        .and_then(Value::as_u64);
+    let actual_pid = observed_xcap_window_pid(window)?;
+    let expected_process_instance_id = entry
+        .metadata
+        .get("process_instance_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{ABILITY_SCREEN_SNAPSHOT}: Linux window/application resource has no process_instance_id; reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+    let actual_pid_u32 = actual_pid
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{ABILITY_SCREEN_SNAPSHOT}: X-Resource owner PID is unavailable; reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+    let actual_process_instance_id =
+        super::linux_x11_window_owner::LinuxProcessInstance::resolve(actual_pid_u32)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "{ABILITY_SCREEN_SNAPSHOT}: resolve Linux process instance for X11 owner {actual_pid_u32}: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
+                )
+            })?
+            .stable_id();
+    if expected_pid != Some(u64::from(actual_pid_u32))
+        || actual_process_instance_id != expected_process_instance_id
+    {
+        anyhow::bail!(
+            "{ABILITY_SCREEN_SNAPSHOT}: Linux X11 owner process instance no longer matches the committed resource; reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "native-media", not(target_os = "linux")))]
 fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> anyhow::Result<()> {
     let expected_pid = entry
         .metadata
@@ -766,7 +856,7 @@ fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> any
         .or_else(|| entry.metadata.get("primary_pid"))
         .and_then(Value::as_u64);
     let expected_app = entry.metadata.get("app_name").and_then(Value::as_str);
-    let actual_pid = window.pid().ok().map(u64::from);
+    let actual_pid = observed_xcap_window_pid(window)?;
     let actual_app = window.app_name().ok();
     if expected_pid.is_none() && expected_app.is_none() {
         anyhow::bail!(
@@ -774,9 +864,12 @@ fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> any
              reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }
-    if expected_pid.is_some_and(|expected| actual_pid != Some(expected))
-        || expected_app.is_some_and(|expected| actual_app.as_deref() != Some(expected))
-    {
+    if !native_window_owner_matches(
+        expected_pid,
+        expected_app,
+        actual_pid,
+        actual_app.as_deref(),
+    ) {
         anyhow::bail!(
             "{ABILITY_SCREEN_SNAPSHOT}: native window owner no longer matches the committed resource; \
              expected_pid={expected_pid:?}, actual_pid={actual_pid:?}, \
@@ -785,6 +878,46 @@ fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> any
         );
     }
     Ok(())
+}
+
+#[cfg(all(feature = "native-media", any(test, not(target_os = "linux"))))]
+fn native_window_owner_matches(
+    expected_pid: Option<u64>,
+    expected_app: Option<&str>,
+    actual_pid: Option<u64>,
+    actual_app: Option<&str>,
+) -> bool {
+    match expected_pid {
+        // A committed process id is the authoritative owner identity. The app
+        // name is display metadata and X11 backends may normalize its casing
+        // differently while still resolving the exact same local process.
+        Some(expected) => actual_pid == Some(expected),
+        None => expected_app.is_some_and(|expected| {
+            actual_app.is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+        }),
+    }
+}
+
+#[cfg(feature = "native-media")]
+fn observed_xcap_window_pid(window: &xcap::Window) -> anyhow::Result<Option<u64>> {
+    #[cfg(target_os = "linux")]
+    {
+        let window_id = window.id().map_err(|error| {
+            anyhow::anyhow!(
+                "{ABILITY_SCREEN_SNAPSHOT}: read native window id for X-Resource owner resolution: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+        return super::linux_x11_window_owner::LinuxX11WindowOwnerResolver::connect()
+            .and_then(|resolver| resolver.resolve_local_client_pid(window_id))
+            .map(|pid| pid.map(u64::from))
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "{ABILITY_SCREEN_SNAPSHOT}: resolve X11 window owner for window {window_id}: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
+                )
+            });
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(window.pid().ok().map(u64::from))
 }
 
 fn validate_region(region: CaptureRegion, width: u32, height: u32) -> anyhow::Result<()> {
@@ -845,6 +978,41 @@ fn resize_rgb_nearest(
         }
     }
     out
+}
+
+fn fit_dimensions_within(
+    source_width: u32,
+    source_height: u32,
+    bounds: VideoResolution,
+) -> (u32, u32) {
+    if source_width == 0 || source_height == 0 {
+        return (source_width, source_height);
+    }
+    if source_width <= bounds.width && source_height <= bounds.height {
+        return (source_width, source_height);
+    }
+    let width_limited_height = rounded_scaled_dimension(
+        u64::from(source_height),
+        u64::from(bounds.width),
+        u64::from(source_width),
+    );
+    let height_limited_width = rounded_scaled_dimension(
+        u64::from(source_width),
+        u64::from(bounds.height),
+        u64::from(source_height),
+    );
+    if width_limited_height <= u64::from(bounds.height) {
+        (bounds.width.max(1), width_limited_height.max(1) as u32)
+    } else {
+        (height_limited_width.max(1) as u32, bounds.height.max(1))
+    }
+}
+
+fn rounded_scaled_dimension(value: u64, numerator: u64, denominator: u64) -> u64 {
+    value
+        .saturating_mul(numerator)
+        .saturating_add(denominator / 2)
+        / denominator.max(1)
 }
 
 fn encode_jpeg_checked(rgb: &[u8], width: u32, height: u32) -> anyhow::Result<Vec<u8>> {
@@ -1217,6 +1385,39 @@ mod tests {
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
 
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn native_window_owner_treats_exact_pid_as_authoritative() {
+        assert!(native_window_owner_matches(
+            Some(2971),
+            Some("Easynetremoteappsentinel"),
+            Some(2971),
+            Some("EasyNetRemoteAppSentinel"),
+        ));
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn native_window_owner_rejects_pid_mismatch_even_when_app_matches() {
+        assert!(!native_window_owner_matches(
+            Some(2971),
+            Some("EasyNetRemoteAppSentinel"),
+            Some(4000),
+            Some("EasyNetRemoteAppSentinel"),
+        ));
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn native_window_owner_app_fallback_is_case_insensitive_without_pid() {
+        assert!(native_window_owner_matches(
+            None,
+            Some("Easynetremoteappsentinel"),
+            None,
+            Some("EasyNetRemoteAppSentinel"),
+        ));
+    }
+
     fn seed_display(file: &mut ResourcesFile, hardware_id: &str) -> String {
         seed_display_with_metadata(file, hardware_id, json!({}))
     }
@@ -1305,6 +1506,35 @@ mod tests {
         assert_eq!((frame.width, frame.height), (4, 2));
         assert_eq!(&frame.rgb_bytes[0..3], &[255, 0, 0]);
         assert_eq!(&frame.rgb_bytes[6..9], &[0, 255, 0]);
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn application_compositor_keeps_native_surface_dimensions_when_output_is_scaled() {
+        let rgba = xcap::image::RgbaImage::from_raw(4, 2, vec![0x7f; 4 * 2 * 4])
+            .expect("application window image");
+        let frame = compose_application_windows(
+            vec![CapturedApplicationWindow {
+                window_id: 10,
+                z: 0,
+                x: 15,
+                y: 25,
+                rgba,
+            }],
+            &ScreenCaptureOptions {
+                fps: 30,
+                resolution: Some(VideoResolution {
+                    width: 1280,
+                    height: 720,
+                }),
+                resize_mode: CaptureResizeMode::Exact,
+                region: None,
+            },
+        )
+        .expect("scaled application surface");
+
+        assert_eq!((frame.width, frame.height), (1280, 720));
+        assert_eq!(frame.native_dimensions(), (4, 2));
     }
 
     #[cfg(feature = "native-media")]
@@ -1579,6 +1809,7 @@ mod tests {
                         width: 320,
                         height: 180,
                     }),
+                    resize_mode: CaptureResizeMode::Exact,
                     region: None,
                 },
             )

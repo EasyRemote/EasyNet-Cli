@@ -36,6 +36,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentAuthor
     pub(in crate::daemon::plugins::remote_desktop) caller_ura: String,
     pub(in crate::daemon::plugins::remote_desktop) subject_ura: String,
     pub(in crate::daemon::plugins::remote_desktop) input_control_granted: bool,
+    pub(in crate::daemon::plugins::remote_desktop) remote_focus_granted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +65,7 @@ struct PendingConsent {
     subject_ura: String,
     intent: String,
     input_control_granted: bool,
+    remote_focus_granted: bool,
     expires_at_ms: u64,
 }
 
@@ -88,7 +90,7 @@ impl RemoteDesktopConsentRegistry {
         subject_ura: &str,
         intent: &str,
     ) -> Result<IssuedConsentTicket, ConsentTicketError> {
-        self.issue_with_grants(caller_ura, subject_ura, intent, false)
+        self.issue_with_grants(caller_ura, subject_ura, intent, false, false)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn issue_with_grants(
@@ -97,6 +99,7 @@ impl RemoteDesktopConsentRegistry {
         subject_ura: &str,
         intent: &str,
         input_control_granted: bool,
+        remote_focus_granted: bool,
     ) -> Result<IssuedConsentTicket, ConsentTicketError> {
         let now = now_ms();
         let mut pending = self.pending();
@@ -113,6 +116,7 @@ impl RemoteDesktopConsentRegistry {
                 subject_ura: subject_ura.to_string(),
                 intent: intent.to_string(),
                 input_control_granted,
+                remote_focus_granted,
                 expires_at_ms,
             },
         );
@@ -148,6 +152,7 @@ impl RemoteDesktopConsentRegistry {
             caller_ura: grant.caller_ura,
             subject_ura: grant.subject_ura,
             input_control_granted: grant.input_control_granted,
+            remote_focus_granted: grant.remote_focus_granted,
         })
     }
 
@@ -190,13 +195,14 @@ mod tests {
     fn consent_ticket_preserves_explicit_input_control_grant() {
         let registry = RemoteDesktopConsentRegistry::new(2);
         let issued = registry
-            .issue_with_grants("caller", "resource", CONSENT_INTENT, true)
+            .issue_with_grants("caller", "resource", CONSENT_INTENT, true, true)
             .unwrap();
         let authorization = registry
             .consume(&issued.ticket, "caller", "resource", CONSENT_INTENT)
             .unwrap();
 
         assert!(authorization.input_control_granted);
+        assert!(authorization.remote_focus_granted);
     }
 
     #[test]

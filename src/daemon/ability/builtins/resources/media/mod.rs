@@ -48,6 +48,11 @@ mod avfoundation_camera;
 #[cfg(any(feature = "native-media", feature = "headless-media"))]
 pub mod screen_snapshot;
 
+/// Shared Linux/X11 owner identity resolver used by resource discovery,
+/// initial capture proof, and continuous RemoteApp target observation.
+#[cfg(all(target_os = "linux", feature = "native-media"))]
+pub(crate) mod linux_x11_window_owner;
+
 /// `mic.subscribe` (RFC-005 v3.2 A1) — real handler. cpal-backed
 /// `CpalMicBackend` opens the default input device on a
 /// dedicated thread and broadcasts S16LE PCM frames through a

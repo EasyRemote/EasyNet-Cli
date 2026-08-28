@@ -17,7 +17,6 @@ use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_co
 use crate::daemon::plugins::remote_desktop::transport::{
     negotiate_remote_offer, RemoteOfferNegotiation,
 };
-use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
 /// Handle `remote_desktop.set_description`.
 pub(in crate::daemon::plugins::remote_desktop) fn handle(
@@ -85,7 +84,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     session,
                 )?;
                 session.set_description(&side, description)?;
-                Ok(serialize_session(session))
+                Ok(plugin.session_view(session))
             });
     }
     let offer_sdp = offer_sdp.ok_or_else(|| RemoteDesktopError::InvalidArgument {
@@ -115,7 +114,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     session_id: session_id.clone(),
                 }
             })?;
-            Ok(serialize_session(session))
+            Ok(plugin.session_view(session))
         })
 }
 

@@ -97,6 +97,10 @@ impl RemoteDesktopConsentState {
         &self.grant
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) const fn consent_epoch(&self) -> u64 {
+        self.consent_epoch
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn revoke(&mut self) -> bool {
         self.transition_terminal(RemoteDesktopConsentPhase::Revoked)
     }

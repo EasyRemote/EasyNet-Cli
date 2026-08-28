@@ -58,6 +58,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentGrant 
     consent_id: String,
     subject_ura: String,
     input_control_granted: bool,
+    remote_focus_granted: bool,
     approval_receipt: RemoteDesktopConsentReceipt,
 }
 
@@ -83,6 +84,10 @@ impl RemoteDesktopConsentGrant {
             subject_ura: required_string(value, "subject_ura")?,
             input_control_granted: grant_scope
                 .get("input_control")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            remote_focus_granted: grant_scope
+                .get("remote_focus")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             approval_receipt,
@@ -113,6 +118,7 @@ impl RemoteDesktopConsentGrant {
                 consent_id: authorization.consent_id,
                 subject_ura: authorization.subject_ura,
                 input_control_granted: authorization.input_control_granted,
+                remote_focus_granted: authorization.remote_focus_granted,
                 approval_receipt,
             });
         }
@@ -126,12 +132,22 @@ impl RemoteDesktopConsentGrant {
     pub(in crate::daemon::plugins::remote_desktop) fn from_envelope_for_test(
         env: &EnvelopeContext,
     ) -> Self {
+        Self::from_envelope_with_grants_for_test(env, false, false)
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn from_envelope_with_grants_for_test(
+        env: &EnvelopeContext,
+        input_control_granted: bool,
+        remote_focus_granted: bool,
+    ) -> Self {
         Self {
             policy: POLICY_LOCAL_USER_CONSENT,
             approval_actor_ura: env.caller().to_string(),
             consent_id: "test-consent".to_string(),
             subject_ura: env.subject().to_string(),
-            input_control_granted: false,
+            input_control_granted,
+            remote_focus_granted,
             approval_receipt: first_receipt_from_causal_context(
                 "test.ability",
                 env.causal_context(),
@@ -151,6 +167,10 @@ impl RemoteDesktopConsentGrant {
         self.input_control_granted
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) const fn permits_remote_focus(&self) -> bool {
+        self.input_control_granted && self.remote_focus_granted
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "policy": self.policy,
@@ -160,6 +180,7 @@ impl RemoteDesktopConsentGrant {
             "grant_scope": {
                 "media": true,
                 "input_control": self.input_control_granted,
+                "remote_focus": self.remote_focus_granted,
             },
             "approval_receipt": self.approval_receipt.to_value(),
         })
@@ -264,6 +285,7 @@ mod tests {
             caller_ura: env.caller().to_string(),
             subject_ura: env.subject().to_string(),
             input_control_granted: false,
+            remote_focus_granted: false,
         }
     }
 

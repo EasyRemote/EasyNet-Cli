@@ -11,6 +11,7 @@
 //   through Invocation once a direct media/control channel is negotiated.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,8 +21,12 @@ use sha2::{Digest as _, Sha256};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
 use crate::daemon::plugins::remote_desktop::session::now_ms;
-use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
-use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::session_store::{
+    RemoteDesktopSessionStore, TargetSafetyReleasePermit,
+};
+use crate::daemon::plugins::remote_desktop::session_transport_state::{
+    PreviewTransportEpoch, TransportEpoch,
+};
 use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
 use crate::daemon::plugins::remote_desktop::target_observer::{
     validate_target_input_observation, validate_target_pointer_input_observation,
@@ -32,10 +37,14 @@ use crate::daemon::plugins::remote_desktop::target_snapshot::{
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapshot;
 
+mod keyboard;
+mod wheel;
+
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
 const MAX_CLIENT_SENT_AT_MS: u64 = 9_007_199_254_740_991;
 const MAX_CLIENT_SEQUENCE: u64 = 9_007_199_254_740_991;
+const MAX_WHEEL_DELTA_PIXELS_PER_FRAME: f64 = 8_192.0;
 const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
 const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;
 const MAX_TRACKED_PRESSED_KEYS: usize = 256;
@@ -153,8 +162,13 @@ pub struct PointerInputFrame {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub button: Option<u8>,
+    /// Horizontal wheel distance in CSS pixels. Browser delta modes are
+    /// normalized at the client boundary; platform adapters translate pixels
+    /// to their native continuous or detent representation.
     #[serde(default)]
     pub delta_x: Option<f64>,
+    /// Vertical wheel distance in CSS pixels. Positive values scroll toward
+    /// increasing content coordinates (normally down).
     #[serde(default)]
     pub delta_y: Option<f64>,
     #[serde(default)]
@@ -224,7 +238,7 @@ impl InputApplyOutcome {
     }
 
     fn with_target_guard_validation(mut self, validation: Option<TargetInputGuardProof>) -> Self {
-        if self.applied {
+        if self.applied && self.target_guard_validation.is_none() {
             self.target_guard_validation = validation;
         }
         self
@@ -393,12 +407,54 @@ impl AppliedInputState {
     }
 }
 
-impl Drop for AppliedInputState {
+/// Cancellation-safe input ledger coupled to an explicit reducing-operation
+/// capability minted for the channel's exact transport generation.
+///
+/// A plain `AppliedInputState` never performs host effects from `Drop`. Only
+/// this guard may do so, and it serializes cleanup through the same target
+/// operation gate used by active input and target lifecycle transitions.
+struct AppliedInputReleaseGuard {
+    state: AppliedInputState,
+    permit: TargetSafetyReleasePermit,
+}
+
+impl AppliedInputReleaseGuard {
+    fn new(permit: TargetSafetyReleasePermit) -> Self {
+        Self {
+            state: AppliedInputState::default(),
+            permit,
+        }
+    }
+
+    fn operation_lock(&self) -> Arc<std::sync::Mutex<()>> {
+        self.permit.operation_lock()
+    }
+
+    fn release_all_under_permit(&mut self) -> InputReleaseSummary {
+        let _operation = self.permit.operation_guard();
+        self.state.release_all()
+    }
+}
+
+impl Deref for AppliedInputReleaseGuard {
+    type Target = AppliedInputState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl DerefMut for AppliedInputReleaseGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
+impl Drop for AppliedInputReleaseGuard {
     fn drop(&mut self) {
-        // Cancellation can drop the channel future before it observes an
-        // explicit close event. Releases are idempotent at the OS input layer,
-        // and this destructor is the final fail-safe for that path.
-        let _ = self.release_all();
+        // Cancellation may skip OnClosing/OnClose. The permit remains valid
+        // solely for idempotent reducing releases after terminal transition.
+        let _ = self.release_all_under_permit();
     }
 }
 
@@ -702,10 +758,12 @@ impl EffectiveRemoteDesktopInputPolicy {
 
 fn target_snapshot_error_reason(error: TargetSnapshotDeadlineError) -> &'static str {
     match error {
-        TargetSnapshotDeadlineError::DeadlineExceeded { .. } => {
-            "target_input_guard_deadline_exceeded"
-        }
+        TargetSnapshotDeadlineError::DeadlineExceeded { .. }
+        | TargetSnapshotDeadlineError::QueueFull { .. } => "target_input_guard_deadline_exceeded",
         TargetSnapshotDeadlineError::SpawnFailed(_)
+        | TargetSnapshotDeadlineError::SequenceExhausted(_)
+        | TargetSnapshotDeadlineError::ProcessUnavailable { .. }
+        | TargetSnapshotDeadlineError::ProtocolFailed { .. }
         | TargetSnapshotDeadlineError::WorkerFailed { .. } => "target_input_guard_snapshot_failed",
     }
 }
@@ -752,7 +810,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effecti
                     Ok(validation) => validation,
                     Err(reason) => return InputApplyOutcome::rejected(reason),
                 };
-            apply_pointer_frame(frame, pointer_target)
+            apply_pointer_frame(frame, pointer_target, target_guard_validation.as_ref())
                 .with_target_guard_validation(target_guard_validation)
         }
         RemoteDesktopInputFrame::Key(frame) => {
@@ -766,7 +824,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effecti
                 Ok(validation) => validation,
                 Err(reason) => return InputApplyOutcome::rejected(reason),
             };
-            apply_key_frame(frame).with_target_guard_validation(target_guard_validation)
+            apply_key_frame(frame, target_guard_validation.as_ref())
+                .with_target_guard_validation(target_guard_validation)
         }
         RemoteDesktopInputFrame::Clipboard(_) => {
             InputApplyOutcome::rejected("clipboard_input_unsupported")
@@ -802,7 +861,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapsh
 #[derive(Debug, Clone, Copy)]
 pub(in crate::daemon::plugins::remote_desktop) enum InputTransportGuard {
     DirectWebRtc(TransportEpoch),
-    DiagnosticPreview,
+    DiagnosticPreview(PreviewTransportEpoch),
 }
 
 #[cfg(test)]
@@ -866,7 +925,19 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
     let mut sequence_gate = InputSequenceGate::default();
     let mut reject_diagnostics = InputRejectCoalescer::default();
     let mut applied_diagnostics = InputAppliedDiagnosticGate::default();
-    let mut applied_input_state = AppliedInputState::default();
+    let Some(safety_release_permit) =
+        sessions.issue_target_safety_release_permit(&session_id, epoch)
+    else {
+        record_input_channel_event(
+            &sessions,
+            &session_id,
+            epoch,
+            "INPUT_CHANNEL_REJECTED",
+            json!({ "reason": "input_transport_generation_not_active" }),
+        );
+        return;
+    };
+    let mut applied_input_state = AppliedInputReleaseGuard::new(safety_release_permit);
     while let Some(event) = data_channel.poll().await {
         match event {
             DataChannelEvent::OnOpen => {
@@ -887,7 +958,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
             }
             DataChannelEvent::OnClose | DataChannelEvent::OnClosing => {
                 flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
-                let release_summary = applied_input_state.release_all();
+                let release_summary = applied_input_state.release_all_under_permit();
                 record_input_channel_event(
                     &sessions,
                     &session_id,
@@ -983,19 +1054,64 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     );
                     continue;
                 }
+                let target_operation_lock = applied_input_state.operation_lock();
+                let _target_operation = match target_operation_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 let tracked_release = applied_input_state.tracked_release(&frame);
-                let (outcome, input_context, safety_release) = if let Some(release) =
-                    tracked_release
-                {
-                    let context = release.context();
-                    (release.apply(), context, true)
-                } else {
-                    let Some(effective_input_policy) = current_session_effective_input_policy(
-                        &sessions,
-                        &session_id,
-                        InputTransportGuard::DirectWebRtc(epoch),
-                        &input_policy,
-                    ) else {
+                let active_policy = admit_input_host_effective_policy(
+                    &sessions,
+                    &session_id,
+                    InputTransportGuard::DirectWebRtc(epoch),
+                    &input_policy,
+                    frame.kind(),
+                );
+                let (
+                    outcome,
+                    input_context,
+                    safety_release,
+                    safety_release_reason,
+                    pointer_position_applied,
+                ) = match (active_policy, tracked_release) {
+                    (Some(effective_input_policy), tracked_release) => {
+                        let input_context = effective_input_policy.accepted_input_context();
+                        let normal_outcome = apply_input_frame_with_effective_policy(
+                            &effective_input_policy,
+                            &frame,
+                        );
+                        if normal_outcome.applied || tracked_release.is_none() {
+                            (
+                                normal_outcome,
+                                input_context,
+                                false,
+                                None,
+                                matches!(frame, RemoteDesktopInputFrame::Pointer(_))
+                                    .then_some(true),
+                            )
+                        } else {
+                            let normal_reject_reason = normal_outcome
+                                .reason
+                                .unwrap_or("normal_release_admission_failed");
+                            let release = tracked_release.expect("tracked release checked above");
+                            (
+                                release.apply(),
+                                release.context(),
+                                true,
+                                Some(normal_reject_reason),
+                                matches!(frame, RemoteDesktopInputFrame::Pointer(_))
+                                    .then_some(false),
+                            )
+                        }
+                    }
+                    (None, Some(release)) => (
+                        release.apply(),
+                        release.context(),
+                        true,
+                        Some("active_session_admission_failed"),
+                        matches!(frame, RemoteDesktopInputFrame::Pointer(_)).then_some(false),
+                    ),
+                    (None, None) => {
                         rejected_count = rejected_count.saturating_add(1);
                         record_input_rejection(
                             &mut reject_diagnostics,
@@ -1009,19 +1125,13 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                                 .client_sequence(client_sequence),
                         );
                         continue;
-                    };
-                    let input_context = effective_input_policy.accepted_input_context();
-                    (
-                        apply_input_frame_with_effective_policy(&effective_input_policy, &frame),
-                        input_context,
-                        false,
-                    )
+                    }
                 };
                 if outcome.applied {
                     applied_input_state.observe_applied(&frame, input_context);
                     accepted_count = accepted_count.saturating_add(1);
                     sessions.mark_input_frame_applied(&session_id, epoch);
-                    if applied_diagnostics.should_emit(kind, accepted_count) {
+                    if applied_diagnostics.should_emit(kind, frame.action(), accepted_count) {
                         flush_input_rejections(
                             &mut reject_diagnostics,
                             &sessions,
@@ -1046,6 +1156,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                                 input_context,
                                 outcome.target_guard_validation.as_ref(),
                                 safety_release,
+                                safety_release_reason,
+                                pointer_position_applied,
                             ),
                         );
                     }
@@ -1072,7 +1184,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
         }
     }
     flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
-    let release_summary = applied_input_state.release_all();
+    let release_summary = applied_input_state.release_all_under_permit();
     if release_summary.attempted > 0 {
         record_input_channel_event(
             &sessions,
@@ -1090,8 +1202,10 @@ struct InputAppliedDiagnosticGate {
 }
 
 impl InputAppliedDiagnosticGate {
-    fn should_emit(&mut self, kind: &str, accepted_count: u64) -> bool {
-        self.emitted_kinds.insert(kind.to_string())
+    fn should_emit(&mut self, kind: &str, action: &str, accepted_count: u64) -> bool {
+        let first_for_kind = self.emitted_kinds.insert(kind.to_string());
+        matches!(action, "down" | "up")
+            || first_for_kind
             || accepted_count == 1
             || accepted_count.is_multiple_of(120)
     }
@@ -1438,6 +1552,8 @@ fn input_frame_applied_payload(
     input_context: InputFrameTargetContext,
     target_guard_validation: Option<&TargetInputGuardProof>,
     safety_release: bool,
+    safety_release_reason: Option<&'static str>,
+    pointer_position_applied: Option<bool>,
 ) -> Value {
     let mut payload = Map::new();
     payload.insert(
@@ -1463,6 +1579,12 @@ fn input_frame_applied_payload(
     insert_client_sequence(&mut payload, client_sequence);
     input_context.insert_into(&mut payload);
     payload.insert("safety_release".to_string(), json!(safety_release));
+    if let Some(reason) = safety_release_reason {
+        payload.insert("safety_release_reason".to_string(), json!(reason));
+    }
+    if let Some(applied) = pointer_position_applied {
+        payload.insert("pointer_position_applied".to_string(), json!(applied));
+    }
     if let Some(validation) = target_guard_validation {
         payload.insert(
             "target_guard_validation".to_string(),
@@ -1604,7 +1726,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_effective_inpu
 ) -> Option<EffectiveRemoteDesktopInputPolicy> {
     let mut s = sessions.lock();
     let session = s.get_mut(session_id)?;
-    if session.is_terminal() {
+    if session.is_terminal() || session.is_terminating() || session.is_expired_at(now_ms()) {
         return None;
     }
     let snapshot = session.target_snapshot();
@@ -1616,10 +1738,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_effective_inpu
                 return None;
             }
         }
-        InputTransportGuard::DiagnosticPreview => {
-            if !session.preview_attached()
-                && !effective_policy.rejects_keyboard_pointer_by_view_only_scope()
-            {
+        InputTransportGuard::DiagnosticPreview(epoch) => {
+            if session.preview_transport_epoch() != Some(epoch) {
                 return None;
             }
         }
@@ -1628,6 +1748,55 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_effective_inpu
     {
         return None;
     }
+    Some(effective_policy)
+}
+
+/// Admit one input frame immediately before its host OS effect.
+///
+/// Callers must hold the session target-operation gate until the returned
+/// policy has either rejected the frame or completed the OS effect. Transport
+/// generation changes use the same gate, so the exact epoch, lease, consent,
+/// target snapshot and coherence reservation form one linearization point.
+pub(in crate::daemon::plugins::remote_desktop) fn admit_input_host_effective_policy(
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
+    transport_guard: InputTransportGuard,
+    base_policy: &EffectiveRemoteDesktopInputPolicy,
+    kind: RemoteDesktopInputKind,
+) -> Option<EffectiveRemoteDesktopInputPolicy> {
+    let mut rows = sessions.lock();
+    let session = rows.get_mut(session_id)?;
+    if session.is_terminal() || session.is_terminating() || session.is_expired_at(now_ms()) {
+        return None;
+    }
+    match transport_guard {
+        InputTransportGuard::DirectWebRtc(epoch)
+            if session.transport_epoch() != Some(epoch.value()) =>
+        {
+            return None;
+        }
+        InputTransportGuard::DiagnosticPreview(epoch)
+            if session.preview_transport_epoch() != Some(epoch) =>
+        {
+            return None;
+        }
+        InputTransportGuard::DirectWebRtc(_) | InputTransportGuard::DiagnosticPreview(_) => {}
+    }
+    let snapshot = session.target_snapshot();
+    let effective_policy = base_policy.for_current_target(snapshot, session.target_binding());
+    if effective_policy
+        .reject_reason(kind.as_policy_key())
+        .is_some()
+    {
+        return Some(effective_policy);
+    }
+    if !session.consent_state().permits_media_input()
+        || !session.consent().permits_input_control()
+        || !snapshot.input_enabled()
+    {
+        return None;
+    }
+    session.reserve_target_operation();
     Some(effective_policy)
 }
 
@@ -1834,6 +2003,17 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
             {
                 anyhow::bail!("pointer wheel deltas must be finite")
             }
+            if pointer
+                .delta_x
+                .is_some_and(|value| value.abs() > MAX_WHEEL_DELTA_PIXELS_PER_FRAME)
+                || pointer
+                    .delta_y
+                    .is_some_and(|value| value.abs() > MAX_WHEEL_DELTA_PIXELS_PER_FRAME)
+            {
+                anyhow::bail!(
+                    "pointer wheel deltas must not exceed {MAX_WHEEL_DELTA_PIXELS_PER_FRAME} CSS pixels per frame"
+                )
+            }
             validate_client_sent_at_ms(pointer.sent_at_ms)?;
             validate_client_sequence(pointer.client_sequence)?;
             validate_target_focus_epoch(pointer.target_focus_epoch)?;
@@ -1889,12 +2069,16 @@ fn reject_unsupported_input_channel_frame(frame: &RemoteDesktopInputFrame) -> an
 fn apply_pointer_frame(
     frame: &PointerInputFrame,
     target: Option<PointerTargetGeometry>,
+    target_guard: Option<&TargetInputGuardProof>,
 ) -> InputApplyOutcome {
-    platform::apply_pointer_frame(frame, target)
+    platform::apply_pointer_frame(frame, target, target_guard)
 }
 
-fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
-    platform::apply_key_frame(frame)
+fn apply_key_frame(
+    frame: &KeyInputFrame,
+    target_guard: Option<&TargetInputGuardProof>,
+) -> InputApplyOutcome {
+    platform::apply_key_frame(frame, target_guard)
 }
 
 #[cfg(target_os = "macos")]
@@ -1907,9 +2091,10 @@ mod platform {
     use objc2_core_foundation::CFString;
     use objc2_foundation::{NSMutableDictionary, NSNumber};
 
+    use super::keyboard::PhysicalKey;
     use super::{
         map_pointer_point, InputApplyOutcome, KeyInputFrame, PointerInputFrame,
-        PointerTargetGeometry,
+        PointerTargetGeometry, TargetInputGuardProof,
     };
 
     #[repr(C)]
@@ -1988,6 +2173,7 @@ mod platform {
     pub(super) fn apply_pointer_frame(
         frame: &PointerInputFrame,
         target: Option<PointerTargetGeometry>,
+        _target_guard: Option<&TargetInputGuardProof>,
     ) -> InputApplyOutcome {
         if !input_injection_available() {
             request_accessibility_prompt();
@@ -2047,7 +2233,10 @@ mod platform {
         InputApplyOutcome::applied()
     }
 
-    pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
+    pub(super) fn apply_key_frame(
+        frame: &KeyInputFrame,
+        _target_guard: Option<&TargetInputGuardProof>,
+    ) -> InputApplyOutcome {
         if !input_injection_available() {
             request_accessibility_prompt();
             return InputApplyOutcome::rejected(ACCESSIBILITY_DENIED_REASON);
@@ -2150,70 +2339,140 @@ mod platform {
     }
 
     fn keycode_from_dom_code(code: &str) -> Option<u16> {
-        match code {
-            "KeyA" => Some(0),
-            "KeyS" => Some(1),
-            "KeyD" => Some(2),
-            "KeyF" => Some(3),
-            "KeyH" => Some(4),
-            "KeyG" => Some(5),
-            "KeyZ" => Some(6),
-            "KeyX" => Some(7),
-            "KeyC" => Some(8),
-            "KeyV" => Some(9),
-            "KeyB" => Some(11),
-            "KeyQ" => Some(12),
-            "KeyW" => Some(13),
-            "KeyE" => Some(14),
-            "KeyR" => Some(15),
-            "KeyY" => Some(16),
-            "KeyT" => Some(17),
-            "Digit1" => Some(18),
-            "Digit2" => Some(19),
-            "Digit3" => Some(20),
-            "Digit4" => Some(21),
-            "Digit6" => Some(22),
-            "Digit5" => Some(23),
-            "Equal" => Some(24),
-            "Digit9" => Some(25),
-            "Digit7" => Some(26),
-            "Minus" => Some(27),
-            "Digit8" => Some(28),
-            "Digit0" => Some(29),
-            "BracketRight" => Some(30),
-            "KeyO" => Some(31),
-            "KeyU" => Some(32),
-            "BracketLeft" => Some(33),
-            "KeyI" => Some(34),
-            "KeyP" => Some(35),
-            "Enter" => Some(36),
-            "KeyL" => Some(37),
-            "KeyJ" => Some(38),
-            "Quote" => Some(39),
-            "KeyK" => Some(40),
-            "Semicolon" => Some(41),
-            "Backslash" => Some(42),
-            "Comma" => Some(43),
-            "Slash" => Some(44),
-            "KeyN" => Some(45),
-            "KeyM" => Some(46),
-            "Period" => Some(47),
-            "Tab" => Some(48),
-            "Space" => Some(49),
-            "Backquote" => Some(50),
-            "Backspace" => Some(51),
-            "Escape" => Some(53),
-            "MetaLeft" | "MetaRight" => Some(55),
-            "ShiftLeft" => Some(56),
-            "CapsLock" => Some(57),
-            "AltLeft" | "AltRight" => Some(58),
-            "ControlLeft" | "ControlRight" => Some(59),
-            "ShiftRight" => Some(60),
-            "ArrowLeft" => Some(123),
-            "ArrowRight" => Some(124),
-            "ArrowDown" => Some(125),
-            "ArrowUp" => Some(126),
-            _ => None,
+        Some(match PhysicalKey::from_dom_code(code)? {
+            PhysicalKey::Letter(letter) => match letter {
+                b'A' => 0,
+                b'S' => 1,
+                b'D' => 2,
+                b'F' => 3,
+                b'H' => 4,
+                b'G' => 5,
+                b'Z' => 6,
+                b'X' => 7,
+                b'C' => 8,
+                b'V' => 9,
+                b'B' => 11,
+                b'Q' => 12,
+                b'W' => 13,
+                b'E' => 14,
+                b'R' => 15,
+                b'Y' => 16,
+                b'T' => 17,
+                b'O' => 31,
+                b'U' => 32,
+                b'I' => 34,
+                b'P' => 35,
+                b'L' => 37,
+                b'J' => 38,
+                b'K' => 40,
+                b'N' => 45,
+                b'M' => 46,
+                _ => return None,
+            },
+            PhysicalKey::Digit(digit) => match digit {
+                b'1' => 18,
+                b'2' => 19,
+                b'3' => 20,
+                b'4' => 21,
+                b'6' => 22,
+                b'5' => 23,
+                b'9' => 25,
+                b'7' => 26,
+                b'8' => 28,
+                b'0' => 29,
+                _ => return None,
+            },
+            PhysicalKey::Function(function) => match function {
+                1 => 122,
+                2 => 120,
+                3 => 99,
+                4 => 118,
+                5 => 96,
+                6 => 97,
+                7 => 98,
+                8 => 100,
+                9 => 101,
+                10 => 109,
+                11 => 103,
+                12 => 111,
+                _ => return None,
+            },
+            PhysicalKey::NumpadDigit(digit) => match digit {
+                b'0' => 82,
+                b'1' => 83,
+                b'2' => 84,
+                b'3' => 85,
+                b'4' => 86,
+                b'5' => 87,
+                b'6' => 88,
+                b'7' => 89,
+                b'8' => 91,
+                b'9' => 92,
+                _ => return None,
+            },
+            PhysicalKey::Enter => 36,
+            PhysicalKey::NumpadEnter => 76,
+            PhysicalKey::Tab => 48,
+            PhysicalKey::Space => 49,
+            PhysicalKey::Backspace => 51,
+            PhysicalKey::Escape => 53,
+            PhysicalKey::CapsLock => 57,
+            PhysicalKey::ShiftLeft => 56,
+            PhysicalKey::ShiftRight => 60,
+            PhysicalKey::ControlLeft => 59,
+            PhysicalKey::ControlRight => 62,
+            PhysicalKey::AltLeft => 58,
+            PhysicalKey::AltRight => 61,
+            PhysicalKey::MetaLeft => 55,
+            PhysicalKey::MetaRight => 54,
+            PhysicalKey::ArrowLeft => 123,
+            PhysicalKey::ArrowRight => 124,
+            PhysicalKey::ArrowDown => 125,
+            PhysicalKey::ArrowUp => 126,
+            PhysicalKey::Delete => 117,
+            PhysicalKey::Home => 115,
+            PhysicalKey::End => 119,
+            PhysicalKey::PageUp => 116,
+            PhysicalKey::PageDown => 121,
+            PhysicalKey::Minus => 27,
+            PhysicalKey::Equal => 24,
+            PhysicalKey::BracketLeft => 33,
+            PhysicalKey::BracketRight => 30,
+            PhysicalKey::Backslash => 42,
+            PhysicalKey::Semicolon => 41,
+            PhysicalKey::Quote => 39,
+            PhysicalKey::Backquote => 50,
+            PhysicalKey::Comma => 43,
+            PhysicalKey::Period => 47,
+            PhysicalKey::Slash => 44,
+            PhysicalKey::NumpadDecimal => 65,
+            PhysicalKey::NumpadMultiply => 67,
+            PhysicalKey::NumpadAdd => 69,
+            PhysicalKey::NumLock => 71,
+            PhysicalKey::NumpadDivide => 75,
+            PhysicalKey::NumpadSubtract => 78,
+            PhysicalKey::NumpadEqual => 81,
+            PhysicalKey::Insert
+            | PhysicalKey::ScrollLock
+            | PhysicalKey::PrintScreen
+            | PhysicalKey::Pause
+            | PhysicalKey::ContextMenu => return None,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::keycode_from_dom_code;
+
+        #[test]
+        fn macos_key_mapping_preserves_sided_modifiers_and_extended_keyboard_keys() {
+            assert_eq!(keycode_from_dom_code("MetaLeft"), Some(55));
+            assert_eq!(keycode_from_dom_code("MetaRight"), Some(54));
+            assert_eq!(keycode_from_dom_code("ControlLeft"), Some(59));
+            assert_eq!(keycode_from_dom_code("ControlRight"), Some(62));
+            assert_eq!(keycode_from_dom_code("F12"), Some(111));
+            assert_eq!(keycode_from_dom_code("NumpadEnter"), Some(76));
+            assert_eq!(keycode_from_dom_code("Delete"), Some(117));
         }
     }
 }
@@ -2228,7 +2487,10 @@ mod platform;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod platform {
-    use super::{InputApplyOutcome, KeyInputFrame, PointerInputFrame, PointerTargetGeometry};
+    use super::{
+        InputApplyOutcome, KeyInputFrame, PointerInputFrame, PointerTargetGeometry,
+        TargetInputGuardProof,
+    };
 
     pub(super) fn input_injection_available() -> bool {
         false
@@ -2249,11 +2511,15 @@ mod platform {
     pub(super) fn apply_pointer_frame(
         _frame: &PointerInputFrame,
         _target: Option<PointerTargetGeometry>,
+        _target_guard: Option<&TargetInputGuardProof>,
     ) -> InputApplyOutcome {
         InputApplyOutcome::rejected("platform_input_injection_unavailable")
     }
 
-    pub(super) fn apply_key_frame(_frame: &KeyInputFrame) -> InputApplyOutcome {
+    pub(super) fn apply_key_frame(
+        _frame: &KeyInputFrame,
+        _target_guard: Option<&TargetInputGuardProof>,
+    ) -> InputApplyOutcome {
         InputApplyOutcome::rejected("platform_input_injection_unavailable")
     }
 
@@ -2280,9 +2546,7 @@ mod tests {
         ResourceEntryTargetResolver, TargetGeometry,
     };
     use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
-    use crate::daemon::plugins::remote_desktop::target_observer::{
-        sample_platform_target_observations, PlatformTargetObservationSample,
-    };
+    use crate::daemon::plugins::remote_desktop::target_observer::PlatformTargetObservationSample;
     use crate::daemon::plugins::remote_desktop::target_snapshot::{
         TargetObservationSampler, TargetSnapshotDeadlineExecutor,
     };
@@ -2331,7 +2595,7 @@ mod tests {
                     .wait(released)
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
             }
-            sample_platform_target_observations()
+            PlatformTargetObservationSample::no_change_for_test()
         }
     }
 
@@ -2359,6 +2623,25 @@ mod tests {
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Pointer);
         assert_eq!(frame.client_sent_at_ms(), Some(1_787_331_000_123));
         assert_eq!(frame.client_sequence(), Some(42));
+    }
+
+    #[test]
+    fn pointer_wheel_delta_contract_is_pixel_bounded() {
+        let frame = parse_input_frame(
+            r#"{"type":"pointer","action":"wheel","x":10,"y":20,"delta_x":32,"delta_y":-48}"#,
+        )
+        .expect("normalized CSS-pixel wheel frame parses");
+        let RemoteDesktopInputFrame::Pointer(frame) = frame else {
+            panic!("pointer frame expected");
+        };
+        assert_eq!(frame.delta_x, Some(32.0));
+        assert_eq!(frame.delta_y, Some(-48.0));
+
+        let error = parse_input_frame(
+            r#"{"type":"pointer","action":"wheel","x":10,"y":20,"delta_y":8193}"#,
+        )
+        .expect_err("unbounded wheel frame must fail closed");
+        assert!(error.to_string().contains("CSS pixels per frame"));
     }
 
     fn key_frame(action: &str, code: &str, focus_epoch: u64) -> RemoteDesktopInputFrame {
@@ -2538,6 +2821,8 @@ mod tests {
             },
             None,
             false,
+            None,
+            Some(true),
         );
 
         assert!(payload["input_event_id"]
@@ -2554,6 +2839,40 @@ mod tests {
         assert_eq!(payload["client_sequence"], json!(7));
         assert_eq!(payload["target_geometry_revision"], json!(3));
         assert_eq!(payload["target_focus_epoch"], json!(5));
+        assert_eq!(payload["safety_release"], json!(false));
+        assert_eq!(payload["pointer_position_applied"], json!(true));
+        assert!(payload.get("safety_release_reason").is_none());
+    }
+
+    #[test]
+    fn input_frame_applied_payload_marks_emergency_release_as_release_only() {
+        let payload = input_frame_applied_payload(
+            "rd-input-event-emergency-release",
+            TransportEpoch::new(3),
+            "pointer",
+            "up",
+            2,
+            0,
+            InputFrameTiming::for_test(Some(1_787_331_000_150), 1_787_331_000_151),
+            1_787_331_000_152,
+            Some(8),
+            InputFrameTargetContext {
+                target_geometry_revision: Some(3),
+                target_focus_epoch: Some(5),
+            },
+            None,
+            true,
+            Some("target_input_guard_focus_mismatch"),
+            Some(false),
+        );
+
+        assert_eq!(payload["safety_release"], json!(true));
+        assert_eq!(
+            payload["safety_release_reason"],
+            json!("target_input_guard_focus_mismatch")
+        );
+        assert_eq!(payload["pointer_position_applied"], json!(false));
+        assert!(payload.get("target_guard_validation").is_none());
     }
 
     #[test]
@@ -2574,6 +2893,8 @@ mod tests {
             },
             None,
             false,
+            None,
+            None,
         );
 
         assert_eq!(payload["client_sent_at_ms"], json!(1_787_331_000_500_u64));
@@ -2603,6 +2924,8 @@ mod tests {
             input_context,
             None,
             false,
+            None,
+            Some(true),
         );
         let same = input_frame_applied_payload(
             "rd-input-event-stable",
@@ -2617,6 +2940,8 @@ mod tests {
             input_context,
             None,
             false,
+            None,
+            Some(true),
         );
         let different_session = input_frame_applied_payload(
             "rd-input-event-other",
@@ -2631,6 +2956,8 @@ mod tests {
             input_context,
             None,
             false,
+            None,
+            Some(true),
         );
         let different_epoch = input_frame_applied_payload(
             "rd-input-event-stable",
@@ -2645,6 +2972,8 @@ mod tests {
             input_context,
             None,
             false,
+            None,
+            Some(true),
         );
 
         assert_eq!(
@@ -2686,14 +3015,15 @@ mod tests {
     fn input_applied_diagnostic_gate_emits_first_success_for_each_kind() {
         let mut gate = InputAppliedDiagnosticGate::default();
 
-        assert!(gate.should_emit("pointer", 1));
+        assert!(gate.should_emit("pointer", "move", 1));
         assert!(
-            gate.should_emit("key", 2),
+            gate.should_emit("key", "down", 2),
             "keyboard must still emit when it is the second accepted frame"
         );
-        assert!(!gate.should_emit("pointer", 3));
-        assert!(!gate.should_emit("key", 4));
-        assert!(gate.should_emit("pointer", 120));
+        assert!(gate.should_emit("key", "up", 3));
+        assert!(!gate.should_emit("pointer", "move", 4));
+        assert!(!gate.should_emit("key", "repeat", 5));
+        assert!(gate.should_emit("pointer", "move", 120));
     }
 
     #[test]
@@ -3156,8 +3486,8 @@ mod tests {
                         geometry: TargetGeometry {
                             x: Some(240.0),
                             y: Some(320.0),
-                            width: Some(1024.0),
-                            height: Some(768.0),
+                            width: Some(800.0),
+                            height: Some(600.0),
                         },
                         target_geometry_revision: 2,
                         observed_at_ms: 100,
@@ -3169,8 +3499,8 @@ mod tests {
                 session
                     .events()
                     .iter()
-                    .any(|event| event["event_type"] == json!("TARGET_RESIZED")),
-                "geometry observation commits TARGET_RESIZED"
+                    .any(|event| event["event_type"] == json!("TARGET_MOVED")),
+                "position-only geometry observation commits TARGET_MOVED"
             );
         });
 
@@ -3181,8 +3511,8 @@ mod tests {
             let target_event = session
                 .events()
                 .into_iter()
-                .find(|event| event["event_type"] == json!("TARGET_RESIZED"))
-                .expect("TARGET_RESIZED event");
+                .find(|event| event["event_type"] == json!("TARGET_MOVED"))
+                .expect("TARGET_MOVED event");
             assert_eq!(
                 target_event["payload"]["target_geometry_revision"],
                 target_event["target_geometry_revision"],
@@ -3213,8 +3543,8 @@ mod tests {
         );
         assert_eq!(policy["pointer_target"]["origin_x"], json!(240.0));
         assert_eq!(policy["pointer_target"]["origin_y"], json!(320.0));
-        assert_eq!(policy["pointer_target"]["width"], json!(1024.0));
-        assert_eq!(policy["pointer_target"]["height"], json!(768.0));
+        assert_eq!(policy["pointer_target"]["width"], json!(800.0));
+        assert_eq!(policy["pointer_target"]["height"], json!(600.0));
         assert_eq!(
             input_policy_reject_reason(&policy, "pointer"),
             Some("input_scope_unsupported"),

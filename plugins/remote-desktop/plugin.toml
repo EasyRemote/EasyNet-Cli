@@ -21,6 +21,22 @@ platforms = ["macos", "linux", "windows"]
 max_sessions = 128
 max_frame_queue = 1
 
+[[runtime_helper]]
+name = "native_target_observation"
+executable = "easynet-remoteapp-native-host"
+protocol = "remoteapp_native_host_v1"
+lifecycle = "on_demand"
+isolation = "per_lane"
+required = true
+
+[[runtime_helper]]
+name = "native_media"
+executable = "easynet-remoteapp-media-host"
+protocol = "remoteapp_media_host_v1"
+lifecycle = "per_generation"
+isolation = "control_video_audio_lanes"
+required = true
+
 [[realtime_capability]]
 kind = "screen"
 modes = ["subscribe", "record"]
@@ -28,6 +44,7 @@ transport = "webrtc"
 activation_abilities = [
   "remote_desktop.grant_consent",
   "remote_desktop.create_session",
+  "remote_desktop.focus_target",
   "remote_desktop.set_description",
   "remote_desktop.add_ice_candidate",
   "remote_desktop.report_client_state",
@@ -55,6 +72,11 @@ call_mode = "rpc"
 
 [[ability_metadata]]
 name = "remote_desktop.create_session"
+layer = "control"
+call_mode = "rpc"
+
+[[ability_metadata]]
+name = "remote_desktop.focus_target"
 layer = "control"
 call_mode = "rpc"
 

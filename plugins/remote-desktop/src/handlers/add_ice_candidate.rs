@@ -19,7 +19,6 @@ use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEp
 use crate::daemon::plugins::remote_desktop::transport::{
     apply_remote_ice_candidate_values, DirectWebRtcEndpoint,
 };
-use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
 enum RemoteIceAdmission {
     Reserved(DirectWebRtcEndpoint),
@@ -103,18 +102,18 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                         .reserve_remote_ice_candidate_slot()
                         .map_err(map_signaling_admission_error)?;
                     if !reserved {
-                        return Ok(Some(RemoteIceAdmission::Committed(serialize_session(
-                            session,
-                        ))));
+                        return Ok(Some(RemoteIceAdmission::Committed(
+                            plugin.session_view(session),
+                        )));
                     }
                     return Ok(Some(RemoteIceAdmission::Reserved(endpoint.clone())));
                 }
                 session
                     .add_remote_ice_candidate(candidate.clone(), "pending", Some(requested_epoch))
                     .map_err(map_signaling_admission_error)?;
-                Ok(Some(RemoteIceAdmission::Committed(serialize_session(
-                    session,
-                ))))
+                Ok(Some(RemoteIceAdmission::Committed(
+                    plugin.session_view(session),
+                )))
             },
         )?;
 
@@ -178,7 +177,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                             Some(requested_epoch),
                         )
                         .map_err(map_signaling_admission_error)?;
-                    Ok(Some(serialize_session(session)))
+                    Ok(Some(plugin.session_view(session)))
                 });
         let committed = match committed {
             Ok(committed) => committed,

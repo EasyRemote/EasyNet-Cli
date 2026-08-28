@@ -166,6 +166,7 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::media::h264_level::H264Level;
     use crate::daemon::plugins::remote_desktop::media::XCAP_OPENH264_WEBRTC_BACKEND;
     use crate::daemon::plugins::remote_desktop::target::{
         AppWindowSetProof, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
@@ -213,10 +214,12 @@ mod tests {
                     locator.app_identity().map(ToOwned::to_owned),
                     locator.bundle_id().map(ToOwned::to_owned),
                 )
+                .with_process_instance_id(locator.process_instance_id().map(ToOwned::to_owned))
                 .with_native_dimensions(Some((1280, 720)));
         let proof = if binding.target_kind() == RemoteDesktopTargetKind::Application {
             proof.with_app_window_set(AppWindowSetProof::new_platform_scoped(
                 locator.display_id(),
+                locator.display_id().into_iter().collect(),
                 locator.bundle_id().map(ToOwned::to_owned),
                 locator.pid(),
                 vec![7],
@@ -235,6 +238,7 @@ mod tests {
             requested_fps: 30,
             fps: 30,
             bitrate_kbps: 2_500,
+            h264_level: H264Level::Level3_1,
             max_frame_queue_depth: 4,
             keyframe_interval_frames: 30,
         }

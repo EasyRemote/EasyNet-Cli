@@ -70,6 +70,47 @@ pub(in crate::daemon::plugins::remote_desktop) enum RemoteDesktopSignalingError 
     IceCandidateLimitExceeded { side: &'static str, limit: usize },
     #[error("remote ICE candidate reservation is missing")]
     RemoteIceCandidateReservationMissing,
+    #[error("local WebRTC answer has invalid negotiated media_scope `{value}`")]
+    InvalidNegotiatedMediaScope { value: String },
+}
+
+/// Media tracks accepted by both peers for the active transport generation.
+///
+/// This is deliberately distinct from host capture capability: an
+/// audio-capable host may negotiate a video-only session when the caller does
+/// not offer an audio transceiver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) enum RemoteDesktopNegotiatedMediaScope {
+    VideoOnly,
+    AudioVideo,
+}
+
+impl RemoteDesktopNegotiatedMediaScope {
+    fn from_local_answer(answer: &Value) -> anyhow::Result<Self> {
+        match answer.get("media_scope").and_then(Value::as_str) {
+            Some("video_only") => Ok(Self::VideoOnly),
+            Some("audio_video") => Ok(Self::AudioVideo),
+            Some(value) => Err(RemoteDesktopSignalingError::InvalidNegotiatedMediaScope {
+                value: value.to_string(),
+            }
+            .into()),
+            None => Err(RemoteDesktopSignalingError::InvalidNegotiatedMediaScope {
+                value: "missing".to_string(),
+            }
+            .into()),
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn as_str(self) -> &'static str {
+        match self {
+            Self::VideoOnly => "video_only",
+            Self::AudioVideo => "audio_video",
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn requires_audio(self) -> bool {
+        matches!(self, Self::AudioVideo)
+    }
 }
 
 /// Negotiated media codec metadata for a direct WebRTC endpoint.
@@ -83,18 +124,18 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopNegotiatedCod
     transport: &'static str,
     endpoint: String,
     backend_id: String,
-    production_ready: bool,
+    backend_production_ready: bool,
 }
 
 impl RemoteDesktopNegotiatedCodec {
-    fn h264_baseline(endpoint: String, backend_id: &str, production_ready: bool) -> Self {
+    fn h264_baseline(endpoint: String, backend_id: &str, backend_production_ready: bool) -> Self {
         Self {
             codec: "h264",
             profile: "baseline",
             transport: TRANSPORT_WEBRTC,
             endpoint,
             backend_id: backend_id.to_string(),
-            production_ready,
+            backend_production_ready,
         }
     }
 
@@ -105,12 +146,18 @@ impl RemoteDesktopNegotiatedCodec {
             "transport": self.transport,
             "endpoint": self.endpoint,
             "backend_id": self.backend_id,
-            "production_ready": self.production_ready,
+            "codec_accepted_for_production": self.codec_accepted_for_production(),
+            "backend_production_ready": self.backend_production_ready,
+            "production_ready": self.backend_production_ready,
         })
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn production_ready(&self) -> bool {
-        self.production_ready
+    pub(in crate::daemon::plugins::remote_desktop) fn codec_accepted_for_production(&self) -> bool {
+        self.codec == "h264" && self.profile == "baseline" && self.transport == TRANSPORT_WEBRTC
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn backend_production_ready(&self) -> bool {
+        self.backend_production_ready
     }
 }
 
@@ -162,6 +209,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSignalingStat
     webrtc_peer_state: Option<String>,
     webrtc_error: Option<String>,
     negotiated_codec: Option<RemoteDesktopNegotiatedCodec>,
+    negotiated_media_scope: Option<RemoteDesktopNegotiatedMediaScope>,
 }
 
 impl RemoteDesktopSignalingState {
@@ -176,6 +224,7 @@ impl RemoteDesktopSignalingState {
             webrtc_peer_state: None,
             webrtc_error: None,
             negotiated_codec: None,
+            negotiated_media_scope: None,
         }
     }
 
@@ -258,10 +307,21 @@ impl RemoteDesktopSignalingState {
             .map(RemoteDesktopNegotiatedCodec::to_value)
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn negotiated_media_scope(
+        &self,
+    ) -> Option<RemoteDesktopNegotiatedMediaScope> {
+        self.negotiated_media_scope
+    }
     pub(in crate::daemon::plugins::remote_desktop) fn production_codec_negotiated(&self) -> bool {
         self.negotiated_codec
             .as_ref()
-            .is_some_and(RemoteDesktopNegotiatedCodec::production_ready)
+            .is_some_and(RemoteDesktopNegotiatedCodec::codec_accepted_for_production)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn production_backend_ready(&self) -> bool {
+        self.negotiated_codec
+            .as_ref()
+            .is_some_and(RemoteDesktopNegotiatedCodec::backend_production_ready)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn has_description(&self) -> bool {
@@ -364,7 +424,11 @@ impl RemoteDesktopSignalingState {
         production_ready: bool,
         endpoint_ura: String,
     ) -> anyhow::Result<()> {
-        self.local_description = Some(RemoteDesktopSessionDescription::new("local", answer)?);
+        let local_description = RemoteDesktopSessionDescription::new("local", answer)?;
+        let negotiated_media_scope =
+            RemoteDesktopNegotiatedMediaScope::from_local_answer(&local_description.value)?;
+        self.local_description = Some(local_description);
+        self.negotiated_media_scope = Some(negotiated_media_scope);
         self.negotiated_codec = Some(RemoteDesktopNegotiatedCodec::h264_baseline(
             endpoint_ura,
             backend_id,
@@ -408,7 +472,7 @@ mod tests {
 
         signaling
             .set_local_webrtc_answer(
-                json!({ "type": "answer", "sdp": "v=0" }),
+                json!({ "type": "answer", "sdp": "v=0", "media_scope": "video_only" }),
                 "native",
                 true,
                 direct_webrtc_endpoint_ura("signaling-answer"),
@@ -417,7 +481,13 @@ mod tests {
 
         assert_eq!(
             signaling.local_description(),
-            Some(json!({ "type": "answer", "sdp": "v=0" }))
+            Some(json!({ "type": "answer", "sdp": "v=0", "media_scope": "video_only" }))
+        );
+        assert_eq!(
+            signaling
+                .negotiated_media_scope()
+                .map(super::RemoteDesktopNegotiatedMediaScope::as_str),
+            Some("video_only")
         );
         assert_eq!(
             signaling.negotiated_codec(),
@@ -427,9 +497,35 @@ mod tests {
                 "transport": "webrtc",
                 "endpoint": direct_webrtc_endpoint_ura("signaling-answer"),
                 "backend_id": "native",
+                "codec_accepted_for_production": true,
+                "backend_production_ready": true,
                 "production_ready": true,
             }))
         );
+    }
+
+    #[test]
+    fn remote_desktop_signaling_rejects_missing_or_unknown_negotiated_media_scope_atomically() {
+        let mut signaling = RemoteDesktopSignalingState::new();
+
+        for answer in [
+            json!({"type": "answer", "sdp": "v=0"}),
+            json!({"type": "answer", "sdp": "v=0", "media_scope": "screen_audio"}),
+        ] {
+            let error = signaling
+                .set_local_webrtc_answer(
+                    answer,
+                    "native",
+                    true,
+                    direct_webrtc_endpoint_ura("signaling-invalid-media-scope"),
+                )
+                .expect_err("untyped media negotiation must not enter session state")
+                .to_string();
+            assert!(error.contains("media_scope"), "got {error}");
+            assert_eq!(signaling.local_description(), None);
+            assert_eq!(signaling.negotiated_codec(), None);
+            assert_eq!(signaling.negotiated_media_scope(), None);
+        }
     }
 
     #[test]
@@ -560,6 +656,7 @@ mod tests {
         assert!(local_err.contains("exceeds"), "got {local_err}");
         assert_eq!(signaling.local_description(), None);
         assert_eq!(signaling.negotiated_codec(), None);
+        assert_eq!(signaling.negotiated_media_scope(), None);
     }
 
     #[test]

@@ -165,6 +165,29 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_bound(
     RemoteDesktopEventProjection::new("TARGET_BOUND", binding.target_bound_event_payload())
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn target_focus_applied(
+    binding: &RemoteAppTargetBinding,
+    previous_target_focus_epoch: u64,
+    target_focus_epoch: u64,
+    observed_at_ms: u64,
+    platform_backend: &str,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "TARGET_FOCUS_APPLIED",
+        json!({
+            "subject_ura": binding.subject_ura(),
+            "focused": true,
+            "previous_target_focus_epoch": previous_target_focus_epoch,
+            "target_focus_epoch": target_focus_epoch,
+            "observed_at_ms": observed_at_ms,
+            "platform_backend": platform_backend,
+            "reason_code": "target_focus_applied",
+            "recoverability": "continue",
+            "frontend_action": Value::Null,
+        }),
+    )
+}
+
 /// Build the daemon-restart recovery event emitted when a durable non-terminal
 /// session snapshot is restored into the runtime aggregate.
 ///
@@ -197,6 +220,63 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_rehydrated(
             "target_binding": binding.to_value(),
             "scope_audit": binding.scope_audit_value(),
             "latest_target_diagnostic": binding.latest_target_diagnostic_value(),
+        }),
+    )
+}
+
+/// Project one unexpected target-monitor generation exit. This is a
+/// plugin-worker failure, not a session or media-transport failure.
+pub(in crate::daemon::plugins::remote_desktop) fn target_monitor_worker_crashed(
+    failed_generation: u64,
+    detail: &str,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "PLUGIN_WORKER_CRASHED",
+        json!({
+            "component": "target_monitor",
+            "failed_generation": failed_generation,
+            "detail": detail,
+            "reason_code": "target_monitor_worker_crashed",
+            "recoverability": "automatic",
+            "frontend_action": Value::Null,
+        }),
+    )
+}
+
+/// Project successful creation of a replacement target-monitor thread.
+/// Functional recovery is emitted separately after its first successful poll.
+pub(in crate::daemon::plugins::remote_desktop) fn target_monitor_worker_restarted(
+    failed_generation: u64,
+    restarted_generation: u64,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "PLUGIN_WORKER_RESTARTED",
+        json!({
+            "component": "target_monitor",
+            "failed_generation": failed_generation,
+            "restarted_generation": restarted_generation,
+            "reason_code": "target_monitor_worker_restarted",
+            "recoverability": "automatic",
+            "frontend_action": Value::Null,
+        }),
+    )
+}
+
+/// Project functional target-monitor recovery only after the replacement
+/// generation has completed one successful host snapshot poll.
+pub(in crate::daemon::plugins::remote_desktop) fn target_monitor_restarted(
+    failed_generation: u64,
+    restarted_generation: u64,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "TARGET_MONITOR_RESTARTED",
+        json!({
+            "component": "target_monitor",
+            "failed_generation": failed_generation,
+            "restarted_generation": restarted_generation,
+            "reason_code": "target_monitor_recovered",
+            "recoverability": "resolved",
+            "frontend_action": Value::Null,
         }),
     )
 }
@@ -477,6 +557,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_closed(
             "reason": reason,
             "reason_code": reason,
             "recoverability": "closed",
+        }),
+    )
+}
+
+/// Build a terminal failure emitted when process-local transport ownership
+/// cannot produce a trustworthy settlement receipt.
+pub(in crate::daemon::plugins::remote_desktop) fn session_failed(
+    reason: &str,
+    termination_intent: Option<&str>,
+) -> RemoteDesktopEventProjection {
+    RemoteDesktopEventProjection::new(
+        "SESSION_FAILED",
+        json!({
+            "reason": reason,
+            "reason_code": reason,
+            "termination_intent": termination_intent,
+            "failure_domain": "transport_settlement",
+            "recoverability": "restart_runtime",
+            "frontend_action": "restart_runtime",
         }),
     )
 }

@@ -14,8 +14,8 @@ use std::collections::{BTreeSet, HashSet};
 use serde_json::{json, Value};
 
 use crate::daemon::persistence::resources::{
-    self, application_surface_layout_epoch, application_window_set_epoch, upsert_resource,
-    ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
+    self, application_surface_layout_epoch, application_window_set_epoch_with_process_instance,
+    upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
 };
 
 /// Freshness lease for live remote target picker rows.
@@ -599,19 +599,86 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
     // Application resources are process instances, not display names. Grouping
     // only by `app_name` merges two independently running instances and makes
     // their window sets impossible to bind or track exactly.
-    let mut apps: BTreeMap<(u32, Option<String>), AppAggregate> = BTreeMap::new();
+    let mut apps: BTreeMap<XcapApplicationOwnerKey, (Option<String>, AppAggregate)> =
+        BTreeMap::new();
     let platform = std::env::consts::OS;
+    let mut windows_without_owner_identity = 0usize;
+    #[cfg(target_os = "linux")]
+    let x11_owner_resolver =
+        match super::linux_x11_window_owner::LinuxX11WindowOwnerResolver::connect() {
+            Ok(resolver) => Some(resolver),
+            Err(error) => {
+                crate::op_event!(
+                    component = media_resource_bootstrap,
+                    kind = x11_window_owner_resolver_unavailable,
+                    reason = error.to_string(),
+                );
+                None
+            }
+        };
     for window in windows {
         let id = match window.id() {
             Ok(id) => id,
             Err(_) => continue,
         };
-        let pid = match window.pid() {
-            Ok(pid) => pid,
-            // Window Resources require a stable owner identity. Publishing an
-            // entry without it only defers an unavoidable admission failure.
-            Err(_) => continue,
+        // The native window id is the capture locator. `_NET_WM_PID` is a
+        // client-controlled diagnostic hint on X11 and must never authorize a
+        // process-scoped Window/Application binding. Linux owner identity is
+        // accepted only from X-Resource's local-client PID query.
+        let property_pid = window.pid().ok();
+        #[cfg(target_os = "linux")]
+        let (pid, pid_source) = match x11_owner_resolver
+            .as_ref()
+            .map(|resolver| resolver.resolve_local_client_pid(id))
+            .transpose()
+        {
+            Ok(Some(Some(pid))) => (Some(pid), Some("xres_local_client_pid")),
+            Ok(Some(None)) | Ok(None) => (None, None),
+            Err(error) => {
+                crate::op_event!(
+                    component = media_resource_bootstrap,
+                    kind = x11_window_owner_resolution_failed,
+                    window_id = id,
+                    reason = error.to_string(),
+                );
+                (None, None)
+            }
         };
+        #[cfg(not(target_os = "linux"))]
+        let (pid, pid_source) = (property_pid, property_pid.map(|_| "platform_window_pid"));
+        #[cfg(target_os = "linux")]
+        let process_instance =
+            pid.and_then(
+                |pid| match super::linux_x11_window_owner::LinuxProcessInstance::resolve(pid) {
+                    Ok(instance) => Some(instance),
+                    Err(error) => {
+                        crate::op_event!(
+                            component = media_resource_bootstrap,
+                            kind = linux_process_instance_resolution_failed,
+                            window_id = id,
+                            pid = pid,
+                            reason = error.to_string(),
+                        );
+                        None
+                    }
+                },
+            );
+        #[cfg(target_os = "linux")]
+        let process_start_ticks = process_instance
+            .as_ref()
+            .map(|instance| instance.start_ticks());
+        #[cfg(target_os = "linux")]
+        let process_boot_id = process_instance.as_ref().map(|instance| instance.boot_id());
+        #[cfg(target_os = "linux")]
+        let process_instance_id = process_instance
+            .as_ref()
+            .map(|instance| instance.stable_id());
+        #[cfg(not(target_os = "linux"))]
+        let (process_start_ticks, process_boot_id, process_instance_id): (
+            Option<u64>,
+            Option<&str>,
+            Option<String>,
+        ) = (None, None, None);
         let app_name = window
             .app_name()
             .ok()
@@ -634,6 +701,9 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         if minimized == Some(true) {
             continue;
         }
+        if pid.is_none() || (cfg!(target_os = "linux") && process_instance_id.is_none()) {
+            windows_without_owner_identity += 1;
+        }
         let focused = window.is_focused().ok();
         let display_name = match &title {
             Some(title) => format!("{display_app_name} - {title}"),
@@ -641,26 +711,42 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         };
         let area = screen_target_area(width, height);
         let bounds = ScreenTargetBounds::new(x, y, width, height);
-        apps.entry((pid, app_name.clone()))
-            .or_default()
-            .record_window(AppWindowObservation {
+        record_xcap_application_window(
+            &mut apps,
+            pid,
+            app_name.clone(),
+            AppWindowObservation {
                 window_id: id,
-                pid: Some(pid),
+                pid,
                 title: title.as_deref(),
                 area,
                 focused: focused == Some(true),
                 bounds,
                 display_ids: Vec::new(),
                 bundle_id: None,
-            });
+                process_start_ticks,
+                process_boot_id,
+                process_instance_id: process_instance_id.as_deref(),
+            },
+        );
+        let (hardware_id, hardware_identity_source) =
+            xcap_window_hardware_identity(platform, pid, process_instance_id.as_deref(), id);
         out.push(DiscoveredResource {
             kind: ResourceType::Window,
-            hardware_id: format!("window:xcap:{pid}:{id}"),
+            hardware_id,
             display_name,
             metadata: json!({
                 "backend": "xcap",
                 "platform": platform,
                 "capture_target": "window",
+                "hardware_identity_source": hardware_identity_source,
+                "owner_identity_available": pid.is_some(),
+                "process_instance_available": process_instance_id.is_some(),
+                "pid_source": pid_source,
+                "net_wm_pid_hint": property_pid,
+                "process_start_ticks": process_start_ticks,
+                "process_boot_id": process_boot_id,
+                "process_instance_id": process_instance_id,
                 "discovery_source": "auto_bootstrap",
                 "discovery_scope": "current_visible_windows",
                 "auto_prune": true,
@@ -678,13 +764,30 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             }),
         });
     }
-    out.extend(apps.into_iter().map(|((pid, app_name), app)| {
+    if windows_without_owner_identity > 0 {
+        crate::op_event!(
+            component = media_resource_bootstrap,
+            kind = windows_published_without_owner_identity,
+            platform = platform,
+            window_count = windows_without_owner_identity,
+            message = "native window ids remain capturable; process-scoped Application Resources were not projected",
+        );
+    }
+    out.extend(apps.into_values().map(|(app_name, app)| {
         let window_set_epoch = app.window_set_epoch();
         let surface_layout = app.surface_layout();
         let surface_layout_epoch = app.surface_layout_epoch();
         DiscoveredResource {
             kind: ResourceType::Application,
-            hardware_id: format!("application:xcap:{platform}:pid:{pid}"),
+            hardware_id: app.process_instance_id.as_ref().map_or_else(
+                || {
+                    format!(
+                        "application:xcap:{platform}:pid:{}",
+                        app.primary_pid.unwrap_or_default()
+                    )
+                },
+                |instance| format!("application:xcap:{platform}:process:{instance}"),
+            ),
             display_name: app_name
                 .clone()
                 .unwrap_or_else(|| "Unknown application".to_string()),
@@ -697,6 +800,8 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
                 "auto_prune": true,
                 "platform_backend": "xcap_window_all",
                 "app_name": app_name,
+                "display_scoped": false,
+                "display_id": null,
                 "window_count": app.window_count,
                 "resolved_window_ids": app.window_ids,
                 "window_set_epoch": window_set_epoch,
@@ -705,6 +810,9 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
                 "target_identity_epoch": window_set_epoch,
                 "primary_window_id": app.primary_window_id,
                 "primary_pid": app.primary_pid,
+                "process_start_ticks": app.process_start_ticks,
+                "process_boot_id": app.process_boot_id,
+                "process_instance_id": app.process_instance_id,
                 "primary_title": app.primary_title,
                 "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
                 "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
@@ -718,6 +826,80 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         }
     }));
     Ok(out)
+}
+
+#[cfg(any(test, not(target_os = "macos")))]
+fn xcap_window_hardware_identity(
+    platform: &str,
+    pid: Option<u32>,
+    process_instance_id: Option<&str>,
+    window_id: u32,
+) -> (String, &'static str) {
+    match (pid, process_instance_id) {
+        (Some(_), Some(instance)) => (
+            format!("window:xcap:{platform}:process:{instance}:window:{window_id}"),
+            "xcap_process_instance_window_id",
+        ),
+        (Some(pid), None) => (
+            format!("window:xcap:{pid}:{window_id}"),
+            "xcap_pid_window_id",
+        ),
+        (None, _) => (
+            format!("window:xcap:{platform}:window:{window_id}"),
+            "xcap_window_id",
+        ),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum XcapApplicationOwnerKey {
+    #[cfg(target_os = "linux")]
+    ProcessInstance(String),
+    #[cfg(not(target_os = "linux"))]
+    Pid(u32),
+}
+
+#[cfg(not(target_os = "macos"))]
+impl XcapApplicationOwnerKey {
+    fn from_observation(pid: u32, process_instance_id: Option<&str>) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = pid;
+            return process_instance_id
+                .filter(|value| !value.is_empty())
+                .map(|value| Self::ProcessInstance(value.to_string()));
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = process_instance_id;
+            Some(Self::Pid(pid))
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn record_xcap_application_window(
+    apps: &mut BTreeMap<XcapApplicationOwnerKey, (Option<String>, AppAggregate)>,
+    pid: Option<u32>,
+    app_name: Option<String>,
+    observation: AppWindowObservation<'_>,
+) {
+    let Some(pid) = pid else {
+        return;
+    };
+    let Some(owner_key) =
+        XcapApplicationOwnerKey::from_observation(pid, observation.process_instance_id)
+    else {
+        return;
+    };
+    let (application_name, application) = apps
+        .entry(owner_key)
+        .or_insert_with(|| (app_name.clone(), AppAggregate::default()));
+    if application_name.is_none() {
+        *application_name = app_name;
+    }
+    application.record_window(observation);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -753,6 +935,9 @@ struct AppAggregate {
     app_identity: Option<String>,
     window_ids: Vec<u32>,
     front_to_back_surfaces: Vec<AppWindowSurfaceObservation>,
+    process_start_ticks: Option<u64>,
+    process_boot_id: Option<String>,
+    process_instance_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -771,6 +956,9 @@ struct AppWindowObservation<'a> {
     bounds: ScreenTargetBounds,
     display_ids: Vec<u32>,
     bundle_id: Option<&'a str>,
+    process_start_ticks: Option<u64>,
+    process_boot_id: Option<&'a str>,
+    process_instance_id: Option<&'a str>,
 }
 
 impl AppAggregate {
@@ -784,6 +972,9 @@ impl AppAggregate {
             bounds,
             display_ids,
             bundle_id,
+            process_start_ticks,
+            process_boot_id,
+            process_instance_id,
         } = observation;
         self.window_count += 1;
         self.window_ids.push(window_id);
@@ -803,6 +994,15 @@ impl AppAggregate {
         if self.app_identity.is_none() {
             self.app_identity = bundle_id.map(ToOwned::to_owned);
         }
+        if self.process_start_ticks.is_none() {
+            self.process_start_ticks = process_start_ticks;
+        }
+        if self.process_boot_id.is_none() {
+            self.process_boot_id = process_boot_id.map(ToOwned::to_owned);
+        }
+        if self.process_instance_id.is_none() {
+            self.process_instance_id = process_instance_id.map(ToOwned::to_owned);
+        }
         let better_primary =
             focused || self.primary_window_id.is_none() || area > self.primary_area;
         if better_primary {
@@ -821,10 +1021,11 @@ impl AppAggregate {
             .copied()
             .map(u64::from)
             .collect::<Vec<_>>();
-        application_window_set_epoch(
+        application_window_set_epoch_with_process_instance(
             None,
             self.bundle_id.as_deref(),
             self.primary_pid.map(i64::from),
+            self.process_instance_id.as_deref(),
             &window_ids,
         )
     }
@@ -1136,6 +1337,9 @@ mod macos_screen_targets {
                         bounds,
                         display_ids: display_ids.clone(),
                         bundle_id: app_identity,
+                        process_start_ticks: None,
+                        process_boot_id: None,
+                        process_instance_id: None,
                     });
             }
             out.push(DiscoveredResource {
@@ -1427,6 +1631,104 @@ fn discover_cameras() -> Vec<DiscoveredResource> {
 mod tests {
     use super::*;
     use crate::daemon::persistence::resources::{self, filter_by_kinds};
+
+    #[test]
+    fn xcap_window_identity_survives_missing_pid_without_fabrication() {
+        assert_eq!(
+            xcap_window_hardware_identity("linux", None, None, 0x400016),
+            (
+                "window:xcap:linux:window:4194326".to_string(),
+                "xcap_window_id"
+            )
+        );
+    }
+
+    #[test]
+    fn xcap_pid_preserves_window_identity_and_enables_process_projection() {
+        assert_eq!(
+            xcap_window_hardware_identity("linux", Some(42), None, 100),
+            ("window:xcap:42:100".to_string(), "xcap_pid_window_id")
+        );
+    }
+
+    #[test]
+    fn xcap_process_instance_identity_prevents_pid_reuse_aliasing() {
+        assert_eq!(
+            xcap_window_hardware_identity("linux", Some(42), Some("linux:boot-a:42:987654"), 100,),
+            (
+                "window:xcap:linux:process:linux:boot-a:42:987654:window:100".to_string(),
+                "xcap_process_instance_window_id"
+            )
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xcap_application_projection_groups_one_process_despite_name_drift() {
+        let mut apps = BTreeMap::new();
+        for (window_id, app_name) in [
+            (10, "EasyNetRemoteAppSentinel"),
+            (11, "Easynetremoteappsentinel"),
+        ] {
+            record_xcap_application_window(
+                &mut apps,
+                Some(2229),
+                Some(app_name.to_string()),
+                AppWindowObservation {
+                    window_id,
+                    pid: Some(2229),
+                    title: None,
+                    area: 10_000,
+                    focused: false,
+                    bounds: ScreenTargetBounds::new(Some(0), Some(0), Some(100), Some(100)),
+                    display_ids: Vec::new(),
+                    bundle_id: None,
+                    process_start_ticks: Some(987654),
+                    process_boot_id: Some("boot-a"),
+                    process_instance_id: Some("linux:boot-a:2229:987654"),
+                },
+            );
+        }
+
+        assert_eq!(apps.len(), 1);
+        let (app_name, aggregate) = apps
+            .get(&XcapApplicationOwnerKey::ProcessInstance(
+                "linux:boot-a:2229:987654".to_string(),
+            ))
+            .expect("process-instance aggregate");
+        assert_eq!(app_name.as_deref(), Some("EasyNetRemoteAppSentinel"));
+        assert_eq!(aggregate.window_count, 2);
+        assert_eq!(aggregate.window_ids, vec![10, 11]);
+    }
+
+    #[cfg(all(not(target_os = "macos"), target_os = "linux"))]
+    #[test]
+    fn xcap_application_projection_never_merges_reused_pid_process_instances() {
+        let mut apps = BTreeMap::new();
+        for (window_id, start_ticks) in [(10, 100_u64), (11, 200_u64)] {
+            let process_instance_id = format!("linux:boot-a:2229:{start_ticks}");
+            record_xcap_application_window(
+                &mut apps,
+                Some(2229),
+                Some("Same name".to_string()),
+                AppWindowObservation {
+                    window_id,
+                    pid: Some(2229),
+                    title: None,
+                    area: 10_000,
+                    focused: false,
+                    bounds: ScreenTargetBounds::new(Some(0), Some(0), Some(100), Some(100)),
+                    display_ids: Vec::new(),
+                    bundle_id: None,
+                    process_start_ticks: Some(start_ticks),
+                    process_boot_id: Some("boot-a"),
+                    process_instance_id: Some(&process_instance_id),
+                },
+            );
+        }
+
+        assert_eq!(apps.len(), 2, "PID reuse must create two typed owners");
+    }
 
     #[test]
     fn apply_discovered_resource_mints_stable_resource_ura() {
@@ -2162,6 +2464,9 @@ mod tests {
             bounds: ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
             display_ids: vec![42],
             bundle_id: Some("com.example.app"),
+            process_start_ticks: None,
+            process_boot_id: None,
+            process_instance_id: None,
         });
         aggregate.record_window(AppWindowObservation {
             window_id: 11,
@@ -2172,6 +2477,9 @@ mod tests {
             bounds: ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
             display_ids: vec![43],
             bundle_id: Some("com.example.app"),
+            process_start_ticks: None,
+            process_boot_id: None,
+            process_instance_id: None,
         });
 
         assert_eq!(aggregate.primary_window_id, Some(11));

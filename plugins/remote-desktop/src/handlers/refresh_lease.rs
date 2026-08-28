@@ -13,7 +13,6 @@ use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
-use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
 /// Handle `remote_desktop.refresh_lease`.
 pub(in crate::daemon::plugins::remote_desktop) fn handle(
@@ -43,7 +42,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 let now = now_ms();
                 let lease_expires_at_ms = session.refresh_lease(now, lease_ttl_ms);
                 let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
-                let view = serialize_session(session);
+                let view = plugin.session_view(session);
                 Ok((lease_expires_at_ms, recovery_snapshot, view))
             })?;
     plugin.persist_recovery_snapshot(&recovery_snapshot)?;

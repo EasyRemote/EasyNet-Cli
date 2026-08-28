@@ -14,15 +14,38 @@ mod manager;
 mod media_source;
 mod terminal;
 mod webrtc;
+#[cfg(any(
+    test,
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
+mod webrtc_audio;
+#[cfg(any(
+    test,
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
 mod webrtc_baseline_media;
+mod webrtc_encoded_audio;
 mod webrtc_endpoint;
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+mod webrtc_hosted_media;
 mod webrtc_media;
-#[cfg(target_os = "macos")]
-mod webrtc_native_media;
 mod webrtc_negotiation;
+mod webrtc_sender_feedback;
 
 pub(in crate::daemon::plugins::remote_desktop) use manager::{
-    DirectWebRtcEndpoint, RemoteDesktopTransportManager,
+    DirectWebRtcEndpoint, PreviewTaskGroupCompletion, RemoteDesktopTransportManager,
+    RetiredDiagnosticPreview, RetiredDirectWebRtcEndpoint, TransportSettlementAdmissionPermit,
+    TransportSettlementFailureKind, TransportSettlementJob, TransportSettlementJobContext,
+    TransportSettlementQueue, TransportSettlementStatus, TRANSPORT_SETTLEMENT_DEADLINE,
 };
 pub(in crate::daemon::plugins::remote_desktop) use terminal::BidiTerminalGuard;
 pub(in crate::daemon::plugins::remote_desktop) use webrtc::{
@@ -33,7 +56,7 @@ pub(in crate::daemon::plugins::remote_desktop) use webrtc_endpoint::{
     start_direct_webrtc_endpoint, StartDirectWebRtcEndpointRequest,
 };
 pub(in crate::daemon::plugins::remote_desktop) use webrtc_media::{
-    run_direct_webrtc_media_loop, DirectWebRtcSession,
+    close_peer_connection_bounded, run_direct_webrtc_media_loop, DirectWebRtcSession,
 };
 pub(in crate::daemon::plugins::remote_desktop) use webrtc_negotiation::{
     negotiate_remote_offer, RemoteOfferNegotiation,

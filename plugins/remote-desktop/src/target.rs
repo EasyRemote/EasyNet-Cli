@@ -18,12 +18,13 @@ use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::persistence::resources::{
-    application_surface_layout_epoch, application_window_set_epoch, ResourceBinding, ResourceEntry,
-    ResourceType,
+    application_surface_layout_epoch, application_window_set_epoch_with_process_instance,
+    ResourceBinding, ResourceEntry, ResourceType,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +207,49 @@ impl InputScopeDecision {
     const fn reason(self) -> InputScopeReason {
         self.reason
     }
+}
+
+/// Compile-time proof that this daemon contains the complete host-side guard
+/// needed before target-local input can be admitted. Runtime permission and
+/// environment readiness remain owned by the platform input adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetScopedInputIsolation {
+    MacosAccessibilityCoreGraphics,
+    WindowsXcapUser32,
+    /// XTest injects into the desktop-global input stream. Even with a final
+    /// XGrabServer target check it cannot bind a press/release lifecycle to one
+    /// window, so Window/Application sessions must remain view-only.
+    LinuxX11Unisolated,
+    Unsupported,
+}
+
+impl TargetScopedInputIsolation {
+    const CURRENT: Self = if cfg!(target_os = "macos") {
+        Self::MacosAccessibilityCoreGraphics
+    } else if cfg!(all(target_os = "windows", feature = "native-media")) {
+        Self::WindowsXcapUser32
+    } else if cfg!(all(target_os = "linux", feature = "native-media")) {
+        Self::LinuxX11Unisolated
+    } else {
+        Self::Unsupported
+    };
+
+    const fn is_safe(self) -> bool {
+        matches!(
+            self,
+            Self::MacosAccessibilityCoreGraphics | Self::WindowsXcapUser32
+        )
+    }
+}
+
+pub(in crate::daemon::plugins::remote_desktop) const fn target_scoped_input_guard_available() -> bool
+{
+    TargetScopedInputIsolation::CURRENT.is_safe()
+}
+
+pub(in crate::daemon::plugins::remote_desktop) const fn target_scoped_input_guard_unavailable_reason(
+) -> &'static str {
+    InputScopeReason::TargetScopedInputUnsafe.as_str()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,7 +529,8 @@ impl fmt::Display for RemoteAppTargetError {
 
 impl std::error::Error for RemoteAppTargetError {}
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetGeometry {
     pub(in crate::daemon::plugins::remote_desktop) x: Option<f64>,
     pub(in crate::daemon::plugins::remote_desktop) y: Option<f64>,
@@ -535,6 +580,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetIdentity {
     pub(in crate::daemon::plugins::remote_desktop) display_id: Option<u64>,
     pub(in crate::daemon::plugins::remote_desktop) window_id: Option<u64>,
     pub(in crate::daemon::plugins::remote_desktop) pid: Option<i64>,
+    pub(in crate::daemon::plugins::remote_desktop) process_instance_id: Option<String>,
     pub(in crate::daemon::plugins::remote_desktop) app_identity: Option<String>,
     pub(in crate::daemon::plugins::remote_desktop) bundle_id: Option<String>,
     pub(in crate::daemon::plugins::remote_desktop) app_name: Option<String>,
@@ -548,6 +594,7 @@ impl TargetIdentity {
             display_id,
             window_id: metadata_u64(entry, "window_id"),
             pid: metadata_i64(entry, "pid").or_else(|| metadata_i64(entry, "primary_pid")),
+            process_instance_id: metadata_string(entry, "process_instance_id"),
             app_identity: metadata_string(entry, "app_identity"),
             bundle_id: metadata_string(entry, "bundle_id"),
             app_name: metadata_string(entry, "app_name"),
@@ -561,6 +608,7 @@ impl TargetIdentity {
             "display_id": self.display_id,
             "window_id": self.window_id,
             "pid": self.pid,
+            "process_instance_id": self.process_instance_id,
             "app_identity": self.app_identity,
             "bundle_id": self.bundle_id,
             "app_name": self.app_name,
@@ -574,6 +622,7 @@ impl TargetIdentity {
             display_id: optional_u64(value, "display_id")?,
             window_id: optional_u64(value, "window_id")?,
             pid: optional_i64(value, "pid")?,
+            process_instance_id: optional_string(value, "process_instance_id")?,
             app_identity: optional_string(value, "app_identity")?,
             bundle_id: optional_string(value, "bundle_id")?,
             app_name: optional_string(value, "app_name")?,
@@ -589,6 +638,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct ResolvedCaptureTargetProof
     display_id: Option<u64>,
     window_id: Option<u64>,
     pid: Option<i64>,
+    process_instance_id: Option<String>,
     app_identity: Option<String>,
     bundle_id: Option<String>,
     app_window_set: Option<AppWindowSetProof>,
@@ -601,8 +651,10 @@ pub(in crate::daemon::plugins::remote_desktop) struct ResolvedCaptureTargetProof
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct AppWindowSetProof {
     display_id: Option<u64>,
+    display_ids: Vec<u64>,
     bundle_id: Option<String>,
     primary_pid: Option<i64>,
+    process_instance_id: Option<String>,
     resolved_window_ids: Vec<u64>,
     window_set_epoch: u64,
 }
@@ -647,6 +699,7 @@ impl AppSurfaceLayoutProof {
         Self::from_canonical_surfaces(front_to_back_surfaces)
     }
 
+    #[cfg(target_os = "macos")]
     pub(in crate::daemon::plugins::remote_desktop) fn front_to_back_window_ids(
         &self,
     ) -> impl Iterator<Item = u64> + '_ {
@@ -657,6 +710,24 @@ impl AppSurfaceLayoutProof {
 
     pub(in crate::daemon::plugins::remote_desktop) fn layout_epoch(&self) -> u64 {
         self.layout_epoch
+    }
+
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    pub(in crate::daemon::plugins::remote_desktop) fn front_to_back_surfaces(
+        &self,
+    ) -> impl Iterator<Item = (u64, i64, i64, u64, u64)> + '_ {
+        self.front_to_back_surfaces.iter().map(|surface| {
+            (
+                surface.window_id,
+                surface.x,
+                surface.y,
+                surface.width,
+                surface.height,
+            )
+        })
     }
 
     fn union_geometry(&self) -> Option<TargetGeometry> {
@@ -782,6 +853,7 @@ impl AppWindowSetProof {
     ) -> Self {
         Self::new_platform_scoped(
             Some(display_id),
+            vec![display_id],
             bundle_id,
             primary_pid,
             resolved_window_ids,
@@ -790,6 +862,7 @@ impl AppWindowSetProof {
 
     pub(in crate::daemon::plugins::remote_desktop) fn new_platform_scoped(
         display_id: Option<u64>,
+        display_ids: Vec<u64>,
         bundle_id: Option<String>,
         primary_pid: Option<i64>,
         resolved_window_ids: Vec<u64>,
@@ -797,16 +870,26 @@ impl AppWindowSetProof {
         let mut resolved_window_ids = resolved_window_ids;
         resolved_window_ids.sort_unstable();
         resolved_window_ids.dedup();
+        let mut display_ids = display_ids;
+        if let Some(display_id) = display_id {
+            display_ids.push(display_id);
+        }
+        display_ids.retain(|display_id| *display_id > 0);
+        display_ids.sort_unstable();
+        display_ids.dedup();
         let window_set_epoch = compute_window_set_epoch(
             display_id,
             bundle_id.as_deref(),
             primary_pid,
+            None,
             &resolved_window_ids,
         );
         Self {
             display_id,
+            display_ids,
             bundle_id,
             primary_pid,
+            process_instance_id: None,
             resolved_window_ids,
             window_set_epoch,
         }
@@ -821,18 +904,29 @@ impl AppWindowSetProof {
         }
         let bundle_id = metadata_string(entry, "bundle_id");
         let primary_pid = metadata_i64(entry, "primary_pid").or_else(|| metadata_i64(entry, "pid"));
+        let process_instance_id = metadata_string(entry, "process_instance_id");
+        let mut display_ids = metadata_u64_array(entry, "display_ids");
+        if let Some(display_id) = display_id {
+            display_ids.push(display_id);
+        }
+        display_ids.retain(|display_id| *display_id > 0);
+        display_ids.sort_unstable();
+        display_ids.dedup();
         let window_set_epoch = metadata_u64(entry, "window_set_epoch").unwrap_or_else(|| {
             compute_window_set_epoch(
                 display_id,
                 bundle_id.as_deref(),
                 primary_pid,
+                process_instance_id.as_deref(),
                 &resolved_window_ids,
             )
         });
         Some(Self {
             display_id,
+            display_ids,
             bundle_id,
             primary_pid,
+            process_instance_id,
             resolved_window_ids,
             window_set_epoch,
         })
@@ -849,6 +943,66 @@ impl AppWindowSetProof {
         self.resolved_window_ids.binary_search(&window_id).is_ok()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn resolved_window_ids(&self) -> &[u64] {
+        &self.resolved_window_ids
+    }
+
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    pub(in crate::daemon::plugins::remote_desktop) fn display_id(&self) -> Option<u64> {
+        self.display_id
+    }
+
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    pub(in crate::daemon::plugins::remote_desktop) fn display_ids(&self) -> &[u64] {
+        &self.display_ids
+    }
+
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    pub(in crate::daemon::plugins::remote_desktop) fn primary_pid(&self) -> Option<i64> {
+        self.primary_pid
+    }
+
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    pub(in crate::daemon::plugins::remote_desktop) fn process_instance_id(&self) -> Option<&str> {
+        self.process_instance_id.as_deref()
+    }
+
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    pub(in crate::daemon::plugins::remote_desktop) fn bundle_id(&self) -> Option<&str> {
+        self.bundle_id.as_deref()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn with_process_instance_id(
+        mut self,
+        process_instance_id: Option<String>,
+    ) -> Self {
+        self.process_instance_id = process_instance_id;
+        self.window_set_epoch = compute_window_set_epoch(
+            self.display_id,
+            self.bundle_id.as_deref(),
+            self.primary_pid,
+            self.process_instance_id.as_deref(),
+            &self.resolved_window_ids,
+        );
+        self
+    }
+
+    #[cfg(target_os = "macos")]
     pub(in crate::daemon::plugins::remote_desktop) fn missing_window_ids(
         &self,
         observed_window_ids: &[u64],
@@ -863,14 +1017,53 @@ impl AppWindowSetProof {
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "display_id": self.display_id,
+            "display_ids": self.display_ids,
             "bundle_id": self.bundle_id,
             "primary_pid": self.primary_pid,
+            "process_instance_id": self.process_instance_id,
             "resolved_window_ids": self.resolved_window_ids,
             "window_set_epoch": self.window_set_epoch,
         })
     }
 
     fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
+        let display_id = optional_u64(value, "display_id")?;
+        if let Some(display_id) = display_id {
+            anyhow::ensure!(
+                display_id > 0,
+                "RemoteApp recovery app_window_set display_id must be positive"
+            );
+        }
+        let display_ids = value
+            .get("display_ids")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                anyhow::anyhow!("RemoteApp recovery app_window_set requires display_ids")
+            })?
+            .iter()
+            .map(|item| {
+                item.as_u64()
+                    .filter(|display_id| *display_id > 0)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "RemoteApp recovery app_window_set display_ids must be positive integers"
+                        )
+                    })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut canonical_display_ids = display_ids.clone();
+        canonical_display_ids.sort_unstable();
+        canonical_display_ids.dedup();
+        anyhow::ensure!(
+            display_ids == canonical_display_ids,
+            "RemoteApp recovery app_window_set display_ids must be sorted and unique"
+        );
+        if let Some(display_id) = display_id {
+            anyhow::ensure!(
+                display_ids.binary_search(&display_id).is_ok(),
+                "RemoteApp recovery app_window_set display_ids must contain display_id"
+            );
+        }
         let resolved_window_ids = value
             .get("resolved_window_ids")
             .and_then(Value::as_array)
@@ -887,9 +1080,11 @@ impl AppWindowSetProof {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Self {
-            display_id: optional_u64(value, "display_id")?,
+            display_id,
+            display_ids,
             bundle_id: optional_string(value, "bundle_id")?,
             primary_pid: optional_i64(value, "primary_pid")?,
+            process_instance_id: optional_string(value, "process_instance_id")?,
             resolved_window_ids,
             window_set_epoch: required_u64(value, "window_set_epoch")?,
         })
@@ -902,10 +1097,12 @@ impl AppWindowSetProof {
 
     fn diagnostic_label(&self) -> String {
         format!(
-            "display_id={:?}, bundle_id={:?}, primary_pid={:?}, resolved_window_ids={:?}, window_set_epoch={}",
+            "display_id={:?}, display_ids={:?}, bundle_id={:?}, primary_pid={:?}, process_instance_id={:?}, resolved_window_ids={:?}, window_set_epoch={}",
             self.display_id,
+            self.display_ids,
             self.bundle_id,
             self.primary_pid,
+            self.process_instance_id,
             self.resolved_window_ids,
             self.window_set_epoch
         )
@@ -923,6 +1120,7 @@ impl ResolvedCaptureTargetProof {
             display_id: None,
             window_id: None,
             pid: None,
+            process_instance_id: None,
             app_identity: None,
             bundle_id: None,
             app_window_set: None,
@@ -949,6 +1147,14 @@ impl ResolvedCaptureTargetProof {
         self
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn with_process_instance_id(
+        mut self,
+        process_instance_id: Option<String>,
+    ) -> Self {
+        self.process_instance_id = process_instance_id;
+        self
+    }
+
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn with_native_dimensions(
         mut self,
@@ -957,6 +1163,16 @@ impl ResolvedCaptureTargetProof {
         (self.native_width, self.native_height) = native_dimensions
             .map(|(width, height)| (Some(width), Some(height)))
             .unwrap_or((None, None));
+        self
+    }
+
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(in crate::daemon::plugins::remote_desktop) fn reverified_with_native_dimensions(
+        mut self,
+        native_dimensions: Option<(usize, usize)>,
+    ) -> Self {
+        self = self.with_native_dimensions(native_dimensions);
+        self.verified_at_ms = unix_epoch_ms();
         self
     }
 
@@ -983,6 +1199,7 @@ impl ResolvedCaptureTargetProof {
             "display_id": self.display_id,
             "window_id": self.window_id,
             "pid": self.pid,
+            "process_instance_id": self.process_instance_id,
             "app_identity": self.app_identity,
             "bundle_id": self.bundle_id,
             "app_window_set": self.app_window_set.as_ref().map(AppWindowSetProof::to_value),
@@ -991,6 +1208,12 @@ impl ResolvedCaptureTargetProof {
             "native_height": self.native_height,
             "verified_at_ms": self.verified_at_ms,
         })
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn native_dimensions(
+        &self,
+    ) -> Option<(usize, usize)> {
+        Some((self.native_width?, self.native_height?))
     }
 
     fn from_recovery_value(value: &Value) -> anyhow::Result<Self> {
@@ -1003,6 +1226,7 @@ impl ResolvedCaptureTargetProof {
             display_id: optional_u64(value, "display_id")?,
             window_id: optional_u64(value, "window_id")?,
             pid: optional_i64(value, "pid")?,
+            process_instance_id: optional_string(value, "process_instance_id")?,
             app_identity: optional_string(value, "app_identity")?,
             bundle_id: optional_string(value, "bundle_id")?,
             app_window_set: optional_object_value(value, "app_window_set")
@@ -1158,6 +1382,7 @@ impl ResolvedCaptureTargetProof {
     fn native_app_identity_expectation(&self) -> NativeAppIdentityExpectation<'_> {
         NativeAppIdentityExpectation {
             expected_pid: self.pid,
+            expected_process_instance_id: self.process_instance_id.as_deref(),
             expected_bundle_id: self.bundle_id.as_deref(),
             expected_app_identity: self.app_identity.as_deref(),
         }
@@ -1169,6 +1394,7 @@ impl ResolvedCaptureTargetProof {
             self.bundle_id.as_deref(),
             self.app_identity.as_deref(),
         )
+        .with_process_instance_id(self.process_instance_id.as_deref())
     }
 }
 
@@ -1190,6 +1416,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct NativeTargetLocator {
     display_id: Option<u64>,
     window_id: Option<u64>,
     pid: Option<i64>,
+    process_instance_id: Option<String>,
     app_identity: Option<String>,
     bundle_id: Option<String>,
     app_name: Option<String>,
@@ -1199,6 +1426,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct NativeTargetLocator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct NativeAppIdentityCandidate<'a> {
     pid: Option<i64>,
+    process_instance_id: Option<&'a str>,
     bundle_id: Option<&'a str>,
     app_identity: Option<&'a str>,
 }
@@ -1211,15 +1439,25 @@ impl<'a> NativeAppIdentityCandidate<'a> {
     ) -> Self {
         Self {
             pid,
+            process_instance_id: None,
             bundle_id,
             app_identity,
         }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn with_process_instance_id(
+        mut self,
+        process_instance_id: Option<&'a str>,
+    ) -> Self {
+        self.process_instance_id = process_instance_id;
+        self
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct NativeAppIdentityExpectation<'a> {
     expected_pid: Option<i64>,
+    expected_process_instance_id: Option<&'a str>,
     expected_bundle_id: Option<&'a str>,
     expected_app_identity: Option<&'a str>,
 }
@@ -1232,6 +1470,9 @@ impl<'a> NativeAppIdentityExpectation<'a> {
         let pid_matches = self
             .expected_pid
             .is_none_or(|expected| candidate.pid == Some(expected));
+        let process_instance_matches = self
+            .expected_process_instance_id
+            .is_none_or(|expected| candidate.process_instance_id == Some(expected));
         let bundle_matches = self.expected_bundle_id.is_none_or(|expected| {
             candidate.bundle_id == Some(expected) || candidate.app_identity == Some(expected)
         });
@@ -1241,6 +1482,9 @@ impl<'a> NativeAppIdentityExpectation<'a> {
         let any_expected_field_seen = self
             .expected_pid
             .is_some_and(|expected| candidate.pid == Some(expected))
+            || self
+                .expected_process_instance_id
+                .is_some_and(|expected| candidate.process_instance_id == Some(expected))
             || self.expected_bundle_id.is_some_and(|expected| {
                 candidate.bundle_id == Some(expected) || candidate.app_identity == Some(expected)
             })
@@ -1248,7 +1492,10 @@ impl<'a> NativeAppIdentityExpectation<'a> {
                 candidate.app_identity == Some(expected) || candidate.bundle_id == Some(expected)
             });
         NativeAppIdentityMatch {
-            matched: pid_matches && bundle_matches && app_identity_matches,
+            matched: pid_matches
+                && process_instance_matches
+                && bundle_matches
+                && app_identity_matches,
             any_expected_field_seen,
         }
     }
@@ -1289,6 +1536,10 @@ impl NativeTargetLocator {
         self.pid
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn process_instance_id(&self) -> Option<&str> {
+        self.process_instance_id.as_deref()
+    }
+
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn app_identity(&self) -> Option<&str> {
         self.app_identity.as_deref()
@@ -1303,6 +1554,7 @@ impl NativeTargetLocator {
     ) -> NativeAppIdentityExpectation<'_> {
         NativeAppIdentityExpectation {
             expected_pid: self.pid,
+            expected_process_instance_id: self.process_instance_id.as_deref(),
             expected_bundle_id: self.bundle_id.as_deref(),
             expected_app_identity: self.app_identity.as_deref(),
         }
@@ -1326,6 +1578,7 @@ impl NativeTargetLocator {
             "display_id": self.display_id,
             "window_id": self.window_id,
             "pid": self.pid,
+            "process_instance_id": self.process_instance_id,
             "app_identity": self.app_identity,
             "bundle_id": self.bundle_id,
             "app_name": self.app_name,
@@ -1345,6 +1598,7 @@ impl NativeTargetLocator {
             display_id: optional_u64(value, "display_id")?,
             window_id: optional_u64(value, "window_id")?,
             pid: optional_i64(value, "pid")?,
+            process_instance_id: optional_string(value, "process_instance_id")?,
             app_identity: optional_string(value, "app_identity")?,
             bundle_id: optional_string(value, "bundle_id")?,
             app_name: optional_string(value, "app_name")?,
@@ -1437,9 +1691,17 @@ impl DiagnosticCaptureSubject {
             "display_id".to_string(),
             window_set.display_id.map_or(Value::Null, Value::from),
         );
+        metadata.insert("display_ids".to_string(), json!(window_set.display_ids));
         metadata.insert(
             "primary_pid".to_string(),
             window_set.primary_pid.map_or(Value::Null, Value::from),
+        );
+        metadata.insert(
+            "process_instance_id".to_string(),
+            window_set
+                .process_instance_id
+                .as_ref()
+                .map_or(Value::Null, |value| Value::String(value.clone())),
         );
         metadata.insert(
             "bundle_id".to_string(),
@@ -1480,6 +1742,16 @@ impl DiagnosticCaptureSubject {
             metadata.insert("union_width".to_string(), json!(geometry.width));
             metadata.insert("union_height".to_string(), json!(geometry.height));
         }
+    }
+
+    fn commit_target_geometry(&mut self, geometry: &TargetGeometry) {
+        let Value::Object(metadata) = &mut self.metadata else {
+            return;
+        };
+        metadata.insert("x".to_string(), json!(geometry.x));
+        metadata.insert("y".to_string(), json!(geometry.y));
+        metadata.insert("width".to_string(), json!(geometry.width));
+        metadata.insert("height".to_string(), json!(geometry.height));
     }
 }
 
@@ -1552,6 +1824,16 @@ impl RemoteAppTargetBinding {
         let subject_ura = required_owned_string(value, "subject_ura")?;
         let platform = required_owned_string(value, "platform")?;
         let backend = required_owned_string(value, "backend")?;
+        if platform == "linux"
+            && matches!(
+                target_kind,
+                RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application
+            )
+        {
+            anyhow::bail!(
+                "Linux RemoteApp Window/Application recovery requires a fresh X11 window-generation lease; recreate the session from fresh inventory"
+            );
+        }
         let diagnostic = json!({
             "status": "rehydrated",
             "reason_code": "daemon_restart_rehydrated",
@@ -1578,6 +1860,7 @@ impl RemoteAppTargetBinding {
                 "window_id": native_locator.window_id,
                 "pid": native_locator.pid,
                 "primary_pid": native_locator.pid,
+                "process_instance_id": native_locator.process_instance_id,
                 "app_identity": native_locator.app_identity,
                 "bundle_id": native_locator.bundle_id,
                 "app_name": native_locator.app_name,
@@ -1725,6 +2008,34 @@ impl RemoteAppTargetBinding {
         Some(candidate)
     }
 
+    /// Build the next committed geometry generation for a display/window.
+    ///
+    /// Application geometry is derived from its committed surface-layout proof
+    /// and must use `application_surface_rebind_candidate` instead. A resize of
+    /// an active capture source advances `media_source_epoch`; a position-only
+    /// move advances only the binding/geometry generation.
+    pub(in crate::daemon::plugins::remote_desktop) fn geometry_rebind_candidate(
+        &self,
+        geometry: TargetGeometry,
+        target_geometry_revision: u64,
+        rebuild_media_source: bool,
+    ) -> Option<Self> {
+        if self.target_kind == RemoteDesktopTargetKind::Application {
+            return None;
+        }
+        let mut candidate = self.clone();
+        candidate.binding_epoch = candidate.binding_epoch.saturating_add(1);
+        candidate.target_geometry_revision = target_geometry_revision;
+        if rebuild_media_source {
+            candidate.media_source_epoch = candidate.media_source_epoch.saturating_add(1);
+        }
+        candidate.geometry = geometry;
+        candidate
+            .diagnostic_capture_subject
+            .commit_target_geometry(&candidate.geometry);
+        Some(candidate)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn geometry(&self) -> &TargetGeometry {
         &self.geometry
     }
@@ -1781,6 +2092,9 @@ impl RemoteAppTargetBinding {
             }
         }
         self.capture_proof = Some(proof);
+        if let Value::Object(fields) = &mut self.diagnostic {
+            fields.insert("live_identity_reverified".to_string(), json!(true));
+        }
         Ok(())
     }
 
@@ -1853,6 +2167,15 @@ impl RemoteAppTargetBinding {
     }
 
     fn target_metadata_resolvable(&self) -> bool {
+        if self.platform == "linux"
+            && matches!(
+                self.target_kind,
+                RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application
+            )
+            && self.native_locator.process_instance_id.is_none()
+        {
+            return false;
+        }
         match self.target_kind {
             RemoteDesktopTargetKind::Application => {
                 self.native_locator.pid.is_some()
@@ -1991,9 +2314,7 @@ mod platform_live_resolution {
         ability: &'static str,
         binding: &RemoteAppTargetBinding,
     ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
-        crate::daemon::plugins::remote_desktop::screencapturekit_capture::verify_target_binding_for_session(
-            ability, binding,
-        )
+        crate::daemon::plugins::remote_desktop::media_host_probe::verify_binding(ability, binding)
     }
 }
 
@@ -2047,7 +2368,8 @@ mod platform_live_resolution {
                     locator.app_identity().map(ToOwned::to_owned),
                     locator.bundle_id().map(ToOwned::to_owned),
                 )
-                .with_native_dimensions(Some((frame.width as usize, frame.height as usize)));
+                .with_process_instance_id(locator.process_instance_id().map(ToOwned::to_owned))
+                .with_native_dimensions(Some(frame.native_dimensions()));
         if binding.target_kind() == RemoteDesktopTargetKind::Application {
             let window_set = binding.committed_app_window_set().cloned().ok_or_else(|| {
                 RemoteAppTargetError::new(
@@ -2157,8 +2479,12 @@ fn resolve_resource_entry_for_session(
         .map_err(|error| RemoteAppTargetError::new(ability, error.reason(), error.to_string()))?;
     validate_resource_inventory_state(ability, entry, target_kind)?;
     let capture_scope = capture_scope_for_kind(target_kind);
-    let input_scope_decision =
-        input_scope_for_request(target_kind, requested_mode, input_control_granted);
+    let input_scope_decision = input_scope_for_request(
+        target_kind,
+        requested_mode,
+        input_control_granted,
+        TargetScopedInputIsolation::CURRENT,
+    );
     let input_scope = input_scope_decision.scope();
     let platform = metadata_string(entry, "platform").unwrap_or_else(|| {
         if cfg!(target_os = "macos") {
@@ -2172,7 +2498,7 @@ fn resolve_resource_entry_for_session(
         }
     });
     let display_id = display_id(entry);
-    validate_required_identity(ability, entry, target_kind, display_id)?;
+    validate_required_identity(ability, entry, target_kind, display_id, &platform)?;
     let discovery_backend =
         metadata_string(entry, "backend").unwrap_or_else(|| "resource_registry".to_string());
     let capture_backend = capture_backend_for_entry(&platform, entry, target_kind);
@@ -2188,6 +2514,7 @@ fn resolve_resource_entry_for_session(
         display_id,
         window_id: metadata_u64(entry, "window_id"),
         pid: metadata_i64(entry, "pid").or_else(|| metadata_i64(entry, "primary_pid")),
+        process_instance_id: metadata_string(entry, "process_instance_id"),
         app_identity: metadata_string(entry, "app_identity"),
         bundle_id: metadata_string(entry, "bundle_id"),
         app_name: metadata_string(entry, "app_name"),
@@ -2201,6 +2528,13 @@ fn resolve_resource_entry_for_session(
         .unwrap_or(1);
     let target_geometry_revision = metadata_u64(entry, "geometry_revision").unwrap_or(1);
     let media_source_epoch = 1;
+    let inventory_observed_at_ms = metadata_freshness_u64(entry, "observed_at_ms");
+    let inventory_stale_after_ms = metadata_freshness_u64(entry, "stale_after_ms");
+    let inventory_cache_expired_before_live_verification = matches!(
+        target_kind,
+        RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application
+    ) && inventory_stale_after_ms
+        .is_some_and(|stale_after_ms| stale_after_ms <= unix_epoch_ms());
     let scope_audit = ScopeAudit {
         requested_target_kind: target_kind,
         effective_target_kind: target_kind,
@@ -2218,6 +2552,10 @@ fn resolve_resource_entry_for_session(
         "match_strategy": match_strategy_for_kind(target_kind, &platform),
         "capture_backend": capture_backend,
         "target_model": target_kind.target_model_for_platform(&platform),
+        "inventory_observed_at_ms": inventory_observed_at_ms,
+        "inventory_stale_after_ms": inventory_stale_after_ms,
+        "inventory_cache_expired_before_live_verification": inventory_cache_expired_before_live_verification,
+        "live_identity_reverified": false,
         "display_fallback_used": false,
         "frontend_action": Value::Null,
     });
@@ -2338,20 +2676,6 @@ fn validate_resource_inventory_state(
         ));
     }
 
-    if let Some(stale_after_ms) = metadata_freshness_u64(entry, "stale_after_ms") {
-        let now_ms = unix_epoch_ms();
-        if stale_after_ms <= now_ms {
-            return Err(RemoteAppTargetError::new(
-                ability,
-                TargetResolutionError::TargetStale,
-                format!(
-                    "remote desktop target {} live inventory row expired at {stale_after_ms}; refresh targets before creating a session",
-                    entry.resource_ura
-                ),
-            ));
-        }
-    }
-
     Ok(())
 }
 
@@ -2367,7 +2691,16 @@ fn validate_required_identity(
     entry: &ResourceEntry,
     target_kind: RemoteDesktopTargetKind,
     display_id: Option<u64>,
+    platform: &str,
 ) -> Result<(), RemoteAppTargetError> {
+    if platform == "linux"
+        && matches!(
+            target_kind,
+            RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application
+        )
+    {
+        validate_linux_process_instance_identity(ability, entry, target_kind)?;
+    }
     match target_kind {
         RemoteDesktopTargetKind::Display => {
             if display_id.is_some() || metadata_bool(entry, "primary_display") {
@@ -2424,6 +2757,50 @@ fn validate_required_identity(
     }
 }
 
+fn validate_linux_process_instance_identity(
+    ability: &'static str,
+    entry: &ResourceEntry,
+    target_kind: RemoteDesktopTargetKind,
+) -> Result<(), RemoteAppTargetError> {
+    let pid = metadata_i64(entry, "pid")
+        .or_else(|| metadata_i64(entry, "primary_pid"))
+        .filter(|pid| *pid > 0);
+    let start_ticks = metadata_u64(entry, "process_start_ticks").filter(|ticks| *ticks > 0);
+    let boot_id =
+        metadata_string(entry, "process_boot_id").filter(|value| !value.trim().is_empty());
+    let process_instance_id =
+        metadata_string(entry, "process_instance_id").filter(|value| !value.trim().is_empty());
+    let Some((pid, start_ticks, boot_id, process_instance_id)) = pid
+        .zip(start_ticks)
+        .zip(boot_id)
+        .zip(process_instance_id)
+        .map(|(((pid, start_ticks), boot_id), process_instance_id)| {
+            (pid, start_ticks, boot_id, process_instance_id)
+        })
+    else {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetMetadataIncomplete,
+            format!(
+                "Linux {} targets require process_instance_id, process_boot_id, positive process_start_ticks, and owner pid from the same live observation",
+                target_kind.as_str()
+            ),
+        ));
+    };
+    let expected = format!("linux:{boot_id}:{pid}:{start_ticks}");
+    if process_instance_id != expected {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetIdentityMismatch,
+            format!(
+                "Linux {} target process instance metadata is inconsistent with its owner pid/starttime/boot identity",
+                target_kind.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn capture_scope_for_kind(target_kind: RemoteDesktopTargetKind) -> CaptureScope {
     match target_kind {
         RemoteDesktopTargetKind::Display => CaptureScope::DisplaySurface,
@@ -2436,6 +2813,7 @@ fn input_scope_for_request(
     target_kind: RemoteDesktopTargetKind,
     requested_mode: &str,
     input_control_granted: bool,
+    target_isolation: TargetScopedInputIsolation,
 ) -> InputScopeDecision {
     if requested_mode != "interactive" {
         return InputScopeDecision::new(InputScope::ViewOnly, InputScopeReason::RequestedViewOnly);
@@ -2458,7 +2836,7 @@ fn input_scope_for_request(
             }
         }
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
-            if !cfg!(target_os = "macos") {
+            if !target_isolation.is_safe() {
                 return InputScopeDecision::new(
                     InputScope::ViewOnly,
                     InputScopeReason::TargetScopedInputUnsafe,
@@ -2684,6 +3062,7 @@ fn mint_binding_id(entry: &ResourceEntry, locator: &NativeTargetLocator) -> Stri
     locator.display_id.hash(&mut hasher);
     locator.window_id.hash(&mut hasher);
     locator.pid.hash(&mut hasher);
+    locator.process_instance_id.hash(&mut hasher);
     locator.app_identity.hash(&mut hasher);
     locator.bundle_id.hash(&mut hasher);
     locator.app_name.hash(&mut hasher);
@@ -2696,9 +3075,16 @@ fn compute_window_set_epoch(
     display_id: Option<u64>,
     bundle_id: Option<&str>,
     primary_pid: Option<i64>,
+    process_instance_id: Option<&str>,
     resolved_window_ids: &[u64],
 ) -> u64 {
-    application_window_set_epoch(display_id, bundle_id, primary_pid, resolved_window_ids)
+    application_window_set_epoch_with_process_instance(
+        display_id,
+        bundle_id,
+        primary_pid,
+        process_instance_id,
+        resolved_window_ids,
+    )
 }
 
 fn unix_epoch_ms() -> u64 {
@@ -2780,6 +3166,7 @@ mod tests {
                         "app_identity": "com.apple.Safari",
                         "app_name": "Safari",
                         "primary_pid": 42,
+                        "display_ids": [1, 2],
                         "resolved_window_ids": [7, 8],
                         "window_set_epoch": 99,
                         "target_identity_epoch": 99,
@@ -2807,6 +3194,7 @@ mod tests {
                         "app_identity": "com.apple.Safari",
                         "app_name": "Safari",
                         "primary_pid": 42,
+                        "display_ids": [1, 2],
                         "resolved_window_ids": [7, 8],
                         "window_set_epoch": 99,
                         "target_identity_epoch": 99,
@@ -2980,6 +3368,7 @@ mod tests {
     fn native_app_identity_expectation_matches_canonical_bundle_aliases() {
         let expected = NativeAppIdentityExpectation {
             expected_pid: Some(42),
+            expected_process_instance_id: None,
             expected_bundle_id: Some("com.example.Editor"),
             expected_app_identity: Some("com.example.Editor"),
         };
@@ -3008,6 +3397,7 @@ mod tests {
     fn native_app_identity_expectation_requires_all_declared_identity_fields() {
         let expected = NativeAppIdentityExpectation {
             expected_pid: Some(42),
+            expected_process_instance_id: None,
             expected_bundle_id: Some("com.example.Editor"),
             expected_app_identity: Some("com.example.Editor"),
         };
@@ -3030,6 +3420,28 @@ mod tests {
         ));
         assert!(!no_field_seen.matched());
         assert!(!no_field_seen.any_expected_field_seen());
+    }
+
+    #[test]
+    fn native_app_identity_expectation_rejects_reused_linux_pid() {
+        let expected = NativeAppIdentityExpectation {
+            expected_pid: Some(42),
+            expected_process_instance_id: Some("linux:boot-a:42:100"),
+            expected_bundle_id: None,
+            expected_app_identity: None,
+        };
+        assert!(expected
+            .evaluate(
+                NativeAppIdentityCandidate::new(Some(42), None, None)
+                    .with_process_instance_id(Some("linux:boot-a:42:100")),
+            )
+            .matched());
+        assert!(!expected
+            .evaluate(
+                NativeAppIdentityCandidate::new(Some(42), None, None)
+                    .with_process_instance_id(Some("linux:boot-a:42:200")),
+            )
+            .matched());
     }
 
     #[test]
@@ -3237,7 +3649,7 @@ mod tests {
     }
 
     #[test]
-    fn resolver_rejects_unavailable_or_expired_inventory_rows_before_binding() {
+    fn resolver_rejects_unavailable_or_unproven_inventory_rows_before_binding() {
         let resolver = ResourceEntryTargetResolver;
         let err = resolver
             .resolve_for_session(
@@ -3284,7 +3696,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let err = resolver
+        let mut expired = resolver
             .resolve_for_session(
                 "remote_desktop.create_session",
                 &entry(
@@ -3303,11 +3715,35 @@ mod tests {
                 "view_only",
                 1,
             )
-            .expect_err("expired live inventory rows must fail closed");
-        assert_eq!(err.reason(), TargetResolutionError::TargetStale);
-        assert!(
-            err.to_string().contains("frontend_action=refresh_targets"),
-            "unexpected error: {err}"
+            .expect("expired picker cache must defer authority to live target verification");
+        assert_eq!(
+            expired.latest_target_diagnostic_value()
+                ["inventory_cache_expired_before_live_verification"],
+            json!(true)
+        );
+        assert_eq!(
+            expired.latest_target_diagnostic_value()["live_identity_reverified"],
+            json!(false)
+        );
+        let locator = expired.native_locator();
+        let proof = ResolvedCaptureTargetProof::new(
+            locator.capture_backend(),
+            RemoteDesktopTargetKind::Window,
+        )
+        .with_native_identity(
+            locator.display_id(),
+            locator.window_id(),
+            locator.pid(),
+            locator.app_identity().map(ToOwned::to_owned),
+            locator.bundle_id().map(ToOwned::to_owned),
+        )
+        .with_native_dimensions(Some((800, 600)));
+        expired
+            .commit_capture_proof("remote_desktop.create_session", proof)
+            .expect("matching live proof commits after picker cache expiry");
+        assert_eq!(
+            expired.latest_target_diagnostic_value()["live_identity_reverified"],
+            json!(true)
         );
     }
 
@@ -3450,6 +3886,18 @@ mod tests {
             .validate_reverified_capture_proof("remote_desktop.set_description", &drifted_pid)
             .expect_err("media path must fail if live target drifts from committed proof");
         assert_eq!(err.reason(), TargetResolutionError::TargetIdentityMismatch);
+    }
+
+    #[test]
+    fn capture_proof_reverification_refreshes_dimensions_and_timestamp() {
+        let mut proof =
+            ResolvedCaptureTargetProof::new("xcap", RemoteDesktopTargetKind::Application)
+                .with_native_dimensions(Some((1020, 380)));
+        proof.verified_at_ms = 1;
+        let proof = proof.reverified_with_native_dimensions(Some((840, 500)));
+        assert_eq!(proof.native_width, Some(840));
+        assert_eq!(proof.native_height, Some(500));
+        assert!(proof.verified_at_ms > 1);
     }
 
     #[test]
@@ -3853,6 +4301,7 @@ mod tests {
             json!("com.apple.Safari")
         );
         assert_eq!(projection["resolved_identity"]["display_id"], Value::Null);
+        assert_eq!(projection["app_window_set"]["display_ids"], json!([1, 2]));
         assert_eq!(
             binding.scope_audit_value()["target_model"],
             json!("multi_surface_application_window_set")
@@ -3880,6 +4329,52 @@ mod tests {
     }
 
     #[test]
+    fn application_recovery_accepts_unknown_platform_display_and_rejects_contradictions() {
+        let platform_unknown = AppWindowSetProof::from_recovery_value(&json!({
+            "display_id": null,
+            "display_ids": [],
+            "bundle_id": "com.example.Editor",
+            "primary_pid": 42,
+            "resolved_window_ids": [70],
+            "window_set_epoch": 1
+        }))
+        .expect("Windows/Linux xcap application sets do not expose display topology");
+        assert_eq!(platform_unknown.to_value()["display_ids"], json!([]));
+
+        let contradictory = AppWindowSetProof::from_recovery_value(&json!({
+            "display_id": 2,
+            "display_ids": [],
+            "bundle_id": "com.example.Editor",
+            "primary_pid": 42,
+            "resolved_window_ids": [70],
+            "window_set_epoch": 1
+        }))
+        .expect_err("a known primary display must belong to the display topology");
+        assert!(
+            contradictory
+                .to_string()
+                .contains("must contain display_id"),
+            "{contradictory}"
+        );
+
+        let noncanonical = AppWindowSetProof::from_recovery_value(&json!({
+            "display_id": null,
+            "display_ids": [2, 1, 2],
+            "bundle_id": "com.example.Editor",
+            "primary_pid": 42,
+            "resolved_window_ids": [70],
+            "window_set_epoch": 1
+        }))
+        .expect_err("noncanonical application display topology must fail closed");
+        assert!(
+            noncanonical
+                .to_string()
+                .contains("must be sorted and unique"),
+            "{noncanonical}"
+        );
+    }
+
+    #[test]
     fn application_interactive_with_input_consent_projects_guarded_target_scope() {
         let binding = interactive_application_binding_with_input_consent();
         assert_eq!(binding.to_value()["input_scope"], json!("target_local"));
@@ -3895,6 +4390,70 @@ mod tests {
             binding.target_bound_event_payload()["input_scope_reason"],
             json!("target_scoped_input_guarded")
         );
+    }
+
+    #[test]
+    fn supported_platform_guards_admit_window_and_application_target_local_input() {
+        for target_guard in [
+            TargetScopedInputIsolation::MacosAccessibilityCoreGraphics,
+            TargetScopedInputIsolation::WindowsXcapUser32,
+        ] {
+            for target_kind in [
+                RemoteDesktopTargetKind::Window,
+                RemoteDesktopTargetKind::Application,
+            ] {
+                assert_eq!(
+                    input_scope_for_request(target_kind, "interactive", true, target_guard),
+                    InputScopeDecision::new(
+                        InputScope::TargetLocal,
+                        InputScopeReason::TargetScopedInputGuarded,
+                    ),
+                    "compiled exact-target guard {target_guard:?} must make {target_kind:?} input reachable",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_platform_guard_keeps_target_local_input_fail_closed() {
+        for target_kind in [
+            RemoteDesktopTargetKind::Window,
+            RemoteDesktopTargetKind::Application,
+        ] {
+            assert_eq!(
+                input_scope_for_request(
+                    target_kind,
+                    "interactive",
+                    true,
+                    TargetScopedInputIsolation::Unsupported,
+                ),
+                InputScopeDecision::new(
+                    InputScope::ViewOnly,
+                    InputScopeReason::TargetScopedInputUnsafe,
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn linux_x11_window_and_application_input_remain_view_only_without_press_release_isolation() {
+        for target_kind in [
+            RemoteDesktopTargetKind::Window,
+            RemoteDesktopTargetKind::Application,
+        ] {
+            assert_eq!(
+                input_scope_for_request(
+                    target_kind,
+                    "interactive",
+                    true,
+                    TargetScopedInputIsolation::LinuxX11Unisolated,
+                ),
+                InputScopeDecision::new(
+                    InputScope::ViewOnly,
+                    InputScopeReason::TargetScopedInputUnsafe,
+                ),
+            );
+        }
     }
 
     #[test]

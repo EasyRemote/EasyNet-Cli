@@ -8,6 +8,7 @@ pub(in crate::daemon::plugins::remote_desktop) mod add_ice_candidate;
 pub(in crate::daemon::plugins::remote_desktop) mod attach;
 pub(in crate::daemon::plugins::remote_desktop) mod create_session;
 pub(in crate::daemon::plugins::remote_desktop) mod end_session;
+pub(in crate::daemon::plugins::remote_desktop) mod focus_target;
 pub(in crate::daemon::plugins::remote_desktop) mod grant_consent;
 pub(in crate::daemon::plugins::remote_desktop) mod permission_status;
 pub(in crate::daemon::plugins::remote_desktop) mod refresh_lease;
@@ -76,14 +77,9 @@ mod tests {
             created["media_sdk"]["sdk_id"],
             json!(REMOTE_DESKTOP_MEDIA_SDK_ID)
         );
-        let expected_device_max_fps = if cfg!(target_os = "macos") {
-            MAX_ATTACH_FPS
-        } else {
-            XCAP_MACOS_RECORDER_MAX_FPS
-        };
         assert_eq!(
             created["device_capabilities"]["max_fps"],
-            json!(expected_device_max_fps)
+            json!(XCAP_MACOS_RECORDER_MAX_FPS)
         );
         assert_eq!(
             created["device_capabilities"]["requested_fps_ceiling"],
@@ -285,6 +281,8 @@ mod tests {
                 "rd-target-events",
                 &inputs.binding_id,
                 inputs.binding_epoch,
+                &inputs.snapshot,
+                &inputs.coherence_token,
                 TargetObservation::GeometryChanged {
                     geometry: TargetGeometry {
                         x: Some(12.0),

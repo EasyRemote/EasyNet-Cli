@@ -4,7 +4,7 @@
 // File: plugins/remote-desktop/src/transport/webrtc.rs
 // Description: PeerConnection event handling for direct WebRTC transport.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use serde_json::{json, Value};
 use webrtc::data_channel::DataChannel;
@@ -32,7 +32,7 @@ use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportMan
 #[derive(Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandler {
     sessions: Arc<RemoteDesktopSessionStore>,
-    transports: Arc<RemoteDesktopTransportManager>,
+    transports: Weak<RemoteDesktopTransportManager>,
     session_id: String,
     epoch: TransportEpoch,
     input_policy: EffectiveRemoteDesktopInputPolicy,
@@ -43,7 +43,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandler {
 
 pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandlerConfig {
     pub(in crate::daemon::plugins::remote_desktop) sessions: Arc<RemoteDesktopSessionStore>,
-    pub(in crate::daemon::plugins::remote_desktop) transports: Arc<RemoteDesktopTransportManager>,
+    pub(in crate::daemon::plugins::remote_desktop) transports: Weak<RemoteDesktopTransportManager>,
     pub(in crate::daemon::plugins::remote_desktop) session_id: String,
     pub(in crate::daemon::plugins::remote_desktop) epoch: TransportEpoch,
     pub(in crate::daemon::plugins::remote_desktop) input_policy: EffectiveRemoteDesktopInputPolicy,
@@ -177,8 +177,9 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
                     "device-side peer connection entered failed".to_string(),
                 );
                 let _ = self.done_tx.try_send(());
-                self.transports
-                    .stop_endpoint_if_epoch(&self.session_id, self.epoch);
+                if let Some(transports) = self.transports.upgrade() {
+                    transports.stop_endpoint_if_epoch(&self.session_id, self.epoch);
+                }
             }
             RTCPeerConnectionState::Disconnected => {
                 self.sessions
@@ -192,8 +193,9 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
                     format!("device-side peer connection entered {state}"),
                 );
                 let _ = self.done_tx.try_send(());
-                self.transports
-                    .stop_endpoint_if_epoch(&self.session_id, self.epoch);
+                if let Some(transports) = self.transports.upgrade() {
+                    transports.stop_endpoint_if_epoch(&self.session_id, self.epoch);
+                }
             }
             _ => {}
         }
@@ -298,4 +300,40 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_pending_remote_ice_candi
             .unwrap_or_default()
     };
     apply_remote_ice_candidate_values(transports, &endpoint.peer_connection, &candidates)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_connection_handler_does_not_keep_transport_manager_alive() {
+        let manager = Arc::new(RemoteDesktopTransportManager::new());
+        let (gather_complete_tx, _gather_complete_rx) = webrtc::runtime::channel(1);
+        let (connected_tx, _connected_rx) = webrtc::runtime::channel(1);
+        let (done_tx, _done_rx) = webrtc::runtime::channel(1);
+        let handler = DirectWebRtcHandler::new(DirectWebRtcHandlerConfig {
+            sessions: Arc::new(RemoteDesktopSessionStore::new()),
+            transports: Arc::downgrade(&manager),
+            session_id: "rd-weak-transport-owner".to_string(),
+            epoch: manager.allocate_epoch(),
+            input_policy: EffectiveRemoteDesktopInputPolicy::from_test_value(json!({
+                "keyboard": false,
+                "pointer": false,
+                "clipboard": false,
+                "file_drop": false,
+                "input_scope": "unsupported",
+            })),
+            gather_complete_tx,
+            connected_tx,
+            done_tx,
+        });
+
+        assert_eq!(Arc::strong_count(&manager), 1);
+        drop(manager);
+        assert!(
+            handler.transports.upgrade().is_none(),
+            "PeerConnection callbacks must not form manager -> peer -> handler -> manager ownership cycles"
+        );
+    }
 }

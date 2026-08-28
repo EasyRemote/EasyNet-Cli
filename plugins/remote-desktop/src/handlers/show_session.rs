@@ -10,9 +10,10 @@ use crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_audit_access;
+use crate::daemon::plugins::remote_desktop::session_lifecycle::{
+    ensure_session_control_audit_access, expire_session_by_id_if_needed,
+};
 use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
-use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
 /// Handle `remote_desktop.show_session`.
 pub(in crate::daemon::plugins::remote_desktop) fn handle(
@@ -21,7 +22,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     args: Value,
 ) -> anyhow::Result<Value> {
     let session_id = require_str(&args, "session_id", ABILITY_SHOW_SESSION)?;
-    let (recovery_snapshot, view) =
+    let _ = expire_session_by_id_if_needed(&plugin, session_id, None);
+    let (recovery_snapshot, mut view) =
         plugin
             .session_store()
             .with_sessions(|sessions| -> anyhow::Result<_> {
@@ -39,9 +41,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     session,
                 )?;
                 let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
-                Ok((recovery_snapshot, serialize_session(session)))
+                Ok((recovery_snapshot, plugin.session_view(session)))
             })?;
     plugin.persist_recovery_snapshot(&recovery_snapshot)?;
+    view["transport_settlement_health"] = plugin.transport_manager().settlement_health().to_value();
     Ok(view)
 }
 

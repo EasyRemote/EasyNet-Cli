@@ -97,6 +97,19 @@ impl RemoteDesktopSessionStateMachine {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate_terminating(
+        reason: String,
+    ) -> anyhow::Result<Self> {
+        if reason.trim().is_empty() {
+            anyhow::bail!("RemoteApp recovery termination reason must not be empty");
+        }
+        Ok(Self {
+            phase: RemoteDesktopSessionPhase::Terminating,
+            public_state: RemoteDesktopState::Closing,
+            end_reason: Some(reason),
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn rehydrate_terminal(
         public_state: RemoteDesktopState,
         reason: String,
@@ -334,14 +347,28 @@ impl RemoteDesktopSessionStateMachine {
         )
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn begin_termination(&mut self) -> bool {
-        if self.is_terminal() || self.phase == RemoteDesktopSessionPhase::Terminating {
+    pub(in crate::daemon::plugins::remote_desktop) fn begin_termination(
+        &mut self,
+        reason: &str,
+    ) -> bool {
+        if reason.trim().is_empty()
+            || self.is_terminal()
+            || self.phase == RemoteDesktopSessionPhase::Terminating
+        {
             return false;
         }
-        self.set_active(
+        let changed = self.set_active(
             RemoteDesktopSessionPhase::Terminating,
             RemoteDesktopState::Closing,
-        )
+        );
+        if changed {
+            self.end_reason = Some(reason.to_string());
+        }
+        changed
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn is_terminating(&self) -> bool {
+        matches!(self.phase, RemoteDesktopSessionPhase::Terminating)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn terminate_closed(&mut self, reason: &str) {
@@ -350,17 +377,29 @@ impl RemoteDesktopSessionStateMachine {
             RemoteDesktopSessionPhase::Terminating,
             "remote desktop close must pass through Terminating"
         );
+        assert_eq!(
+            self.end_reason.as_deref(),
+            Some(reason),
+            "remote desktop terminal reason must match the durable Closing intent"
+        );
         self.phase = RemoteDesktopSessionPhase::Terminated;
         self.public_state = RemoteDesktopState::Closed;
         self.end_reason = Some(reason.to_string());
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn expire(&mut self, reason: &str) -> bool {
-        if !self.begin_termination() {
-            return false;
-        }
-        self.terminate_closed(reason);
-        true
+    pub(in crate::daemon::plugins::remote_desktop) fn terminate_failed(&mut self, reason: &str) {
+        assert_eq!(
+            self.phase,
+            RemoteDesktopSessionPhase::Terminating,
+            "remote desktop failure must pass through Terminating"
+        );
+        assert!(
+            !reason.trim().is_empty(),
+            "remote desktop terminal failure reason must not be empty"
+        );
+        self.phase = RemoteDesktopSessionPhase::Terminated;
+        self.public_state = RemoteDesktopState::Failed;
+        self.end_reason = Some(reason.to_string());
     }
 
     fn set_active(
@@ -407,13 +446,25 @@ mod tests {
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::MediaActive);
         assert!(state.activate_input(InputActivationGate::Ready));
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::InputActive);
-        assert!(state.begin_termination());
+        assert!(state.begin_termination("caller_ended"));
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Terminating);
         state.terminate_closed("caller_ended");
 
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Terminated);
         assert_eq!(state.state(), RemoteDesktopState::Closed);
         assert_eq!(state.end_reason(), Some("caller_ended"));
+    }
+
+    #[test]
+    fn transport_settlement_failure_is_an_absorbing_terminal_outcome() {
+        let mut state = RemoteDesktopSessionStateMachine::new();
+        assert!(state.begin_termination("caller_ended"));
+        state.terminate_failed("transport_settlement_failed");
+
+        assert_eq!(state.phase(), RemoteDesktopSessionPhase::Terminated);
+        assert_eq!(state.state(), RemoteDesktopState::Failed);
+        assert_eq!(state.end_reason(), Some("transport_settlement_failed"));
+        assert!(!state.start_media());
     }
 
     #[test]
@@ -424,7 +475,7 @@ mod tests {
         )
         .expect("terminal failure rehydrates");
 
-        assert!(!state.expire("lease_expired"));
+        assert!(!state.begin_termination("caller_ended"));
         assert!(!state.start_media());
 
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Terminated);
@@ -452,7 +503,7 @@ mod tests {
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Rebinding);
         assert!(state.reject_rebinding());
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Suspended);
-        assert!(state.begin_termination());
+        assert!(state.begin_termination("caller_ended"));
         state.terminate_closed("caller_ended");
         assert_eq!(state.phase(), RemoteDesktopSessionPhase::Terminated);
     }

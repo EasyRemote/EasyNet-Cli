@@ -15,22 +15,36 @@ use crate::daemon::plugins::remote_desktop::input::{
     input_injection_available, input_injection_backend, input_injection_unavailable_reason,
     unsupported_input_channel_types_value, INPUT_DATA_CHANNEL_LABEL,
 };
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::media::host_audio::{
+    HostAudioSourcePlan, HostAudioSourcePlanError,
+};
+use crate::daemon::plugins::remote_desktop::media::host_audio_capability::HostAudioRuntimeSnapshot;
+#[cfg(target_os = "macos")]
+use crate::daemon::plugins::remote_desktop::media::host_audio_capability::HostAudioSourceClass;
+#[cfg(any(test, not(target_os = "macos")))]
+use crate::daemon::plugins::remote_desktop::media::host_audio_capability::REASON_ACTIVE_MEDIA_SESSION_AUDIO_UNAVAILABLE;
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, native_webrtc_backend_runtime_descriptor, production_gate_view,
     sdk_contract_view, MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID, XCAP_MACOS_RECORDER_MAX_FPS,
     XCAP_OPENH264_BACKEND_ID, XCAP_OPENH264_WEBRTC_BACKEND,
 };
+use crate::daemon::plugins::remote_desktop::target::{
+    target_scoped_input_guard_available, target_scoped_input_guard_unavailable_reason,
+};
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(test, not(target_os = "macos")))]
 pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &str =
-    "host_audio_not_implemented";
+    REASON_ACTIVE_MEDIA_SESSION_AUDIO_UNAVAILABLE;
 const PLATFORM_REASON_MACOS_NATIVE_BACKEND_READY: &str =
     "macos_screencapturekit_videotoolbox_ready";
 const PLATFORM_REASON_LINUX_XCAP_BASELINE_READY: &str = "linux_xcap_target_baseline_ready";
 const PLATFORM_REASON_WINDOWS_XCAP_BASELINE_READY: &str = "windows_xcap_target_baseline_ready";
 const INPUT_REASON_MACOS_PERMISSION_GRANTED: &str = "macos_accessibility_permission_granted";
 const INPUT_REASON_MACOS_TARGET_GUARD_READY: &str = "macos_target_input_guard_ready";
-const INPUT_REASON_LINUX_X11_READY: &str = "linux_x11_xtest_target_guard_ready";
+const INPUT_REASON_LINUX_X11_DISPLAY_READY: &str = "linux_x11_xcb_atomic_display_global_ready";
+const INPUT_REASON_LINUX_X11_TARGET_UNISOLATED: &str =
+    "linux_x11_xtest_cannot_isolate_press_release_to_target";
 const INPUT_REASON_WINDOWS_READY: &str = "windows_sendinput_target_guard_ready";
 
 /// Build media quality targets from create-session video constraints.
@@ -59,7 +73,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn quality_targets(video: &Value)
 }
 
 /// Build device/media capability projection for session responses.
-pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> Value {
+pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view(
+    audio_runtime: &HostAudioRuntimeSnapshot,
+) -> Value {
     let production_backend = native_webrtc_backend_runtime_descriptor();
     let production_ready = production_backend.production_ready();
     let max_fps = if production_ready {
@@ -131,7 +147,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     } else {
         "xcap.avcapture_screen_input"
     };
-    let audio = audio_support_view();
+    let audio = audio_support_view(audio_runtime);
     let mut unsupported_capabilities = vec![
         json!({
             "capability": "clipboard",
@@ -174,11 +190,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     let reason = if production_ready {
         "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
     } else {
-        "current builtin backend is capped by xcap macOS recorder; 144Hz requires the ScreenCaptureKit/VideoToolbox plugin backend"
+        "current builtin display/window/application target backend is capped by the xcap macOS recorder; 144Hz requires the ScreenCaptureKit/VideoToolbox plugin backend"
     };
     let platform_support = platform_support_view(production_ready, &production_backend);
     let input_available = input_injection_available();
-    let input_control_support = input_control_support_view(input_available);
+    let target_local_guard_available = target_scoped_input_guard_available();
+    let input_control_support =
+        input_control_support_view(input_available, target_local_guard_available);
     let media_pipeline_support =
         media_pipeline_support_view(production_ready, &production_backend, max_fps, &audio);
     json!({
@@ -261,17 +279,17 @@ fn media_pipeline_support_view(
     let adaptation_policy = if production_ready {
         "native_bitrate_adaptation_from_webrtc_stats_and_encoder_pressure"
     } else {
-        "static_bitrate_with_bounded_stale_frame_drop"
+        "receiver_feedback_openh264_rebuild"
     };
 
-    let audio_ready = audio["capture_ready"] == json!(true) && audio["send_ready"] == json!(true);
+    let audio_offer_ready = audio["offer_ready"] == json!(true);
     let mut product_blockers = vec![json!("remoteapp_media_adaptation_e2e_artifact_missing")];
-    if !audio_ready {
+    if !audio_offer_ready {
         product_blockers.insert(0, audio["blocked_reason"].clone());
     }
     json!({
         "schema_version": 1,
-        "media_scope": if audio_ready { "audio_video" } else { "video_only" },
+        "media_scope": if audio_offer_ready { "audio_video" } else { "video_only" },
         "product_ready": false,
         "product_blockers": product_blockers,
         "video": {
@@ -309,7 +327,7 @@ fn input_support(status: &str, reason: &str, scope: Value, backend: &str) -> Val
     })
 }
 
-fn input_control_support_view(input_available: bool) -> Value {
+fn input_control_support_view(input_available: bool, target_local_guard_available: bool) -> Value {
     let current_os = std::env::consts::OS;
     let runtime_backend = input_injection_backend();
     let runtime_blocked_reason = input_injection_unavailable_reason();
@@ -317,17 +335,23 @@ fn input_control_support_view(input_available: bool) -> Value {
                         non_current_status: &str,
                         backend: &str,
                         ready_reason: &str,
-                        scope: Value| {
+                        scope: Value,
+                        requires_target_guard: bool| {
         if current_os == platform {
+            let target_guard_blocked = requires_target_guard && !target_local_guard_available;
             input_support(
-                if input_available {
+                if target_guard_blocked {
+                    "unavailable"
+                } else if input_available {
                     "available"
                 } else if platform == "macos" {
                     "permission_denied"
                 } else {
                     "unavailable"
                 },
-                if input_available {
+                if target_guard_blocked {
+                    target_scoped_input_guard_unavailable_reason()
+                } else if input_available {
                     ready_reason
                 } else {
                     runtime_blocked_reason.unwrap_or("input_injection_unavailable")
@@ -346,27 +370,34 @@ fn input_control_support_view(input_available: bool) -> Value {
         "runtime_backend": runtime_backend,
         "runtime_available": input_available,
         "runtime_blocked_reason": runtime_blocked_reason,
+        "target_local_guard_compiled": target_local_guard_available,
+        "target_local_runtime_available": input_available && target_local_guard_available,
+        "target_local_runtime_blocked_reason": if !target_local_guard_available {
+            json!(target_scoped_input_guard_unavailable_reason())
+        } else {
+            runtime_blocked_reason.map_or(Value::Null, Value::from)
+        },
         "requires_input_control_consent": true,
         "input_transport": "webrtc_data_channel",
         "platforms": {
             "macos": {
-                "display": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_PERMISSION_GRANTED, json!("display_global")),
-                "window": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_TARGET_GUARD_READY, json!("target_local")),
-                "application": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_TARGET_GUARD_READY, json!("target_local")),
+                "display": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_PERMISSION_GRANTED, json!("display_global"), false),
+                "window": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_TARGET_GUARD_READY, json!("target_local"), true),
+                "application": platform_row("macos", "implementation_ready", "macos_coregraphics_cgevent", INPUT_REASON_MACOS_TARGET_GUARD_READY, json!("target_local"), true),
             },
             "linux": {
-                "display": platform_row("linux", "x11_baseline_ready", "linux_x11_xtest", INPUT_REASON_LINUX_X11_READY, json!("display_global")),
-                "window": platform_row("linux", "x11_baseline_ready", "linux_x11_xtest", INPUT_REASON_LINUX_X11_READY, json!("target_local")),
-                "application": platform_row("linux", "x11_baseline_ready", "linux_x11_xtest", INPUT_REASON_LINUX_X11_READY, json!("target_local")),
+                "display": platform_row("linux", "x11_display_global_ready", "linux_x11_xcb_atomic_xtest", INPUT_REASON_LINUX_X11_DISPLAY_READY, json!("display_global"), false),
+                "window": platform_row("linux", "view_only_only", "linux_x11_xcb_atomic_xtest", INPUT_REASON_LINUX_X11_TARGET_UNISOLATED, json!("view_only"), true),
+                "application": platform_row("linux", "view_only_only", "linux_x11_xcb_atomic_xtest", INPUT_REASON_LINUX_X11_TARGET_UNISOLATED, json!("view_only"), true),
             },
             "windows": {
-                "display": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("display_global")),
-                "window": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("target_local")),
-                "application": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("target_local")),
+                "display": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("display_global"), false),
+                "window": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("target_local"), true),
+                "application": platform_row("windows", "baseline_ready", "windows_user32_sendinput", INPUT_REASON_WINDOWS_READY, json!("target_local"), true),
             },
         },
         "environment_constraints": {
-            "linux": "X11/XTest only; pure Wayland requires xdg-desktop-portal RemoteDesktop integration",
+            "linux": "X11/XTest supports display-global input only; Window/Application input stays view-only until a target-bound press/release device exists. Pure Wayland requires xdg-desktop-portal RemoteDesktop plus libei.",
             "windows": "SendInput is subject to UIPI integrity-level restrictions",
         },
         "non_claim": "executable input backends do not replace live Windows/Linux/macOS OS input injection E2E evidence",
@@ -483,15 +514,33 @@ fn platform_support_view(
     })
 }
 
-pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view() -> Value {
+pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view(
+    runtime: &HostAudioRuntimeSnapshot,
+) -> Value {
     #[cfg(target_os = "macos")]
     {
-        let backend = native_webrtc_backend_runtime_descriptor();
-        let ready = backend.production_ready();
+        let ready = runtime.compiled_supported()
+            && runtime.runtime_reachable()
+            && runtime.is_fresh()
+            && runtime
+                .source(HostAudioSourceClass::SystemLoopback)
+                .is_ready();
         return json!({
-            "supported": true,
+            "supported": runtime.compiled_supported(),
+            "offer_ready": ready,
             "capture_ready": ready,
-            "send_ready": ready,
+            "send_ready": false,
+            "runtime_reachable": runtime.runtime_reachable(),
+            "runtime_generation": runtime.generation(),
+            "runtime_observed_at_ms": runtime.observed_at_ms(),
+            "runtime_expires_at_ms": runtime.expires_at_ms(),
+            "system_loopback_available": ready,
+            "process_loopback_available": runtime
+                .source(HostAudioSourceClass::ProcessTreeLoopback)
+                .is_ready(),
+            "target_admissible": Value::Null,
+            "supported_target_kinds": ["display", "window", "application"],
+            "unsupported_target_kinds": [],
             "codec_profiles": [{
                 "codec": "opus",
                 "sample_rate_hz": 48000,
@@ -502,22 +551,85 @@ pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view() -> Value 
             "blocked_reason": if ready {
                 Value::Null
             } else {
-                json!(backend.unavailable_reason().unwrap_or("native_media_backend_not_ready"))
+                json!(runtime
+                    .admission_blocker(HostAudioSourceClass::SystemLoopback)
+                    .unwrap_or("native_media_backend_not_ready"))
             },
+            "runtime_probe_detail": runtime.diagnostic_detail(),
             "transport": "webrtc",
-            "non_claim": "capability metadata does not replace live decoded host-audio E2E evidence",
+            "non_claim": "offer readiness does not claim sender packets or browser-decoded host audio",
         });
     }
     #[cfg(not(target_os = "macos"))]
-    json!({
-        "supported": false,
-        "capture_ready": false,
-        "send_ready": false,
-        "codec_profiles": [],
-        "blocked_reason": AUDIO_UNSUPPORTED_REASON,
-        "transport": Value::Null,
-        "non_claim": "host audio remains unsupported on this platform",
-    })
+    {
+        json!({
+            "supported": false,
+            "offer_ready": false,
+            "capture_ready": false,
+            "send_ready": false,
+            "runtime_reachable": false,
+            "runtime_generation": runtime.generation(),
+            "runtime_observed_at_ms": runtime.observed_at_ms(),
+            "runtime_expires_at_ms": runtime.expires_at_ms(),
+            "system_loopback_available": false,
+            "process_loopback_available": false,
+            "target_admissible": false,
+            "supported_target_kinds": [],
+            "unsupported_target_kinds": [],
+            "codec_profiles": [],
+            "blocked_reason": AUDIO_UNSUPPORTED_REASON,
+            "runtime_probe_detail": runtime.diagnostic_detail(),
+            "transport": Value::Null,
+            "non_claim": "the canonical media-host session cannot emit validator-checked Opus on this platform",
+        })
+    }
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view_for_binding(
+    binding: &crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding,
+    runtime: &HostAudioRuntimeSnapshot,
+) -> Value {
+    let mut support = audio_support_view(runtime);
+    let _ = binding;
+    if support["supported"] == json!(true) {
+        support["target_admissible"] = json!(true);
+    }
+    support
+}
+
+#[cfg(test)]
+fn apply_target_audio_admission(
+    mut support: Value,
+    runtime: &HostAudioRuntimeSnapshot,
+    admission: Result<HostAudioSourcePlan, HostAudioSourcePlanError>,
+) -> Value {
+    match admission {
+        Ok(plan) => {
+            let source = runtime.source(plan.source_class());
+            let offer_ready = support["supported"] == json!(true)
+                && runtime.runtime_reachable()
+                && runtime.is_fresh()
+                && source.is_ready();
+            support["offer_ready"] = json!(offer_ready);
+            support["capture_ready"] = json!(offer_ready);
+            support["send_ready"] = json!(false);
+            support["target_admissible"] = json!(true);
+            support["target_source"] = json!(plan.source_label());
+            support["blocked_reason"] = runtime
+                .admission_blocker(plan.source_class())
+                .map(|reason| json!(reason))
+                .unwrap_or(Value::Null);
+        }
+        Err(error) => {
+            support["offer_ready"] = json!(false);
+            support["capture_ready"] = json!(false);
+            support["send_ready"] = json!(false);
+            support["target_admissible"] = json!(false);
+            support["target_source"] = Value::Null;
+            support["blocked_reason"] = json!(error.reason_code());
+        }
+    }
+    support
 }
 
 /// Empty latest-metrics DTO used until runtime metrics arrive.
@@ -542,12 +654,27 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::constants::{
         DEFAULT_FRAME_QUEUE_DEPTH, DEFAULT_TARGET_BITRATE_KBPS,
     };
+    use crate::daemon::plugins::remote_desktop::media::host_audio::{
+        HostAudioSourcePlan, HostAudioSourcePlanError,
+    };
+    use crate::daemon::plugins::remote_desktop::media::host_audio_capability::{
+        HostAudioRuntimeSnapshot, REASON_HOST_AUDIO_SNAPSHOT_EXPIRED,
+        REASON_PIPEWIRE_RUNTIME_UNAVAILABLE,
+    };
+    use crate::daemon::plugins::remote_desktop::target::RemoteDesktopTargetKind;
 
-    use super::device_capabilities_view;
+    use super::{
+        apply_target_audio_admission, device_capabilities_view, input_control_support_view,
+        target_scoped_input_guard_available, AUDIO_UNSUPPORTED_REASON,
+    };
+
+    fn test_host_audio_runtime() -> HostAudioRuntimeSnapshot {
+        HostAudioRuntimeSnapshot::for_test(true, true, true, true, None)
+    }
 
     #[test]
     fn device_capabilities_report_clipboard_and_file_transfer_unsupported() {
-        let capabilities = device_capabilities_view();
+        let capabilities = device_capabilities_view(&test_host_audio_runtime());
 
         assert_eq!(
             capabilities["unsupported_input_types"],
@@ -573,33 +700,31 @@ mod tests {
             capabilities["unsupported_capabilities"][1]["future_abilities"][2],
             json!("remote_desktop.file_transfer.send")
         );
-        #[cfg(target_os = "macos")]
-        assert_eq!(
-            capabilities["unsupported_capabilities"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        #[cfg(not(target_os = "macos"))]
-        {
+        if capabilities["audio"]["supported"] == json!(true) {
+            assert_eq!(
+                capabilities["unsupported_capabilities"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+        } else {
             assert_eq!(
                 capabilities["unsupported_capabilities"][2]["capability"],
                 json!("host_audio")
             );
             assert_eq!(
                 capabilities["unsupported_capabilities"][2]["reason"],
-                json!("host_audio_not_implemented")
+                capabilities["audio"]["blocked_reason"]
             );
         }
     }
 
     #[test]
     fn device_capabilities_report_platform_host_audio_support() {
-        let capabilities = device_capabilities_view();
+        let capabilities = device_capabilities_view(&test_host_audio_runtime());
 
-        #[cfg(target_os = "macos")]
-        {
+        if capabilities["audio"]["supported"] == json!(true) {
             assert_eq!(capabilities["audio"]["supported"], json!(true));
             assert_eq!(
                 capabilities["audio"]["codec_profiles"][0]["codec"],
@@ -614,23 +739,168 @@ mod tests {
                 json!(2)
             );
             assert_eq!(capabilities["audio"]["transport"], json!("webrtc"));
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
+        } else {
             assert_eq!(capabilities["audio"]["supported"], json!(false));
             assert_eq!(capabilities["audio"]["capture_ready"], json!(false));
             assert_eq!(capabilities["audio"]["send_ready"], json!(false));
             assert_eq!(
                 capabilities["audio"]["blocked_reason"],
-                json!("host_audio_not_implemented")
+                json!(AUDIO_UNSUPPORTED_REASON)
             );
             assert_eq!(capabilities["audio"]["codec_profiles"], json!([]));
         }
     }
 
     #[test]
+    fn target_audio_capability_uses_exact_source_admission_and_fails_closed() {
+        let runtime = test_host_audio_runtime();
+        let ready_support = || {
+            json!({
+                "supported": true,
+                "offer_ready": true,
+                "capture_ready": true,
+                "send_ready": false,
+                "blocked_reason": null,
+            })
+        };
+        let windows_process = apply_target_audio_admission(
+            ready_support(),
+            &runtime,
+            HostAudioSourcePlan::for_target(
+                "windows",
+                RemoteDesktopTargetKind::Application,
+                Some(4242),
+            ),
+        );
+        assert_eq!(windows_process["supported"], json!(true));
+        assert_eq!(windows_process["offer_ready"], json!(true));
+        assert_eq!(windows_process["capture_ready"], json!(true));
+        assert_eq!(windows_process["send_ready"], json!(false));
+        assert_eq!(windows_process["target_admissible"], json!(true));
+        assert_eq!(
+            windows_process["target_source"],
+            json!("process_tree_loopback")
+        );
+
+        let linux_process = apply_target_audio_admission(
+            ready_support(),
+            &runtime,
+            HostAudioSourcePlan::for_target(
+                "linux",
+                RemoteDesktopTargetKind::Application,
+                Some(4242),
+            ),
+        );
+        assert_eq!(linux_process["supported"], json!(true));
+        assert_eq!(linux_process["offer_ready"], json!(true));
+        assert_eq!(linux_process["capture_ready"], json!(true));
+        assert_eq!(linux_process["send_ready"], json!(false));
+        assert_eq!(linux_process["target_admissible"], json!(true));
+        assert_eq!(
+            linux_process["target_source"],
+            json!("process_tree_loopback")
+        );
+
+        for error in [HostAudioSourcePlanError::TargetPidMissing {
+            target_kind: "window",
+        }] {
+            let blocked =
+                apply_target_audio_admission(ready_support(), &runtime, Err(error.clone()));
+            assert_eq!(blocked["supported"], json!(true));
+            assert_eq!(blocked["offer_ready"], json!(false));
+            assert_eq!(blocked["capture_ready"], json!(false));
+            assert_eq!(blocked["send_ready"], json!(false));
+            assert_eq!(blocked["target_admissible"], json!(false));
+            assert_eq!(blocked["target_source"], json!(null));
+            assert_eq!(blocked["blocked_reason"], json!(error.reason_code()));
+        }
+    }
+
+    #[test]
+    fn compiled_host_audio_stays_supported_when_runtime_is_unreachable() {
+        let runtime = HostAudioRuntimeSnapshot::for_test(
+            true,
+            false,
+            false,
+            false,
+            Some(REASON_PIPEWIRE_RUNTIME_UNAVAILABLE),
+        );
+        let support = super::audio_support_view(&runtime);
+
+        assert_eq!(support["supported"], json!(true));
+        assert_eq!(support["runtime_reachable"], json!(false));
+        assert_eq!(support["offer_ready"], json!(false));
+        assert_eq!(support["capture_ready"], json!(false));
+        assert_eq!(support["send_ready"], json!(false));
+        assert_eq!(
+            support["blocked_reason"],
+            json!(REASON_PIPEWIRE_RUNTIME_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn quiet_linux_process_source_does_not_require_a_default_sink() {
+        let runtime = HostAudioRuntimeSnapshot::for_test(
+            true,
+            true,
+            false,
+            true,
+            Some("pipewire_default_output_sink_unavailable"),
+        );
+        let support = apply_target_audio_admission(
+            json!({
+                "supported": true,
+                "offer_ready": true,
+                "capture_ready": true,
+                "send_ready": false,
+                "blocked_reason": null,
+            }),
+            &runtime,
+            HostAudioSourcePlan::for_target(
+                "linux",
+                RemoteDesktopTargetKind::Application,
+                Some(4242),
+            ),
+        );
+
+        assert_eq!(support["target_admissible"], json!(true));
+        assert_eq!(support["offer_ready"], json!(true));
+        assert_eq!(support["target_source"], json!("process_tree_loopback"));
+    }
+
+    #[test]
+    fn expired_ready_snapshot_cannot_authorize_an_audio_offer() {
+        let mut runtime = test_host_audio_runtime();
+        runtime.expire_for_test();
+        let support = apply_target_audio_admission(
+            json!({
+                "supported": true,
+                "offer_ready": true,
+                "capture_ready": true,
+                "send_ready": false,
+                "blocked_reason": null,
+            }),
+            &runtime,
+            HostAudioSourcePlan::for_target(
+                "linux",
+                RemoteDesktopTargetKind::Application,
+                Some(4242),
+            ),
+        );
+
+        assert_eq!(support["supported"], json!(true));
+        assert_eq!(support["target_admissible"], json!(true));
+        assert_eq!(support["offer_ready"], json!(false));
+        assert_eq!(support["capture_ready"], json!(false));
+        assert_eq!(
+            support["blocked_reason"],
+            json!(REASON_HOST_AUDIO_SNAPSHOT_EXPIRED)
+        );
+    }
+
+    #[test]
     fn device_capabilities_project_native_target_subject_matrix() {
-        let capabilities = device_capabilities_view();
+        let capabilities = device_capabilities_view(&test_host_audio_runtime());
 
         if capabilities["production_gate"]["ready"] == json!(true) {
             assert_eq!(
@@ -681,7 +951,7 @@ mod tests {
 
     #[test]
     fn device_capabilities_project_cross_platform_support_matrix() {
-        let capabilities = device_capabilities_view();
+        let capabilities = device_capabilities_view(&test_host_audio_runtime());
         let platform_support = &capabilities["metadata"]["platform_support"];
 
         assert_eq!(platform_support["schema_version"], json!(2));
@@ -747,13 +1017,24 @@ mod tests {
 
     #[test]
     fn device_capabilities_project_input_control_support_matrix() {
-        let capabilities = device_capabilities_view();
+        let capabilities = device_capabilities_view(&test_host_audio_runtime());
         let input_support = &capabilities["metadata"]["input_control_support"];
 
         assert_eq!(input_support["schema_version"], json!(1));
         assert_eq!(
             input_support["runtime_available"],
             capabilities["input_injection"]
+        );
+        assert_eq!(
+            input_support["target_local_guard_compiled"],
+            json!(target_scoped_input_guard_available())
+        );
+        assert_eq!(
+            input_support["target_local_runtime_available"],
+            json!(
+                capabilities["input_injection"] == json!(true)
+                    && target_scoped_input_guard_available()
+            )
         );
         assert_eq!(input_support["requires_input_control_consent"], json!(true));
         assert_eq!(
@@ -807,7 +1088,7 @@ mod tests {
             if std::env::consts::OS == "linux" && capabilities["input_injection"] != json!(true) {
                 input_support["runtime_blocked_reason"].clone()
             } else {
-                json!("linux_x11_xtest_target_guard_ready")
+                json!("linux_x11_xcb_atomic_display_global_ready")
             }
         );
         assert_eq!(
@@ -828,7 +1109,15 @@ mod tests {
         );
         assert_eq!(
             input_support["platforms"]["linux"]["window"]["scope"],
-            json!("target_local")
+            json!("view_only")
+        );
+        assert_eq!(
+            input_support["platforms"]["linux"]["application"]["reason"],
+            json!(if std::env::consts::OS == "linux" {
+                "target_scoped_keyboard_pointer_dispatch_unsafe"
+            } else {
+                "linux_x11_xtest_cannot_isolate_press_release_to_target"
+            })
         );
         assert!(input_support["non_claim"].as_str().is_some_and(
             |message| message.contains("live Windows/Linux/macOS OS input injection E2E")
@@ -836,23 +1125,41 @@ mod tests {
     }
 
     #[test]
+    fn input_capability_keeps_display_global_but_blocks_target_local_without_guard() {
+        let support = input_control_support_view(true, false);
+        let current = &support["platforms"][std::env::consts::OS];
+
+        assert_eq!(support["runtime_available"], json!(true));
+        assert_eq!(support["target_local_guard_compiled"], json!(false));
+        assert_eq!(support["target_local_runtime_available"], json!(false));
+        assert_eq!(current["display"]["status"], json!("available"));
+        for target_kind in ["window", "application"] {
+            assert_eq!(current[target_kind]["status"], json!("unavailable"));
+            assert_eq!(current[target_kind]["scope"], json!("target_local"));
+            assert_eq!(
+                current[target_kind]["reason"],
+                json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            );
+        }
+    }
+
+    #[test]
     fn device_capabilities_project_media_pipeline_support_matrix() {
-        let capabilities = device_capabilities_view();
+        let capabilities = device_capabilities_view(&test_host_audio_runtime());
         let media_support = &capabilities["metadata"]["media_pipeline_support"];
 
         assert_eq!(media_support["schema_version"], json!(1));
-        let audio_ready = capabilities["audio"]["capture_ready"] == json!(true)
-            && capabilities["audio"]["send_ready"] == json!(true);
+        let audio_offer_ready = capabilities["audio"]["offer_ready"] == json!(true);
         assert_eq!(
             media_support["media_scope"],
-            json!(if audio_ready {
+            json!(if audio_offer_ready {
                 "audio_video"
             } else {
                 "video_only"
             })
         );
         assert_eq!(media_support["product_ready"], json!(false));
-        if audio_ready {
+        if audio_offer_ready {
             assert_eq!(
                 media_support["product_blockers"],
                 json!(["remoteapp_media_adaptation_e2e_artifact_missing"])
@@ -903,7 +1210,7 @@ mod tests {
             );
             assert_eq!(
                 media_support["video"]["adaptation_policy"],
-                json!("static_bitrate_with_bounded_stale_frame_drop")
+                json!("receiver_feedback_openh264_rebuild")
             );
         }
         assert_eq!(media_support["audio"], capabilities["audio"]);

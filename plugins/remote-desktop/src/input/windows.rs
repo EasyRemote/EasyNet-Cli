@@ -11,22 +11,25 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE,
     MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
     MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_BACK, VK_CONTROL, VK_DELETE,
-    VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_OEM_1,
-    VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS,
-    VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
-    VK_UP,
+    MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_ADD, VK_APPS, VK_BACK, VK_CAPITAL,
+    VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_HOME, VK_INSERT,
+    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK,
+    VK_NUMPAD0, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA,
+    VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PAUSE, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT,
+    VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SNAPSHOT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
+use super::keyboard::PhysicalKey;
+use super::wheel::windows_native_units;
 use super::{
     map_pointer_point, InputApplyOutcome, KeyInputFrame, PointerInputFrame, PointerTargetGeometry,
+    TargetInputGuardProof,
 };
 
 const WINDOWS_SEND_INPUT_DENIED: &str = "windows_send_input_denied";
-const MAX_WHEEL_DELTA_PER_FRAME: i32 = 1_200;
 
 pub(super) fn input_injection_available() -> bool {
     virtual_desktop().is_some()
@@ -47,6 +50,7 @@ pub(super) fn request_input_injection_permission() -> bool {
 pub(super) fn apply_pointer_frame(
     frame: &PointerInputFrame,
     target: Option<PointerTargetGeometry>,
+    _target_guard: Option<&TargetInputGuardProof>,
 ) -> InputApplyOutcome {
     let Some(desktop) = virtual_desktop() else {
         return InputApplyOutcome::rejected("windows_virtual_desktop_unavailable");
@@ -71,8 +75,8 @@ pub(super) fn apply_pointer_frame(
             ));
         }
         "wheel" => {
-            let vertical = bounded_wheel_delta(frame.delta_y.map(|value| -value));
-            let horizontal = bounded_wheel_delta(frame.delta_x);
+            let vertical = windows_native_units(frame.delta_y.map(|value| -value));
+            let horizontal = windows_native_units(frame.delta_x);
             if vertical == 0 && horizontal == 0 {
                 return InputApplyOutcome::rejected("empty_wheel_delta");
             }
@@ -105,7 +109,10 @@ pub(super) fn release_pointer_button(button: u8) -> InputApplyOutcome {
     send_inputs(&[mouse_input(0, 0, 0, flag)])
 }
 
-pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
+pub(super) fn apply_key_frame(
+    frame: &KeyInputFrame,
+    _target_guard: Option<&TargetInputGuardProof>,
+) -> InputApplyOutcome {
     let Some(key) = windows_key(frame) else {
         return InputApplyOutcome::rejected("unsupported_key");
     };
@@ -137,7 +144,7 @@ pub(super) fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
 }
 
 pub(super) fn release_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
-    apply_key_frame(frame)
+    apply_key_frame(frame, None)
 }
 
 fn send_inputs(inputs: &[INPUT]) -> InputApplyOutcome {
@@ -181,13 +188,6 @@ fn button_flag(action: &str, button: u8) -> Option<u32> {
         ("up", 2) => Some(MOUSEEVENTF_RIGHTUP),
         _ => None,
     }
-}
-
-fn bounded_wheel_delta(value: Option<f64>) -> i32 {
-    value.unwrap_or(0.0).round().clamp(
-        f64::from(-MAX_WHEEL_DELTA_PER_FRAME),
-        f64::from(MAX_WHEEL_DELTA_PER_FRAME),
-    ) as i32
 }
 
 #[derive(Clone, Copy)]
@@ -234,47 +234,58 @@ fn windows_key(frame: &KeyInputFrame) -> Option<WindowsKey> {
 }
 
 fn dom_code_virtual_key(code: &str) -> Option<WindowsKey> {
-    let (virtual_key, extended) = match code {
-        code if code.len() == 4 && code.starts_with("Key") => {
-            (u16::from(code.as_bytes()[3].to_ascii_uppercase()), false)
-        }
-        code if code.len() == 6 && code.starts_with("Digit") => {
-            (u16::from(code.as_bytes()[5]), false)
-        }
-        "Enter" => (VK_RETURN, false),
-        "Tab" => (VK_TAB, false),
-        "Space" => (VK_SPACE, false),
-        "Backspace" => (VK_BACK, false),
-        "Escape" => (VK_ESCAPE, false),
-        "ShiftLeft" | "ShiftRight" => (VK_SHIFT, false),
-        "ControlLeft" => (VK_CONTROL, false),
-        "ControlRight" => (VK_CONTROL, true),
-        "AltLeft" => (VK_MENU, false),
-        "AltRight" => (VK_MENU, true),
-        "MetaLeft" => (VK_LWIN, true),
-        "MetaRight" => (VK_RWIN, true),
-        "ArrowLeft" => (VK_LEFT, true),
-        "ArrowRight" => (VK_RIGHT, true),
-        "ArrowUp" => (VK_UP, true),
-        "ArrowDown" => (VK_DOWN, true),
-        "Insert" => (VK_INSERT, true),
-        "Delete" => (VK_DELETE, true),
-        "Home" => (VK_HOME, true),
-        "End" => (VK_END, true),
-        "PageUp" => (VK_PRIOR, true),
-        "PageDown" => (VK_NEXT, true),
-        "Minus" => (VK_OEM_MINUS, false),
-        "Equal" => (VK_OEM_PLUS, false),
-        "BracketLeft" => (VK_OEM_4, false),
-        "BracketRight" => (VK_OEM_6, false),
-        "Backslash" => (VK_OEM_5, false),
-        "Semicolon" => (VK_OEM_1, false),
-        "Quote" => (VK_OEM_7, false),
-        "Backquote" => (VK_OEM_3, false),
-        "Comma" => (VK_OEM_COMMA, false),
-        "Period" => (VK_OEM_PERIOD, false),
-        "Slash" => (VK_OEM_2, false),
-        _ => return None,
+    let (virtual_key, extended) = match PhysicalKey::from_dom_code(code)? {
+        PhysicalKey::Letter(letter) => (u16::from(letter), false),
+        PhysicalKey::Digit(digit) => (u16::from(digit), false),
+        PhysicalKey::Function(function) => (VK_F1 + u16::from(function - 1), false),
+        PhysicalKey::NumpadDigit(digit) => (VK_NUMPAD0 + u16::from(digit - b'0'), false),
+        PhysicalKey::Enter => (VK_RETURN, false),
+        PhysicalKey::NumpadEnter => (VK_RETURN, true),
+        PhysicalKey::Tab => (VK_TAB, false),
+        PhysicalKey::Space => (VK_SPACE, false),
+        PhysicalKey::Backspace => (VK_BACK, false),
+        PhysicalKey::Escape => (VK_ESCAPE, false),
+        PhysicalKey::CapsLock => (VK_CAPITAL, false),
+        PhysicalKey::NumLock => (VK_NUMLOCK, true),
+        PhysicalKey::ScrollLock => (VK_SCROLL, false),
+        PhysicalKey::PrintScreen => (VK_SNAPSHOT, true),
+        PhysicalKey::Pause => (VK_PAUSE, false),
+        PhysicalKey::ContextMenu => (VK_APPS, true),
+        PhysicalKey::ShiftLeft => (VK_LSHIFT, false),
+        PhysicalKey::ShiftRight => (VK_RSHIFT, false),
+        PhysicalKey::ControlLeft => (VK_LCONTROL, false),
+        PhysicalKey::ControlRight => (VK_RCONTROL, true),
+        PhysicalKey::AltLeft => (VK_LMENU, false),
+        PhysicalKey::AltRight => (VK_RMENU, true),
+        PhysicalKey::MetaLeft => (VK_LWIN, true),
+        PhysicalKey::MetaRight => (VK_RWIN, true),
+        PhysicalKey::ArrowLeft => (VK_LEFT, true),
+        PhysicalKey::ArrowRight => (VK_RIGHT, true),
+        PhysicalKey::ArrowUp => (VK_UP, true),
+        PhysicalKey::ArrowDown => (VK_DOWN, true),
+        PhysicalKey::Insert => (VK_INSERT, true),
+        PhysicalKey::Delete => (VK_DELETE, true),
+        PhysicalKey::Home => (VK_HOME, true),
+        PhysicalKey::End => (VK_END, true),
+        PhysicalKey::PageUp => (VK_PRIOR, true),
+        PhysicalKey::PageDown => (VK_NEXT, true),
+        PhysicalKey::Minus => (VK_OEM_MINUS, false),
+        PhysicalKey::Equal => (VK_OEM_PLUS, false),
+        PhysicalKey::BracketLeft => (VK_OEM_4, false),
+        PhysicalKey::BracketRight => (VK_OEM_6, false),
+        PhysicalKey::Backslash => (VK_OEM_5, false),
+        PhysicalKey::Semicolon => (VK_OEM_1, false),
+        PhysicalKey::Quote => (VK_OEM_7, false),
+        PhysicalKey::Backquote => (VK_OEM_3, false),
+        PhysicalKey::Comma => (VK_OEM_COMMA, false),
+        PhysicalKey::Period => (VK_OEM_PERIOD, false),
+        PhysicalKey::Slash => (VK_OEM_2, false),
+        PhysicalKey::NumpadDecimal => (VK_DECIMAL, false),
+        PhysicalKey::NumpadMultiply => (VK_MULTIPLY, false),
+        PhysicalKey::NumpadAdd => (VK_ADD, false),
+        PhysicalKey::NumpadSubtract => (VK_SUBTRACT, false),
+        PhysicalKey::NumpadDivide => (VK_DIVIDE, true),
+        PhysicalKey::NumpadEqual => return None,
     };
     Some(WindowsKey {
         virtual_key,
@@ -314,20 +325,21 @@ mod tests {
     }
 
     #[test]
-    fn windows_wheel_delta_is_bounded_per_frame() {
-        assert_eq!(bounded_wheel_delta(Some(9_999.0)), 1_200);
-        assert_eq!(bounded_wheel_delta(Some(-9_999.0)), -1_200);
-        assert_eq!(bounded_wheel_delta(None), 0);
-    }
-
-    #[test]
     fn windows_dom_key_mapping_marks_extended_keys() {
         let right_control = dom_code_virtual_key("ControlRight").expect("right control");
-        assert_eq!(right_control.virtual_key, VK_CONTROL);
+        assert_eq!(right_control.virtual_key, VK_RCONTROL);
         assert!(right_control.extended);
 
         let left_control = dom_code_virtual_key("ControlLeft").expect("left control");
-        assert_eq!(left_control.virtual_key, VK_CONTROL);
+        assert_eq!(left_control.virtual_key, VK_LCONTROL);
         assert!(!left_control.extended);
+
+        let right_shift = dom_code_virtual_key("ShiftRight").expect("right shift");
+        assert_eq!(right_shift.virtual_key, VK_RSHIFT);
+        assert!(!right_shift.extended);
+
+        let numpad_enter = dom_code_virtual_key("NumpadEnter").expect("numpad enter");
+        assert_eq!(numpad_enter.virtual_key, VK_RETURN);
+        assert!(numpad_enter.extended);
     }
 }

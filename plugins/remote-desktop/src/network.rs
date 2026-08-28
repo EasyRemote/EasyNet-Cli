@@ -10,13 +10,12 @@ use std::net::Ipv4Addr;
 use anyhow::{bail, Context};
 use serde_json::{json, Map, Value};
 
+use crate::daemon::plugins::remote_desktop::relay_lease::RemoteDesktopRelayLease;
+
 const ENV_STUN_URLS: &str = "EASYNET_REMOTE_DESKTOP_STUN_URLS";
 const ENV_TURN_URLS: &str = "EASYNET_REMOTE_DESKTOP_TURN_URLS";
 const ENV_TURN_USERNAME: &str = "EASYNET_REMOTE_DESKTOP_TURN_USERNAME";
 const ENV_TURN_CREDENTIAL: &str = "EASYNET_REMOTE_DESKTOP_TURN_CREDENTIAL";
-const ENV_EASYNET_RELAY_URLS: &str = "EASYNET_REMOTE_DESKTOP_EASYNET_RELAY_URLS";
-const ENV_EASYNET_RELAY_USERNAME: &str = "EASYNET_REMOTE_DESKTOP_EASYNET_RELAY_USERNAME";
-const ENV_EASYNET_RELAY_CREDENTIAL: &str = "EASYNET_REMOTE_DESKTOP_EASYNET_RELAY_CREDENTIAL";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) enum DirectWebRtcRouteCandidateClass {
@@ -184,11 +183,20 @@ impl DirectWebRtcRouteConfig {
             read_optional_env(ENV_TURN_USERNAME)?,
             read_optional_env(ENV_TURN_CREDENTIAL)?,
         )?;
-        config.add_easynet_relay_urls(
-            read_url_list_env(ENV_EASYNET_RELAY_URLS)?,
-            read_optional_env(ENV_EASYNET_RELAY_USERNAME)?,
-            read_optional_env(ENV_EASYNET_RELAY_CREDENTIAL)?,
-        )?;
+        Ok(config)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn from_env_with_relay_lease(
+        relay_lease: Option<&RemoteDesktopRelayLease>,
+    ) -> anyhow::Result<Self> {
+        let mut config = Self::from_env()?;
+        if let Some(lease) = relay_lease {
+            config.add_easynet_relay_urls(
+                lease.urls().to_vec(),
+                Some(lease.username().to_string()),
+                Some(lease.credential().to_string()),
+            )?;
+        }
         Ok(config)
     }
 
@@ -333,9 +341,10 @@ impl DirectWebRtcClientIceServerProjection {
     }
 }
 
-pub(in crate::daemon::plugins::remote_desktop) fn direct_webrtc_client_ice_server_projection_from_env(
+pub(in crate::daemon::plugins::remote_desktop) fn direct_webrtc_client_ice_server_projection(
+    relay_lease: Option<&RemoteDesktopRelayLease>,
 ) -> DirectWebRtcClientIceServerProjection {
-    match DirectWebRtcRouteConfig::from_env() {
+    match DirectWebRtcRouteConfig::from_env_with_relay_lease(relay_lease) {
         Ok(route_config) => DirectWebRtcClientIceServerProjection::from_route_config(&route_config),
         Err(error) => DirectWebRtcClientIceServerProjection::configuration_error(error),
     }
@@ -376,8 +385,12 @@ pub(in crate::daemon::plugins::remote_desktop) struct ConfiguredDirectWebRtcRout
 }
 
 impl ConfiguredDirectWebRtcRouteProvider {
-    pub(in crate::daemon::plugins::remote_desktop) fn from_env() -> anyhow::Result<Self> {
-        Ok(Self::new(DirectWebRtcRouteConfig::from_env()?))
+    pub(in crate::daemon::plugins::remote_desktop) fn from_env_with_relay_lease(
+        relay_lease: Option<&RemoteDesktopRelayLease>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self::new(
+            DirectWebRtcRouteConfig::from_env_with_relay_lease(relay_lease)?,
+        ))
     }
 
     fn new(route_config: DirectWebRtcRouteConfig) -> Self {

@@ -35,10 +35,37 @@ use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::persistence::resources::ResourceType;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
+pub(in crate::daemon::plugins::remote_desktop) mod adaptation;
+#[cfg(any(
+    test,
+    target_os = "windows",
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
+pub(in crate::daemon::plugins::remote_desktop) mod audio;
 pub(in crate::daemon::plugins::remote_desktop) mod encode;
-pub(in crate::daemon::plugins::remote_desktop) mod native;
+pub(in crate::daemon::plugins::remote_desktop) mod h264_level;
+#[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) mod host_audio;
+pub(in crate::daemon::plugins::remote_desktop) mod host_audio_capability;
+#[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) mod linux_process_tree_audio;
 
 pub const REMOTE_DESKTOP_MEDIA_SDK_ID: &str = "easynet.remote_desktop.media.v1";
+pub(in crate::daemon::plugins::remote_desktop) const MEDIA_PIPELINE_STATS_CONTRACT: &str =
+    "remoteapp_media_pipeline_stats_v1";
+pub(in crate::daemon::plugins::remote_desktop) const WEBRTC_VIDEO_TRANSPORT: &str = "webrtc";
+#[cfg(any(
+    test,
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
+pub(in crate::daemon::plugins::remote_desktop) const H264_ANNEX_B_CONTENT_TYPE: &str =
+    "video/h264; stream-format=annexb";
 pub const XCAP_OPENH264_BACKEND_ID: &str = "builtin.xcap.openh264.annexb.v1";
 pub const XCAP_OPENH264_WEBRTC_BACKEND_ID: &str = "builtin.xcap.openh264.webrtc.v1";
 pub const MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID: &str =

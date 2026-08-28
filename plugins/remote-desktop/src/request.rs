@@ -8,7 +8,7 @@ use rand::RngCore as _;
 use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
-    ScreenCaptureOptions, VideoResolution,
+    CaptureResizeMode, ScreenCaptureOptions, VideoResolution,
 };
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_SET_DESCRIPTION,
@@ -69,6 +69,11 @@ impl RemoteDesktopVideoConstraints {
             height: self.max_height,
         })
         .filter(|resolution| resolution.width > 0 && resolution.height > 0)
+    }
+
+    fn resize_mode(&self) -> CaptureResizeMode {
+        debug_assert_eq!(self.scale_mode, "native");
+        CaptureResizeMode::FitWithin
     }
 
     fn bitrate_kbps(&self) -> u32 {
@@ -251,9 +256,13 @@ pub(crate) fn parse_video_constraints(
         MAX_FRAME_QUEUE_DEPTH as u64,
     )?;
     let codec_preferences = parse_codec_preferences(raw)?;
-    let scale_mode = optional_string_field(raw, "scale_mode", ABILITY_CREATE_SESSION)?
-        .unwrap_or("native")
-        .to_string();
+    let scale_mode =
+        optional_string_field(raw, "scale_mode", ABILITY_CREATE_SESSION)?.unwrap_or("native");
+    if scale_mode != "native" {
+        anyhow::bail!(
+            "{ABILITY_CREATE_SESSION}: unsupported video.scale_mode {scale_mode:?}; expected native; reason={REASON_INVALID_ARGUMENT}"
+        );
+    }
     let region = optional_string_field(raw, "region", ABILITY_CREATE_SESSION)?
         .unwrap_or("")
         .to_string();
@@ -262,7 +271,7 @@ pub(crate) fn parse_video_constraints(
         max_height,
         max_fps,
         max_bitrate_kbps,
-        scale_mode,
+        scale_mode: scale_mode.to_string(),
         region,
         codec_preferences,
         target_latency_ms,
@@ -523,19 +532,20 @@ pub(in crate::daemon::plugins::remote_desktop) fn parse_attach_capture_options(
             "{ABILITY_ATTACH_SESSION}: fps {fps} outside {MIN_ATTACH_FPS}..={MAX_ATTACH_FPS}; reason={REASON_INVALID_ARGUMENT}"
         );
     }
-    let resolution = match args.get("resolution") {
-        Some(Value::String(raw)) if raw.eq_ignore_ascii_case("native") => None,
-        Some(Value::String(raw)) => parse_resolution_string(raw)?,
+    let (resolution, resize_mode) = match args.get("resolution") {
+        Some(Value::String(raw)) if raw.eq_ignore_ascii_case("native") => {
+            (None, CaptureResizeMode::Exact)
+        }
+        Some(Value::String(raw)) => (parse_resolution_string(raw)?, CaptureResizeMode::Exact),
         Some(_) => anyhow::bail!(
             "{ABILITY_ATTACH_SESSION}: resolution must be a string; reason={REASON_INVALID_ARGUMENT}"
         ),
-        None => {
-            video.resolution()
-        }
+        None => (video.resolution(), video.resize_mode()),
     };
     Ok(ScreenCaptureOptions {
         fps: fps as u32,
         resolution,
+        resize_mode,
         region: None,
     })
 }
@@ -553,6 +563,7 @@ pub(crate) fn capture_options_from_video_constraints(
     Ok(ScreenCaptureOptions {
         fps: fps as u32,
         resolution,
+        resize_mode: video.resize_mode(),
         region: None,
     })
 }
@@ -685,6 +696,35 @@ mod tests {
                 "error must carry invalid_argument reason; got: {err}"
             );
         }
+    }
+
+    #[test]
+    fn native_scale_mode_treats_max_dimensions_as_aspect_preserving_bounds() {
+        let video = parse_video_constraints(&json!({
+            "video": {
+                "max_width": 1280,
+                "max_height": 720,
+                "scale_mode": "native"
+            }
+        }))
+        .expect("native video constraints");
+        let options = capture_options_from_video_constraints(&video).expect("capture options");
+
+        assert_eq!(options.resize_mode, CaptureResizeMode::FitWithin);
+        assert_eq!(options.output_dimensions(840, 500), (840, 500));
+        assert_eq!(options.output_dimensions(2560, 1664), (1108, 720));
+    }
+
+    #[test]
+    fn unsupported_scale_mode_fails_closed_instead_of_being_ignored() {
+        let error = parse_video_constraints(&json!({
+            "video": { "scale_mode": "stretch" }
+        }))
+        .expect_err("an unimplemented scale mode must not silently distort frames")
+        .to_string();
+
+        assert!(error.contains("unsupported video.scale_mode"));
+        assert!(error.contains(REASON_INVALID_ARGUMENT));
     }
 
     #[test]

@@ -3608,7 +3608,7 @@ fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
             binding: crate::daemon::persistence::resources::ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Real Invoke Display",
-            metadata: json!({"primary_display": true, "backend": "xcap"}),
+            metadata: json!({"display_id": 1, "primary_display": true, "backend": "xcap"}),
         },
     )
     .expect("seed real-invoke display resource");
@@ -3813,7 +3813,13 @@ fn real_remote_desktop_create_session_requires_envelope_subject() {
 fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let subject = seed_real_invoke_display_resource("remote-desktop-real-invoke-display");
-    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let reg = Arc::new(
+        crate::daemon::plugins::remote_desktop::test_support::test_catalog_with_screen_backend(
+            Arc::new(
+                crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend,
+            ),
+        ),
+    );
     let d = dispatcher_for(reg);
     let session_id = unique_call_id("remote-desktop");
     let granted = d
@@ -3979,12 +3985,22 @@ fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
         json!({"session_id": "missing-real-invoke-session"}),
     );
     attach.call_mode = CallMode::Bidi;
-    let err = d
+    let mut bidi = d
         .execute_bidi(attach)
-        .expect_err("remote_desktop.attach with missing session must reject");
+        .expect("remote_desktop.attach must open the typed bidi outcome stream");
+    let frame = tokio::runtime::Runtime::new()
+        .expect("bidi rejection observer runtime")
+        .block_on(async move {
+            tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+                .await
+                .expect("remote_desktop.attach rejection must be bounded")
+                .expect("remote_desktop.attach rejection must emit a terminal frame")
+                .into_json_value()
+                .expect("remote_desktop.attach rejection must be JSON")
+        });
     assert!(
-        err.to_string().contains("session_not_found"),
-        "attach must route to the remote desktop session gate; got {err}"
+        frame.to_string().contains("session_not_found"),
+        "attach must route to the remote desktop session gate; got {frame}"
     );
 }
 

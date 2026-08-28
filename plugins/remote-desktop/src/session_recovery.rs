@@ -29,7 +29,8 @@
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -41,10 +42,13 @@ use crate::daemon::persistence::config::{self, WritePermissions};
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 
-const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const LEGACY_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 const MAX_RECOVERY_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RECOVERY_BATCH_BYTES: u64 = 64 * 1024 * 1024;
 const RECOVERY_DIRECTORY_ENTRY_HEADROOM: usize = 16;
+const RECOVERY_STAGING_DIRECTORY: &str = ".staging";
+static RECOVERY_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnapshot {
@@ -66,6 +70,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoverySnaps
     updated_at_ms: u64,
     lease_expires_at_ms: u64,
     lifecycle_state: String,
+    #[serde(default)]
+    termination_reason: Option<String>,
     #[serde(default)]
     transport_epoch_high_watermark: u64,
     #[serde(default)]
@@ -94,6 +100,7 @@ impl RemoteDesktopRecoverySnapshot {
             session.updated_at_ms(),
             session.lease_expires_at_ms(),
             session.state().json_name().to_string(),
+            session.termination_reason().map(ToString::to_string),
             if session.is_terminal() {
                 None
             } else {
@@ -106,6 +113,32 @@ impl RemoteDesktopRecoverySnapshot {
         )?;
         snapshot.target_tracking = Some(session.target_tracking_recovery_value());
         snapshot.transport_epoch_high_watermark = session.transport_epoch_high_watermark();
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    /// Build the write-ahead termination intent for one live aggregate.
+    ///
+    /// This snapshot is deliberately derived without mutating the in-memory
+    /// session. Callers must durably commit it before entering Closing or
+    /// starting any host-visible transport teardown. Recovery treats Closing
+    /// as absorbing within the same session incarnation, so a delayed Active
+    /// writer cannot resurrect a termination that already won this commit.
+    pub(in crate::daemon::plugins::remote_desktop) fn prepare_closing_intent(
+        session: &RemoteDesktopSession,
+        reason: &str,
+    ) -> anyhow::Result<Self> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            anyhow::bail!("RemoteApp Closing intent requires a non-empty reason");
+        }
+        if session.is_terminal() {
+            anyhow::bail!("RemoteApp terminal session cannot prepare a Closing intent");
+        }
+        let mut snapshot = Self::from_session(session)?;
+        snapshot.lifecycle_state = "closing".to_string();
+        snapshot.termination_reason = Some(reason.to_string());
+        snapshot.terminal_receipt = None;
         snapshot.validate()?;
         Ok(snapshot)
     }
@@ -127,6 +160,7 @@ impl RemoteDesktopRecoverySnapshot {
         updated_at_ms: u64,
         lease_expires_at_ms: u64,
         lifecycle_state: String,
+        termination_reason: Option<String>,
         input_runtime_block_reason: Option<String>,
         terminal_receipt: Option<Value>,
         events: Vec<Value>,
@@ -149,6 +183,7 @@ impl RemoteDesktopRecoverySnapshot {
             updated_at_ms,
             lease_expires_at_ms,
             lifecycle_state,
+            termination_reason,
             transport_epoch_high_watermark: 0,
             input_runtime_block_reason,
             terminal_receipt,
@@ -178,6 +213,12 @@ impl RemoteDesktopRecoverySnapshot {
         require_object("consent", &self.consent)?;
         require_non_empty("mode", &self.mode)?;
         require_non_empty("lifecycle_state", &self.lifecycle_state)?;
+        if self.lifecycle_state == "closing" {
+            require_non_empty(
+                "termination_reason",
+                self.termination_reason.as_deref().unwrap_or_default(),
+            )?;
+        }
         require_object("video", &self.video)?;
         require_object("input_policy", &self.input_policy)?;
         if self.updated_at_ms < self.created_at_ms {
@@ -259,6 +300,10 @@ impl RemoteDesktopRecoverySnapshot {
         &self.lifecycle_state
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn termination_reason(&self) -> Option<&str> {
+        self.termination_reason.as_deref()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) const fn transport_epoch_high_watermark(
         &self,
     ) -> u64 {
@@ -296,6 +341,29 @@ impl RemoteDesktopRecoverySnapshot {
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoveryStore {
     root: Option<PathBuf>,
+    #[cfg(test)]
+    fail_saves: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// A durable but non-authoritative recovery candidate.
+///
+/// Staging performs serialization and file I/O without holding the session
+/// aggregate mutex. Only `RemoteDesktopRecoveryStore::promote` can move this
+/// file into the authoritative `<session_id>.json` slot, after the caller has
+/// revalidated the in-memory aggregate revision while holding that mutex.
+pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopRecoveryStagedSnapshot {
+    snapshot: RemoteDesktopRecoverySnapshot,
+    store_root: PathBuf,
+    staged_path: PathBuf,
+    committed: bool,
+}
+
+impl Drop for RemoteDesktopRecoveryStagedSnapshot {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_file(&self.staged_path);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -350,17 +418,34 @@ impl RemoteDesktopRecoveryLoadRejection {
 
 impl RemoteDesktopRecoveryStore {
     pub(in crate::daemon::plugins::remote_desktop) fn daemon_default() -> Self {
-        Self { root: None }
+        Self {
+            root: None,
+            #[cfg(test)]
+            fail_saves: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn new(root: PathBuf) -> Self {
-        Self { root: Some(root) }
+        Self {
+            root: Some(root),
+            #[cfg(test)]
+            fail_saves: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn set_fail_saves_for_test(&self, fail: bool) {
+        self.fail_saves.store(fail, Ordering::SeqCst);
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn save(
         &self,
         snapshot: &RemoteDesktopRecoverySnapshot,
     ) -> anyhow::Result<PathBuf> {
+        #[cfg(test)]
+        if self.fail_saves.load(Ordering::SeqCst) {
+            anyhow::bail!("injected RemoteApp recovery save failure");
+        }
         snapshot.validate()?;
         let path = self.snapshot_path(snapshot.session_id())?;
         let _lock = self.lock_store()?;
@@ -382,6 +467,83 @@ impl RemoteDesktopRecoveryStore {
         }
         let body = serialize_snapshot_bounded(snapshot)?;
         config::atomic_write_with_permissions(&path, &body, WritePermissions::OwnerReadWrite)?;
+        Ok(path)
+    }
+
+    /// Serialize and durably write a non-authoritative snapshot candidate.
+    /// Recovery readers never inspect the staging directory.
+    pub(in crate::daemon::plugins::remote_desktop) fn stage(
+        &self,
+        snapshot: RemoteDesktopRecoverySnapshot,
+    ) -> anyhow::Result<RemoteDesktopRecoveryStagedSnapshot> {
+        snapshot.validate()?;
+        validate_session_id_for_path(snapshot.session_id())?;
+        let store_root = self.root();
+        let staging_root = store_root.join(RECOVERY_STAGING_DIRECTORY);
+        fs::create_dir_all(&staging_root)?;
+        harden_recovery_dir(&staging_root)?;
+        let sequence = RECOVERY_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let staged_path = staging_root.join(format!(
+            "{}.{}.{}.json.stage",
+            snapshot.session_id(),
+            std::process::id(),
+            sequence
+        ));
+        let body = serialize_snapshot_bounded(&snapshot)?;
+        config::atomic_write_with_permissions(
+            &staged_path,
+            &body,
+            WritePermissions::OwnerReadWrite,
+        )?;
+        Ok(RemoteDesktopRecoveryStagedSnapshot {
+            snapshot,
+            store_root,
+            staged_path,
+            committed: false,
+        })
+    }
+
+    /// Atomically publish a previously staged candidate into the authoritative
+    /// recovery slot. Callers must hold the matching session aggregate lock
+    /// from their final revision check through this method and in-memory
+    /// publication.
+    pub(in crate::daemon::plugins::remote_desktop) fn promote(
+        &self,
+        mut staged: RemoteDesktopRecoveryStagedSnapshot,
+    ) -> anyhow::Result<PathBuf> {
+        let root = self.root();
+        if staged.store_root != root {
+            anyhow::bail!("RemoteApp staged recovery candidate belongs to another store");
+        }
+        let path = self.snapshot_path(staged.snapshot.session_id())?;
+        let _lock = self.lock_store()?;
+        match load_snapshot_path(&path) {
+            Ok(existing) if existing == staged.snapshot => {
+                fs::remove_file(&staged.staged_path)?;
+                config::sync_parent_dir(&staged.staged_path)?;
+                staged.committed = true;
+                return Ok(path);
+            }
+            Ok(existing) if !recovery_snapshot_should_replace(&existing, &staged.snapshot)? => {
+                anyhow::bail!(
+                    "refusing to promote stale RemoteApp recovery candidate for session {}",
+                    staged.snapshot.session_id()
+                );
+            }
+            Ok(_) => {}
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) => {}
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "refusing to replace unreadable RemoteApp recovery snapshot {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+        replace_staged_snapshot(&staged.staged_path, &path)?;
+        staged.committed = true;
         Ok(path)
     }
 
@@ -517,6 +679,42 @@ impl RemoteDesktopRecoveryStore {
     }
 }
 
+#[cfg(not(windows))]
+fn replace_staged_snapshot(staged: &Path, destination: &Path) -> anyhow::Result<()> {
+    fs::rename(staged, destination)?;
+    config::sync_parent_dir(destination)
+}
+
+#[cfg(windows)]
+fn replace_staged_snapshot(staged: &Path, destination: &Path) -> anyhow::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let staged = staged
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            staged.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
 /// Decide a per-session durable commit while the recovery-store lock is held.
 ///
 /// Terminal state is absorbing: once published, no delayed active snapshot
@@ -544,10 +742,13 @@ fn recovery_snapshot_should_replace(
             incoming.created_at_ms
         );
     }
-    match (existing.terminal(), incoming.terminal()) {
-        (true, false) => return Ok(false),
-        (false, true) => return Ok(true),
-        _ => {}
+    let existing_lifecycle_rank = recovery_lifecycle_rank(existing);
+    let incoming_lifecycle_rank = recovery_lifecycle_rank(incoming);
+    if incoming_lifecycle_rank < existing_lifecycle_rank {
+        return Ok(false);
+    }
+    if incoming_lifecycle_rank > existing_lifecycle_rank {
+        return Ok(true);
     }
     let existing_order = (existing.last_event_sequence(), existing.updated_at_ms);
     let incoming_order = (incoming.last_event_sequence(), incoming.updated_at_ms);
@@ -567,6 +768,21 @@ fn recovery_snapshot_should_replace(
     )
 }
 
+/// Durable lifecycle ordering within one session incarnation.
+///
+/// Active-like rows may advance normally until a Closing intent commits.
+/// Closing is then absorbing against every delayed non-terminal writer, while
+/// a terminal receipt remains the only state allowed to supersede Closing.
+fn recovery_lifecycle_rank(snapshot: &RemoteDesktopRecoverySnapshot) -> u8 {
+    if snapshot.terminal() {
+        2
+    } else if snapshot.lifecycle_state() == "closing" {
+        1
+    } else {
+        0
+    }
+}
+
 fn load_snapshot_path(path: &PathBuf) -> anyhow::Result<RemoteDesktopRecoverySnapshot> {
     let file = File::open(path)?;
     let mut body = Vec::new();
@@ -578,9 +794,65 @@ fn load_snapshot_path(path: &PathBuf) -> anyhow::Result<RemoteDesktopRecoverySna
             MAX_RECOVERY_SNAPSHOT_BYTES
         );
     }
-    let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_slice(&body)?;
+    let mut value: Value = serde_json::from_slice(&body)?;
+    migrate_recovery_snapshot_value(&mut value)?;
+    let snapshot: RemoteDesktopRecoverySnapshot = serde_json::from_value(value)?;
     snapshot.validate()?;
     Ok(snapshot)
+}
+
+/// Upgrade the only previously published RemoteApp recovery shape.
+///
+/// Schema v1 predated the canonical `display_ids` topology evidence on
+/// application window-set projections. A positive committed `display_id` is
+/// sufficient to derive that older single-display shape. Process-scoped rows
+/// without a display identity are intentionally non-migratable: guessing one
+/// would widen or falsify the recovered capture authority.
+fn migrate_recovery_snapshot_value(value: &mut Value) -> anyhow::Result<()> {
+    let schema_version = value
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery snapshot requires schema_version"))?;
+    if schema_version != u64::from(LEGACY_SNAPSHOT_SCHEMA_VERSION) {
+        return Ok(());
+    }
+
+    migrate_legacy_app_window_sets(value)?;
+    value["schema_version"] = Value::from(SNAPSHOT_SCHEMA_VERSION);
+    Ok(())
+}
+
+fn migrate_legacy_app_window_sets(value: &mut Value) -> anyhow::Result<()> {
+    match value {
+        Value::Object(fields) => {
+            let legacy_app_window_set = fields.contains_key("window_set_epoch")
+                && fields.contains_key("resolved_window_ids")
+                && fields.contains_key("display_id")
+                && !fields.contains_key("display_ids");
+            if legacy_app_window_set {
+                let display_id = fields
+                    .get("display_id")
+                    .and_then(Value::as_u64)
+                    .filter(|display_id| *display_id > 0)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "RemoteApp recovery schema 1 application window set has no positive display_id; display_ids topology cannot be migrated safely"
+                        )
+                    })?;
+                fields.insert("display_ids".to_string(), serde_json::json!([display_id]));
+            }
+            for child in fields.values_mut() {
+                migrate_legacy_app_window_sets(child)?;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                migrate_legacy_app_window_sets(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn serialize_snapshot_bounded(snapshot: &RemoteDesktopRecoverySnapshot) -> anyhow::Result<Vec<u8>> {
@@ -694,6 +966,7 @@ mod tests {
             120,
             60_000,
             "active".to_string(),
+            None,
             None,
             None,
             vec![json!({"event_type": "SESSION_CREATED", "sequence": 1})],
@@ -810,6 +1083,53 @@ mod tests {
     }
 
     #[test]
+    fn recovery_store_closing_intent_is_absorbing_against_delayed_active_write() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let active = snapshot();
+        let mut closing = active.clone();
+        closing.lifecycle_state = "closing".to_string();
+        closing.termination_reason = Some("caller_ended".to_string());
+        closing.validate().expect("Closing intent validates");
+        let mut delayed_active = active.clone();
+        delayed_active.updated_at_ms = delayed_active.updated_at_ms.saturating_add(10_000);
+        delayed_active.lease_expires_at_ms =
+            delayed_active.lease_expires_at_ms.saturating_add(10_000);
+
+        store.save(&active).expect("active snapshot saves");
+        store.save(&closing).expect("Closing intent saves");
+        store
+            .save(&delayed_active)
+            .expect("delayed active snapshot is safely ignored");
+
+        let loaded = store
+            .load(active.session_id())
+            .expect("load Closing intent")
+            .expect("Closing intent exists");
+        assert_eq!(loaded, closing);
+    }
+
+    #[test]
+    fn recovery_store_terminal_snapshot_supersedes_closing_intent() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+        let mut closing = snapshot();
+        closing.lifecycle_state = "closing".to_string();
+        closing.termination_reason = Some("caller_ended".to_string());
+        closing.validate().expect("Closing intent validates");
+        let terminal = terminal_snapshot();
+
+        store.save(&closing).expect("Closing intent saves");
+        store.save(&terminal).expect("terminal snapshot saves");
+
+        let loaded = store
+            .load(closing.session_id())
+            .expect("load terminal snapshot")
+            .expect("terminal snapshot exists");
+        assert_eq!(loaded, terminal);
+    }
+
+    #[test]
     fn recovery_store_concurrent_terminal_and_active_commits_converge_to_terminal() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
@@ -919,6 +1239,107 @@ mod tests {
             .expect("snapshot exists");
 
         assert_eq!(loaded.input_runtime_block_reason(), None);
+    }
+
+    #[test]
+    fn recovery_store_migrates_schema_v1_application_display_topology_everywhere() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("rd-recovery-test.json");
+        let mut body = serde_json::to_value(snapshot()).expect("snapshot serializes");
+        body["schema_version"] = json!(1);
+        body["target_binding"] = json!({
+            "app_window_set": {
+                "display_id": 7,
+                "resolved_window_ids": [70],
+                "window_set_epoch": 1
+            },
+            "capture_proof": {
+                "app_window_set": {
+                    "display_id": 7,
+                    "resolved_window_ids": [70],
+                    "window_set_epoch": 1
+                }
+            }
+        });
+        body["target_tracking"] = json!({
+            "app_window_set": {
+                "display_id": 7,
+                "resolved_window_ids": [70],
+                "window_set_epoch": 1
+            }
+        });
+        body["events"] = json!([{
+            "payload": {
+                "target_binding": {
+                    "app_window_set": {
+                        "display_id": 7,
+                        "resolved_window_ids": [70],
+                        "window_set_epoch": 1
+                    }
+                }
+            }
+        }]);
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&body).expect("serialize schema v1 snapshot"),
+        )
+        .expect("write schema v1 snapshot");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+
+        let loaded = store
+            .load("rd-recovery-test")
+            .expect("schema v1 snapshot migrates")
+            .expect("snapshot exists");
+
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(
+            loaded.target_binding()["app_window_set"]["display_ids"],
+            json!([7])
+        );
+        assert_eq!(
+            loaded.target_binding()["capture_proof"]["app_window_set"]["display_ids"],
+            json!([7])
+        );
+        assert_eq!(
+            loaded.target_tracking().expect("tracking exists")["app_window_set"]["display_ids"],
+            json!([7])
+        );
+        assert_eq!(
+            loaded.events()[0]["payload"]["target_binding"]["app_window_set"]["display_ids"],
+            json!([7])
+        );
+    }
+
+    #[test]
+    fn recovery_store_rejects_ambiguous_schema_v1_application_topology() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("rd-recovery-test.json");
+        let mut body = serde_json::to_value(snapshot()).expect("snapshot serializes");
+        body["schema_version"] = json!(1);
+        body["target_binding"] = json!({
+            "app_window_set": {
+                "display_id": null,
+                "resolved_window_ids": [70],
+                "window_set_epoch": 1
+            }
+        });
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&body).expect("serialize ambiguous schema v1 snapshot"),
+        )
+        .expect("write ambiguous schema v1 snapshot");
+        let store = RemoteDesktopRecoveryStore::new(temp.path().to_path_buf());
+
+        let error = store
+            .load("rd-recovery-test")
+            .expect_err("ambiguous schema v1 topology must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("display_ids topology cannot be migrated safely"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1107,6 +1528,7 @@ mod tests {
             100,
             101,
             "active".to_string(),
+            None,
             None,
             None,
             vec![],

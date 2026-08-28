@@ -30,22 +30,32 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::daemon::plugins::remote_desktop::lease_monitor::RemoteDesktopLeaseMonitor;
 use crate::daemon::plugins::remote_desktop::lifecycle_worker::LifecycleWorker;
+use crate::daemon::plugins::remote_desktop::relay_lease::RemoteDesktopRelayLeaseProvider;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{now_ms, TargetMediaSourceLost};
+use crate::daemon::plugins::remote_desktop::session_lifecycle::{
+    commit_prepared_closing_checkpoint, settle_session_transports_and_finish,
+    DurableClosingCheckpoint, RetiredSessionTransports,
+};
 use crate::daemon::plugins::remote_desktop::session_recovery::{
     RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore,
 };
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-use crate::daemon::plugins::remote_desktop::target_observer::observe_bound_session_target_once;
+use crate::daemon::plugins::remote_desktop::target_observer::observe_bound_session_target_once_with_closing_checkpoint;
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::target_observer::PlatformTargetObservationSample;
 #[cfg(test)]
 use crate::daemon::plugins::remote_desktop::target_snapshot::TargetObservationSampler;
 use crate::daemon::plugins::remote_desktop::target_snapshot::{
     TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
-use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;
+use crate::daemon::plugins::remote_desktop::transport::{
+    RemoteDesktopTransportManager, TransportSettlementStatus,
+};
 
 const TARGET_MONITOR_INTERVAL: Duration = Duration::from_millis(250);
 const TARGET_MONITOR_SUPERVISOR_INTERVAL: Duration = Duration::from_millis(25);
@@ -54,9 +64,19 @@ const TARGET_MONITOR_RETRY_MAX: Duration = Duration::from_secs(2);
 const TARGET_MONITOR_PROVIDER_DEADLINE: Duration = Duration::from_secs(1);
 const TARGET_MONITOR_FAILURE_BUDGET: u32 = 3;
 
+#[cfg(test)]
+struct StableTargetObservationSampler;
+
+#[cfg(test)]
+impl TargetObservationSampler for StableTargetObservationSampler {
+    fn sample(&self) -> PlatformTargetObservationSample {
+        PlatformTargetObservationSample::no_change_for_test()
+    }
+}
+
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTargetMonitor {
     worker: Mutex<LifecycleWorker<TargetMonitorCommand>>,
-    desired: Mutex<HashSet<String>>,
+    desired: Arc<Mutex<HashSet<String>>>,
     generation: Arc<AtomicU64>,
     snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
     provider_deadline: Duration,
@@ -75,15 +95,33 @@ struct TargetMonitorRuntimeContext {
     sessions: Arc<RemoteDesktopSessionStore>,
     transports: Arc<RemoteDesktopTransportManager>,
     recovery: Arc<RemoteDesktopRecoveryStore>,
+    leases: Arc<RemoteDesktopLeaseMonitor>,
+    relay_lease_provider: Arc<dyn RemoteDesktopRelayLeaseProvider>,
+    desired: Arc<Mutex<HashSet<String>>>,
 }
 
 impl TargetMonitorRuntimeContext {
-    fn from_plugin(plugin: &RemoteDesktopPlugin) -> Self {
+    fn from_plugin(plugin: &RemoteDesktopPlugin, desired: Arc<Mutex<HashSet<String>>>) -> Self {
         Self {
             sessions: plugin.session_store(),
             transports: plugin.transport_manager(),
             recovery: plugin.recovery_store(),
+            leases: plugin.lease_monitor(),
+            relay_lease_provider: plugin.relay_lease_provider(),
+            desired,
         }
+    }
+
+    fn cancel_termination_inventory(&self, session_id: &str) {
+        match self.desired.lock() {
+            Ok(mut desired) => {
+                desired.remove(session_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(session_id);
+            }
+        }
+        self.leases.cancel(session_id);
     }
 }
 
@@ -112,15 +150,19 @@ struct TargetMonitorGeneration {
     events: Receiver<TargetMonitorGenerationEvent>,
     join: JoinHandle<()>,
     failure_detail: Option<String>,
+    recovery_from_generation: Option<u64>,
 }
 
 trait TargetMediaSourceStopper {
-    fn stop_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool;
+    fn stop_and_settle_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool;
 }
 
 impl TargetMediaSourceStopper for RemoteDesktopTransportManager {
-    fn stop_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool {
-        RemoteDesktopTransportManager::stop_endpoint_if_epoch(self, session_id, epoch)
+    fn stop_and_settle_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool {
+        let Some(endpoint) = self.take_endpoint_if_epoch_for_settlement(session_id, epoch) else {
+            return false;
+        };
+        endpoint.settle()
     }
 }
 
@@ -144,7 +186,7 @@ impl RemoteDesktopTargetMonitor {
     ) -> Self {
         Self {
             worker: Mutex::new(LifecycleWorker::new()),
-            desired: Mutex::new(HashSet::new()),
+            desired: Arc::new(Mutex::new(HashSet::new())),
             generation: Arc::new(AtomicU64::new(0)),
             snapshot_executor,
             provider_deadline,
@@ -159,6 +201,22 @@ impl RemoteDesktopTargetMonitor {
         Self::with_sampler(
             Arc::new(TargetSnapshotDeadlineExecutor::new(sampler)),
             provider_deadline,
+        )
+    }
+
+    /// Build a deterministic monitor for aggregate/handler unit tests.
+    ///
+    /// Those tests inject a synthetic target-binding verifier, so consulting
+    /// the real host topology would combine contradictory authorities and make
+    /// session state depend on the developer machine. Dedicated target-monitor
+    /// tests inject explicit samplers through `with_sampler_for_test` instead.
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn stable_for_test() -> Self {
+        Self::with_sampler(
+            Arc::new(TargetSnapshotDeadlineExecutor::new(Arc::new(
+                StableTargetObservationSampler,
+            ))),
+            TARGET_MONITOR_PROVIDER_DEADLINE,
         )
     }
 
@@ -233,7 +291,7 @@ impl RemoteDesktopTargetMonitor {
         let generation = Arc::clone(&self.generation);
         let snapshot_executor = Arc::clone(&self.snapshot_executor);
         let provider_deadline = self.provider_deadline;
-        let runtime = TargetMonitorRuntimeContext::from_plugin(plugin);
+        let runtime = TargetMonitorRuntimeContext::from_plugin(plugin, Arc::clone(&self.desired));
         worker
             .start(|| {
                 spawn_target_monitor_supervisor(
@@ -256,7 +314,7 @@ impl RemoteDesktopTargetMonitor {
         let generation = Arc::clone(&self.generation);
         let snapshot_executor = Arc::clone(&self.snapshot_executor);
         let provider_deadline = self.provider_deadline;
-        let runtime = TargetMonitorRuntimeContext::from_plugin(plugin);
+        let runtime = TargetMonitorRuntimeContext::from_plugin(plugin, Arc::clone(&self.desired));
         worker
             .start(|| {
                 spawn_target_monitor_supervisor(
@@ -333,6 +391,7 @@ fn run_target_monitor_supervisor(
     let mut tracked = initial_tracked;
     let mut consecutive_failures = 0_u32;
     let mut generation = None;
+    let mut pending_failed_generation = None;
 
     loop {
         if generation.is_none() {
@@ -343,7 +402,16 @@ fn run_target_monitor_supervisor(
                 Arc::clone(&snapshot_executor),
                 provider_deadline,
             ) {
-                Ok(next) => {
+                Ok(mut next) => {
+                    if let Some(failed_generation) = pending_failed_generation.take() {
+                        record_target_monitor_worker_restarted(
+                            &runtime,
+                            &tracked,
+                            failed_generation,
+                            next.id,
+                        );
+                        next.recovery_from_generation = Some(failed_generation);
+                    }
                     generation = Some(next);
                     continue;
                 }
@@ -368,15 +436,13 @@ fn run_target_monitor_supervisor(
             .as_mut()
             .expect("target monitor generation exists after spawn branch");
         while let Ok(event) = current.events.try_recv() {
-            match event {
-                TargetMonitorGenerationEvent::PollSucceeded => {
-                    consecutive_failures = 0;
-                    current.failure_detail = None;
-                }
-                TargetMonitorGenerationEvent::PollFailed { detail } => {
-                    current.failure_detail = Some(detail)
-                }
-            }
+            apply_target_monitor_generation_event(
+                &runtime,
+                &tracked,
+                current,
+                event,
+                &mut consecutive_failures,
+            );
         }
 
         if current.join.is_finished() {
@@ -384,30 +450,36 @@ fn run_target_monitor_supervisor(
                 .take()
                 .expect("finished target monitor generation exists");
             let failed_generation = failed.id;
-            let panicked = failed.join.join().is_err();
             while let Ok(event) = failed.events.try_recv() {
-                match event {
-                    TargetMonitorGenerationEvent::PollSucceeded => {
-                        consecutive_failures = 0;
-                        failed.failure_detail = None;
-                    }
-                    TargetMonitorGenerationEvent::PollFailed { detail } => {
-                        failed.failure_detail = Some(detail)
-                    }
-                }
+                apply_target_monitor_generation_event(
+                    &runtime,
+                    &tracked,
+                    &mut failed,
+                    event,
+                    &mut consecutive_failures,
+                );
             }
+            let panicked = failed.join.join().is_err();
+            let failure_detail = failed.failure_detail.clone().unwrap_or_else(|| {
+                if panicked {
+                    "worker panicked".to_string()
+                } else {
+                    "worker exited unexpectedly".to_string()
+                }
+            });
+            record_target_monitor_worker_crashed(
+                &runtime,
+                &tracked,
+                failed_generation,
+                &failure_detail,
+            );
+            pending_failed_generation = Some(failed_generation);
             let retry_after = record_target_monitor_failure(
                 &runtime,
                 &tracked,
                 &mut consecutive_failures,
                 failed_generation,
-                if let Some(detail) = failed.failure_detail.as_deref() {
-                    detail
-                } else if panicked {
-                    "worker panicked"
-                } else {
-                    "worker exited unexpectedly"
-                },
+                &failure_detail,
             );
             if !wait_for_target_monitor_retry(&rx, retry_after, &mut tracked) {
                 return;
@@ -438,6 +510,122 @@ fn run_target_monitor_supervisor(
                 let _ = current.join.join();
                 return;
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TargetMonitorLifecycleEvent<'a> {
+    WorkerCrashed {
+        failed_generation: u64,
+        detail: &'a str,
+    },
+    WorkerRestarted {
+        failed_generation: u64,
+        restarted_generation: u64,
+    },
+    MonitorRestarted {
+        failed_generation: u64,
+        restarted_generation: u64,
+    },
+}
+
+fn record_target_monitor_worker_crashed(
+    runtime: &TargetMonitorRuntimeContext,
+    tracked: &HashSet<String>,
+    failed_generation: u64,
+    detail: &str,
+) {
+    persist_target_monitor_lifecycle_event(
+        runtime,
+        tracked,
+        TargetMonitorLifecycleEvent::WorkerCrashed {
+            failed_generation,
+            detail,
+        },
+    );
+}
+
+fn record_target_monitor_worker_restarted(
+    runtime: &TargetMonitorRuntimeContext,
+    tracked: &HashSet<String>,
+    failed_generation: u64,
+    restarted_generation: u64,
+) {
+    persist_target_monitor_lifecycle_event(
+        runtime,
+        tracked,
+        TargetMonitorLifecycleEvent::WorkerRestarted {
+            failed_generation,
+            restarted_generation,
+        },
+    );
+}
+
+fn record_target_monitor_restarted(
+    runtime: &TargetMonitorRuntimeContext,
+    tracked: &HashSet<String>,
+    failed_generation: u64,
+    restarted_generation: u64,
+) {
+    persist_target_monitor_lifecycle_event(
+        runtime,
+        tracked,
+        TargetMonitorLifecycleEvent::MonitorRestarted {
+            failed_generation,
+            restarted_generation,
+        },
+    );
+}
+
+fn persist_target_monitor_lifecycle_event(
+    runtime: &TargetMonitorRuntimeContext,
+    tracked: &HashSet<String>,
+    event: TargetMonitorLifecycleEvent<'_>,
+) {
+    let snapshots = runtime.sessions.with_sessions(|rows| {
+        tracked
+            .iter()
+            .filter_map(|session_id| {
+                let session = rows.get_mut(session_id)?;
+                match event {
+                    TargetMonitorLifecycleEvent::WorkerCrashed {
+                        failed_generation,
+                        detail,
+                    } => session.record_target_monitor_worker_crashed(failed_generation, detail),
+                    TargetMonitorLifecycleEvent::WorkerRestarted {
+                        failed_generation,
+                        restarted_generation,
+                    } => session.record_target_monitor_worker_restarted(
+                        failed_generation,
+                        restarted_generation,
+                    ),
+                    TargetMonitorLifecycleEvent::MonitorRestarted {
+                        failed_generation,
+                        restarted_generation,
+                    } => session
+                        .record_target_monitor_restarted(failed_generation, restarted_generation),
+                }
+                Some((
+                    session_id.clone(),
+                    RemoteDesktopRecoverySnapshot::from_session(session),
+                ))
+            })
+            .collect::<Vec<_>>()
+    });
+
+    for (session_id, snapshot) in snapshots {
+        match snapshot {
+            Ok(snapshot) => {
+                if let Err(error) = runtime.recovery.save(&snapshot) {
+                    eprintln!(
+                        "[remote-desktop] failed to persist target monitor lifecycle event for {session_id}: {error}"
+                    );
+                }
+            }
+            Err(error) => eprintln!(
+                "[remote-desktop] failed to snapshot target monitor lifecycle event for {session_id}: {error}"
+            ),
         }
     }
 }
@@ -491,7 +679,12 @@ fn spawn_target_monitor_generation(
     snapshot_executor: Arc<TargetSnapshotDeadlineExecutor>,
     provider_deadline: Duration,
 ) -> std::io::Result<TargetMonitorGeneration> {
-    let id = generation_counter.load(Ordering::Acquire).saturating_add(1);
+    let id = generation_counter
+        .load(Ordering::Acquire)
+        .checked_add(1)
+        .ok_or_else(|| {
+            std::io::Error::other("RemoteApp target monitor generation sequence exhausted")
+        })?;
     let (tx, rx) = mpsc::channel();
     let (event_tx, events) = mpsc::channel();
     let join = thread::Builder::new()
@@ -514,7 +707,29 @@ fn spawn_target_monitor_generation(
         events,
         join,
         failure_detail: None,
+        recovery_from_generation: None,
     })
+}
+
+fn apply_target_monitor_generation_event(
+    runtime: &TargetMonitorRuntimeContext,
+    tracked: &HashSet<String>,
+    generation: &mut TargetMonitorGeneration,
+    event: TargetMonitorGenerationEvent,
+    consecutive_failures: &mut u32,
+) {
+    match event {
+        TargetMonitorGenerationEvent::PollSucceeded => {
+            *consecutive_failures = 0;
+            generation.failure_detail = None;
+            if let Some(failed_generation) = generation.recovery_from_generation.take() {
+                record_target_monitor_restarted(runtime, tracked, failed_generation, generation.id);
+            }
+        }
+        TargetMonitorGenerationEvent::PollFailed { detail } => {
+            generation.failure_detail = Some(detail);
+        }
+    }
 }
 
 fn run_target_monitor_generation(
@@ -539,6 +754,12 @@ fn run_target_monitor_generation(
             }
             continue;
         }
+
+        #[cfg(all(feature = "remoteapp-e2e-fault-injection", unix))]
+        crate::daemon::plugins::remote_desktop::e2e_fault_injection::maybe_crash_target_monitor_generation(
+            generation,
+            &tracked,
+        );
 
         match rx.recv_timeout(TARGET_MONITOR_INTERVAL) {
             Ok(command) => {
@@ -642,6 +863,8 @@ fn mark_target_monitor_unhealthy(
             session_id,
             &inputs.binding_id,
             inputs.binding_epoch,
+            &inputs.snapshot,
+            &inputs.coherence_token,
             TargetObservation::MonitorUnavailable {
                 detail: format!(
                     "target monitor generation {failed_generation} exhausted its restart budget"
@@ -674,9 +897,69 @@ fn poll_tracked_sessions(
     let transports = &runtime.transports;
     let provider = snapshot_executor.sample_for_generation(generation, provider_deadline)?;
     tracked.retain(|session_id| {
-        let result = observe_bound_session_target_once(&sessions, session_id, &provider);
-        stop_lost_media_source(transports.as_ref(), session_id, result.media_source_lost);
-        if result.state_changed {
+        let mut durable_closing_checkpoint = None;
+        let result = observe_bound_session_target_once_with_closing_checkpoint(
+            sessions,
+            session_id,
+            &provider,
+            |snapshot| {
+                match commit_prepared_closing_checkpoint(runtime.recovery.as_ref(), snapshot) {
+                    Ok(checkpoint) => {
+                        durable_closing_checkpoint = Some(checkpoint);
+                        true
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[remote-desktop] target monitor permission-revocation Closing checkpoint remains pending for {session_id}: {error}"
+                        );
+                        false
+                    }
+                }
+            },
+        );
+        if result.permission_verification_started {
+            if let Some(preview) = stop_preview_transport(sessions, transports, session_id) {
+                transports.settlement_queue().enqueue(preview);
+            }
+            stop_lost_media_source(transports.as_ref(), session_id, result.media_source_lost);
+        }
+        if result.permission_revocation_started {
+            persist_target_monitor_snapshot(
+                runtime.recovery.as_ref(),
+                sessions,
+                session_id,
+                "permission-revocation Closing projection",
+            );
+        } else if !result.permission_verification_started {
+            stop_lost_media_source(transports.as_ref(), session_id, result.media_source_lost);
+        }
+        if result.permission_revocation_started {
+            let checkpoint = durable_closing_checkpoint
+                .take()
+                .expect("permission revocation cannot commit without durable Closing checkpoint");
+            let transports = retire_permission_revoked_transports(
+                runtime,
+                session_id,
+                checkpoint,
+            );
+            let settlement = settle_session_transports_and_finish(
+                runtime.transports.settlement_queue(),
+                Arc::clone(sessions),
+                Arc::clone(&runtime.recovery),
+                Arc::clone(&runtime.relay_lease_provider),
+                session_id.to_string(),
+                transports,
+            );
+            match settlement {
+                TransportSettlementStatus::Settled => {}
+                TransportSettlementStatus::Pending => eprintln!(
+                    "[remote-desktop] permission revocation for {session_id} continues under the session-owned settler; retaining Closing until real receipts arrive"
+                ),
+                TransportSettlementStatus::Failed => eprintln!(
+                    "[remote-desktop] permission revocation for {session_id} received an explicit transport settlement failure; retaining Closing"
+                ),
+            }
+        } else if result.state_changed {
             persist_target_monitor_snapshot(
                 &runtime.recovery,
                 sessions,
@@ -687,6 +970,50 @@ fn poll_tracked_sessions(
         result.keep_tracking
     });
     Ok(true)
+}
+
+fn retire_permission_revoked_transports(
+    runtime: &TargetMonitorRuntimeContext,
+    session_id: &str,
+    checkpoint: DurableClosingCheckpoint,
+) -> RetiredSessionTransports {
+    let operation_lock = runtime.sessions.target_operation_lock(session_id);
+    let _operation = match operation_lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let preview_stop = runtime.sessions.with_sessions(|rows| {
+        let session = rows
+            .get_mut(session_id)
+            .expect("permission-revoked Closing session remains owned");
+        checkpoint.assert_matches(session_id, session);
+        session.detach_preview_transport()
+    });
+    // Every ownership mutation below is authorized by the durable checkpoint
+    // validated above while the per-session operation gate remains held.
+    runtime.cancel_termination_inventory(session_id);
+    if let Some(stop_tx) = preview_stop {
+        let _ = stop_tx.send(true);
+    }
+    let diagnostic_preview = runtime.transports.take_preview_for_settlement(session_id);
+    let direct_webrtc = runtime.transports.take_endpoint_for_settlement(session_id);
+    RetiredSessionTransports::new(direct_webrtc, diagnostic_preview)
+        .unwrap_or_else(RetiredSessionTransports::empty)
+}
+
+fn stop_preview_transport(
+    sessions: &RemoteDesktopSessionStore,
+    transports: &RemoteDesktopTransportManager,
+    session_id: &str,
+) -> Option<crate::daemon::plugins::remote_desktop::transport::RetiredDiagnosticPreview> {
+    let stop_tx = sessions.with_sessions(|rows| {
+        rows.get_mut(session_id)
+            .and_then(|session| session.detach_preview_transport())
+    });
+    if let Some(stop_tx) = stop_tx {
+        let _ = stop_tx.send(true);
+    }
+    transports.take_preview_for_settlement(session_id)
 }
 
 fn persist_target_monitor_snapshot(
@@ -726,20 +1053,21 @@ where
     let Some(media_source_lost) = media_source_lost else {
         return false;
     };
-    transports.stop_endpoint_if_epoch(session_id, media_source_lost.transport_epoch)
+    transports.stop_and_settle_endpoint_if_epoch(session_id, media_source_lost.transport_epoch)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+    use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
     use std::time::{Duration, Instant};
 
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
+    use crate::daemon::plugins::remote_desktop::constants::REASON_TARGET_PERMISSION_REVOKED;
     use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
     use crate::daemon::plugins::remote_desktop::session::{
-        RemoteDesktopSession, TargetMediaSourceLost,
+        now_ms, RemoteDesktopSession, TargetMediaSourceLost,
     };
     use crate::daemon::plugins::remote_desktop::session_recovery::{
         RemoteDesktopRecoverySnapshot, RemoteDesktopRecoveryStore,
@@ -751,16 +1079,16 @@ mod tests {
         RemoteDesktopTargetMonitor, TargetMediaSourceStopper, TargetMonitorCommand,
         TargetMonitorRuntimeContext, TARGET_MONITOR_RETRY_MAX,
     };
-    use crate::daemon::plugins::remote_desktop::target_observer::{
-        sample_platform_target_observations, PlatformTargetObservationSample,
-    };
+    use crate::daemon::plugins::remote_desktop::target_observer::PlatformTargetObservationSample;
     use crate::daemon::plugins::remote_desktop::target_snapshot::{
         TargetObservationSampler, TargetSnapshotDeadlineError, TargetSnapshotDeadlineExecutor,
         TargetSnapshotOwner,
     };
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::{
         test_runtime_limits, test_session_init, TestRemoteAppTargetBindingVerifier,
     };
+    use crate::daemon::plugins::remote_desktop::transport::PreviewTaskGroupCompletion;
 
     #[derive(Default)]
     struct RecordingStopper {
@@ -772,6 +1100,30 @@ mod tests {
         calls: AtomicUsize,
         released: Mutex<bool>,
         release_signal: Condvar,
+    }
+
+    struct PermissionRevokedTargetSampler;
+
+    #[derive(Default)]
+    struct CountingPermissionRevokedTargetSampler {
+        calls: AtomicUsize,
+    }
+
+    impl TargetObservationSampler for PermissionRevokedTargetSampler {
+        fn sample(&self) -> PlatformTargetObservationSample {
+            PlatformTargetObservationSample::permission_revoked(
+                "injected screen-capture permission revocation",
+            )
+        }
+    }
+
+    impl TargetObservationSampler for CountingPermissionRevokedTargetSampler {
+        fn sample(&self) -> PlatformTargetObservationSample {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            PlatformTargetObservationSample::permission_revoked(
+                "injected screen-capture permission revocation",
+            )
+        }
     }
 
     impl BlockingFirstTargetSampler {
@@ -812,7 +1164,7 @@ mod tests {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                 }
             }
-            sample_platform_target_observations()
+            PlatformTargetObservationSample::no_change_for_test()
         }
     }
 
@@ -825,7 +1177,11 @@ mod tests {
     }
 
     impl TargetMediaSourceStopper for RecordingStopper {
-        fn stop_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool {
+        fn stop_and_settle_endpoint_if_epoch(
+            &self,
+            session_id: &str,
+            epoch: TransportEpoch,
+        ) -> bool {
             self.calls().push((session_id.to_string(), epoch));
             self.stopped
         }
@@ -1014,7 +1370,8 @@ mod tests {
         );
         assert_eq!(Arc::strong_count(&plugin), 1);
 
-        let runtime = TargetMonitorRuntimeContext::from_plugin(&plugin);
+        let runtime =
+            TargetMonitorRuntimeContext::from_plugin(&plugin, Arc::new(Mutex::new(HashSet::new())));
 
         assert_eq!(
             Arc::strong_count(&plugin),
@@ -1029,12 +1386,24 @@ mod tests {
 
     #[test]
     fn supervisor_restarts_panicked_generation_without_a_new_track_command() {
-        let plugin = RemoteDesktopPlugin::with_target_binding_verifier(
+        let temp = tempfile::tempdir().expect("tempdir");
+        let recovery = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
+        let plugin = RemoteDesktopPlugin::with_recovery_store_for_test(
             Arc::new(SyntheticScreenBackend),
             Arc::new(TestRemoteAppTargetBindingVerifier),
             test_runtime_limits().into(),
+            Arc::clone(&recovery),
         );
-        RemoteDesktopPlugin::track_target_for_test(&plugin, "rd-supervised-generation")
+        let session_id = "rd-supervised-generation";
+        let session = RemoteDesktopSession::new(test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.supervised-generation",
+            vec!["webrtc".into()],
+        ));
+        plugin.session_store().with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+        RemoteDesktopPlugin::track_target_for_test(&plugin, session_id)
             .expect("target tracking starts the supervisor");
         let first_generation = wait_for_generation_after(&plugin, 0);
 
@@ -1046,9 +1415,70 @@ mod tests {
         assert!(restarted_generation > first_generation);
         assert_eq!(
             plugin.target_monitor_desired_sessions_for_test(),
-            vec!["rd-supervised-generation".to_string()],
+            vec![session_id.to_string()],
             "the supervisor must seed the new generation from desired state"
         );
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let lifecycle_events = loop {
+            let events = plugin.session_store().with_sessions(|sessions| {
+                sessions
+                    .get(session_id)
+                    .expect("tracked session remains present")
+                    .events()
+                    .into_iter()
+                    .filter(|event| {
+                        matches!(
+                            event["event_type"].as_str(),
+                            Some(
+                                "PLUGIN_WORKER_CRASHED"
+                                    | "PLUGIN_WORKER_RESTARTED"
+                                    | "TARGET_MONITOR_RESTARTED"
+                            )
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            if events.len() == 3 {
+                break events;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "replacement generation did not publish functional recovery"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(
+            lifecycle_events
+                .iter()
+                .filter_map(|event| event["event_type"].as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "PLUGIN_WORKER_CRASHED",
+                "PLUGIN_WORKER_RESTARTED",
+                "TARGET_MONITOR_RESTARTED",
+            ]
+        );
+        assert_eq!(
+            lifecycle_events[0]["payload"]["failed_generation"],
+            first_generation
+        );
+        assert_eq!(
+            lifecycle_events[2]["payload"]["restarted_generation"],
+            restarted_generation
+        );
+        let snapshot = wait_for_recovery_snapshot(&recovery, session_id, |snapshot| {
+            snapshot
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == "TARGET_MONITOR_RESTARTED")
+        });
+        let recovered = RemoteDesktopSession::rehydrate(&snapshot)
+            .expect("worker lifecycle events persist with the session aggregate");
+        assert!(recovered
+            .events()
+            .iter()
+            .any(|event| { event["event_type"] == "TARGET_MONITOR_RESTARTED" }));
     }
 
     #[test]
@@ -1100,7 +1530,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        let snapshot = wait_for_recovery_snapshot(&recovery, session_id);
+        let snapshot = wait_for_recovery_snapshot(&recovery, session_id, |snapshot| {
+            snapshot
+                .target_tracking()
+                .is_some_and(|tracking| tracking["status"] == "lost")
+        });
         let recovered = RemoteDesktopSession::rehydrate(&snapshot)
             .expect("persisted unavailable target rehydrates");
         assert_eq!(recovered.target_tracking_state()["status"], "lost");
@@ -1142,7 +1576,11 @@ mod tests {
             1,
             "three timed-out generations must share one bounded native call"
         );
-        let snapshot = wait_for_recovery_snapshot(&recovery, session_id);
+        let snapshot = wait_for_recovery_snapshot(&recovery, session_id, |snapshot| {
+            snapshot
+                .target_tracking()
+                .is_some_and(|tracking| tracking["status"] == "lost")
+        });
         let recovered = RemoteDesktopSession::rehydrate(&snapshot)
             .expect("hung-provider unavailable state rehydrates");
         assert_eq!(recovered.target_tracking_state()["status"], "lost");
@@ -1155,6 +1593,200 @@ mod tests {
             "plugin shutdown must not join the blocked native provider call"
         );
         sampler.release();
+    }
+
+    #[test]
+    fn permission_revocation_durably_stops_preview_and_clears_desired_tracking() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let recovery = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
+        let monitor = Arc::new(RemoteDesktopTargetMonitor::with_sampler_for_test(
+            Arc::new(PermissionRevokedTargetSampler),
+            Duration::from_millis(250),
+        ));
+        let plugin = RemoteDesktopPlugin::with_target_monitor_for_test(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+            Arc::clone(&recovery),
+            monitor,
+        );
+        let session_id = "rd-monitor-permission-revoked";
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.monitor-permission",
+            vec!["invoke_bidi".into()],
+        ));
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+        let preview_epoch = session
+            .attach_preview_transport(stop_tx.clone())
+            .expect("preview attaches before permission revocation")
+            .0;
+        plugin.session_store().with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+        let (preview_done_tx, preview_done_rx) = mpsc::channel();
+        plugin.transport_manager().activate_preview(
+            session_id.to_string(),
+            preview_epoch,
+            stop_tx,
+            preview_done_rx,
+        );
+        RemoteDesktopPlugin::track_target_for_test(&plugin, session_id)
+            .expect("target tracking starts the supervisor");
+
+        let closing_deadline = Instant::now() + Duration::from_secs(2);
+        while !*stop_rx.borrow_and_update() && Instant::now() < closing_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            *stop_rx.borrow_and_update(),
+            "permission verification publishes stop on its first negative sample"
+        );
+        preview_done_tx
+            .send(PreviewTaskGroupCompletion)
+            .expect("preview worker group completion is still owned");
+
+        let revocation_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let terminating = plugin.session_store().with_sessions(|sessions| {
+                sessions
+                    .get(session_id)
+                    .is_some_and(|session| session.is_terminating())
+            });
+            if terminating {
+                break;
+            }
+            assert!(
+                Instant::now() < revocation_deadline,
+                "second permission denial did not confirm revocation"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        plugin.session_store().with_sessions(|sessions| {
+            let session = sessions.get(session_id).expect("revoked session exists");
+            assert!(session.is_terminating());
+            assert!(!session.is_terminal());
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let terminal = plugin.session_store().with_sessions(|sessions| {
+                sessions
+                    .get(session_id)
+                    .is_some_and(|session| session.is_terminal())
+            });
+            if terminal {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "permission revocation did not reach terminal state"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            *stop_rx.borrow_and_update(),
+            "permission revocation must publish the preview stop signal before dropping ownership"
+        );
+        assert!(plugin.target_monitor_desired_sessions_for_test().is_empty());
+        plugin.session_store().with_sessions(|sessions| {
+            let session = sessions.get(session_id).expect("revoked session exists");
+            assert_eq!(session.end_reason(), Some(REASON_TARGET_PERMISSION_REVOKED));
+            assert!(!session.preview_attached());
+        });
+        let snapshot = recovery
+            .load(session_id)
+            .expect("recovery snapshot loads")
+            .expect("permission terminal snapshot persists");
+        assert_eq!(snapshot.lifecycle_state(), "closed");
+        assert_eq!(
+            snapshot.terminal_receipt().expect("terminal receipt")["reason_code"],
+            serde_json::json!(REASON_TARGET_PERMISSION_REVOKED)
+        );
+    }
+
+    #[test]
+    fn permission_revocation_checkpoint_failure_keeps_transport_and_tracking_owner() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let recovery = Arc::new(RemoteDesktopRecoveryStore::new(temp.path().to_path_buf()));
+        let sampler = Arc::new(CountingPermissionRevokedTargetSampler::default());
+        let monitor = Arc::new(RemoteDesktopTargetMonitor::with_sampler_for_test(
+            sampler.clone(),
+            Duration::from_millis(250),
+        ));
+        let plugin = RemoteDesktopPlugin::with_target_monitor_for_test(
+            Arc::new(SyntheticScreenBackend),
+            Arc::new(TestRemoteAppTargetBindingVerifier),
+            test_runtime_limits().into(),
+            Arc::clone(&recovery),
+            monitor,
+        );
+        let session_id = "rd-monitor-permission-checkpoint-failure";
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.monitor-permission-checkpoint-failure",
+            vec!["invoke_bidi".into()],
+        ));
+        session.record_target_observation(TargetObservation::PermissionVerificationRequired {
+            detail: "first permission denial".to_string(),
+            observed_at_ms: now_ms(),
+        });
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+        let preview_epoch = session
+            .attach_preview_transport(stop_tx.clone())
+            .expect("preview attaches to verification-pending session")
+            .0;
+        plugin.session_store().with_sessions(|rows| {
+            rows.insert(session_id.to_string(), session);
+        });
+        let (preview_done_tx, preview_done_rx) = mpsc::channel();
+        plugin.transport_manager().activate_preview(
+            session_id.to_string(),
+            preview_epoch,
+            stop_tx,
+            preview_done_rx,
+        );
+        recovery.set_fail_saves_for_test(true);
+        RemoteDesktopPlugin::track_target_for_test(&plugin, session_id)
+            .expect("target tracking starts the supervisor");
+
+        let sampled_deadline = Instant::now() + Duration::from_secs(2);
+        while sampler.calls.load(Ordering::SeqCst) == 0 && Instant::now() < sampled_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            sampler.calls.load(Ordering::SeqCst) > 0,
+            "revocation observation must be attempted"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !*stop_rx.borrow_and_update(),
+            "preview stop must not be sent"
+        );
+        plugin.session_store().with_sessions(|rows| {
+            let session = rows.get(session_id).expect("session remains present");
+            assert!(!session.is_terminating());
+            assert!(!session.is_terminal());
+            assert!(session.preview_attached());
+        });
+        assert!(plugin
+            .target_monitor_desired_sessions_for_test()
+            .iter()
+            .any(|tracked| tracked == session_id));
+
+        recovery.set_fail_saves_for_test(false);
+        plugin.cancel_session_target_tracking(session_id);
+        let stop_tx = plugin.session_store().with_sessions(|rows| {
+            rows.get_mut(session_id)
+                .and_then(|session| session.detach_preview_transport())
+        });
+        if let Some(stop_tx) = stop_tx {
+            let _ = stop_tx.send(true);
+        }
+        preview_done_tx
+            .send(PreviewTaskGroupCompletion)
+            .expect("preview worker completion sends");
     }
 
     fn wait_for_generation_after(plugin: &RemoteDesktopPlugin, previous: u64) -> u64 {
@@ -1199,15 +1831,18 @@ mod tests {
     fn wait_for_recovery_snapshot(
         recovery: &RemoteDesktopRecoveryStore,
         session_id: &str,
+        matches_expected_state: impl Fn(&RemoteDesktopRecoverySnapshot) -> bool,
     ) -> RemoteDesktopRecoverySnapshot {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if let Some(snapshot) = recovery.load(session_id).expect("load recovery snapshot") {
-                return snapshot;
+                if matches_expected_state(&snapshot) {
+                    return snapshot;
+                }
             }
             assert!(
                 Instant::now() < deadline,
-                "target monitor did not persist unavailable snapshot"
+                "target monitor did not persist the expected recovery state"
             );
             std::thread::sleep(Duration::from_millis(10));
         }

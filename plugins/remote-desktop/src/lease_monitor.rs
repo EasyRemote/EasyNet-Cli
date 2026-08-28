@@ -29,7 +29,11 @@ use std::time::Duration;
 use crate::daemon::plugins::remote_desktop::lifecycle_worker::LifecycleWorker;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::now_ms;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::expire_session_from_watchdog;
+use crate::daemon::plugins::remote_desktop::session_lifecycle::{
+    expire_session_from_watchdog, SessionExpirationOutcome,
+};
+
+const CLOSING_CHECKPOINT_RETRY_MS: u64 = 250;
 
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopLeaseMonitor {
     worker: Mutex<LifecycleWorker<LeaseMonitorCommand>>,
@@ -40,10 +44,20 @@ enum LeaseMonitorCommand {
         session_id: String,
         lease_expires_at_ms: u64,
     },
+    ScheduleRelayRefresh {
+        session_id: String,
+        refresh_after_ms: u64,
+    },
     Cancel {
         session_id: String,
     },
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SessionLeaseDeadline {
+    lease_expires_at_ms: u64,
+    next_attempt_at_ms: u64,
 }
 
 impl RemoteDesktopLeaseMonitor {
@@ -91,6 +105,38 @@ impl RemoteDesktopLeaseMonitor {
                 session_id: session_id.to_string(),
             });
         }
+    }
+
+    pub(in crate::daemon) fn schedule_relay_refresh(
+        &self,
+        plugin: &Arc<RemoteDesktopPlugin>,
+        session_id: String,
+        refresh_after_ms: u64,
+    ) -> anyhow::Result<()> {
+        let command = LeaseMonitorCommand::ScheduleRelayRefresh {
+            session_id,
+            refresh_after_ms,
+        };
+        let tx = self.ensure_worker(plugin)?;
+        let command = match tx.send(command) {
+            Ok(()) => return Ok(()),
+            Err(error) => error.0,
+        };
+        if let LeaseMonitorCommand::ScheduleRelayRefresh {
+            session_id,
+            refresh_after_ms,
+        } = command
+        {
+            self.restart_worker(plugin)?
+                .send(LeaseMonitorCommand::ScheduleRelayRefresh {
+                    session_id,
+                    refresh_after_ms,
+                })
+                .map_err(|error| {
+                    anyhow::anyhow!("remote desktop relay lease monitor unavailable: {error}")
+                })?;
+        }
+        Ok(())
     }
 
     fn ensure_worker(
@@ -145,13 +191,20 @@ fn spawn_lease_monitor_worker(
 }
 
 fn run_lease_monitor(plugin: Weak<RemoteDesktopPlugin>, rx: Receiver<LeaseMonitorCommand>) {
-    let mut deadlines = HashMap::<String, u64>::new();
+    let mut deadlines = HashMap::<String, SessionLeaseDeadline>::new();
+    let mut relay_refreshes = HashMap::<String, u64>::new();
     loop {
         expire_due_sessions(&plugin, &mut deadlines);
-        let Some(next_deadline) = deadlines.values().copied().min() else {
+        refresh_due_relay_leases(&plugin, &mut relay_refreshes);
+        let next_deadline = deadlines
+            .values()
+            .map(|deadline| deadline.next_attempt_at_ms)
+            .chain(relay_refreshes.values().copied())
+            .min();
+        let Some(next_deadline) = next_deadline else {
             match rx.recv() {
                 Ok(command) => {
-                    if !apply_command(command, &mut deadlines) {
+                    if !apply_command(command, &mut deadlines, &mut relay_refreshes) {
                         return;
                     }
                 }
@@ -163,7 +216,7 @@ fn run_lease_monitor(plugin: Weak<RemoteDesktopPlugin>, rx: Receiver<LeaseMonito
         let timeout = Duration::from_millis(next_deadline.saturating_sub(now_ms()));
         match rx.recv_timeout(timeout) {
             Ok(command) => {
-                if !apply_command(command, &mut deadlines) {
+                if !apply_command(command, &mut deadlines, &mut relay_refreshes) {
                     return;
                 }
             }
@@ -173,37 +226,95 @@ fn run_lease_monitor(plugin: Weak<RemoteDesktopPlugin>, rx: Receiver<LeaseMonito
     }
 }
 
-fn apply_command(command: LeaseMonitorCommand, deadlines: &mut HashMap<String, u64>) -> bool {
+fn apply_command(
+    command: LeaseMonitorCommand,
+    deadlines: &mut HashMap<String, SessionLeaseDeadline>,
+    relay_refreshes: &mut HashMap<String, u64>,
+) -> bool {
     match command {
         LeaseMonitorCommand::Schedule {
             session_id,
             lease_expires_at_ms,
         } => {
             if !session_id.is_empty() {
-                deadlines.insert(session_id, lease_expires_at_ms);
+                deadlines.insert(
+                    session_id,
+                    SessionLeaseDeadline {
+                        lease_expires_at_ms,
+                        next_attempt_at_ms: lease_expires_at_ms,
+                    },
+                );
+            }
+            true
+        }
+        LeaseMonitorCommand::ScheduleRelayRefresh {
+            session_id,
+            refresh_after_ms,
+        } => {
+            if !session_id.is_empty() {
+                relay_refreshes.insert(session_id, refresh_after_ms);
             }
             true
         }
         LeaseMonitorCommand::Cancel { session_id } => {
             deadlines.remove(&session_id);
+            relay_refreshes.remove(&session_id);
             true
         }
         LeaseMonitorCommand::Shutdown => false,
     }
 }
 
-fn expire_due_sessions(plugin: &Weak<RemoteDesktopPlugin>, deadlines: &mut HashMap<String, u64>) {
+fn refresh_due_relay_leases(
+    plugin: &Weak<RemoteDesktopPlugin>,
+    relay_refreshes: &mut HashMap<String, u64>,
+) {
     let now = now_ms();
-    let due: Vec<(String, u64)> = deadlines
+    let due = relay_refreshes
         .iter()
         .filter(|(_, deadline)| **deadline <= now)
         .map(|(session_id, deadline)| (session_id.clone(), *deadline))
+        .collect::<Vec<_>>();
+    for (session_id, expected_refresh_after_ms) in due {
+        relay_refreshes.remove(&session_id);
+        let Some(plugin) = plugin.upgrade() else {
+            return;
+        };
+        if let Some(next_refresh) = RemoteDesktopPlugin::refresh_relay_lease_from_watchdog(
+            &plugin,
+            &session_id,
+            expected_refresh_after_ms,
+        ) {
+            relay_refreshes.insert(session_id, next_refresh);
+        }
+    }
+}
+
+fn expire_due_sessions(
+    plugin: &Weak<RemoteDesktopPlugin>,
+    deadlines: &mut HashMap<String, SessionLeaseDeadline>,
+) {
+    let now = now_ms();
+    let due: Vec<(String, u64)> = deadlines
+        .iter()
+        .filter(|(_, deadline)| deadline.next_attempt_at_ms <= now)
+        .map(|(session_id, deadline)| (session_id.clone(), deadline.lease_expires_at_ms))
         .collect();
     for (session_id, deadline) in due {
         deadlines.remove(&session_id);
         let Some(plugin) = plugin.upgrade() else {
             return;
         };
-        expire_session_from_watchdog(&plugin, &session_id, deadline);
+        if expire_session_from_watchdog(&plugin, &session_id, deadline)
+            == SessionExpirationOutcome::CheckpointPending
+        {
+            deadlines.insert(
+                session_id,
+                SessionLeaseDeadline {
+                    lease_expires_at_ms: deadline,
+                    next_attempt_at_ms: now_ms().saturating_add(CLOSING_CHECKPOINT_RETRY_MS),
+                },
+            );
+        }
     }
 }
