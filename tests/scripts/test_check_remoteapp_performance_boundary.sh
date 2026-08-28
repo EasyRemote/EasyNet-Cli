@@ -19,12 +19,16 @@ mkdir -p \
   "$SB/src/daemon/ability/builtins/resources" \
   "$SB/plugins/remote-desktop/src/transport" \
   "$SB/plugins/remote-desktop/src/handlers" \
+  "$SB/plugins/remote-desktop/abilities" \
+  "$SB/plugins/remote-desktop/src/media" \
+  "$SB/plugins/remote-desktop/media-host/src" \
+  "$SB/plugins/remote-desktop/native-host/src" \
   "$SB/plugins/remote-desktop/src" \
   "$SB/tests"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-performance-boundary.sh"
 
 cat >"$SB/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
-PERF-01 PERF-02 PERF-03 PERF-04 PERF-05 PERF-06 PERF-07
+PERF-01 PERF-02 PERF-03 PERF-04 PERF-05 PERF-06 PERF-07 PERF-08
 MD
 
 cat >"$SB/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs" <<'RS'
@@ -75,12 +79,6 @@ fn watch_input_schema_has_single_types_description_contract() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/target_observer.rs" <<'RS'
-pub(in crate::daemon::plugins::remote_desktop) fn sample_platform_target_observations() {}
-
-fn macos_sampler() {
-    sample_host_target_observations(&MacOsHostTargetSnapshotProvider);
-}
-
 #[test]
 fn sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_tick() {
     const SESSION_COUNT: usize = 128;
@@ -92,9 +90,15 @@ fn sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_
 }
 RS
 
+cat >"$SB/plugins/remote-desktop/native-host/src/lib.rs" <<'RS'
+fn sample_xcap_target_observations() {
+    let windows = xcap::Window::all();
+}
+RS
+
 cat >"$SB/plugins/remote-desktop/src/target_monitor.rs" <<'RS'
 fn poll_tracked_sessions() {
-    let provider = sample_platform_target_observations();
+    let provider = snapshot_executor.sample_for_generation(generation, provider_deadline)?;
     tracked.retain(|session_id| {
         observe_bound_session_target_once(&sessions, session_id, &provider);
         true
@@ -156,6 +160,17 @@ fn apply(admission: RemoteIceAdmission) -> Value {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session_signaling.rs" <<'RS'
+enum RemoteDesktopNegotiatedMediaScope {
+    VideoOnly,
+    AudioVideo,
+}
+
+impl RemoteDesktopNegotiatedMediaScope {
+    fn from_local_answer(answer: &Value) -> anyhow::Result<Self> {
+        Ok(Self::VideoOnly)
+    }
+}
+
 impl RemoteDesktopSessionDescription {
     fn new(value: Value) -> anyhow::Result<Self> {
         validate_signaling_description_size(&value)?;
@@ -164,6 +179,7 @@ impl RemoteDesktopSessionDescription {
 }
 
 fn set_local_webrtc_answer(answer: Value) -> anyhow::Result<()> {
+    let _scope = RemoteDesktopNegotiatedMediaScope::from_local_answer(&answer)?;
     RemoteDesktopSessionDescription::new(answer)?;
     Ok(())
 }
@@ -226,13 +242,17 @@ RS
 
 cat >"$SB/plugins/remote-desktop/src/view_device.rs" <<'RS'
 pub(in crate::daemon::plugins::remote_desktop) const AUDIO_UNSUPPORTED_REASON: &str =
-    "host_audio_not_implemented";
+    "native_media_disabled";
 
-fn audio_support_view() {
+fn audio_support_view(runtime: HostAudioRuntimeSnapshot) {
+    let _ = runtime.compiled_supported();
+    let _ = runtime.runtime_reachable();
+    json!(["display", "window", "application"]);
     json!({
         "supported": false,
         "capture_ready": false,
         "send_ready": false,
+        "supported_target_kinds": [],
         "codec_profiles": [],
         "blocked_reason": AUDIO_UNSUPPORTED_REASON,
     });
@@ -246,12 +266,14 @@ fn audio_support_view() {
     });
 }
 
+fn audio_support_view_for_binding() {}
+
 fn media_pipeline_support_view() {
     json!({
         "media_pipeline_support": media_pipeline_support,
         "product_ready": false,
         "product_blockers": [
-            "host_audio_not_implemented",
+            AUDIO_UNSUPPORTED_REASON,
             "remoteapp_media_adaptation_e2e_artifact_missing"
         ],
         "video": {
@@ -259,13 +281,13 @@ fn media_pipeline_support_view() {
             "adaptation_policy": "native_bitrate_adaptation_from_webrtc_stats_and_encoder_pressure",
         },
         "diagnostic": {
-            "adaptation_policy": "static_bitrate_with_bounded_stale_frame_drop",
+            "adaptation_policy": "receiver_feedback_openh264_rebuild",
         }
     });
 }
 
 #[test]
-fn device_capabilities_report_host_audio_as_explicitly_unsupported() {}
+fn device_capabilities_report_platform_host_audio_support() {}
 
 #[test]
 fn device_capabilities_project_media_pipeline_support_matrix() {}
@@ -282,16 +304,120 @@ fn serialize_session(session: Session, transport_route_state: Value) {
 }
 
 fn production_readiness_view() {
+    let audio_support = audio_support_view();
+    let negotiated_media_scope = session.negotiated_media_scope();
+    let audio_required = negotiated_media_scope.is_some_and(|scope| scope.requires_audio());
+    let audio_ready = session.audio_operational_ready();
+    let audio_blocked_reason = json!("host_audio_not_yet_ready");
     json!({
-        "media_scope": "video_only",
-        "audio_ready": false,
-        "audio_blocked_reason": AUDIO_UNSUPPORTED_REASON,
+        "media_scope": negotiated_media_scope.map(|scope| scope.as_str()).unwrap_or("not_negotiated"),
+        "audio_required": audio_required,
+        "audio_ready": audio_ready,
+        "audio_blocked_reason": audio_blocked_reason,
     });
 }
 
 #[test]
-fn session_view_reports_audio_as_explicitly_unsupported_product_state() {}
+fn session_view_separates_platform_audio_capability_from_unnegotiated_scope() {}
+
+#[test]
+fn video_only_negotiation_requires_bound_decode_but_not_audio_runtime_stats() {}
+
+#[test]
+fn audio_video_negotiation_requires_live_audio_runtime_stats() {}
 RS
+
+cat >"$SB/plugins/remote-desktop/src/media/host_audio_capability.rs" <<'RS'
+struct HostAudioRuntimeProbe;
+struct HostAudioProbeCoordinator;
+struct HostAudioCoordinatorState {
+    refresh_requested: bool,
+    attempt_running: bool,
+}
+fn monitor() {
+    let _ = expires_at_monotonic;
+    let _ = mpsc::sync_channel(1);
+}
+#[test]
+fn blocked_native_probe_does_not_block_supervisor_shutdown() {}
+#[test]
+fn native_probe_projection_keeps_source_readiness_independent() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/transport/webrtc_audio.rs" <<'RS'
+fn project() { let _ = "audio_operational_ready"; }
+RS
+
+cat >"$SB/plugins/remote-desktop/src/session_transport_state.rs" <<'RS'
+struct ClientRenderEvidence;
+fn state() {
+    let _ = client_render_evidence_sequence;
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/media/adaptation.rs" <<'RS'
+const ADAPTIVE_MIN_BITRATE_KBPS: u32 = 128;
+fn effective_fps_for_writer_service() {}
+fn adaptive(available_kbps: u32) {
+    let _ = available_kbps;
+}
+#[test]
+fn writer_service_time_independently_bounds_frame_rate() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs" <<'RS'
+async fn adapt(inputs: HostedMediaInputs) {
+    let pressure = rtcp_receiver.observe(inputs.video_sender, Instant::now()).await;
+    record_writer_service();
+    effective_fps_for_writer_service();
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/transport/webrtc_baseline_media.rs" <<'RS'
+async fn adapt(video_sender: Sender) {
+    let pressure = rtcp_receiver.observe(video_sender, Instant::now()).await;
+    record_writer_service();
+    effective_fps_for_writer_service();
+}
+#[test]
+fn writer_service_can_reconfigure_fps_without_falsifying_bitrate_change() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/media-host/src/lib.rs" <<'RS'
+struct SharedMediaLaneProducer;
+RS
+
+cat >"$SB/plugins/remote-desktop/src/native_host_process.rs" <<'RS'
+fn read_frame(lease: Lease) {
+    let frame = Bytes::from_owner(lease);
+    let payload = Bytes::from_owner(transport_pool.copy_from_slice(payload_view));
+}
+RS
+
+cat >>"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
+const CLIENT_RENDER_EVIDENCE_MAX_AGE: Duration = Duration::from_secs(10);
+fn client_decode_ready() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/handlers/report_client_state.rs" <<'RS'
+#[test]
+fn render_probe_requires_exact_active_session_binding_tuple() {}
+#[test]
+fn render_probe_rejects_replay_and_counter_regression() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/schema.rs" <<'RS'
+fn schema() {
+    let _ = (session_id, transport_epoch, binding_id, binding_epoch, media_source_epoch,
+        media_pipeline_id, video_codec, video_transport, decoded_video_frames, frame_width, frame_height);
+}
+#[test]
+fn authored_descriptor_and_runtime_schema_are_identical() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/abilities/remote_desktop.report_client_state.ability.toml" <<'TOML'
+required = ["session_id", "transport_epoch", "binding_id", "binding_epoch", "media_source_epoch", "media_pipeline_id", "video_codec", "video_transport", "decoded_video_frames", "frame_width", "frame_height"]
+TOML
 
 cat >"$SB/plugins/remote-desktop/src/view_transport.rs" <<'RS'
 struct RemoteDesktopTransportReadinessBlocker;
@@ -314,6 +440,26 @@ fn route_readiness_blockers_project_frontend_recovery_action() {
 }
 RS
 
+cat >"$SB/plugins/remote-desktop/src/media/linux_process_tree_audio.rs" <<'RS'
+struct LinuxProcessTreeAudioBackend;
+fn install_revalidation_timer() { main_loop.loop_().add_timer(|_| {}); }
+
+#[test]
+fn process_tree_includes_all_descendants_and_excludes_unrelated_processes() {}
+
+#[test]
+fn audio_node_selection_includes_every_node_in_the_process_tree() {}
+
+#[test]
+fn reused_root_pid_fails_closed_instead_of_selecting_new_process_tree() {}
+
+#[test]
+fn empty_authority_set_revokes_all_previously_eligible_nodes() {}
+
+#[test]
+fn contradictory_node_and_client_pid_identity_fails_closed_in_both_directions() {}
+RS
+
 cat >"$SB/plugins/remote-desktop/src/sdp.rs" <<'RS'
 #[test]
 fn signaling_rejects_oversized_sdp_and_ice_rows() {}
@@ -328,22 +474,43 @@ fn resolve_for_session() {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/transport/webrtc_endpoint.rs" <<'RS'
+fn configure_transport() {
+    let registry = configure_twcc_sender_only(registry, &mut media_engine)?;
+}
 fn start_direct_webrtc_endpoint(transports: RemoteDesktopTransportManager) -> anyhow::Result<()> {
-    transports.block_on(create_direct_webrtc_endpoint())??;
+    let build = transports.block_on(create_direct_webrtc_endpoint(DirectWebRtcEndpointConfig {
+        session_id,
+    }))?;
+    let (answer, peer_connection, completion) = match build {
+        Ok(endpoint) => endpoint,
+        Err(error) => return Err(error),
+    };
+    let transport_runtime = endpoint_config.transports.runtime_handle()?;
     std::thread::Builder::new()
         .name("easynet-remote-desktop-webrtc".into())
         .spawn(move || {
-            if let Err(err) = transports.block_on(run_direct_webrtc_media_loop()) {
-                eprintln!(
-                    "[remote-desktop-webrtc] direct media loop runtime unavailable: {err}"
-                );
-            }
+            transport_runtime.block_on(run_direct_webrtc_media_loop());
         })?;
     Ok(())
 }
 
 #[test]
 fn endpoint_start_boundary_refuses_to_run_while_session_store_lock_is_held() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
+struct DirectWebRtcSession {
+    video_sender: Arc<dyn RtpSender>,
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/transport/webrtc_sender_feedback.rs" <<'RS'
+fn observe(entry: RTCStatsReportEntry) {
+    if let RTCStatsReportEntry::RemoteInboundRtp(stats) = entry {
+        let measurements = stats.round_trip_time_measurements;
+        if sample.measurements <= self.last_measurements { return; }
+    }
+}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/transport/manager.rs" <<'RS'
@@ -360,7 +527,7 @@ fn runtime_handle(&self) -> anyhow::Result<Handle> {
         .thread_name("easynet-webrtc-runtime")
         .enable_all()
         .build()
-        .map_err(|err| anyhow::anyhow!("build remote desktop WebRTC runtime: {err}"))?;
+        .map_err(|error| anyhow::anyhow!("build RemoteApp WebRTC runtime: {error}"))?;
     Ok(handle)
 }
 RS
@@ -391,7 +558,38 @@ RS
   CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
 ) >/dev/null || fail "happy path should pass"
 
-perl -0pi -e 's/"audio_ready": false/"audio_ready": true/' \
+perl -0pi -e 's/RemoteDesktopNegotiatedMediaScope::from_local_answer/derive_scope_from_host_capability/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-negotiated-scope-source.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "host-capability-derived negotiated media scope should exit 1 (got $rc)"
+grep -q "committed local WebRTC answer" /tmp/check-remoteapp-performance-boundary-negotiated-scope-source.out || fail "expected negotiated media scope authority failure"
+
+perl -0pi -e 's/derive_scope_from_host_capability/RemoteDesktopNegotiatedMediaScope::from_local_answer/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+perl -0pi -e 's/"media_scope": negotiated_media_scope\.map\(\|scope\| scope\.as_str\(\)\)\.unwrap_or\("not_negotiated"\)/"media_scope": if audio_support["supported"] { "audio_video" } else { "video_only" }/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-capability-scope.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "capability-projected session media scope should exit 1 (got $rc)"
+grep -q "project negotiated scope" /tmp/check-remoteapp-performance-boundary-capability-scope.out || fail "expected negotiated media scope projection failure"
+
+perl -0pi -e 's/"media_scope": if audio_support\["supported"\] \{ "audio_video" \} else \{ "video_only" \}/"media_scope": negotiated_media_scope.map(|scope| scope.as_str()).unwrap_or("not_negotiated")/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+
+perl -0pi -e 's/let audio_ready = session\.audio_operational_ready\(\)/let audio_ready = false; \/\/ session-owned predicate removed/' \
   "$SB/plugins/remote-desktop/src/view.rs"
 
 set +e
@@ -401,13 +599,13 @@ set +e
 ) >/tmp/check-remoteapp-performance-boundary-audio-ready.out 2>&1
 rc=$?
 set -e
-[[ "$rc" == "1" ]] || fail "misreported host-audio readiness should exit 1 (got $rc)"
-grep -q "must not imply host audio is ready" /tmp/check-remoteapp-performance-boundary-audio-ready.out || fail "expected audio readiness failure"
+[[ "$rc" == "1" ]] || fail "hard-coded host-audio readiness should exit 1 (got $rc)"
+grep -q "session-owned operational audio predicate" /tmp/check-remoteapp-performance-boundary-audio-ready.out || fail "expected session-owned audio readiness failure"
 
-perl -0pi -e 's/"audio_ready": true/"audio_ready": false/' \
+perl -0pi -e 's/let audio_ready = false; \/\/ session-owned predicate removed/let audio_ready = session.audio_operational_ready()/' \
   "$SB/plugins/remote-desktop/src/view.rs"
-perl -0pi -e 's/host_audio_not_implemented/host_audio_ready/g' \
-  "$SB/plugins/remote-desktop/src/view_device.rs"
+perl -0pi -e 's/process_tree_includes_all_descendants_and_excludes_unrelated_processes/process_tree_ignores_descendants/g' \
+  "$SB/plugins/remote-desktop/src/media/linux_process_tree_audio.rs"
 
 set +e
 (
@@ -416,12 +614,27 @@ set +e
 ) >/tmp/check-remoteapp-performance-boundary-audio-reason.out 2>&1
 rc=$?
 set -e
-[[ "$rc" == "1" ]] || fail "missing stable host-audio blocker should exit 1 (got $rc)"
-grep -q "host audio as not implemented" /tmp/check-remoteapp-performance-boundary-audio-reason.out || fail "expected host-audio blocker failure"
+[[ "$rc" == "1" ]] || fail "missing Linux process-tree selection proof should exit 1 (got $rc)"
+grep -q "test root and descendant process selection" /tmp/check-remoteapp-performance-boundary-audio-reason.out || fail "expected Linux process-tree selection failure"
 
-perl -0pi -e 's/host_audio_ready/host_audio_not_implemented/g' \
-  "$SB/plugins/remote-desktop/src/view_device.rs"
-perl -0pi -e 's/session_view_reports_audio_as_explicitly_unsupported_product_state/session_view_omits_audio_product_state/' \
+perl -0pi -e 's/process_tree_ignores_descendants/process_tree_includes_all_descendants_and_excludes_unrelated_processes/g' \
+  "$SB/plugins/remote-desktop/src/media/linux_process_tree_audio.rs"
+perl -0pi -e 's/\.add_timer/\.graph_events_only/g' \
+  "$SB/plugins/remote-desktop/src/media/linux_process_tree_audio.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-audio-revalidation.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing Linux process-authority revalidation should exit 1 (got $rc)"
+grep -q "revalidate process authority" /tmp/check-remoteapp-performance-boundary-audio-revalidation.out || fail "expected Linux process-authority revalidation failure"
+
+perl -0pi -e 's/\.graph_events_only/\.add_timer/g' \
+  "$SB/plugins/remote-desktop/src/media/linux_process_tree_audio.rs"
+perl -0pi -e 's/session_view_separates_platform_audio_capability_from_unnegotiated_scope/session_view_conflates_audio_capability_and_scope/' \
   "$SB/plugins/remote-desktop/src/view.rs"
 
 set +e
@@ -432,9 +645,9 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing session audio product-state regression should exit 1 (got $rc)"
-grep -q "session view tests must pin explicit host-audio unsupported state" /tmp/check-remoteapp-performance-boundary-audio-test.out || fail "expected session audio regression failure"
+grep -q "separate platform capability from session negotiation" /tmp/check-remoteapp-performance-boundary-audio-test.out || fail "expected session audio regression failure"
 
-perl -0pi -e 's/session_view_omits_audio_product_state/session_view_reports_audio_as_explicitly_unsupported_product_state/' \
+perl -0pi -e 's/session_view_conflates_audio_capability_and_scope/session_view_separates_platform_audio_capability_from_unnegotiated_scope/' \
   "$SB/plugins/remote-desktop/src/view.rs"
 
 perl -0pi -e 's/"product_ready": false/"product_ready": true/' \
@@ -593,7 +806,7 @@ grep -q "S=128 active session ticks" /tmp/check-remoteapp-performance-boundary-f
 
 perl -0pi -e 's/const SESSION_COUNT: usize = 8;/const SESSION_COUNT: usize = 128;/' \
   "$SB/plugins/remote-desktop/src/target_observer.rs"
-perl -0pi -e 's/let provider = sample_platform_target_observations\(\);/let provider = PlatformTargetObservationProvider;/' \
+perl -0pi -e 's/let provider = snapshot_executor\.sample_for_generation\(generation, provider_deadline\)\?;/let provider = PlatformTargetObservationProvider;/' \
   "$SB/plugins/remote-desktop/src/target_monitor.rs"
 
 set +e
@@ -604,9 +817,9 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "target monitor per-session platform observer should exit 1 (got $rc)"
-grep -q "sample host state once" /tmp/check-remoteapp-performance-boundary-production-sampler.out || fail "expected PERF-03 target monitor sampler failure"
+grep -q "generation-scoped host sample" /tmp/check-remoteapp-performance-boundary-production-sampler.out || fail "expected PERF-03 target monitor sampler failure"
 
-perl -0pi -e 's/let provider = PlatformTargetObservationProvider;/let provider = sample_platform_target_observations();/' \
+perl -0pi -e 's/let provider = PlatformTargetObservationProvider;/let provider = snapshot_executor.sample_for_generation(generation, provider_deadline)?;/' \
   "$SB/plugins/remote-desktop/src/target_monitor.rs"
 perl -0pi -e 's/fn event_replay_projects_compaction_before_retained_window/fn event_replay_silently_starts_at_retained_window/' \
   "$SB/plugins/remote-desktop/src/event_log.rs"
@@ -819,7 +1032,7 @@ grep -q "must propagate runtime initialization failure" /tmp/check-remoteapp-per
 
 perl -0pi -e 's/F::Output/anyhow::Result<F::Output>/' \
   "$SB/plugins/remote-desktop/src/transport/manager.rs"
-perl -0pi -e 's/(fn runtime_handle\(&self\) -> anyhow::Result<Handle> \{\n)/$1    expect("build remote desktop WebRTC runtime");\n/' \
+perl -0pi -e 's/(fn runtime_handle\(&self\) -> anyhow::Result<Handle> \{\n)/$1    expect("build RemoteApp WebRTC runtime");\n/' \
   "$SB/plugins/remote-desktop/src/transport/manager.rs"
 
 set +e
@@ -832,18 +1045,9 @@ set -e
 [[ "$rc" == "1" ]] || fail "expect-based direct WebRTC runtime boundary should exit 1 (got $rc)"
 grep -q "runtime initialization must not panic" /tmp/check-remoteapp-performance-boundary-runtime-expect.out || fail "expected direct runtime expect failure"
 
-perl -0pi -e 's/    expect\("build remote desktop WebRTC runtime"\);\n//' \
+perl -0pi -e 's/    expect\("build RemoteApp WebRTC runtime"\);\n//' \
   "$SB/plugins/remote-desktop/src/transport/manager.rs"
 
-cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
-#[test]
-fn production_readiness_reports_client_blocker_and_route_degradation_before_presentation() {
-    assert_eq!(
-        view["production_readiness"]["route_readiness_blocker"]["frontend_action"],
-        json!("retry_session")
-    );
-}
-RS
 perl -0pi -e 's/const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;//' \
   "$SB/plugins/remote-desktop/src/input.rs"
 
@@ -871,5 +1075,99 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing input reject sample cap enforcement should exit 1 (got $rc)"
 grep -q "enforce the hard sample cap" /tmp/check-remoteapp-performance-boundary-input-enforce.out || fail "expected PERF-07 cap enforcement failure"
+
+perl -0pi -e 's/emitted_diagnostic_samples > 0/emitted_diagnostic_samples < MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE/' \
+  "$SB/plugins/remote-desktop/src/input.rs"
+
+printf '%s\n' 'struct ClientMediaFeedback { available_outgoing_bitrate_bps: Option<f64> }' >> \
+  "$SB/plugins/remote-desktop/src/session_transport_state.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-bandwidth-direction.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "reverse-direction Browser bandwidth authority should exit 1 (got $rc)"
+grep -q "Browser outgoing/upload" /tmp/check-remoteapp-performance-boundary-bandwidth-direction.out || fail "expected PERF-08 bandwidth direction failure"
+
+perl -ni -e 'print unless /available_outgoing_bitrate_bps/' \
+  "$SB/plugins/remote-desktop/src/session_transport_state.rs"
+perl -0pi -e 's/let payload = Bytes::from_owner\(transport_pool\.copy_from_slice\(payload_view\)\);/let payload = frame.slice(0..payload_view.len());/' \
+  "$SB/plugins/remote-desktop/src/native_host_process.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-shared-lease.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "retaining a shared media slot into WebRTC should exit 1 (got $rc)"
+grep -q "transport-owned bytes" /tmp/check-remoteapp-performance-boundary-shared-lease.out || fail "expected PERF-08 transport ownership failure"
+
+perl -0pi -e 's/let payload = frame\.slice\(0\.\.payload_view\.len\(\)\);/let payload = Bytes::from_owner(transport_pool.copy_from_slice(payload_view));/' \
+  "$SB/plugins/remote-desktop/src/native_host_process.rs"
+
+perl -0pi -e 's/configure_twcc_sender_only/configure_twcc_receiver_only/' \
+  "$SB/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-twcc-direction.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "receiver-only TWCC on a send-only endpoint should exit 1 (got $rc)"
+grep -q "TWCC in the sender direction" /tmp/check-remoteapp-performance-boundary-twcc-direction.out || fail "expected PERF-08 TWCC direction failure"
+
+perl -0pi -e 's/configure_twcc_receiver_only/configure_twcc_sender_only/' \
+  "$SB/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+
+perl -0pi -e 's/writer_service_time_independently_bounds_frame_rate/writer_service_rate_is_not_tested/' \
+  "$SB/plugins/remote-desktop/src/media/adaptation.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-writer-service.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing writer-service FPS proof should exit 1 (got $rc)"
+grep -q "slow writer lowers FPS" /tmp/check-remoteapp-performance-boundary-writer-service.out || fail "expected PERF-08 writer-service proof failure"
+
+perl -0pi -e 's/writer_service_rate_is_not_tested/writer_service_time_independently_bounds_frame_rate/' \
+  "$SB/plugins/remote-desktop/src/media/adaptation.rs"
+
+perl -0pi -e 's/mpsc::sync_channel\(1\)/mpsc::channel()/' \
+  "$SB/plugins/remote-desktop/src/media/host_audio_capability.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-host-audio-queue.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "unbounded host-audio wake queue should exit 1 (got $rc)"
+grep -q "capacity one\|unbounded command queue" /tmp/check-remoteapp-performance-boundary-host-audio-queue.out || fail "expected bounded host-audio queue failure"
+
+perl -0pi -e 's/mpsc::channel\(\)/mpsc::sync_channel(1)/' \
+  "$SB/plugins/remote-desktop/src/media/host_audio_capability.rs"
+perl -0pi -e 's/native_probe_projection_keeps_source_readiness_independent/native_probe_projection_conflates_source_readiness/' \
+  "$SB/plugins/remote-desktop/src/media/host_audio_capability.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-windows-process-audio.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing independent native source-readiness projection proof should exit 1 (got $rc)"
+grep -q "native source readiness must remain independent" /tmp/check-remoteapp-performance-boundary-windows-process-audio.out || fail "expected native source-readiness independence failure"
 
 printf 'test_check_remoteapp_performance_boundary.sh: all cases passed\n'

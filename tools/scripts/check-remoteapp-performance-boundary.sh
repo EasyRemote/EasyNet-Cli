@@ -42,6 +42,9 @@ RESOURCE_LIST="$ROOT/src/daemon/ability/builtins/resources/list.rs"
 WATCH_REMOTE_TARGETS="$ROOT/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
 TARGET_OBSERVER="$ROOT/plugins/remote-desktop/src/target_observer.rs"
 TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
+NATIVE_HOST="$ROOT/plugins/remote-desktop/native-host/src/lib.rs"
+MEDIA_HOST="$ROOT/plugins/remote-desktop/media-host/src/lib.rs"
+NATIVE_HOST_PROCESS="$ROOT/plugins/remote-desktop/src/native_host_process.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 REQUEST="$ROOT/plugins/remote-desktop/src/request.rs"
 HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
@@ -53,14 +56,26 @@ SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
 VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 VIEW_DEVICE="$ROOT/plugins/remote-desktop/src/view_device.rs"
 VIEW_TRANSPORT="$ROOT/plugins/remote-desktop/src/view_transport.rs"
+SESSION_TRANSPORT_STATE="$ROOT/plugins/remote-desktop/src/session_transport_state.rs"
+MEDIA_ADAPTATION="$ROOT/plugins/remote-desktop/src/media/adaptation.rs"
+WEBRTC_HOSTED_MEDIA="$ROOT/plugins/remote-desktop/src/transport/webrtc_hosted_media.rs"
+WEBRTC_BASELINE_MEDIA="$ROOT/plugins/remote-desktop/src/transport/webrtc_baseline_media.rs"
+WEBRTC_MEDIA="$ROOT/plugins/remote-desktop/src/transport/webrtc_media.rs"
+WEBRTC_SENDER_FEEDBACK="$ROOT/plugins/remote-desktop/src/transport/webrtc_sender_feedback.rs"
+HOST_AUDIO_CAPABILITY="$ROOT/plugins/remote-desktop/src/media/host_audio_capability.rs"
+LINUX_PROCESS_TREE_AUDIO="$ROOT/plugins/remote-desktop/src/media/linux_process_tree_audio.rs"
 SDP="$ROOT/plugins/remote-desktop/src/sdp.rs"
 TARGET="$ROOT/plugins/remote-desktop/src/target.rs"
 WEBRTC_ENDPOINT="$ROOT/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+WEBRTC_AUDIO="$ROOT/plugins/remote-desktop/src/transport/webrtc_audio.rs"
 TRANSPORT_MANAGER="$ROOT/plugins/remote-desktop/src/transport/manager.rs"
 INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
+REMOTE_DESKTOP_SCHEMA="$ROOT/plugins/remote-desktop/src/schema.rs"
+REPORT_CLIENT_STATE="$ROOT/plugins/remote-desktop/src/handlers/report_client_state.rs"
+REPORT_CLIENT_STATE_DESCRIPTOR="$ROOT/plugins/remote-desktop/abilities/remote_desktop.report_client_state.ability.toml"
 SCRIPT_CHECKS="$ROOT/tests/script_checks.rs"
 
-for checkpoint in PERF-01 PERF-02 PERF-03 PERF-04 PERF-05 PERF-06 PERF-07; do
+for checkpoint in PERF-01 PERF-02 PERF-03 PERF-04 PERF-05 PERF-06 PERF-07 PERF-08; do
   require "$checkpoint" "$SPEC" "SPEC must retain $checkpoint performance checkpoint"
 done
 
@@ -103,16 +118,18 @@ require 'watch_input_schema_has_single_types_description_contract' "$WATCH_REMOT
 
 require 'sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_tick' "$TARGET_OBSERVER" \
   'PERF-03 must prove a sampled target observer fans out one host enumeration to 128 sessions'
-require 'pub\(in crate::daemon::plugins::remote_desktop\) fn sample_platform_target_observations' "$TARGET_OBSERVER" \
-  'PERF-03 production platform observer must expose an explicit per-tick sampler'
-require 'sample_host_target_observations\(&MacOsHostTargetSnapshotProvider\)' "$TARGET_OBSERVER" \
-  'PERF-03 macOS platform sampler must capture one host snapshot before session fanout'
-require 'let provider = sample_platform_target_observations\(\);' "$TARGET_MONITOR" \
-  'PERF-03 target monitor must sample host state once before retaining tracked sessions'
+require 'fn sample_xcap_target_observations' "$NATIVE_HOST" \
+  'PERF-03 production host must own one explicit native inventory sampler'
+require 'xcap::Window::all\(\)' "$NATIVE_HOST" \
+  'PERF-03 native host must enumerate the host window set once per request'
+require_multiline 'm/let provider = snapshot_executor\.sample_for_generation\(generation, provider_deadline\)\?;\s*tracked\.retain/s' "$TARGET_MONITOR" \
+  'PERF-03 target monitor must obtain one generation-scoped host sample before retaining tracked sessions'
 reject 'PlatformTargetObservationProvider' "$TARGET_MONITOR" \
   'PERF-03 target monitor must not instantiate a per-session platform observation provider'
 reject 'SharedHostTargetSnapshotProvider' "$TARGET_OBSERVER" \
   'PERF-03 must not rely on refresh-window cache compatibility instead of explicit tick sampling'
+reject 'xcap::|CGWindowListCopyWindowInfo|NSWorkspace' "$TARGET_OBSERVER" \
+  'PERF-03 daemon-side target observer must not execute native inventory APIs'
 require 'const SESSION_COUNT: usize = 128' "$TARGET_OBSERVER" \
   'PERF-03 shared sampler test must cover S=128 active session ticks'
 require 'calls\.load\(Ordering::SeqCst\)' "$TARGET_OBSERVER" \
@@ -181,12 +198,50 @@ require 'audio_support_view' "$VIEW_DEVICE" \
   'RemoteApp device view must expose explicit host-audio product state'
 require 'AUDIO_UNSUPPORTED_REASON' "$VIEW_DEVICE" \
   'RemoteApp device view must use a stable host-audio blocked reason'
-require '"host_audio_not_implemented"' "$VIEW_DEVICE" \
-  'RemoteApp device view must report host audio as not implemented'
+require 'runtime\.compiled_supported\(\)' "$VIEW_DEVICE" \
+  'RemoteApp device view must project compiled host-audio support from the runtime capability snapshot'
+require 'runtime\.runtime_reachable\(\)' "$VIEW_DEVICE" \
+  'RemoteApp device view must keep compiled support separate from live host-audio reachability'
+require '"supported_target_kinds"' "$VIEW_DEVICE" \
+  'RemoteApp device view must publish target-scoped host-audio support'
+require 'audio_support_view_for_binding' "$VIEW_DEVICE" \
+  'RemoteApp session audio capability must be resolved against the bound target'
+require 'struct HostAudioRuntimeProbe' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp host-audio runtime probing must be plugin-owned and cached outside session serialization'
+require 'expires_at_monotonic' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp host-audio offer admission must fail closed on monotonic snapshot expiry'
+require 'refresh_requested: bool' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp host-audio refresh work must coalesce into one fixed-state bit'
+require 'mpsc::sync_channel\(1\)' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp host-audio supervisor wake queue must be capacity one'
+reject 'mpsc::channel\(\)' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp host-audio capability monitor must not retain an unbounded command queue'
+require 'attempt_running: bool' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp host-audio capability monitor must track at most one native probe attempt'
+require 'blocked_native_probe_does_not_block_supervisor_shutdown' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp host-audio tests must prove a blocked native probe cannot hang daemon shutdown'
+require 'native_probe_projection_keeps_source_readiness_independent' "$HOST_AUDIO_CAPABILITY" \
+  'RemoteApp native source readiness must remain independent when projected into daemon admission state'
+require 'LinuxProcessTreeAudioBackend' "$LINUX_PROCESS_TREE_AUDIO" \
+  'RemoteApp Linux target audio must use the dedicated PipeWire process-tree backend'
+require 'process_tree_includes_all_descendants_and_excludes_unrelated_processes' "$LINUX_PROCESS_TREE_AUDIO" \
+  'RemoteApp Linux target audio must test root and descendant process selection'
+require 'audio_node_selection_includes_every_node_in_the_process_tree' "$LINUX_PROCESS_TREE_AUDIO" \
+  'RemoteApp Linux target audio must prove multiple nodes from the authorized process tree are retained'
+require 'reused_root_pid_fails_closed_instead_of_selecting_new_process_tree' "$LINUX_PROCESS_TREE_AUDIO" \
+  'RemoteApp Linux target audio must fail closed across root PID reuse'
+require 'add_timer' "$LINUX_PROCESS_TREE_AUDIO" \
+  'RemoteApp Linux target audio must revalidate process authority without relying on graph events'
+require 'empty_authority_set_revokes_all_previously_eligible_nodes' "$LINUX_PROCESS_TREE_AUDIO" \
+  'RemoteApp Linux target audio must prove stale nodes are revoked when process authority disappears'
+require 'contradictory_node_and_client_pid_identity_fails_closed_in_both_directions' "$LINUX_PROCESS_TREE_AUDIO" \
+  'RemoteApp Linux target audio must reject contradictory node and owning-client process identities'
+require 'json!\(\["display", "window", "application"\]\)' "$VIEW_DEVICE" \
+  'RemoteApp Linux host-audio capability must publish every implemented target kind'
 require '"capability": "host_audio"' "$VIEW_DEVICE" \
-  'RemoteApp unsupported capability list must include host_audio'
-require 'device_capabilities_report_host_audio_as_explicitly_unsupported' "$VIEW_DEVICE" \
-  'RemoteApp device capability tests must pin explicit host-audio unsupported state'
+  'RemoteApp unsupported capability list must include host_audio when the current runtime cannot provide it'
+require 'device_capabilities_report_platform_host_audio_support' "$VIEW_DEVICE" \
+  'RemoteApp device capability tests must pin platform host-audio state'
 require 'media_pipeline_support_view' "$VIEW_DEVICE" \
   'RemoteApp device view must expose a canonical media pipeline support projection'
 require '"media_pipeline_support": media_pipeline_support' "$VIEW_DEVICE" \
@@ -199,20 +254,54 @@ require 'bounded_queue_drop_stale_frames' "$VIEW_DEVICE" \
   'RemoteApp media pipeline support must publish bounded queue stale-frame drop policy'
 require 'native_bitrate_adaptation_from_webrtc_stats_and_encoder_pressure' "$VIEW_DEVICE" \
   'RemoteApp media pipeline support must publish native bitrate adaptation policy'
-require 'static_bitrate_with_bounded_stale_frame_drop' "$VIEW_DEVICE" \
-  'RemoteApp media pipeline support must publish diagnostic stale-frame drop policy'
+require 'receiver_feedback_openh264_rebuild' "$VIEW_DEVICE" \
+  'RemoteApp diagnostic media pipeline must publish its receiver-feedback encoder rebuild policy'
 require 'device_capabilities_project_media_pipeline_support_matrix' "$VIEW_DEVICE" \
   'RemoteApp device capability tests must pin media pipeline support projection'
 require '"audio": audio\.clone\(\)' "$VIEW" \
   'RemoteApp public session view must expose explicit audio product state'
-require '"media_scope": "video_only"' "$VIEW" \
-  'RemoteApp production readiness must state that current media readiness is video-only'
-require '"audio_ready": false' "$VIEW" \
-  'RemoteApp production readiness must not imply host audio is ready'
-require '"audio_blocked_reason": AUDIO_UNSUPPORTED_REASON' "$VIEW" \
-  'RemoteApp production readiness must expose the canonical host-audio blocker'
-require 'session_view_reports_audio_as_explicitly_unsupported_product_state' "$VIEW" \
-  'RemoteApp session view tests must pin explicit host-audio unsupported state'
+require 'enum RemoteDesktopNegotiatedMediaScope' "$SESSION_SIGNALING" \
+  'RemoteApp signaling state must model negotiated media scope as a typed domain fact'
+require 'RemoteDesktopNegotiatedMediaScope::from_local_answer' "$SESSION_SIGNALING" \
+  'RemoteApp must derive negotiated media scope from the committed local WebRTC answer'
+require 'let negotiated_media_scope = session\.negotiated_media_scope\(\)' "$VIEW" \
+  'RemoteApp production readiness must read per-session negotiated media scope'
+require 'let audio_required = negotiated_media_scope\.is_some_and' "$VIEW" \
+  'RemoteApp production readiness must require audio only for an audio-video negotiation'
+require '"media_scope": negotiated_media_scope' "$VIEW" \
+  'RemoteApp production readiness must project negotiated scope instead of host capability'
+reject '"media_scope": if audio_support\["supported"\]' "$VIEW" \
+  'RemoteApp production readiness must not infer negotiation from host audio capability'
+require 'let audio_ready = session\.audio_operational_ready\(\)' "$VIEW" \
+  'RemoteApp production readiness must consume the session-owned operational audio predicate'
+require 'audio_operational_ready' "$WEBRTC_AUDIO" \
+  'RemoteApp audio runtime stats must distinguish operational readiness from media observation'
+require '"audio_blocked_reason": audio_blocked_reason' "$VIEW" \
+  'RemoteApp production readiness must expose the effective runtime or capability audio blocker'
+require 'session_view_separates_platform_audio_capability_from_unnegotiated_scope' "$VIEW" \
+  'RemoteApp session view tests must separate platform capability from session negotiation'
+require 'video_only_negotiation_requires_bound_decode_but_not_audio_runtime_stats' "$VIEW" \
+  'RemoteApp must prove video-only readiness requires exact receiver decode evidence without waiting for an absent audio track'
+require 'audio_video_negotiation_requires_live_audio_runtime_stats' "$VIEW" \
+  'RemoteApp must prove audio-video negotiation remains gated on live audio evidence'
+require 'struct ClientRenderEvidence' "$SESSION_TRANSPORT_STATE" \
+  'RemoteApp browser decode evidence must be a typed transport-generation fact'
+require 'client_render_evidence_sequence' "$SESSION_TRANSPORT_STATE" \
+  'RemoteApp browser decode evidence must use daemon-owned admission ordering'
+require 'CLIENT_RENDER_EVIDENCE_MAX_AGE' "$SESSION" \
+  'RemoteApp product readiness must expire stale receiver decode evidence'
+require 'client_decode_ready\(\)' "$SESSION" \
+  'RemoteApp session aggregate must own the exact receiver decode readiness predicate'
+require 'render_probe_requires_exact_active_session_binding_tuple' "$REPORT_CLIENT_STATE" \
+  'RemoteApp client reports must test the complete current session/binding/media-source tuple'
+require 'render_probe_rejects_replay_and_counter_regression' "$REPORT_CLIENT_STATE" \
+  'RemoteApp client render evidence must reject replay and cumulative counter regression'
+require 'authored_descriptor_and_runtime_schema_are_identical' "$REMOTE_DESKTOP_SCHEMA" \
+  'RemoteApp authored and NativeStatic report_client_state schemas must be parity-gated'
+for field in session_id transport_epoch binding_id binding_epoch media_source_epoch media_pipeline_id video_codec video_transport decoded_video_frames frame_width frame_height; do
+  require "$field" "$REPORT_CLIENT_STATE_DESCRIPTOR" \
+    "RemoteApp report_client_state descriptor must require render evidence field $field"
+done
 require 'view\["production_readiness"\]\["route_readiness_blocker"\]\["frontend_action"\]' "$SESSION" \
   'PERF-05 production readiness tests must prove route blockers publish frontend recovery action separately'
 require 'summary\["readiness_blocker"\]\["frontend_action"\]' "$VIEW_TRANSPORT" \
@@ -258,16 +347,18 @@ require 'endpoint_start_boundary_refuses_to_run_while_session_store_lock_is_held
   'PERF-06 must reject WebRTC endpoint startup while session store lock is held'
 require_multiline 'm/pub\(in crate::daemon::plugins::remote_desktop\) fn block_on<F: Future>\(.+?\) -> anyhow::Result<F::Output>/s' "$TRANSPORT_MANAGER" \
   'PERF-06 direct WebRTC async runtime boundary must propagate runtime initialization failure'
-require 'build remote desktop WebRTC runtime: \{err\}' "$TRANSPORT_MANAGER" \
+require 'build RemoteApp WebRTC runtime: \{error\}' "$TRANSPORT_MANAGER" \
   'PERF-06 direct WebRTC runtime initialization failure must be surfaced as a transport error'
-reject 'expect\("build remote desktop WebRTC runtime"\)' "$TRANSPORT_MANAGER" \
+reject 'expect\("build RemoteApp WebRTC runtime"\)' "$TRANSPORT_MANAGER" \
   'PERF-06 direct WebRTC runtime initialization must not panic'
 require 'transports\.block_on\(create_direct_webrtc_endpoint' "$WEBRTC_ENDPOINT" \
   'PERF-06 endpoint setup must run through the fallible transport runtime boundary'
-require '\)\)\?\?' "$WEBRTC_ENDPOINT" \
-  'PERF-06 endpoint setup must propagate both runtime-boundary and endpoint-construction failures'
-require 'direct media loop runtime unavailable' "$WEBRTC_ENDPOINT" \
-  'PERF-06 media-loop thread must surface runtime-boundary failure instead of panicking'
+require_multiline 'm/let build = transports\.block_on\(create_direct_webrtc_endpoint\(.+?\}\)\)\?;\s*let \(answer, peer_connection, completion\) = match build/s' "$WEBRTC_ENDPOINT" \
+  'PERF-06 endpoint setup must preserve the nested construction result for reservation-owned cleanup'
+require 'let transport_runtime = endpoint_config\.transports\.runtime_handle\(\)\?;' "$WEBRTC_ENDPOINT" \
+  'PERF-06 media-loop runtime acquisition must fail before worker ownership crosses the thread boundary'
+require 'transport_runtime\.block_on\(run_direct_webrtc_media_loop' "$WEBRTC_ENDPOINT" \
+  'PERF-06 media-loop worker must use the pre-acquired fallible runtime handle'
 require 'remote_desktop\.target\.resolve_for_session' "$TARGET" \
   'PERF-06 must identify the target resolver lock-boundary stage'
 require '\{stage\} must not run while RemoteDesktopSessionStore is locked' "$SESSION_STORE" \
@@ -287,6 +378,51 @@ require 'diagnostic_sample_limit' "$INPUT" \
   'PERF-07 input reject diagnostics must publish the sample limit'
 require 'coalesced_rejections' "$INPUT" \
   'PERF-07 must expose coalesced rejection counts'
+
+reject 'available_outgoing_bitrate_bps: Option<f64>' "$SESSION_TRANSPORT_STATE" \
+  'PERF-08 must not treat Browser outgoing/upload capacity as device-to-Browser encoder authority'
+reject 'pressure\.available_outgoing_bitrate_bps' "$WEBRTC_HOSTED_MEDIA" \
+  'PERF-08 hosted media must not consume a reverse-direction Browser upload estimate'
+reject 'pressure\.available_outgoing_bitrate_bps' "$WEBRTC_BASELINE_MEDIA" \
+  'PERF-08 baseline media must not consume a reverse-direction Browser upload estimate'
+require 'ADAPTIVE_MIN_BITRATE_KBPS: u32 = 128' "$MEDIA_ADAPTATION" \
+  'PERF-08 adaptive encoder floor must remain distinct from the public requested-quality floor'
+require 'SharedMediaLaneProducer' "$MEDIA_HOST" \
+  'PERF-08 media-host must publish encoded payloads through the binary shared lane'
+require 'Bytes::from_owner\(lease\)' "$NATIVE_HOST_PROCESS" \
+  'PERF-08 daemon media ingress must validate the mapped shared slot without JSON/base64 payload copying'
+require 'Bytes::from_owner\(transport_pool\.copy_from_slice\(payload_view\)\)' "$NATIVE_HOST_PROCESS" \
+  'PERF-08 daemon media ingress must detach transport-owned bytes into a pooled buffer before RTP/NACK lifetime can pin the shared slot'
+require 'video_sender: Arc<dyn RtpSender>' "$WEBRTC_MEDIA" \
+  'PERF-08 each transport generation must retain its exact negotiated video sender'
+require 'RTCStatsReportEntry::RemoteInboundRtp' "$WEBRTC_SENDER_FEEDBACK" \
+  'PERF-08 sender adaptation must consume direction-correct remote-inbound RTCP receiver evidence'
+require 'round_trip_time_measurements' "$WEBRTC_SENDER_FEEDBACK" \
+  'PERF-08 RTCP pressure must have a monotonic fresh-report discriminator'
+require 'sample\.measurements <= self\.last_measurements' "$WEBRTC_SENDER_FEEDBACK" \
+  'PERF-08 repeated RTCP snapshots must not replay congestion pressure'
+require 'configure_twcc_sender_only' "$WEBRTC_ENDPOINT" \
+  'PERF-08 send-only RemoteApp video must negotiate TWCC in the sender direction'
+reject 'register_default_interceptors' "$WEBRTC_ENDPOINT" \
+  'PERF-08 endpoint must not restore the crate default receiver-only TWCC path'
+require_multiline 'm/rtcp_receiver\s*\.observe\(inputs\.video_sender/s' "$WEBRTC_HOSTED_MEDIA" \
+  'PERF-08 hosted media must consume local RTCP from its generation-owned sender'
+require_multiline 'm/rtcp_receiver\s*\.observe\(video_sender/s' "$WEBRTC_BASELINE_MEDIA" \
+  'PERF-08 baseline media must consume local RTCP from its generation-owned sender'
+require 'effective_fps_for_writer_service' "$MEDIA_ADAPTATION" \
+  'PERF-08 frame pacing must be independently bounded by measured RTP-writer service time'
+require 'writer_service_time_independently_bounds_frame_rate' "$MEDIA_ADAPTATION" \
+  'PERF-08 media policy must prove a slow writer lowers FPS independently of nominal bitrate'
+require 'record_writer_service' "$WEBRTC_HOSTED_MEDIA" \
+  'PERF-08 hosted media must measure the actual awaited RTP writer service duration'
+require 'effective_fps_for_writer_service' "$WEBRTC_HOSTED_MEDIA" \
+  'PERF-08 hosted media must apply the shared writer-service FPS policy'
+require 'record_writer_service' "$WEBRTC_BASELINE_MEDIA" \
+  'PERF-08 baseline media must measure the actual awaited RTP writer service duration'
+require 'effective_fps_for_writer_service' "$WEBRTC_BASELINE_MEDIA" \
+  'PERF-08 baseline media must apply the shared writer-service FPS policy'
+require 'writer_service_can_reconfigure_fps_without_falsifying_bitrate_change' "$WEBRTC_BASELINE_MEDIA" \
+  'PERF-08 baseline media must prove FPS-only reconfiguration is not reported as a bitrate change'
 
 require 'remoteapp_performance_boundary_script_holds' "$SCRIPT_CHECKS" \
   'remoteapp performance boundary must be wired into cargo script_checks'
