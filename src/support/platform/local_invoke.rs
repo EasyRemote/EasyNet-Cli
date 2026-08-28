@@ -1618,6 +1618,11 @@ fn remote_desktop_session_consent_args(input_control: bool) -> Value {
     serde_json::json!({
         "intent": "remote_desktop_session",
         "input_control": input_control,
+        // Target-local pointer/keyboard control cannot make progress while the
+        // selected app/window is blurred. The CLI's explicit input-control
+        // intent therefore requests the separately audited focus scope in the
+        // same local consent decision; the daemon still enforces both grants.
+        "allow_remote_focus": input_control,
     })
 }
 
@@ -2289,6 +2294,7 @@ mod tests {
             serde_json::json!({
                 "intent": "remote_desktop_session",
                 "input_control": false,
+                "allow_remote_focus": false,
             })
         );
         assert_eq!(
@@ -2296,6 +2302,7 @@ mod tests {
             serde_json::json!({
                 "intent": "remote_desktop_session",
                 "input_control": true,
+                "allow_remote_focus": true,
             })
         );
     }
