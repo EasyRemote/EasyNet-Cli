@@ -12,7 +12,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/packaging/release" "$sandbox/include" "$sandbox/docs/spec"
+    mkdir -p "$sandbox/packaging/release" "$sandbox/include" "$sandbox/docs/spec" "$sandbox/.github/workflows"
+    mkdir -p "$sandbox/plugins/remote-desktop/native-host/src"
+    mkdir -p "$sandbox/plugins/remote-desktop/media-host/src"
     cp "$REPO_ROOT/packaging/release/build-release-tarball.sh" "$sandbox/packaging/release/build-release-tarball.sh"
     cp "$REPO_ROOT/packaging/release/build-windows-cli.ps1" "$sandbox/packaging/release/build-windows-cli.ps1"
     cp "$REPO_ROOT/packaging/release/e2e-release-flow.sh" "$sandbox/packaging/release/e2e-release-flow.sh"
@@ -24,6 +26,11 @@ make_sandbox() {
     cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v8.md" "$sandbox/docs/spec/ffi-abi-v8.md"
+    cp "$REPO_ROOT/.github/workflows/release-runtime.yml" "$sandbox/.github/workflows/release-runtime.yml"
+    cp "$REPO_ROOT/plugins/remote-desktop/native-host/Cargo.toml" "$sandbox/plugins/remote-desktop/native-host/Cargo.toml"
+    cp "$REPO_ROOT/plugins/remote-desktop/native-host/src/main.rs" "$sandbox/plugins/remote-desktop/native-host/src/main.rs"
+    cp "$REPO_ROOT/plugins/remote-desktop/media-host/Cargo.toml" "$sandbox/plugins/remote-desktop/media-host/Cargo.toml"
+    cp "$REPO_ROOT/plugins/remote-desktop/media-host/src/main.rs" "$sandbox/plugins/remote-desktop/media-host/src/main.rs"
     echo "$sandbox"
 }
 
@@ -37,18 +44,34 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: release package 
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/ --bin easynet-keyring//' "$SB/packaging/release/build-release-tarball.sh"
+perl -0pi -e 's/--bin easynet-keyring/--bin missing-keyring/' "$SB/packaging/release/build-release-tarball.sh"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing keyring build should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/ --bin easynet-keyring//' "$SB/packaging/release/dev-install-local.sh"
+perl -0pi -e 's/--bin easynet-keyring/--bin missing-keyring/' "$SB/packaging/release/dev-install-local.sh"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "dev installer missing keyring build should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/easynet-remoteapp-native-host/missing-native-host/g' \
+    "$SB/packaging/release/build-release-tarball.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing RemoteApp native host should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/easynet-remoteapp-media-host/missing-media-host/g' \
+    "$SB/packaging/release/build-release-tarball.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing RemoteApp media host should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's#include/easynet_cli\.h#include/missing_header.h#g' \

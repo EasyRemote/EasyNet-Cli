@@ -68,7 +68,9 @@ packaging/release/dev-install-local.sh --debug --no-install
 ```
 
 `dev-install-local.sh` mirrors the production install layout: it installs
-`easynet`, `easynet-daemon`, and `easynet-keyring` under `/usr/local/bin`, and
+`easynet`, `easynet-daemon`, `easynet-keyring`, and the plugin-private
+`easynet-remoteapp-native-host` plus
+`easynet-remoteapp-media-host` under `/usr/local/bin`, and
 installs the sibling EasyNet-Axon Dendrite bridge under the invoking user's
 `~/.easynet/dendrite-bridge/native`. It intentionally requests `sudo` only for
 the `/usr/local/bin` writes. Set `EASYNET_BRIDGE_CRATE` only for a non-standard

@@ -2,7 +2,9 @@
 # dev-install-local.sh — build the current EasyNet-Cli checkout and
 # overwrite the system-installed binaries in place. Same shape as
 # `packaging/release/install.sh` lays down — `easynet`, `easynet-daemon`,
-# and `easynet-keyring` in /usr/local/bin, `libaxon_dendrite_bridge.{dylib|so}` in
+# `easynet-keyring`, `easynet-remoteapp-native-host`, and
+# `easynet-remoteapp-media-host` in /usr/local/bin,
+# `libaxon_dendrite_bridge.{dylib|so}` in
 # ~/.easynet/dendrite-bridge/native — but pulls bytes from `cargo build`
 # instead of the production tarball server.
 #
@@ -94,14 +96,23 @@ else
 fi
 native_dir="$real_home/.easynet/dendrite-bridge/native"
 
-cargo_args_cli=(--bin easynet --bin easynet-daemon --bin easynet-keyring)
+cargo_args_cli=(
+    -p easynet
+    --bin easynet
+    --bin easynet-daemon
+    --bin easynet-keyring
+    -p easynet-remoteapp-native-host
+    --bin easynet-remoteapp-native-host
+    -p easynet-remoteapp-media-host
+    --bin easynet-remoteapp-media-host
+)
 cargo_args_bridge=(--lib)
 if [ "$build_profile" = "release" ]; then
     cargo_args_cli+=(--release)
     cargo_args_bridge+=(--release)
 fi
 
-echo "==> [1/3] cargo build easynet + easynet-daemon + easynet-keyring ($build_profile)"
+echo "==> [1/3] cargo build EasyNet Runtime process set ($build_profile)"
 (
     cd "$cli_root"
     cargo build "${cargo_args_cli[@]}"
@@ -123,9 +134,11 @@ fi
 cli_bin="$cli_root/target/$build_profile/easynet"
 daemon_bin="$cli_root/target/$build_profile/easynet-daemon"
 keyring_bin="$cli_root/target/$build_profile/easynet-keyring"
+remoteapp_native_host_bin="$cli_root/target/$build_profile/easynet-remoteapp-native-host"
+remoteapp_media_host_bin="$cli_root/target/$build_profile/easynet-remoteapp-media-host"
 bridge_lib="$bridge_crate/target/$build_profile/libaxon_dendrite_bridge.${lib_ext}"
 
-for path in "$cli_bin" "$daemon_bin" "$keyring_bin"; do
+for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$remoteapp_native_host_bin" "$remoteapp_media_host_bin"; do
     if [ ! -f "$path" ]; then
         echo "dev-install-local.sh: build artefact missing: $path" >&2
         exit 1
@@ -138,6 +151,8 @@ if [ "$do_install" -eq 0 ]; then
     echo "      $cli_bin"
     echo "      $daemon_bin"
     echo "      $keyring_bin"
+    echo "      $remoteapp_native_host_bin"
+    echo "      $remoteapp_media_host_bin"
     [ -f "$bridge_lib" ] && echo "      $bridge_lib"
     echo ""
     echo "  Run directly without installing:"
@@ -164,6 +179,8 @@ echo "    installing to $install_dir + $native_dir"
 $SUDO install -m 755 "$cli_bin"    "$install_dir/easynet"
 $SUDO install -m 755 "$daemon_bin" "$install_dir/easynet-daemon"
 $SUDO install -m 755 "$keyring_bin" "$install_dir/easynet-keyring"
+$SUDO install -m 755 "$remoteapp_native_host_bin" "$install_dir/easynet-remoteapp-native-host"
+$SUDO install -m 755 "$remoteapp_media_host_bin" "$install_dir/easynet-remoteapp-media-host"
 
 if [ -f "$bridge_lib" ]; then
     # native_dir lives under the real user's $HOME, not root's — so

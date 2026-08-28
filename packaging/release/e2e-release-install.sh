@@ -10,7 +10,7 @@
 #
 #   * `easynet`                  is on PATH
 #   * `easynet-daemon`           is on PATH
-#   * `easynet-keyring`          is on PATH
+#   * `easynet-keyring` and `easynet-remoteapp-native-host` are on PATH
 #   * `libaxon_dendrite_bridge`  is at $HOME/.easynet/dendrite-bridge/native/
 #   * `easynet_cli.h`            is installed under the sandbox include dir
 #   * `easynet_cli.exports.v7`   is installed under the sandbox include dir
@@ -143,6 +143,8 @@ for required in \
     easynet \
     easynet-daemon \
     easynet-keyring \
+    easynet-remoteapp-native-host \
+    easynet-remoteapp-media-host \
     "libaxon_dendrite_bridge.${lib_ext}" \
     include/easynet_cli.h \
     include/easynet_cli.exports.v7 \
@@ -169,7 +171,9 @@ fi
 mv "$extract_dir/easynet"        "$install_dir/easynet"
 mv "$extract_dir/easynet-daemon" "$install_dir/easynet-daemon"
 mv "$extract_dir/easynet-keyring" "$install_dir/easynet-keyring"
-chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon" "$install_dir/easynet-keyring"
+mv "$extract_dir/easynet-remoteapp-native-host" "$install_dir/easynet-remoteapp-native-host"
+mv "$extract_dir/easynet-remoteapp-media-host" "$install_dir/easynet-remoteapp-media-host"
+chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon" "$install_dir/easynet-keyring" "$install_dir/easynet-remoteapp-native-host" "$install_dir/easynet-remoteapp-media-host"
 mv "$extract_dir/libaxon_dendrite_bridge.${lib_ext}" "$native_dir/"
 mv "$extract_dir/include/easynet_cli.h" "$include_dir/easynet_cli.h"
 mv "$extract_dir/include/easynet_cli.exports.v7" "$include_dir/easynet_cli.exports.v7"
@@ -198,6 +202,8 @@ for assert in \
     "$install_dir/easynet:executable" \
     "$install_dir/easynet-daemon:executable" \
     "$install_dir/easynet-keyring:executable" \
+    "$install_dir/easynet-remoteapp-native-host:executable" \
+    "$install_dir/easynet-remoteapp-media-host:executable" \
     "$native_dir/libaxon_dendrite_bridge.${lib_ext}:exists" \
     "$include_dir/easynet_cli.h:exists" \
     "$include_dir/easynet_cli.exports.v7:exists" \
@@ -275,7 +281,7 @@ if ! grep -q 'include/easynet_cli.h' "$doc_dir/ffi-abi-v7.md"; then
     fail=1
 fi
 if ! grep -q 'runtime_invocation_stream_open_v8' "$doc_dir/ffi-abi-v8.md"; then
-    echo "[FAIL] installed ffi-abi-v8.md does not define the raw stream extension" >&2
+    echo "[FAIL] installed ffi-abi-v8.md does not define the binary stream extension" >&2
     fail=1
 fi
 
@@ -326,7 +332,7 @@ echo "  native_dir:  $native_dir"
 echo "  include_dir: $include_dir"
 echo "  doc_dir:     $doc_dir"
 echo "  env file:    $env_file"
-echo "  binaries:    easynet, easynet-daemon, easynet-keyring"
+echo "  binaries:    easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, easynet-remoteapp-media-host"
 echo "  library:     libaxon_dendrite_bridge.${lib_ext}"
 echo "  c abi:       easynet_cli.h + easynet_cli.exports.v7 + easynet_cli.exports.v8 (generic ABI v7 with v8 raw-stream extension)"
 echo "  forbidden:   axon-runtime (absent ✓)"

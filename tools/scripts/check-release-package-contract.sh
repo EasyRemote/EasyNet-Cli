@@ -56,6 +56,8 @@ forbid_literal() {
 
 if require_file "packaging/release/build-release-tarball.sh"; then
     for literal in \
+        "required_command in cargo cmake cc" \
+        "cargo build --locked" \
         "--bin easynet-keyring" \
         "include/easynet_cli.h" \
         "include/easynet_cli.exports.v7" \
@@ -63,6 +65,8 @@ if require_file "packaging/release/build-release-tarball.sh"; then
         "docs/spec/ffi-abi-v7.md" \
         "docs/spec/ffi-abi-v8.md" \
         "easynet-keyring" \
+        "easynet-remoteapp-native-host" \
+        "easynet-remoteapp-media-host" \
         "libaxon_dendrite_bridge"
     do
         require_literal "packaging/release/build-release-tarball.sh" "$literal"
@@ -74,6 +78,8 @@ if require_file "packaging/release/install.sh"; then
         "INCLUDE_DIR=\"/usr/local/include/easynet\"" \
         "DOC_DIR=\"/usr/local/share/doc/easynet\"" \
         "easynet-keyring" \
+        "easynet-remoteapp-native-host" \
+        "easynet-remoteapp-media-host" \
         "include/easynet_cli.h" \
         "easynet_cli.exports.v7" \
         "easynet_cli.exports.v8" \
@@ -88,6 +94,8 @@ if require_file "packaging/release/dev-install-local.sh"; then
     for literal in \
         "--bin easynet-keyring" \
         "easynet-keyring" \
+        "easynet-remoteapp-native-host" \
+        "easynet-remoteapp-media-host" \
         '$keyring_bin' \
         '"$install_dir/easynet-keyring"'
     do
@@ -96,13 +104,31 @@ if require_file "packaging/release/dev-install-local.sh"; then
 fi
 
 if require_file "packaging/release/build-windows-cli.ps1"; then
+    require_literal "packaging/release/build-windows-cli.ps1" 'Require-Command "cmake"'
+    require_literal "packaging/release/build-windows-cli.ps1" '"--locked"'
     require_literal "packaging/release/build-windows-cli.ps1" "docs\spec\ffi-abi-v8.md"
     require_literal "packaging/release/build-windows-cli.ps1" "ffi-abi-v8.md"
+    require_literal "packaging/release/build-windows-cli.ps1" "easynet-remoteapp-native-host.exe"
+    require_literal "packaging/release/build-windows-cli.ps1" "easynet-remoteapp-media-host.exe"
+fi
+
+if require_file ".github/workflows/release-runtime.yml"; then
+    for literal in \
+        "build-windows:" \
+        "x86_64-pc-windows-gnu" \
+        "actions-setup-cmake@v2" \
+        "setup-mingw@v2" \
+        "Verify bundled Opus has no runtime DLL dependency"
+    do
+        require_literal ".github/workflows/release-runtime.yml" "$literal"
+    done
 fi
 
 if require_file "packaging/release/e2e-release-install.sh"; then
     for literal in \
         "easynet-keyring" \
+        "easynet-remoteapp-native-host" \
+        "easynet-remoteapp-media-host" \
         "include/easynet_cli.h" \
         "include/easynet_cli.exports.v7" \
         "include/easynet_cli.exports.v8" \
@@ -114,6 +140,11 @@ if require_file "packaging/release/e2e-release-install.sh"; then
         require_literal "packaging/release/e2e-release-install.sh" "$literal"
     done
 fi
+
+require_file "plugins/remote-desktop/native-host/Cargo.toml" || true
+require_file "plugins/remote-desktop/native-host/src/main.rs" || true
+require_file "plugins/remote-desktop/media-host/Cargo.toml" || true
+require_file "plugins/remote-desktop/media-host/src/main.rs" || true
 
 if require_file "packaging/release/e2e-release-flow.sh"; then
     require_literal "packaging/release/e2e-release-flow.sh" 'bash "$script_dir/e2e-release-install.sh"'

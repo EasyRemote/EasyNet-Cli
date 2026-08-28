@@ -92,6 +92,7 @@ $Profile = $Configuration.ToLowerInvariant()
 
 Require-Command "cargo"
 Require-Command "rustc"
+Require-Command "cmake"
 
 $HostTarget = Get-RustHostTarget
 $TargetLabel = if ([string]::IsNullOrWhiteSpace($Target)) { $HostTarget } else { $Target }
@@ -102,16 +103,36 @@ if ([string]::IsNullOrWhiteSpace($BridgeCrate)) {
 
 $CargoArgs = @(
     "build",
+    "--locked",
+    "-p", "easynet",
     "--bin", "easynet",
     "--bin", "easynet-daemon",
     "--bin", "easynet-keyring"
 )
 
+$NativeHostCargoArgs = @(
+    "build",
+    "--locked",
+    "-p", "easynet-remoteapp-native-host",
+    "--bin", "easynet-remoteapp-native-host"
+)
+
+$MediaProbeHostCargoArgs = @(
+    "build",
+    "--locked",
+    "-p", "easynet-remoteapp-media-host",
+    "--bin", "easynet-remoteapp-media-host"
+)
+
 if ($Configuration -eq "Release") {
     $CargoArgs += "--release"
+    $NativeHostCargoArgs += "--release"
+    $MediaProbeHostCargoArgs += "--release"
 }
 if (-not [string]::IsNullOrWhiteSpace($Target)) {
     $CargoArgs += @("--target", $Target)
+    $NativeHostCargoArgs += @("--target", $Target)
+    $MediaProbeHostCargoArgs += @("--target", $Target)
 }
 if ($NoDefaultFeatures) {
     $CargoArgs += "--no-default-features"
@@ -125,9 +146,11 @@ Write-Host "    root:   $Root"
 Write-Host "    target: $TargetLabel"
 Write-Host "    config: $Configuration"
 Invoke-CargoBuild -WorkingDirectory $Root -CargoArgs $CargoArgs
+Invoke-CargoBuild -WorkingDirectory $Root -CargoArgs $NativeHostCargoArgs
+Invoke-CargoBuild -WorkingDirectory $Root -CargoArgs $MediaProbeHostCargoArgs
 
 $CliArtifactDir = Cargo-ArtifactDir -Root $Root -ExplicitTarget $Target -Profile $Profile
-$RequiredBins = @("easynet.exe", "easynet-daemon.exe", "easynet-keyring.exe")
+$RequiredBins = @("easynet.exe", "easynet-daemon.exe", "easynet-keyring.exe", "easynet-remoteapp-native-host.exe", "easynet-remoteapp-media-host.exe")
 foreach ($bin in $RequiredBins) {
     $path = Join-Path $CliArtifactDir $bin
     if (-not (Test-Path $path)) {
@@ -150,7 +173,7 @@ $BridgeStaged = $false
 if (-not $SkipBridge) {
     if (Test-Path (Join-Path $BridgeCrate "Cargo.toml")) {
         Write-Host "==> [2/3] Building Axon dendrite bridge"
-        $BridgeArgs = @("build", "--lib")
+        $BridgeArgs = @("build", "--locked", "--lib")
         if ($Configuration -eq "Release") {
             $BridgeArgs += "--release"
         }

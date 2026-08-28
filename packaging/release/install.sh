@@ -66,6 +66,8 @@ main() {
     echo "    easynet                      → $INSTALL_DIR/"
     echo "    easynet-daemon               → $INSTALL_DIR/"
     echo "    easynet-keyring              → $INSTALL_DIR/"
+    echo "    easynet-remoteapp-native-host → $INSTALL_DIR/"
+    echo "    easynet-remoteapp-media-host → $INSTALL_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo "    easynet_cli.h                → $INCLUDE_DIR/"
     echo "    easynet_cli.exports.v7       → $INCLUDE_DIR/"
@@ -186,16 +188,21 @@ download_and_install() {
     # that). Plain mv into INSTALL_DIR — no per-step sudo, no tty
     # juggling.
     #
-    # The transport-plane rollout ships three binaries:
+    # The Runtime process set ships five binaries:
     # `easynet` (user-facing CLI), `easynet-daemon` (long-running
     # control + InvocationServer sidecar), and `easynet-keyring`
-    # (device-signing vault sidecar). Treat them as required
+    # (device-signing vault sidecar), and
+    # `easynet-remoteapp-native-host` (plugin-private target observer), and
+    # `easynet-remoteapp-media-host` (killable native media generation host).
+    # Treat them as required
     # artefacts: if the tarball is missing one, the release is
     # malformed and the installer should fail loudly.
     mv "${TMPDIR}/easynet"        "${INSTALL_DIR}/easynet"
     mv "${TMPDIR}/easynet-daemon" "${INSTALL_DIR}/easynet-daemon"
     mv "${TMPDIR}/easynet-keyring" "${INSTALL_DIR}/easynet-keyring"
-    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring"
+    mv "${TMPDIR}/easynet-remoteapp-native-host" "${INSTALL_DIR}/easynet-remoteapp-native-host"
+    mv "${TMPDIR}/easynet-remoteapp-media-host" "${INSTALL_DIR}/easynet-remoteapp-media-host"
+    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring" "${INSTALL_DIR}/easynet-remoteapp-native-host" "${INSTALL_DIR}/easynet-remoteapp-media-host"
 
     # Install the generic C ABI contract alongside the runtime artefacts.
     # Language bindings compile against the header; release/CI tooling uses
@@ -283,11 +290,11 @@ reload_shell() {
 }
 
 cleanup_stale_binaries() {
-    # Remove stale easynet/easynet-daemon/easynet-keyring/axon-runtime binaries from
+    # Remove stale Runtime process-set/axon-runtime binaries from
     # other PATH dirs
     # that would shadow the freshly installed copy. We're root here,
     # so direct rm — no nested sudo dance.
-    for bin in easynet easynet-daemon easynet-keyring axon-runtime; do
+    for bin in easynet easynet-daemon easynet-keyring easynet-remoteapp-native-host easynet-remoteapp-media-host axon-runtime; do
         IFS=:
         for dir in $PATH; do
             unset IFS
