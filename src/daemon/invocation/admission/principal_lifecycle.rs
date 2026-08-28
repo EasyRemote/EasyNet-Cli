@@ -545,11 +545,18 @@ impl<'a> PrincipalLifecycle<'a> {
             ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
             &request.principal_ura,
         )?;
-        if principal
+        if let Some(existing) = principal
             .enrollments
             .iter()
-            .any(|enrollment| enrollment.enrollment_id == enrollment_id)
+            .find(|enrollment| enrollment.enrollment_id == enrollment_id)
         {
+            if existing.subject_principal_ura == request.subject_principal_ura
+                && principal
+                    .command_log
+                    .contains_key(&request.command.idempotency_key)
+            {
+                return Ok(principal.clone());
+            }
             return Err(Status::already_exists(format!(
                 "principal.lifecycle.issue_enrollment: enrollment_id `{enrollment_id}` already exists"
             )));
@@ -2409,6 +2416,27 @@ mod tests {
         let enrollment_id = issued["principal"]["enrollments"][0]["enrollment_id"]
             .as_str()
             .unwrap();
+        let replayed = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
+            json!({
+                "command": command_for_actor_with_ref(admin, "issue-bob", "active_key", admin_binding_id, Some(2)),
+                "principal_ura": admin,
+                "subject_principal_ura": bob
+            }),
+        );
+        assert_eq!(
+            replayed["principal"]["enrollments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "idempotent replay must return the committed enrollment without duplicating it"
+        );
+        assert_eq!(
+            replayed["principal"]["enrollments"][0]["enrollment_id"],
+            enrollment_id
+        );
         invoke(
             &ctx,
             ABILITY_PRINCIPAL_CREATE,
