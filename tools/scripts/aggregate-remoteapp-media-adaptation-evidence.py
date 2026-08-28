@@ -56,6 +56,10 @@ def load_browser_evidence(path: Path, expected_scenario: str) -> dict[str, Any]:
         evidence = json.load(source)
     require(evidence.get("status") == "passed", f"{path}: browser run did not pass")
     require(
+        evidence.get("evidence_origin") == "live_runner",
+        f"{path}: evidence_origin must be live_runner",
+    )
+    require(
         evidence.get("proof_mode") == "real_browser_tauri_lifecycle",
         f"{path}: expected real browser lifecycle evidence",
     )
@@ -78,6 +82,7 @@ def unique_native_samples(evidence: dict[str, Any]) -> list[dict[str, Any]]:
         key = (
             value.get("session_id"),
             value.get("transport_epoch"),
+            value.get("media_source_epoch"),
             value.get("sampled_at_ms"),
             value.get("terminal"),
         )
@@ -136,9 +141,19 @@ def adaptation_events(
     subject_ura: str,
     session_id: str,
     media_pipeline_id: str,
+    transport_epoch: int,
+    media_source_epoch: int,
 ) -> list[dict[str, Any]]:
     candidates: dict[tuple[str, int, int], dict[str, Any]] = {}
     for sample in samples:
+        if (
+            sample.get("selected_resource_ura") != subject_ura
+            or sample.get("session_id") != session_id
+            or sample.get("media_pipeline_id") != media_pipeline_id
+            or integer(sample.get("transport_epoch")) != transport_epoch
+            or integer(sample.get("media_source_epoch")) != media_source_epoch
+        ):
+            continue
         for event in sample.get("adaptation_events", []):
             if not isinstance(event, dict):
                 continue
@@ -155,6 +170,8 @@ def adaptation_events(
                 event.get("selected_resource_ura") != subject_ura
                 or event.get("session_id") != session_id
                 or event.get("media_pipeline_id") != media_pipeline_id
+                or integer(event.get("transport_epoch")) != transport_epoch
+                or integer(event.get("media_source_epoch")) != media_source_epoch
             ):
                 continue
             candidates[(event_type, observed_at_ms, sequence)] = event
@@ -224,11 +241,29 @@ def scenario_projection(
     subject_ura = latest.get("selected_resource_ura")
     session_id = latest.get("session_id")
     media_pipeline_id = latest.get("media_pipeline_id")
+    transport_epoch = integer(latest.get("transport_epoch"))
+    media_source_epoch = integer(latest.get("media_source_epoch"))
     require(isinstance(subject_ura, str) and subject_ura.startswith("easynet:///"), "subject missing")
     require(isinstance(session_id, str) and session_id, "session id missing")
     require(isinstance(media_pipeline_id, str) and media_pipeline_id, "pipeline id missing")
+    require(transport_epoch > 0, f"{scenario_name}: transport_epoch must be positive")
+    require(media_source_epoch > 0, f"{scenario_name}: media_source_epoch must be positive")
     require(evidence.get("selected_resource_ura") == subject_ura, "selected subject mismatch")
     require(evidence.get("session_id") == session_id, "selected session mismatch")
+
+    generation_samples = [
+        sample
+        for sample in eligible
+        if sample.get("selected_resource_ura") == subject_ura
+        and sample.get("session_id") == session_id
+        and sample.get("media_pipeline_id") == media_pipeline_id
+        and integer(sample.get("transport_epoch")) == transport_epoch
+        and integer(sample.get("media_source_epoch")) == media_source_epoch
+    ]
+    require(
+        generation_samples,
+        f"{scenario_name}: selected media generation samples missing",
+    )
 
     events = adaptation_events(
         samples,
@@ -238,6 +273,8 @@ def scenario_projection(
         subject_ura=subject_ura,
         session_id=session_id,
         media_pipeline_id=media_pipeline_id,
+        transport_epoch=transport_epoch,
+        media_source_epoch=media_source_epoch,
     )
     latest_event_at_ms = max((integer(event["at_ms"]) for event in events), default=0)
     browser_samples = unique_browser_samples(evidence)
@@ -257,12 +294,12 @@ def scenario_projection(
     duration_ms = integer(latest.get("sampled_at_ms")) - scenario_started_at_ms
     queue_depth = integer(latest.get("max_frame_queue_depth"))
     observed_queue_depth = max(
-        (integer(sample.get("queued_units")) for sample in eligible),
+        (integer(sample.get("queued_units")) for sample in generation_samples),
         default=0,
     )
     audio_queue_depth = integer(latest.get("audio_max_queue_depth"))
     observed_audio_queue_depth = max(
-        (integer(sample.get("audio_queue_depth")) for sample in eligible),
+        (integer(sample.get("audio_queue_depth")) for sample in generation_samples),
         default=0,
     )
     terminal = terminal_receipt(evidence, session_id)
@@ -282,6 +319,8 @@ def scenario_projection(
         "selected_resource_ura": subject_ura,
         "session_id": session_id,
         "media_pipeline_id": media_pipeline_id,
+        "transport_epoch": transport_epoch,
+        "media_source_epoch": media_source_epoch,
         "scenario_started_at_ms": scenario_started_at_ms,
         "impairment_applied_at_ms": impairment_applied_at_ms,
         "abilities": projected_abilities(evidence, subject_ura, session_id),
@@ -352,6 +391,8 @@ def scenario_projection(
             "selected_resource_ura": subject_ura,
             "session_id": session_id,
             "media_pipeline_id": media_pipeline_id,
+            "transport_epoch": transport_epoch,
+            "media_source_epoch": media_source_epoch,
             "video_codec": latest.get("video_codec"),
             "video_transport": latest.get("video_transport"),
             "audio_codec": latest.get("audio_codec"),
@@ -387,6 +428,7 @@ def main() -> None:
 
     output = {
         "status": "passed",
+        "evidence_origin": "live_runner",
         "proof_mode": "real_media_adaptation_matrix",
         "component_mock": False,
         "real_backend_runtime": True,

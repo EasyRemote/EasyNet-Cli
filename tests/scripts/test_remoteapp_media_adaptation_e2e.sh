@@ -22,6 +22,23 @@ grep -q "skipped" /tmp/remoteapp-media-adaptation-skip.out || \
 
 EASYNET_REMOTEAPP_MEDIA_ADAPTATION_OUT_DIR="$OUT_DIR/good" "$SCRIPT" --self-test >/dev/null
 
+python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/live-evidence.json" <<'PY'
+import json
+import sys
+
+evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+assert evidence["evidence_origin"] == "contract_self_test"
+evidence["evidence_origin"] = "live_runner"
+json.dump(evidence, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+PY
+
+if "$SCRIPT" --run --evidence-json "$OUT_DIR/good/evidence.json" \
+    --out-dir "$OUT_DIR/self-test-as-live" >/tmp/remoteapp-media-adaptation-origin.out 2>&1; then
+  fail "verifier accepted contract self-test evidence in run mode"
+fi
+grep -q "evidence_origin must be live_runner" /tmp/remoteapp-media-adaptation-origin.out || \
+  fail "self-test provenance rejection was not explicit"
+
 python3 - "$OUT_DIR/good/report.json" <<'PY'
 import json
 import sys
@@ -44,7 +61,7 @@ assert "backpressure_detected" in scenarios["backpressure"]["adaptation_event_ty
 assert scenarios["backpressure"]["frames_dropped"] > scenarios["baseline"]["frames_dropped"]
 PY
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-codec.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/no-codec.json" <<'PY'
 import json
 import sys
 
@@ -58,7 +75,7 @@ fi
 grep -q "video.codec_negotiated must be true" /tmp/remoteapp-media-adaptation-no-codec.out || \
   fail "missing video codec failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-audio.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/no-audio.json" <<'PY'
 import json
 import sys
 
@@ -73,7 +90,7 @@ fi
 grep -q "audio must render packets or samples" /tmp/remoteapp-media-adaptation-no-audio.out || \
   fail "missing audio render failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-adaptation.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/no-adaptation.json" <<'PY'
 import json
 import sys
 
@@ -89,7 +106,7 @@ fi
 grep -q "degraded_network must include bitrate_downshift" /tmp/remoteapp-media-adaptation-no-adaptation.out || \
   fail "missing adaptation failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/unbounded-queue.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/unbounded-queue.json" <<'PY'
 import json
 import sys
 
@@ -104,7 +121,7 @@ fi
 grep -q "queue.observed_max_depth must not exceed max_depth" /tmp/remoteapp-media-adaptation-unbounded-queue.out || \
   fail "unbounded queue failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-render-probe.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/no-render-probe.json" <<'PY'
 import json
 import sys
 
@@ -118,7 +135,7 @@ fi
 grep -q "render_probe evidence must be present" /tmp/remoteapp-media-adaptation-no-render-probe.out || \
   fail "missing render probe failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/wrong-render-pipeline.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/wrong-render-pipeline.json" <<'PY'
 import json
 import sys
 
@@ -132,7 +149,7 @@ fi
 grep -q "render_probe media_pipeline_id must bind media_pipeline_id" /tmp/remoteapp-media-adaptation-wrong-render-pipeline.out || \
   fail "render probe pipeline binding failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/no-audio-payload.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/no-audio-payload.json" <<'PY'
 import json
 import sys
 
@@ -146,7 +163,7 @@ fi
 grep -q "render_probe audio_payload_hash must be recorded" /tmp/remoteapp-media-adaptation-no-audio-payload.out || \
   fail "render probe audio payload failure was not explicit"
 
-python3 - "$OUT_DIR/good/evidence.json" "$OUT_DIR/render-before-adaptation.json" <<'PY'
+python3 - "$OUT_DIR/live-evidence.json" "$OUT_DIR/render-before-adaptation.json" <<'PY'
 import json
 import sys
 

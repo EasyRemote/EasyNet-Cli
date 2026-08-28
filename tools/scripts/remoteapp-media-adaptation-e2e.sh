@@ -13,6 +13,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 
 MODE=skip
 OUT_DIR="${EASYNET_REMOTEAPP_MEDIA_ADAPTATION_OUT_DIR:-$REPO_ROOT/target/e2e/remoteapp-media-adaptation/$(date -u +%Y%m%d-%H%M%S)-$$}"
@@ -113,12 +114,13 @@ PY
 }
 
 validate_evidence() {
-  python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
+  python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$MODE" <<'PY'
 import json
 import pathlib
 import sys
 
-evidence_path, report_path, md_path = sys.argv[1:4]
+evidence_path, report_path, md_path, mode = sys.argv[1:5]
 with open(evidence_path, encoding="utf-8") as f:
     evidence = json.load(f)
 
@@ -153,7 +155,9 @@ def nested_get(value, path, default=None):
 required_scenarios = {"baseline", "degraded_network", "backpressure"}
 allowed_video_codecs = {"h264", "avc1", "vp8", "vp9", "av1", "hevc"}
 allowed_audio_codecs = {"opus", "aac", "pcm", "flac"}
-allowed_transports = {"webrtc", "raw_stream_v8", "native_webrtc"}
+# RemoteApp interactive media is a WebRTC data plane. The generic C ABI v8
+# raw server-stream carrier is intentionally not valid product evidence here.
+allowed_transports = {"webrtc", "native_webrtc"}
 required_abilities = (
     "remote_desktop.create_session",
     "remote_desktop.set_description",
@@ -161,8 +165,11 @@ required_abilities = (
     "remote_desktop.end_session",
 )
 terminal_reasons = {"caller_ended", "user_cancelled", "media_adaptation_e2e_cleanup"}
+expected_origin = "contract_self_test" if mode == "self-test" else "live_runner"
 
 require(evidence.get("status") == "passed", "evidence.status must be passed")
+require(evidence.get("evidence_origin") == expected_origin,
+        f"evidence_origin must be {expected_origin}")
 require(evidence.get("proof_mode") == "real_media_adaptation_matrix",
         "proof_mode must be real_media_adaptation_matrix")
 require(evidence.get("component_mock") is False, "component_mock must be false")
@@ -245,7 +252,7 @@ for scenario_name in sorted(required_scenarios):
             and video.get("payload_content_type"),
             f"{prefix}: video.payload_content_type must be present")
     require(transport in allowed_transports,
-            f"{prefix}: video.transport must be WebRTC or raw_stream_v8")
+            f"{prefix}: video.transport must be WebRTC")
     require(integer(video.get("frames_encoded")) > 0,
             f"{prefix}: video.frames_encoded must be positive")
     require(integer(video.get("frames_rendered")) > 0,
@@ -531,6 +538,7 @@ if errors:
     report = {
         "script": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
         "status": "failed",
+        "evidence_origin": evidence.get("evidence_origin"),
         "errors": errors,
         "product_complete_claim": False,
     }
@@ -549,6 +557,7 @@ if errors:
 report = {
     "script": "tools/scripts/remoteapp-media-adaptation-e2e.sh",
     "status": "passed",
+    "evidence_origin": evidence.get("evidence_origin"),
     "proof_mode": evidence.get("proof_mode"),
     "coverage": {name: name in scenario_by_name for name in sorted(required_scenarios)},
     "scenarios": scenario_reports,
@@ -569,6 +578,8 @@ pathlib.Path(md_path).write_text(
     encoding="utf-8",
 )
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 write_self_test_evidence() {
@@ -739,6 +750,7 @@ def scenario(name, *, degraded=False, backpressure=False):
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "proof_mode": "real_media_adaptation_matrix",
     "component_mock": False,
     "real_backend_runtime": True,

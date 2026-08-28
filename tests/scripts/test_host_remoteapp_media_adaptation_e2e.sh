@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$ROOT/tools/scripts/host-remoteapp-media-adaptation-e2e.sh"
+AGGREGATOR="$ROOT/tools/scripts/aggregate-remoteapp-media-adaptation-evidence.py"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -142,6 +143,62 @@ import sys
 
 lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
 assert lines[-2:] == ["pressure-reset", "pressure-reset"], lines
+PY
+
+python3 - "$AGGREGATOR" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("remoteapp_media_aggregator", path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+subject = "easynet:///r/test/resource/application.editor"
+session = "session-1"
+pipeline = "openh264-xcap"
+
+def sample(transport_epoch, media_source_epoch, event_type):
+    return {
+        "contract": module.PIPELINE_CONTRACT,
+        "selected_resource_ura": subject,
+        "session_id": session,
+        "media_pipeline_id": pipeline,
+        "transport_epoch": transport_epoch,
+        "media_source_epoch": media_source_epoch,
+        "sampled_at_ms": 200,
+        "terminal": False,
+        "adaptation_events": [{
+            "event_type": event_type,
+            "sequence": media_source_epoch,
+            "observed_at_ms": 180,
+            "selected_resource_ura": subject,
+            "session_id": session,
+            "media_pipeline_id": pipeline,
+            "transport_epoch": transport_epoch,
+            "media_source_epoch": media_source_epoch,
+        }],
+    }
+
+old_generation = sample(3, 9, "old_generation_event")
+new_generation = sample(3, 10, "new_generation_event")
+wrong_transport = sample(2, 10, "old_transport_event")
+unique = module.unique_native_samples({"samples": [old_generation, new_generation]})
+assert len(unique) == 2, "media_source_epoch must participate in sample identity"
+events = module.adaptation_events(
+    [old_generation, new_generation, wrong_transport],
+    scenario_started_at_ms=100,
+    impairment_applied_at_ms=120,
+    render_probe_at_ms=220,
+    subject_ura=subject,
+    session_id=session,
+    media_pipeline_id=pipeline,
+    transport_epoch=3,
+    media_source_epoch=10,
+)
+assert [event["type"] for event in events] == ["new_generation_event"], events
 PY
 
 if EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_RUNNER_CMD="$FAKE_RUNNER" \
