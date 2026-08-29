@@ -23,6 +23,8 @@
 //   all go through the daemon's Axon Invocation gRPC endpoint.
 
 #[cfg(feature = "axon-pb")]
+use bytes::Bytes;
+#[cfg(feature = "axon-pb")]
 use rand::{rngs::OsRng, RngCore};
 use std::os::raw::{c_char, c_void};
 #[cfg(feature = "axon-pb")]
@@ -34,9 +36,21 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 #[cfg(feature = "axon-pb")]
 mod backpressure;
+#[cfg(feature = "axon-pb")]
+mod buffer_lease;
 
 #[cfg(feature = "axon-pb")]
 use self::backpressure::bidi_callback_backpressure_frame;
+#[cfg(all(test, feature = "axon-pb"))]
+use self::buffer_lease::{allocate as allocate_buffer_lease, STREAM_V9_MAX_OUTSTANDING_LEASES};
+#[cfg(feature = "axon-pb")]
+use self::buffer_lease::{
+    allocate_with_budget as allocate_buffer_lease_with_budget,
+    close_stream as close_buffer_lease_stream, purge_owner as purge_buffer_leases_for_binding,
+    register_stream as register_buffer_lease_stream, release as release_buffer_lease,
+    retain as retain_buffer_lease, BufferLeaseAccessError, BufferLeaseAllocationError,
+    STREAM_V9_MAX_OUTSTANDING_BYTES,
+};
 #[cfg(feature = "axon-pb")]
 use crate::daemon::ability::AbilityCatalogQuery;
 #[cfg(feature = "axon-pb")]
@@ -44,20 +58,20 @@ use crate::daemon::axon_bridge::runtime_descriptor_provider::{
     DescriptorCatalogReadContext, DescriptorResolutionError, RuntimeDescriptorCatalogReader,
     RuntimeDescriptorResolutionProvider,
 };
+use crate::ffi::client::handle::{binding_for_handle, get, RuntimeHandle};
 #[cfg(feature = "axon-pb")]
-use crate::ffi::client::handle::{binding_for_handle, lib_runtime, ClientSessionBinding};
-use crate::ffi::client::handle::{get, RuntimeHandle};
+use crate::ffi::client::handle::{lib_runtime, ClientSessionBinding};
 #[cfg(not(feature = "axon-pb"))]
 use crate::ffi::errors::ERR_NOT_IMPLEMENTED;
 #[cfg(feature = "axon-pb")]
 use crate::ffi::errors::{
     clear_last_error, ERR_ABILITY_FAILED, ERR_CANCELLED, ERR_DAEMON_DOWN, ERR_GENERIC,
-    ERR_INVALID_ARG, ERR_NOT_FOUND, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED, ERR_PROTOCOL,
-    ERR_TIMEOUT, RUNTIME_OK,
+    ERR_NOT_FOUND, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED, ERR_PROTOCOL, ERR_TIMEOUT,
+    RUNTIME_OK,
 };
 use crate::ffi::errors::{
-    set_last_error_code, set_last_error_projection, ErrorProjection, ERR_INVALID_HANDLE,
-    ERR_INVALID_UTF8, ERR_NULL_POINTER,
+    set_last_error_code, set_last_error_projection, ErrorProjection, ERR_INVALID_ARG,
+    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
 };
 #[cfg(feature = "axon-pb")]
 use crate::ffi::strings::alloc_output_cstring;
@@ -70,6 +84,11 @@ use crate::ffi::strings::{read_cstr, StringError};
 /// process-local; they are not Axon protocol ids and must not be
 /// serialized as receipt or invocation identifiers.
 pub type InvocationStreamId = u64;
+
+/// Opaque id for an ABI v9 payload lease. Lease ids are process-local,
+/// session-bound capabilities and must never be serialized into Invocation
+/// metadata.
+pub type RuntimeBufferLeaseId = u64;
 
 /// Opaque id for an InvokeBidi session opened through
 /// `runtime_invocation_bidi_open`.
@@ -128,6 +147,8 @@ const STREAM_FRAME_V8_FLAG_HAS_ADMISSION_RECEIPT: u32 = 1 << 4;
 const STREAM_FRAME_V8_FLAG_HAS_TERMINAL_RECEIPT: u32 = 1 << 5;
 const STREAM_FRAME_V8_FLAG_HAS_ERROR: u32 = 1 << 6;
 
+const STREAM_FRAME_V9_ABI_VERSION: u16 = 9;
+
 #[repr(C)]
 pub struct RuntimeBytesViewV8 {
     data: *const u8,
@@ -169,10 +190,64 @@ pub struct RuntimeInvocationStreamFrameV8 {
 pub type InvocationStreamV8Callback =
     unsafe extern "C" fn(user_data: *mut c_void, frame: *const RuntimeInvocationStreamFrameV8);
 
+/// ABI v9 immutable payload lease. Empty payloads use the canonical
+/// `{ lease_id: 0, data: NULL, len: 0 }` representation. A non-empty payload
+/// owns one reference which the callback consumer must eventually release.
+#[repr(C)]
+pub struct RuntimeBufferLeaseV9 {
+    lease_id: RuntimeBufferLeaseId,
+    data: *const u8,
+    len: usize,
+}
+
+impl RuntimeBufferLeaseV9 {
+    fn empty() -> Self {
+        Self {
+            lease_id: 0,
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+
+    #[cfg(feature = "axon-pb")]
+    fn borrowed(lease_id: RuntimeBufferLeaseId, payload: &Bytes) -> Self {
+        if payload.is_empty() {
+            return Self::empty();
+        }
+        Self {
+            lease_id,
+            data: payload.as_ptr(),
+            len: payload.len(),
+        }
+    }
+}
+
+/// ABI v9 fixed-layout stream frame. Lifecycle and sidecar semantics are
+/// identical to v8; only the payload view becomes an explicitly owned lease.
+#[repr(C)]
+pub struct RuntimeInvocationStreamFrameV9 {
+    struct_size: u32,
+    abi_version: u16,
+    kind: u8,
+    state: u8,
+    flags: u32,
+    sequence: u64,
+    elapsed_ms: u64,
+    payload_content_type: RuntimeBytesViewV8,
+    payload: RuntimeBufferLeaseV9,
+    admission_receipt_json: RuntimeBytesViewV8,
+    terminal_receipt_json: RuntimeBytesViewV8,
+    error_json: RuntimeBytesViewV8,
+}
+
+pub type InvocationStreamV9Callback =
+    unsafe extern "C" fn(user_data: *mut c_void, frame: *const RuntimeInvocationStreamFrameV9);
+
 #[derive(Clone, Copy)]
 enum InvocationStreamCallbackTarget {
     Json(InvocationStreamCallback),
     V8(InvocationStreamV8Callback),
+    V9(InvocationStreamV9Callback),
 }
 
 #[cfg(feature = "axon-pb")]
@@ -180,6 +255,7 @@ enum InvocationStreamCallbackTarget {
 enum StreamCallbackEncoding {
     Json,
     V8,
+    V9,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -188,6 +264,7 @@ impl InvocationStreamCallbackTarget {
         match self {
             Self::Json(_) => StreamCallbackEncoding::Json,
             Self::V8(_) => StreamCallbackEncoding::V8,
+            Self::V9(_) => StreamCallbackEncoding::V9,
         }
     }
 }
@@ -196,6 +273,44 @@ impl InvocationStreamCallbackTarget {
 enum StreamCallbackDelivery {
     Json(Vec<u8>),
     V8(BinaryStreamFrameV8),
+    V9(BinaryStreamFrameV9),
+}
+
+#[cfg(feature = "axon-pb")]
+impl StreamCallbackDelivery {
+    async fn reserve_v9_payload_budget(
+        self,
+        budget: Option<Arc<tokio::sync::Semaphore>>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<(Self, bool), ()> {
+        let Self::V9(mut frame) = self else {
+            return Ok((self, false));
+        };
+        let bytes = frame.payload.len();
+        if bytes > STREAM_V9_MAX_OUTSTANDING_BYTES {
+            return Ok((
+                Self::V9(v9_payload_too_large_delivery(
+                    frame.sequence,
+                    frame.elapsed_ms,
+                    bytes,
+                )),
+                true,
+            ));
+        }
+        if bytes == 0 {
+            return Ok((Self::V9(frame), false));
+        }
+        let Some(budget) = budget else {
+            return Err(());
+        };
+        let permits = u32::try_from(bytes).map_err(|_| ())?;
+        let permit = tokio::select! {
+            _ = cancel.cancelled() => return Err(()),
+            permit = budget.acquire_many_owned(permits) => permit.map_err(|_| ())?,
+        };
+        frame.payload_budget = Some(permit);
+        Ok((Self::V9(frame), false))
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -225,6 +340,57 @@ impl BinaryStreamFrameV8 {
             elapsed_ms: self.elapsed_ms,
             payload_content_type: RuntimeBytesViewV8::borrowed(&self.payload_content_type),
             payload: RuntimeBytesViewV8::borrowed(&self.payload),
+            admission_receipt_json: RuntimeBytesViewV8::borrowed(&self.admission_receipt_json),
+            terminal_receipt_json: RuntimeBytesViewV8::borrowed(&self.terminal_receipt_json),
+            error_json: RuntimeBytesViewV8::borrowed(&self.error_json),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct BinaryStreamFrameV9 {
+    kind: u8,
+    state: u8,
+    flags: u32,
+    sequence: u64,
+    elapsed_ms: u64,
+    payload_content_type: Vec<u8>,
+    payload: Bytes,
+    payload_budget: Option<tokio::sync::OwnedSemaphorePermit>,
+    admission_receipt_json: Vec<u8>,
+    terminal_receipt_json: Vec<u8>,
+    error_json: Vec<u8>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl BinaryStreamFrameV9 {
+    fn from_v8(frame: BinaryStreamFrameV8) -> Self {
+        Self {
+            kind: frame.kind,
+            state: frame.state,
+            flags: frame.flags,
+            sequence: frame.sequence,
+            elapsed_ms: frame.elapsed_ms,
+            payload_content_type: frame.payload_content_type,
+            payload: Bytes::from(frame.payload),
+            payload_budget: None,
+            admission_receipt_json: frame.admission_receipt_json,
+            terminal_receipt_json: frame.terminal_receipt_json,
+            error_json: frame.error_json,
+        }
+    }
+
+    fn borrowed_frame(&self, lease_id: RuntimeBufferLeaseId) -> RuntimeInvocationStreamFrameV9 {
+        RuntimeInvocationStreamFrameV9 {
+            struct_size: std::mem::size_of::<RuntimeInvocationStreamFrameV9>() as u32,
+            abi_version: STREAM_FRAME_V9_ABI_VERSION,
+            kind: self.kind,
+            state: self.state,
+            flags: self.flags,
+            sequence: self.sequence,
+            elapsed_ms: self.elapsed_ms,
+            payload_content_type: RuntimeBytesViewV8::borrowed(&self.payload_content_type),
+            payload: RuntimeBufferLeaseV9::borrowed(lease_id, &self.payload),
             admission_receipt_json: RuntimeBytesViewV8::borrowed(&self.admission_receipt_json),
             terminal_receipt_json: RuntimeBytesViewV8::borrowed(&self.terminal_receipt_json),
             error_json: RuntimeBytesViewV8::borrowed(&self.error_json),
@@ -1533,6 +1699,105 @@ pub unsafe extern "C" fn runtime_invocation_stream_open_v8(
         out_stream_id,
         "runtime_invocation_stream_open_v8",
     )
+}
+
+/// Open an ABI v9 binary-frame server stream with an explicitly retained
+/// payload lease. The callback receives one owning reference for every
+/// non-empty payload and must release it with
+/// `runtime_buffer_lease_release_v9`.
+#[no_mangle]
+pub unsafe extern "C" fn runtime_invocation_stream_open_v9(
+    handle: RuntimeHandle,
+    invocation_json: *const c_char,
+    on_chunk: Option<InvocationStreamV9Callback>,
+    user_data: *mut c_void,
+    out_stream_id: *mut InvocationStreamId,
+) -> i32 {
+    let Some(on_chunk) = on_chunk else {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "runtime_invocation_stream_open_v9: on_chunk callback is null",
+        );
+    };
+    runtime_invocation_stream_open_inner(
+        handle,
+        invocation_json,
+        InvocationStreamCallbackTarget::V9(on_chunk),
+        user_data,
+        out_stream_id,
+        "runtime_invocation_stream_open_v9",
+    )
+}
+
+/// Retain one additional reference to a live ABI v9 payload lease.
+#[no_mangle]
+pub extern "C" fn runtime_buffer_lease_retain_v9(
+    handle: RuntimeHandle,
+    lease_id: RuntimeBufferLeaseId,
+) -> i32 {
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("runtime_buffer_lease_retain_v9: handle {handle} is not registered"),
+        );
+    };
+    if lease_id == 0 {
+        return record_invocation_error(
+            ERR_INVALID_ARG,
+            "runtime_buffer_lease_retain_v9: lease_id must be non-zero",
+        );
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (owner, lease_id);
+        record_invocation_feature_disabled("runtime_buffer_lease_retain_v9")
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        ffi_buffer_lease_result(
+            "runtime_buffer_lease_retain_v9",
+            handle,
+            retain_buffer_lease(owner, lease_id),
+        )
+    }
+}
+
+/// Release one reference to a live ABI v9 payload lease. The payload pointer
+/// becomes invalid after the final successful release.
+#[no_mangle]
+pub extern "C" fn runtime_buffer_lease_release_v9(
+    handle: RuntimeHandle,
+    lease_id: RuntimeBufferLeaseId,
+) -> i32 {
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("runtime_buffer_lease_release_v9: handle {handle} is not registered"),
+        );
+    };
+    if lease_id == 0 {
+        return record_invocation_error(
+            ERR_INVALID_ARG,
+            "runtime_buffer_lease_release_v9: lease_id must be non-zero",
+        );
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (owner, lease_id);
+        record_invocation_feature_disabled("runtime_buffer_lease_release_v9")
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        ffi_buffer_lease_result(
+            "runtime_buffer_lease_release_v9",
+            handle,
+            release_buffer_lease(owner, lease_id),
+        )
+    }
 }
 
 unsafe fn runtime_invocation_stream_open_inner(
@@ -3595,26 +3860,55 @@ fn stream_open_with_axon_pb(
         Err(err) => return ffi_daemon_error(operation, err),
     };
 
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let owner = registration.binding();
+    let active_stream = ActiveInvocationStream::new(owner, cancel.clone(), cancellation);
+    let callback_dispatcher = active_stream.callback_dispatcher.clone();
+    callback_dispatcher.arm();
+    let stream_id = match try_insert_stream(active_stream) {
+        Ok(stream_id) => stream_id,
+        Err(limit) => {
+            cancel.cancel();
+            return record_invocation_error(
+                ERR_ABILITY_FAILED,
+                format!(
+                    "{operation}: active stream limit reached ({limit:?}); per_handle={MAX_ACTIVE_STREAMS_PER_OWNER}, global={MAX_ACTIVE_STREAMS_GLOBAL}"
+                ),
+            );
+        }
+    };
+    if matches!(callback, InvocationStreamCallbackTarget::V9(_)) {
+        register_buffer_lease_stream(owner, stream_id);
+    }
+
     let (tx, rx) =
         tokio::sync::mpsc::channel::<StreamCallbackDelivery>(STREAM_CALLBACK_QUEUE_CAPACITY);
     let callback_user_data = CallbackUserData(user_data);
     let dispatcher = std::thread::Builder::new()
         .name("easynet-inv-stream-callback".to_string())
-        .spawn(move || dispatch_stream_callbacks(rx, callback, callback_user_data));
+        .spawn(move || {
+            dispatch_stream_callbacks(
+                rx,
+                callback,
+                callback_user_data,
+                owner,
+                stream_id,
+                callback_dispatcher,
+            )
+        });
     if let Err(err) = dispatcher {
+        if let Ok(Some(stream)) = get_stream_for_handle(owner, stream_id) {
+            stream.callback_dispatcher.mark_complete();
+        }
+        let _ = remove_stream_for_handle(owner, stream_id);
+        close_buffer_lease_stream(owner, stream_id);
+        cancel.cancel();
         return record_invocation_error(
             ERR_GENERIC,
             format!("{operation}: spawn callback dispatcher failed: {err}"),
         );
     }
 
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let owner = registration.binding();
-    let stream_id = insert_stream(ActiveInvocationStream::new(
-        owner,
-        cancel.clone(),
-        cancellation,
-    ));
     rt.spawn(run_stream_reader(
         stream_id,
         stream_endpoint,
@@ -3622,6 +3916,8 @@ fn stream_open_with_axon_pb(
         cancel,
         tx,
         callback.encoding(),
+        matches!(callback, InvocationStreamCallbackTarget::V9(_))
+            .then(|| Arc::new(tokio::sync::Semaphore::new(STREAM_V9_MAX_OUTSTANDING_BYTES))),
     ));
     drop(registration);
 
@@ -3848,9 +4144,12 @@ fn release_stream_with_reader_cancel(
 ) -> i32 {
     match remove_stream_for_handle(owner, stream_id) {
         Ok(Some(stream)) => {
+            stream.request_callback_stop();
+            close_buffer_lease_stream(owner, stream_id);
             if !stream.reader_finished() {
                 stream.reader_cancel.cancel();
             }
+            stream.wait_for_callback_quiescence();
             clear_last_error();
             RUNTIME_OK
         }
@@ -4268,11 +4567,98 @@ trait ProviderCancellableResource {
 }
 
 #[cfg(feature = "axon-pb")]
+struct CallbackDispatcherState {
+    thread_id: Option<std::thread::ThreadId>,
+    complete: bool,
+}
+
+#[cfg(feature = "axon-pb")]
+impl Default for CallbackDispatcherState {
+    fn default() -> Self {
+        Self {
+            thread_id: None,
+            complete: true,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct CallbackDispatcherFence {
+    stop_requested: AtomicBool,
+    state: Mutex<CallbackDispatcherState>,
+    changed: Condvar,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CallbackDispatcherFence {
+    fn new() -> Self {
+        Self {
+            stop_requested: AtomicBool::new(false),
+            state: Mutex::new(CallbackDispatcherState::default()),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn mark_started(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.thread_id = Some(std::thread::current().id());
+    }
+
+    fn arm(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.complete = false;
+        state.thread_id = None;
+        self.stop_requested.store(false, Ordering::Release);
+    }
+
+    fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::Release);
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop_requested.load(Ordering::Acquire)
+    }
+
+    fn mark_complete(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.complete = true;
+        self.changed.notify_all();
+    }
+
+    fn wait_for_quiescence(&self) {
+        let current = std::thread::current().id();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.thread_id.as_ref() == Some(&current) {
+            return;
+        }
+        while !state.complete {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 struct ActiveInvocationStream {
     owner: ClientSessionBinding,
     reader_cancel: tokio_util::sync::CancellationToken,
     cancellation: Arc<ProviderCancellationControl>,
     reader_finished: AtomicBool,
+    callback_dispatcher: Arc<CallbackDispatcherFence>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4287,6 +4673,7 @@ impl ActiveInvocationStream {
             reader_cancel,
             cancellation,
             reader_finished: AtomicBool::new(false),
+            callback_dispatcher: Arc::new(CallbackDispatcherFence::new()),
         }
     }
 
@@ -4296,6 +4683,14 @@ impl ActiveInvocationStream {
 
     fn reader_finished(&self) -> bool {
         self.reader_finished.load(Ordering::Acquire)
+    }
+
+    fn request_callback_stop(&self) {
+        self.callback_dispatcher.request_stop();
+    }
+
+    fn wait_for_callback_quiescence(&self) {
+        self.callback_dispatcher.wait_for_quiescence();
     }
 }
 
@@ -4917,6 +5312,18 @@ struct StreamRegistry {
 }
 
 #[cfg(feature = "axon-pb")]
+const MAX_ACTIVE_STREAMS_PER_OWNER: usize = 32;
+#[cfg(feature = "axon-pb")]
+const MAX_ACTIVE_STREAMS_GLOBAL: usize = 256;
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamRegistrationError {
+    OwnerLimit,
+    GlobalLimit,
+}
+
+#[cfg(feature = "axon-pb")]
 struct BidiRegistry {
     next: AtomicU64,
     entries: Mutex<std::collections::HashMap<InvocationBidiId, Arc<ActiveInvocationBidi>>>,
@@ -4953,6 +5360,32 @@ fn stream_registry() -> &'static StreamRegistry {
         next: AtomicU64::new(1),
         entries: Mutex::new(std::collections::HashMap::new()),
     })
+}
+
+#[cfg(feature = "axon-pb")]
+fn ffi_buffer_lease_result(
+    function: &str,
+    handle: RuntimeHandle,
+    result: Result<(), BufferLeaseAccessError>,
+) -> i32 {
+    match result {
+        Ok(()) => {
+            clear_last_error();
+            RUNTIME_OK
+        }
+        Err(BufferLeaseAccessError::NotFound) => record_invocation_error(
+            ERR_NOT_FOUND,
+            format!("{function}: lease is unknown, released, or revoked"),
+        ),
+        Err(BufferLeaseAccessError::OwnerMismatch) => record_invocation_error(
+            ERR_PERMISSION_DENIED,
+            format!("{function}: lease does not belong to handle {handle}"),
+        ),
+        Err(BufferLeaseAccessError::ReferenceOverflow) => record_invocation_error(
+            ERR_ABILITY_FAILED,
+            format!("{function}: lease reference count overflow"),
+        ),
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5063,12 +5496,34 @@ fn lock_signed_entries(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[cfg(feature = "axon-pb")]
+#[cfg(all(test, feature = "axon-pb"))]
 fn insert_stream(stream: ActiveInvocationStream) -> InvocationStreamId {
     let registry = stream_registry();
     let stream_id = registry.next.fetch_add(1, Ordering::Relaxed);
     lock_stream_entries(registry).insert(stream_id, Arc::new(stream));
     stream_id
+}
+
+#[cfg(feature = "axon-pb")]
+fn try_insert_stream(
+    stream: ActiveInvocationStream,
+) -> Result<InvocationStreamId, StreamRegistrationError> {
+    let registry = stream_registry();
+    let mut entries = lock_stream_entries(registry);
+    if entries.len() >= MAX_ACTIVE_STREAMS_GLOBAL {
+        return Err(StreamRegistrationError::GlobalLimit);
+    }
+    if entries
+        .values()
+        .filter(|active| active.owner == stream.owner)
+        .count()
+        >= MAX_ACTIVE_STREAMS_PER_OWNER
+    {
+        return Err(StreamRegistrationError::OwnerLimit);
+    }
+    let stream_id = registry.next.fetch_add(1, Ordering::Relaxed);
+    entries.insert(stream_id, Arc::new(stream));
+    Ok(stream_id)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5323,12 +5778,20 @@ pub(crate) fn cancel_invocations_for_binding(owner: ClientSessionBinding) {
             .collect::<Vec<_>>();
         owned_ids
             .into_iter()
-            .filter_map(|id| entries.remove(&id))
+            .filter_map(|id| entries.remove(&id).map(|stream| (id, stream)))
             .collect::<Vec<_>>()
     };
-    for stream in streams {
+    for (stream_id, stream) in &streams {
+        stream.request_callback_stop();
+        close_buffer_lease_stream(owner, *stream_id);
         stream.reader_cancel.cancel();
     }
+
+    for (_, stream) in streams {
+        stream.wait_for_callback_quiescence();
+    }
+
+    purge_buffer_leases_for_binding(owner);
 
     let bidis = {
         let registry = bidi_registry();
@@ -5467,9 +5930,16 @@ fn dispatch_stream_callbacks(
     mut rx: tokio::sync::mpsc::Receiver<StreamCallbackDelivery>,
     callback: InvocationStreamCallbackTarget,
     user_data: CallbackUserData,
+    owner: ClientSessionBinding,
+    stream_id: InvocationStreamId,
+    dispatcher: Arc<CallbackDispatcherFence>,
 ) {
+    dispatcher.mark_started();
     let raw_user_data = user_data.raw();
     while let Some(delivery) = rx.blocking_recv() {
+        if dispatcher.should_stop() {
+            break;
+        }
         match (callback, delivery) {
             (
                 InvocationStreamCallbackTarget::Json(on_chunk),
@@ -5488,24 +5958,94 @@ fn dispatch_stream_callbacks(
                 let frame = delivery.borrowed_frame();
                 unsafe { on_chunk(raw_user_data, &frame) };
             }
+            (
+                InvocationStreamCallbackTarget::V9(on_chunk),
+                StreamCallbackDelivery::V9(mut delivery),
+            ) => {
+                let payload_budget = delivery.payload_budget.take();
+                let lease_id = match allocate_buffer_lease_with_budget(
+                    owner,
+                    stream_id,
+                    delivery.payload.clone(),
+                    payload_budget,
+                ) {
+                    Ok(lease_id) => lease_id,
+                    Err(BufferLeaseAllocationError::StreamClosed) => break,
+                    Err(BufferLeaseAllocationError::PayloadTooLarge { bytes }) => {
+                        let failure = v9_payload_too_large_delivery(
+                            delivery.sequence,
+                            delivery.elapsed_ms,
+                            bytes,
+                        );
+                        let frame = failure.borrowed_frame(0);
+                        unsafe { on_chunk(raw_user_data, &frame) };
+                        break;
+                    }
+                };
+                if dispatcher.should_stop() {
+                    if lease_id != 0 {
+                        let _ = release_buffer_lease(owner, lease_id);
+                    }
+                    break;
+                }
+                let frame = delivery.borrowed_frame(lease_id);
+                unsafe { on_chunk(raw_user_data, &frame) };
+            }
             _ => continue,
         }
     }
+    close_buffer_lease_stream(owner, stream_id);
     // End-of-stream signal: the daemon stream closed (terminal frame
     // delivered, or transport ended). Deliver ONE final callback with a
     // null `chunk_json` so the consumer has an unambiguous EOF marker —
     // without it a queue-backed consumer blocks forever waiting on a
     // frame that will never arrive. Bindings treat a null chunk as
     // "stream finished", never as a data frame.
-    unsafe {
-        match callback {
-            InvocationStreamCallbackTarget::Json(on_chunk) => {
-                on_chunk(raw_user_data, std::ptr::null())
-            }
-            InvocationStreamCallbackTarget::V8(on_chunk) => {
-                on_chunk(raw_user_data, std::ptr::null())
+    if !dispatcher.should_stop() {
+        unsafe {
+            match callback {
+                InvocationStreamCallbackTarget::Json(on_chunk) => {
+                    on_chunk(raw_user_data, std::ptr::null())
+                }
+                InvocationStreamCallbackTarget::V8(on_chunk) => {
+                    on_chunk(raw_user_data, std::ptr::null())
+                }
+                InvocationStreamCallbackTarget::V9(on_chunk) => {
+                    on_chunk(raw_user_data, std::ptr::null())
+                }
             }
         }
+    }
+    dispatcher.mark_complete();
+}
+
+#[cfg(feature = "axon-pb")]
+fn v9_payload_too_large_delivery(
+    sequence: u64,
+    elapsed_ms: u64,
+    bytes: usize,
+) -> BinaryStreamFrameV9 {
+    BinaryStreamFrameV9 {
+        kind: STREAM_FRAME_V8_KIND_ERROR,
+        state: STREAM_FRAME_V8_STATE_FAILED,
+        flags: STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL | STREAM_FRAME_V8_FLAG_HAS_ERROR,
+        sequence,
+        elapsed_ms,
+        payload_content_type: Vec::new(),
+        payload: Bytes::new(),
+        payload_budget: None,
+        admission_receipt_json: Vec::new(),
+        terminal_receipt_json: Vec::new(),
+        error_json: serde_json::json!({
+            "code": "PAYLOAD_TOO_LARGE",
+            "stage": "stream_projection",
+            "message": format!(
+                "ABI v9 payload {bytes} bytes exceeds the bounded lease carrier"
+            ),
+            "retryable": false,
+        })
+        .to_string()
+        .into_bytes(),
     }
 }
 
@@ -5535,6 +6075,7 @@ async fn run_stream_reader(
     cancel: tokio_util::sync::CancellationToken,
     tx: tokio::sync::mpsc::Sender<StreamCallbackDelivery>,
     encoding: StreamCallbackEncoding,
+    v9_payload_budget: Option<Arc<tokio::sync::Semaphore>>,
 ) {
     let mut next_error_sequence = 1;
     let mut receipt_verifier = InboundReceiptCheckpointVerifier::for_daemon_endpoint(endpoint);
@@ -5557,7 +6098,7 @@ async fn run_stream_reader(
                             break;
                         }
                     };
-                    let terminal = projection.should_stop_after_frame();
+                    let mut terminal = projection.should_stop_after_frame();
                     let delivery = match projection.into_delivery(encoding) {
                         Ok(delivery) => delivery,
                         Err(message) => {
@@ -5570,6 +6111,14 @@ async fn run_stream_reader(
                             break;
                         }
                     };
+                    let (delivery, budget_terminal) = match delivery
+                        .reserve_v9_payload_budget(v9_payload_budget.clone(), &cancel)
+                        .await
+                    {
+                        Ok(delivery) => delivery,
+                        Err(()) => break,
+                    };
+                    terminal |= budget_terminal;
                     // Server-stream delivery is lossless. Awaiting this bounded
                     // channel propagates consumer pressure through tonic instead
                     // of replacing data with a synthetic overflow terminal.
@@ -5604,28 +6153,36 @@ fn stream_callback_error_delivery(
         StreamCallbackEncoding::Json => {
             StreamCallbackDelivery::Json(metadata.to_string().into_bytes())
         }
-        StreamCallbackEncoding::V8 => StreamCallbackDelivery::V8(
-            binary_v8_error_delivery(&metadata).unwrap_or_else(|message| BinaryStreamFrameV8 {
-                kind: STREAM_FRAME_V8_KIND_ERROR,
-                state: STREAM_FRAME_V8_STATE_FAILED,
-                flags: STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL | STREAM_FRAME_V8_FLAG_HAS_ERROR,
-                sequence: 1,
-                elapsed_ms: 0,
-                payload_content_type: Vec::new(),
-                payload: Vec::new(),
-                admission_receipt_json: Vec::new(),
-                terminal_receipt_json: Vec::new(),
-                error_json: serde_json::json!({
-                    "code": "PROTOCOL_ERROR",
-                    "stage": "stream_projection",
-                    "message": message,
-                    "retryable": false,
-                })
-                .to_string()
-                .into_bytes(),
-            }),
-        ),
+        StreamCallbackEncoding::V8 => {
+            StreamCallbackDelivery::V8(binary_v8_error_delivery_or_fallback(&metadata))
+        }
+        StreamCallbackEncoding::V9 => StreamCallbackDelivery::V9(BinaryStreamFrameV9::from_v8(
+            binary_v8_error_delivery_or_fallback(&metadata),
+        )),
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn binary_v8_error_delivery_or_fallback(metadata: &serde_json::Value) -> BinaryStreamFrameV8 {
+    binary_v8_error_delivery(metadata).unwrap_or_else(|message| BinaryStreamFrameV8 {
+        kind: STREAM_FRAME_V8_KIND_ERROR,
+        state: STREAM_FRAME_V8_STATE_FAILED,
+        flags: STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL | STREAM_FRAME_V8_FLAG_HAS_ERROR,
+        sequence: 1,
+        elapsed_ms: 0,
+        payload_content_type: Vec::new(),
+        payload: Vec::new(),
+        admission_receipt_json: Vec::new(),
+        terminal_receipt_json: Vec::new(),
+        error_json: serde_json::json!({
+            "code": "PROTOCOL_ERROR",
+            "stage": "stream_projection",
+            "message": message,
+            "retryable": false,
+        })
+        .to_string()
+        .into_bytes(),
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -7474,6 +8031,9 @@ impl VerifiedStreamCallbackFrame {
                 ))
             }
             StreamCallbackEncoding::V8 => Ok(StreamCallbackDelivery::V8(self.into_binary_v8()?)),
+            StreamCallbackEncoding::V9 => Ok(StreamCallbackDelivery::V9(
+                BinaryStreamFrameV9::from_v8(self.into_binary_v8()?),
+            )),
         }
     }
 
@@ -13738,5 +14298,391 @@ mod tests {
             "runtime bidi frame did not include a payload"
         );
         assert_ne!(value["kind"], "unknown");
+    }
+
+    struct BlockingStreamCallbackState {
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        frames: AtomicUsize,
+        eof: AtomicUsize,
+    }
+
+    unsafe extern "C" fn blocking_stream_callback(user_data: *mut c_void, chunk: *const c_char) {
+        let state = unsafe { &*(user_data.cast::<BlockingStreamCallbackState>()) };
+        if chunk.is_null() {
+            state.eof.fetch_add(1, AtomicOrdering::SeqCst);
+            return;
+        }
+        state.frames.fetch_add(1, AtomicOrdering::SeqCst);
+        state.entered.send(()).unwrap();
+        state
+            .release
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .recv()
+            .unwrap();
+    }
+
+    #[test]
+    fn stream_close_waits_for_inflight_callback_and_suppresses_late_eof() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let state = Box::new(BlockingStreamCallbackState {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            frames: AtomicUsize::new(0),
+            eof: AtomicUsize::new(0),
+        });
+        let state_ptr = Box::into_raw(state);
+        let fence = Arc::new(CallbackDispatcherFence::new());
+        fence.arm();
+        let dispatcher_fence = fence.clone();
+        let callback_user_data = CallbackUserData(state_ptr.cast());
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let dispatcher = std::thread::spawn(move || {
+            dispatch_stream_callbacks(
+                rx,
+                InvocationStreamCallbackTarget::Json(blocking_stream_callback),
+                callback_user_data,
+                ClientSessionBinding {
+                    handle: 91,
+                    incarnation: 17,
+                },
+                44,
+                dispatcher_fence,
+            )
+        });
+        tx.blocking_send(StreamCallbackDelivery::Json(b"{}".to_vec()))
+            .unwrap();
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("callback must enter");
+
+        fence.request_stop();
+        drop(tx);
+        let (quiesced_tx, quiesced_rx) = std::sync::mpsc::channel();
+        let waiter_fence = fence.clone();
+        let waiter = std::thread::spawn(move || {
+            waiter_fence.wait_for_quiescence();
+            quiesced_tx.send(()).unwrap();
+        });
+        assert!(
+            quiesced_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "close must not return while user_data is in an active callback"
+        );
+        release_tx.send(()).unwrap();
+        quiesced_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("callback completion must release close waiter");
+        waiter.join().unwrap();
+        dispatcher.join().unwrap();
+
+        let state = unsafe { Box::from_raw(state_ptr) };
+        assert_eq!(state.frames.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(state.eof.load(AtomicOrdering::SeqCst), 0);
+    }
+
+    #[test]
+    fn v9_empty_payload_rejects_closed_stream_before_canonicalizing_empty_lease() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+        close_buffer_lease_stream(owner, stream_id);
+
+        assert_eq!(
+            allocate_buffer_lease(owner, stream_id, Bytes::new()),
+            Err(BufferLeaseAllocationError::StreamClosed)
+        );
+
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn v9_queue_budget_remains_held_by_delivered_lease() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+        let budget = Arc::new(tokio::sync::Semaphore::new(4));
+        let delivery =
+            StreamCallbackDelivery::V9(BinaryStreamFrameV9::from_v8(BinaryStreamFrameV8 {
+                kind: STREAM_FRAME_V8_KIND_DATA,
+                state: STREAM_FRAME_V8_STATE_RUNNING,
+                flags: STREAM_FRAME_V8_FLAG_HAS_PAYLOAD,
+                sequence: 1,
+                elapsed_ms: 0,
+                payload_content_type: Vec::new(),
+                payload: b"four".to_vec(),
+                admission_receipt_json: Vec::new(),
+                terminal_receipt_json: Vec::new(),
+                error_json: Vec::new(),
+            }));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (delivery, terminal) = runtime
+            .block_on(delivery.reserve_v9_payload_budget(
+                Some(budget.clone()),
+                &tokio_util::sync::CancellationToken::new(),
+            ))
+            .unwrap();
+        assert!(!terminal);
+        assert_eq!(budget.available_permits(), 0);
+        let StreamCallbackDelivery::V9(mut frame) = delivery else {
+            panic!("expected v9 delivery")
+        };
+        let lease_id = allocate_buffer_lease_with_budget(
+            owner,
+            stream_id,
+            frame.payload.clone(),
+            frame.payload_budget.take(),
+        )
+        .unwrap();
+        assert_eq!(budget.available_permits(), 0);
+        assert_eq!(release_buffer_lease(owner, lease_id), Ok(()));
+        assert_eq!(budget.available_permits(), 4);
+
+        close_buffer_lease_stream(owner, stream_id);
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn stream_registry_enforces_per_handle_limit() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let mut stream_ids = Vec::new();
+        for _ in 0..MAX_ACTIVE_STREAMS_PER_OWNER {
+            stream_ids.push(
+                try_insert_stream(ActiveInvocationStream::new(
+                    owner,
+                    tokio_util::sync::CancellationToken::new(),
+                    test_cancellation_control(),
+                ))
+                .expect("within per-handle limit"),
+            );
+        }
+        assert_eq!(
+            try_insert_stream(ActiveInvocationStream::new(
+                owner,
+                tokio_util::sync::CancellationToken::new(),
+                test_cancellation_control(),
+            )),
+            Err(StreamRegistrationError::OwnerLimit)
+        );
+        for stream_id in stream_ids {
+            let _ = remove_stream(stream_id);
+        }
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn v9_payload_moves_from_vec_and_remains_valid_until_final_release() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+
+        let mut source = b"v9-binary-payload\0with-nul".to_vec();
+        source.shrink_to_fit();
+        let source_ptr = source.as_ptr();
+        let delivery = BinaryStreamFrameV9::from_v8(BinaryStreamFrameV8 {
+            kind: STREAM_FRAME_V8_KIND_DATA,
+            state: STREAM_FRAME_V8_STATE_RUNNING,
+            flags: STREAM_FRAME_V8_FLAG_HAS_PAYLOAD,
+            sequence: 7,
+            elapsed_ms: 3,
+            payload_content_type: b"application/octet-stream".to_vec(),
+            payload: source,
+            admission_receipt_json: Vec::new(),
+            terminal_receipt_json: Vec::new(),
+            error_json: Vec::new(),
+        });
+        assert_eq!(
+            delivery.payload.as_ptr(),
+            source_ptr,
+            "Vec<u8> -> Bytes must move the decoded allocation instead of copying it"
+        );
+
+        let lease_id = allocate_buffer_lease(owner, stream_id, delivery.payload.clone()).unwrap();
+        let frame = delivery.borrowed_frame(lease_id);
+        assert_eq!(frame.abi_version, 9);
+        assert_eq!(frame.payload.lease_id, lease_id);
+        assert_eq!(frame.payload.data, source_ptr);
+        assert_eq!(frame.payload.len, delivery.payload.len());
+
+        assert_eq!(runtime_buffer_lease_retain_v9(handle, lease_id), RUNTIME_OK);
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            RUNTIME_OK
+        );
+        close_buffer_lease_stream(owner, stream_id);
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            RUNTIME_OK,
+            "a delivered lease remains valid after stream close"
+        );
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            ERR_NOT_FOUND,
+            "final release must make the opaque id stale"
+        );
+
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn v9_lease_rejects_cross_session_access_and_shutdown_purges_owner() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let (other_handle, _) = alloc(test_session());
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+        let lease_id = allocate_buffer_lease(owner, stream_id, Bytes::from_static(b"owned"))
+            .expect("allocate owner lease");
+
+        assert_eq!(
+            runtime_buffer_lease_retain_v9(other_handle, lease_id),
+            ERR_PERMISSION_DENIED
+        );
+        assert_eq!(
+            runtime_buffer_lease_release_v9(other_handle, lease_id),
+            ERR_PERMISSION_DENIED
+        );
+
+        cancel_invocations_for_binding(owner);
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            ERR_NOT_FOUND,
+            "RuntimeHandle shutdown cleanup must revoke all owned leases"
+        );
+        crate::ffi::client::handle::release(handle);
+        crate::ffi::client::handle::release(other_handle);
+    }
+
+    #[test]
+    fn v9_oversized_payload_projects_an_explicit_error_before_eof() {
+        let delivery = v9_payload_too_large_delivery(17, 23, 300 * 1024 * 1024);
+        let frame = delivery.borrowed_frame(0);
+
+        assert_eq!(frame.kind, STREAM_FRAME_V8_KIND_ERROR);
+        assert_eq!(frame.state, STREAM_FRAME_V8_STATE_FAILED);
+        assert_eq!(frame.sequence, 17);
+        assert_eq!(frame.elapsed_ms, 23);
+        assert_eq!(frame.payload.lease_id, 0);
+        assert!(frame.payload.data.is_null());
+        assert_eq!(frame.payload.len, 0);
+        assert_ne!(frame.flags & STREAM_FRAME_V8_FLAG_HAS_ERROR, 0);
+        assert_ne!(frame.flags & STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL, 0);
+        let error: serde_json::Value =
+            serde_json::from_slice(&delivery.error_json).expect("v9 error sidecar");
+        assert_eq!(error["code"], "PAYLOAD_TOO_LARGE");
+        assert_eq!(error["stage"], "stream_projection");
+        assert_eq!(error["retryable"], false);
+    }
+
+    #[test]
+    fn v9_lease_bound_backpressures_and_stream_close_wakes_waiters() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+
+        let leases = (0..STREAM_V9_MAX_OUTSTANDING_LEASES)
+            .map(|_| {
+                allocate_buffer_lease(owner, stream_id, Bytes::from_static(b"x"))
+                    .expect("fill lease capacity")
+            })
+            .collect::<Vec<_>>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            result_tx
+                .send(allocate_buffer_lease(
+                    owner,
+                    stream_id,
+                    Bytes::from_static(b"unblocked"),
+                ))
+                .unwrap();
+        });
+
+        assert!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "the 65th outstanding lease must wait instead of allocating"
+        );
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, leases[0]),
+            RUNTIME_OK
+        );
+        let unblocked = result_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("release must wake the bounded allocator")
+            .expect("stream remains open");
+        waiter.join().unwrap();
+
+        let (close_tx, close_rx) = std::sync::mpsc::channel();
+        let close_waiter = std::thread::spawn(move || {
+            close_tx
+                .send(allocate_buffer_lease(
+                    owner,
+                    stream_id,
+                    Bytes::from_static(b"must-not-deliver"),
+                ))
+                .unwrap();
+        });
+        assert!(
+            close_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "a full stream must keep applying backpressure"
+        );
+        close_buffer_lease_stream(owner, stream_id);
+        assert_eq!(
+            close_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("stream close must wake the allocator"),
+            Err(BufferLeaseAllocationError::StreamClosed)
+        );
+        close_waiter.join().unwrap();
+
+        for lease_id in leases.into_iter().skip(1).chain(std::iter::once(unblocked)) {
+            assert_eq!(
+                runtime_buffer_lease_release_v9(handle, lease_id),
+                RUNTIME_OK
+            );
+        }
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
     }
 }

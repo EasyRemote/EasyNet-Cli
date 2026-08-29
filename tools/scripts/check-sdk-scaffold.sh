@@ -15,6 +15,7 @@ required=(
   include/easynet_cli.h
   include/easynet_cli.exports.v7
   include/easynet_cli.exports.v8
+  include/easynet_cli.exports.v9
   tools/sdk-conformance-runner/Cargo.toml
   tools/sdk-conformance-runner/src/main.rs
   sdk/README.md
@@ -87,6 +88,17 @@ if not schemas or not fixtures or not cases or not reports:
 
 for path in schemas + fixtures + reports:
     load_json(path)
+
+feature_schema = load_json(schema_dir / "feature-discovery.schema.json")
+try:
+    extension_required = feature_schema["properties"]["abi_extensions"]["required"]
+    symbol_required = feature_schema["properties"]["symbols"]["required"]
+except (KeyError, TypeError) as exc:
+    fail(f"feature discovery schema has no additive extension boundary: {exc}")
+if "v9" in extension_required:
+    fail("feature discovery schema must accept pre-v9 discovery without abi_extensions.v9")
+if "stream_buffer_lease_v9" in symbol_required:
+    fail("feature discovery schema must accept pre-v9 discovery without stream_buffer_lease_v9")
 
 bindings_path = root / "sdk/conformance/fixture-schema-bindings.json"
 bindings = load_json(bindings_path)
@@ -193,14 +205,19 @@ PY
 )"
 v7_symbols="$(LC_ALL=C sort -u "$ROOT/include/easynet_cli.exports.v7")"
 v8_symbols="$(LC_ALL=C sort -u "$ROOT/include/easynet_cli.exports.v8")"
-[[ "$header_symbols" == "$v8_symbols" ]] || fail "C header and v8 export allowlist differ"
+v9_symbols="$(LC_ALL=C sort -u "$ROOT/include/easynet_cli.exports.v9")"
+[[ "$header_symbols" == "$v9_symbols" ]] || fail "C header and latest v9 export allowlist differ"
 [[ "$(printf '%s\n' "$v7_symbols" | grep -c '^runtime_')" -eq 56 ]] || fail "generic C ABI v7 must contain exactly 56 runtime symbols"
 [[ "$(printf '%s\n' "$v8_symbols" | grep -c '^runtime_')" -eq 57 ]] || fail "generic C ABI v8 must contain exactly 57 runtime symbols"
+[[ "$(printf '%s\n' "$v9_symbols" | grep -c '^runtime_')" -eq 60 ]] || fail "generic C ABI v9 must contain exactly 60 runtime symbols"
 [[ "$(comm -23 "$ROOT/include/easynet_cli.exports.v7" "$ROOT/include/easynet_cli.exports.v8")" == "" ]] || fail "generic C ABI v8 must include every v7 symbol"
 [[ "$(comm -13 "$ROOT/include/easynet_cli.exports.v7" "$ROOT/include/easynet_cli.exports.v8")" == "runtime_invocation_stream_open_v8" ]] || fail "generic C ABI v8 must add only runtime_invocation_stream_open_v8"
+[[ "$(comm -23 "$ROOT/include/easynet_cli.exports.v8" "$ROOT/include/easynet_cli.exports.v9")" == "" ]] || fail "generic C ABI v9 must include every v8 symbol"
+[[ "$(comm -13 "$ROOT/include/easynet_cli.exports.v8" "$ROOT/include/easynet_cli.exports.v9")" == $'runtime_buffer_lease_release_v9\nruntime_buffer_lease_retain_v9\nruntime_invocation_stream_open_v9' ]] || fail "generic C ABI v9 has an invalid additive set"
 [[ "$(printf '%s\n' "$v7_symbols" | grep -c '^easynet_')" -eq 0 ]] || fail "generic C ABI v7 must not contain easynet-prefixed symbols"
 [[ "$(printf '%s\n' "$v8_symbols" | grep -c '^easynet_')" -eq 0 ]] || fail "generic C ABI v8 must not contain easynet-prefixed symbols"
-if printf '%s\n' "$v8_symbols" | rg -q '_(admin|directory|identity|mission|publication|receipt|surface|compatibility|host_binding|events|wrapper|companion)_'; then
+[[ "$(printf '%s\n' "$v9_symbols" | grep -c '^easynet_')" -eq 0 ]] || fail "generic C ABI v9 must not contain easynet-prefixed symbols"
+if printf '%s\n' "$v9_symbols" | rg -q '_(admin|directory|identity|mission|publication|receipt|surface|compatibility|host_binding|events|wrapper|companion)_'; then
   fail "product-domain symbol leaked into C ABI v7"
 fi
 

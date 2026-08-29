@@ -9,6 +9,7 @@ cd "$ROOT"
 HEADER="include/easynet_cli.h"
 ALLOWLIST="include/easynet_cli.exports.v7"
 ALLOWLIST_V8="include/easynet_cli.exports.v8"
+ALLOWLIST_LATEST="include/easynet_cli.exports.v9"
 SPEC="docs/spec/ffi-abi-v7.md"
 RELEASE_TARBALL_SCRIPT="packaging/release/build-release-tarball.sh"
 RELEASE_INSTALL_E2E_SCRIPT="packaging/release/e2e-release-install.sh"
@@ -123,14 +124,16 @@ compare_exact() {
 compare_v7_surface_with_extensions() {
     local label="$1"
     local actual="$2"
-    local sorted_v8="$tmp/v8.symbols"
-    if [[ -f "$ALLOWLIST_V8" ]]; then
-        LC_ALL=C sort "$ALLOWLIST_V8" >"$sorted_v8"
+    local sorted_latest="$tmp/latest.symbols"
+    if [[ -f "$ALLOWLIST_LATEST" ]]; then
+        LC_ALL=C sort "$ALLOWLIST_LATEST" >"$sorted_latest"
+    elif [[ -f "$ALLOWLIST_V8" ]]; then
+        LC_ALL=C sort "$ALLOWLIST_V8" >"$sorted_latest"
     else
-        cp "$ALLOWLIST" "$sorted_v8"
+        cp "$ALLOWLIST" "$sorted_latest"
     fi
     comm -23 "$ALLOWLIST" "$actual" >"$tmp/$label.missing-v7" || true
-    comm -23 "$actual" "$sorted_v8" >"$tmp/$label.unexpected" || true
+    comm -23 "$actual" "$sorted_latest" >"$tmp/$label.unexpected" || true
     if [[ -s "$tmp/$label.missing-v7" || -s "$tmp/$label.unexpected" ]]; then
         record_violation "$label is not v7 plus declared ABI extensions" \
             "missing_v7:\n$(cat "$tmp/$label.missing-v7")\nunexpected:\n$(cat "$tmp/$label.unexpected")"
@@ -141,10 +144,10 @@ exported_symbols() {
     local lib="$1"
     case "$(uname -s)" in
         Darwin)
-            nm -gU "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            nm -gU "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//'
             ;;
         Linux)
-            nm -D --defined-only "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            nm -D --defined-only "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/@.*//'
             ;;
         *)
             return 1
@@ -196,10 +199,23 @@ if require_file "$ALLOWLIST_V8"; then
     fi
     require_literal "$ALLOWLIST_V8" "runtime_invocation_stream_open_v8"
 fi
+if require_file "$ALLOWLIST_LATEST"; then
+    if ! LC_ALL=C sort -c "$ALLOWLIST_LATEST" 2>/dev/null; then
+        record_violation "latest extension allowlist must be sorted" "$ALLOWLIST_LATEST"
+    fi
+    comm -23 "$ALLOWLIST_V8" "$ALLOWLIST_LATEST" >"$tmp/v9-missing-v8" || true
+    if [[ -s "$tmp/v9-missing-v8" ]]; then
+        record_violation "v9 allowlist must include every v8 symbol" "$(cat "$tmp/v9-missing-v8")"
+    fi
+    require_literal "$ALLOWLIST_LATEST" "runtime_invocation_stream_open_v9"
+    require_literal "$ALLOWLIST_LATEST" "runtime_buffer_lease_retain_v9"
+    require_literal "$ALLOWLIST_LATEST" "runtime_buffer_lease_release_v9"
+fi
 
 if require_file "$HEADER"; then
     require_literal "$HEADER" "#define RUNTIME_ABI_VERSION 7u"
     require_literal "$HEADER" "#define RUNTIME_ABI_V8_EXTENSION_VERSION 8u"
+    require_literal "$HEADER" "#define RUNTIME_ABI_V9_EXTENSION_VERSION 9u"
     if command -v cc >/dev/null 2>&1; then
         if ! printf '#include "include/easynet_cli.h"\n' | cc -I. -x c -fsyntax-only - >/dev/null 2>&1; then
             record_violation "C compiler rejects v7 header" "$HEADER"
@@ -252,8 +268,10 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
     require_literal "$SPEC" "include/easynet_cli.exports.v7"
     require_literal "$SPEC" "include/easynet_cli.exports.v8"
+    require_literal "$SPEC" "include/easynet_cli.exports.v9"
     require_literal "$SPEC" 'exactly `56`'
     require_literal "$SPEC" 'exactly `57`'
+    require_literal "$SPEC" 'exactly `60`'
     require_literal "$SPEC" "runtime_invocation_stream_open_v8"
     require_literal "$SPEC" 'ABI version: `7`'
 fi
@@ -266,6 +284,7 @@ for release_script in \
 do
     if require_file "$release_script"; then
         require_literal "$release_script" "easynet_cli.exports.v8"
+        require_literal "$release_script" "easynet_cli.exports.v9"
     fi
 done
 

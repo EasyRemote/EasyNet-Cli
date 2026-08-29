@@ -186,10 +186,15 @@ jobs:
       # exports. Build the actual shared library and compare its normalized
       # dynamic symbol table against the canonical base-v7 allowlist. The v8
       # raw-stream entry point is additive and feature-detected.
-      - name: Verify exact generic C ABI v7 and v8 extension exports
+      - name: Verify exact generic C ABI v7/v8/v9 extension exports
         working-directory: EasyNet-Cli
         run: |
           cargo build --features axon-pb --lib
+          bash packaging/release/constrain-c-abi-exports.sh \
+            --library "target/debug/libeasynet_cli.$([[ \"$(uname -s)\" == Darwin ]] && echo dylib || echo so)" \
+            --allowlist include/easynet_cli.exports.v9
           EASYNET_FFI_REQUIRE_DYLIB=1 bash tools/scripts/check-ffi-abi-v7-header.sh
           EASYNET_FFI_REQUIRE_DYLIB=1 bash tools/scripts/check-ffi-abi-v8-header.sh
+          EASYNET_FFI_REQUIRE_DYLIB=1 bash tools/scripts/check-ffi-abi-v9-header.sh
           bash tests/scripts/test_check_ffi_abi_v8_header.sh
+          bash tests/scripts/test_check_ffi_abi_v9_header.sh

@@ -21,6 +21,7 @@ make_sandbox() {
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
     cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v9" "$sandbox/include/easynet_cli.exports.v9"
     cp -R "$REPO_ROOT/src/ffi" "$sandbox/src/ffi"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v8.md" "$sandbox/docs/spec/ffi-abi-v8.md"
     cp "$REPO_ROOT/sdk/conformance/fixtures/feature-discovery.v7.json" \
@@ -73,7 +74,7 @@ expect_failure "v8 header symbol drift" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/JSON pointers, v8 frame pointers/JSON pointers/' \
+perl -0pi -e 's/every RuntimeBytesViewV8 member/every removed member/' \
     "$SB/include/easynet_cli.h"
 expect_failure "v8 borrowed payload ownership removed" "$SB"
 rm -rf "$SB"
@@ -182,7 +183,7 @@ if command -v cc >/dev/null 2>&1 && command -v nm >/dev/null 2>&1; then
     {
         while IFS= read -r symbol; do
             printf 'void %s(void) {}\n' "$symbol"
-        done <"$SB/include/easynet_cli.exports.v8"
+        done <"$SB/include/easynet_cli.exports.v9"
     } >"$C_SOURCE"
     if [[ "$(uname -s)" == "Darwin" ]]; then
         cc -dynamiclib -o "$LIB" "$C_SOURCE"
@@ -190,7 +191,7 @@ if command -v cc >/dev/null 2>&1 && command -v nm >/dev/null 2>&1; then
         cc -shared -fPIC -o "$LIB" "$C_SOURCE"
     fi
     EASYNET_FFI_DYLIB="$LIB" run_check "$SB" >/dev/null \
-        || fail "exact v8 dynamic-library exports should pass"
+        || fail "exact latest dynamic-library exports should pass"
 
     sed -i.bak '/runtime_invocation_stream_open_v8/d' "$C_SOURCE"
     rm -f "$C_SOURCE.bak"

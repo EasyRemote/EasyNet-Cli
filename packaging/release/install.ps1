@@ -4,6 +4,8 @@ $ErrorActionPreference = "Stop"
 
 $BaseUrl = "https://easynet.run/download"
 $InstallDir = "$env:USERPROFILE\.easynet\bin"
+$IncludeDir = "$env:USERPROFILE\.easynet\include"
+$DocDir = "$env:USERPROFILE\.easynet\docs"
 $NativeDir = "$env:USERPROFILE\.easynet\dendrite-bridge\native"
 $Target = "x86_64-pc-windows-gnu"
 
@@ -28,6 +30,16 @@ Copy-Item (Join-Path $TmpDir "easynet-daemon.exe") (Join-Path $InstallDir "easyn
 Copy-Item (Join-Path $TmpDir "easynet-keyring.exe") (Join-Path $InstallDir "easynet-keyring.exe") -Force
 Copy-Item (Join-Path $TmpDir "easynet-remoteapp-native-host.exe") (Join-Path $InstallDir "easynet-remoteapp-native-host.exe") -Force
 Copy-Item (Join-Path $TmpDir "easynet-remoteapp-media-host.exe") (Join-Path $InstallDir "easynet-remoteapp-media-host.exe") -Force
+Copy-Item (Join-Path $TmpDir "easynet_cli.dll") (Join-Path $InstallDir "easynet_cli.dll") -Force
+
+New-Item -ItemType Directory -Path $IncludeDir -Force | Out-Null
+New-Item -ItemType Directory -Path $DocDir -Force | Out-Null
+foreach ($Contract in @("easynet_cli.h", "easynet_cli.exports.v7", "easynet_cli.exports.v8", "easynet_cli.exports.v9")) {
+    Copy-Item (Join-Path (Join-Path $TmpDir "include") $Contract) (Join-Path $IncludeDir $Contract) -Force
+}
+foreach ($Spec in @("ffi-abi-v7.md", "ffi-abi-v8.md", "ffi-abi-v9.md")) {
+    Copy-Item (Join-Path (Join-Path $TmpDir "docs\spec") $Spec) (Join-Path $DocDir $Spec) -Force
+}
 
 # Install dendrite bridge
 if (-not (Test-Path $NativeDir)) {
@@ -78,6 +90,8 @@ Write-Host "    easynet-daemon.exe  → $InstallDir"
 Write-Host "    easynet-keyring.exe → $InstallDir"
 Write-Host "    easynet-remoteapp-native-host.exe → $InstallDir"
 Write-Host "    easynet-remoteapp-media-host.exe → $InstallDir"
+Write-Host "    easynet_cli.dll     → $InstallDir"
+Write-Host "    C ABI contracts     → $IncludeDir"
 Write-Host "    dendrite bridge     → $NativeDir"
 Write-Host ""
 Write-Host "  Run 'easynet --help' to get started."

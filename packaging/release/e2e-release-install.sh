@@ -12,6 +12,7 @@
 #   * `easynet-daemon`           is on PATH
 #   * `easynet-keyring` and `easynet-remoteapp-native-host` are on PATH
 #   * `libaxon_dendrite_bridge`  is at $HOME/.easynet/dendrite-bridge/native/
+#   * `libeasynet_cli`           is under the platform library directory
 #   * `easynet_cli.h`            is installed under the sandbox include dir
 #   * `easynet_cli.exports.v7`   is installed under the sandbox include dir
 #   * `easynet_cli.exports.v8`   is installed under the sandbox include dir
@@ -125,11 +126,12 @@ echo "==> tarball:        $tarball"
 
 # Mirror packaging/release/install.sh layout under the sandbox prefix.
 install_dir="$prefix/usr/local/bin"
+lib_dir="$prefix/usr/local/lib"
 include_dir="$prefix/usr/local/include/easynet"
 doc_dir="$prefix/usr/local/share/doc/easynet"
 easynet_home="$prefix/home/.easynet"
 native_dir="$easynet_home/dendrite-bridge/native"
-mkdir -p "$install_dir" "$include_dir" "$doc_dir" "$native_dir"
+mkdir -p "$install_dir" "$lib_dir" "$include_dir" "$doc_dir" "$native_dir"
 
 # Step 1: extract.
 extract_dir="$prefix/extract"
@@ -145,12 +147,15 @@ for required in \
     easynet-keyring \
     easynet-remoteapp-native-host \
     easynet-remoteapp-media-host \
+    "libeasynet_cli.${lib_ext}" \
     "libaxon_dendrite_bridge.${lib_ext}" \
     include/easynet_cli.h \
     include/easynet_cli.exports.v7 \
     include/easynet_cli.exports.v8 \
+    include/easynet_cli.exports.v9 \
     docs/spec/ffi-abi-v7.md \
-    docs/spec/ffi-abi-v8.md
+    docs/spec/ffi-abi-v8.md \
+    docs/spec/ffi-abi-v9.md
 do
     if [ ! -f "$extract_dir/$required" ]; then
         echo "[FAIL] tarball missing required artefact: $required" >&2
@@ -174,12 +179,15 @@ mv "$extract_dir/easynet-keyring" "$install_dir/easynet-keyring"
 mv "$extract_dir/easynet-remoteapp-native-host" "$install_dir/easynet-remoteapp-native-host"
 mv "$extract_dir/easynet-remoteapp-media-host" "$install_dir/easynet-remoteapp-media-host"
 chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon" "$install_dir/easynet-keyring" "$install_dir/easynet-remoteapp-native-host" "$install_dir/easynet-remoteapp-media-host"
+mv "$extract_dir/libeasynet_cli.${lib_ext}" "$lib_dir/libeasynet_cli.${lib_ext}"
 mv "$extract_dir/libaxon_dendrite_bridge.${lib_ext}" "$native_dir/"
 mv "$extract_dir/include/easynet_cli.h" "$include_dir/easynet_cli.h"
 mv "$extract_dir/include/easynet_cli.exports.v7" "$include_dir/easynet_cli.exports.v7"
 mv "$extract_dir/include/easynet_cli.exports.v8" "$include_dir/easynet_cli.exports.v8"
+mv "$extract_dir/include/easynet_cli.exports.v9" "$include_dir/easynet_cli.exports.v9"
 mv "$extract_dir/docs/spec/ffi-abi-v7.md" "$doc_dir/ffi-abi-v7.md"
 mv "$extract_dir/docs/spec/ffi-abi-v8.md" "$doc_dir/ffi-abi-v8.md"
+mv "$extract_dir/docs/spec/ffi-abi-v9.md" "$doc_dir/ffi-abi-v9.md"
 
 # Step 5: env stamping (mirror packaging/release/install.sh::setup_env). We don't
 # write into a real shell profile — the harness's caller picks up
@@ -189,6 +197,7 @@ cat > "$env_file" <<EOF
 # Sourced by e2e-release-flow.sh. Mirrors what packaging/release/install.sh appends
 # to a real user's shell profile.
 export EASYNET_DENDRITE_BRIDGE_LIB="$native_dir/libaxon_dendrite_bridge.${lib_ext}"
+export EASYNET_CLI_LIB="$lib_dir/libeasynet_cli.${lib_ext}"
 export PATH="$install_dir:\$PATH"
 # Sandbox HOME so each Phase-C run gets its own credentials.json /
 # local-agents.json / runtime.json without touching the real user's
@@ -204,12 +213,15 @@ for assert in \
     "$install_dir/easynet-keyring:executable" \
     "$install_dir/easynet-remoteapp-native-host:executable" \
     "$install_dir/easynet-remoteapp-media-host:executable" \
+    "$lib_dir/libeasynet_cli.${lib_ext}:exists" \
     "$native_dir/libaxon_dendrite_bridge.${lib_ext}:exists" \
     "$include_dir/easynet_cli.h:exists" \
     "$include_dir/easynet_cli.exports.v7:exists" \
     "$include_dir/easynet_cli.exports.v8:exists" \
+    "$include_dir/easynet_cli.exports.v9:exists" \
     "$doc_dir/ffi-abi-v7.md:exists" \
-    "$doc_dir/ffi-abi-v8.md:exists"
+    "$doc_dir/ffi-abi-v8.md:exists" \
+    "$doc_dir/ffi-abi-v9.md:exists"
 do
     path="${assert%:*}"
     kind="${assert##*:}"
@@ -241,6 +253,9 @@ if [ "$fail" != 0 ]; then
     exit 1
 fi
 
+EASYNET_FFI_DYLIB="$lib_dir/libeasynet_cli.${lib_ext}" \
+    bash "$cli_root/tools/scripts/check-ffi-abi-v9-header.sh"
+
 if ! grep -q '#define RUNTIME_ABI_VERSION 7u' "$include_dir/easynet_cli.h"; then
     echo "[FAIL] installed easynet_cli.h does not declare ABI version 5" >&2
     fail=1
@@ -255,6 +270,12 @@ fi
 if [ "$(wc -l < "$include_dir/easynet_cli.exports.v8" | tr -d ' ')" != "57" ] ||
    ! LC_ALL=C sort -c "$include_dir/easynet_cli.exports.v8" 2>/dev/null; then
     echo "[FAIL] installed easynet_cli.exports.v8 is not the exact sorted 57-symbol contract" >&2
+    fail=1
+fi
+
+if [ "$(wc -l < "$include_dir/easynet_cli.exports.v9" | tr -d ' ')" != "60" ] ||
+   ! LC_ALL=C sort -c "$include_dir/easynet_cli.exports.v9" 2>/dev/null; then
+    echo "[FAIL] installed easynet_cli.exports.v9 is not the exact sorted 60-symbol contract" >&2
     fail=1
 fi
 
@@ -276,12 +297,36 @@ if [ "$(cat "$prefix/v8-added")" != "runtime_invocation_stream_open_v8" ]; then
     fail=1
 fi
 
+if ! comm -23 "$include_dir/easynet_cli.exports.v8" "$include_dir/easynet_cli.exports.v9" | sed '/^$/d' >"$prefix/v9-missing-v8"; then
+    true
+fi
+if [ -s "$prefix/v9-missing-v8" ]; then
+    echo "[FAIL] installed easynet_cli.exports.v9 does not include every v8 symbol" >&2
+    cat "$prefix/v9-missing-v8" >&2
+    fail=1
+fi
+
+if ! comm -13 "$include_dir/easynet_cli.exports.v8" "$include_dir/easynet_cli.exports.v9" >"$prefix/v9-added"; then
+    true
+fi
+if [ "$(cat "$prefix/v9-added")" != "runtime_buffer_lease_release_v9
+runtime_buffer_lease_retain_v9
+runtime_invocation_stream_open_v9" ]; then
+    echo "[FAIL] installed easynet_cli.exports.v9 has an invalid additive symbol set" >&2
+    cat "$prefix/v9-added" >&2
+    fail=1
+fi
+
 if ! grep -q 'include/easynet_cli.h' "$doc_dir/ffi-abi-v7.md"; then
     echo "[FAIL] installed ffi-abi-v7.md does not reference the C header contract" >&2
     fail=1
 fi
 if ! grep -q 'runtime_invocation_stream_open_v8' "$doc_dir/ffi-abi-v8.md"; then
     echo "[FAIL] installed ffi-abi-v8.md does not define the binary stream extension" >&2
+    fail=1
+fi
+if ! grep -q 'runtime_buffer_lease_release_v9' "$doc_dir/ffi-abi-v9.md"; then
+    echo "[FAIL] installed ffi-abi-v9.md does not define the buffer-lease extension" >&2
     fail=1
 fi
 
@@ -329,12 +374,13 @@ echo
 echo "[OK] release-shape install verified"
 echo "  install_dir: $install_dir"
 echo "  native_dir:  $native_dir"
+echo "  lib_dir:     $lib_dir"
 echo "  include_dir: $include_dir"
 echo "  doc_dir:     $doc_dir"
 echo "  env file:    $env_file"
 echo "  binaries:    easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, easynet-remoteapp-media-host"
-echo "  library:     libaxon_dendrite_bridge.${lib_ext}"
-echo "  c abi:       easynet_cli.h + easynet_cli.exports.v7 + easynet_cli.exports.v8 (generic ABI v7 with v8 raw-stream extension)"
+echo "  libraries:   libeasynet_cli.${lib_ext}, libaxon_dendrite_bridge.${lib_ext}"
+echo "  c abi:       easynet_cli.h + exports.v7/v8/v9 (generic ABI v7 with raw-stream and buffer-lease extensions)"
 echo "  forbidden:   axon-runtime (absent ✓)"
 echo
 # Last-line contract for Phase C consumers: env=<path> + prefix=<path>

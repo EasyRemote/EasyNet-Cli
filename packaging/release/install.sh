@@ -33,6 +33,7 @@ set -eu
 
 BASE_URL="https://easynet.run/download"
 INSTALL_DIR="/usr/local/bin"
+LIB_DIR="/usr/local/lib"
 INCLUDE_DIR="/usr/local/include/easynet"
 DOC_DIR="/usr/local/share/doc/easynet"
 
@@ -68,12 +69,15 @@ main() {
     echo "    easynet-keyring              → $INSTALL_DIR/"
     echo "    easynet-remoteapp-native-host → $INSTALL_DIR/"
     echo "    easynet-remoteapp-media-host → $INSTALL_DIR/"
+    echo "    libeasynet_cli.$LIB_EXT      → $LIB_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo "    easynet_cli.h                → $INCLUDE_DIR/"
     echo "    easynet_cli.exports.v7       → $INCLUDE_DIR/"
     echo "    easynet_cli.exports.v8       → $INCLUDE_DIR/"
+    echo "    easynet_cli.exports.v9       → $INCLUDE_DIR/"
     echo "    ffi-abi-v7.md                → $DOC_DIR/"
     echo "    ffi-abi-v8.md                → $DOC_DIR/"
+    echo "    ffi-abi-v9.md                → $DOC_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
         echo "  To activate in this terminal, run:"
@@ -209,12 +213,15 @@ download_and_install() {
     # the exact export allowlists; the spec carries ownership rules. The v8
     # allowlist is an additive raw-stream extension; runtime_abi_version()
     # remains 7.
-    mkdir -p "$INCLUDE_DIR" "$DOC_DIR"
+    mkdir -p "$LIB_DIR" "$INCLUDE_DIR" "$DOC_DIR"
+    mv "${TMPDIR}/libeasynet_cli.${LIB_EXT}" "${LIB_DIR}/libeasynet_cli.${LIB_EXT}"
     mv "${TMPDIR}/include/easynet_cli.h" "${INCLUDE_DIR}/easynet_cli.h"
     mv "${TMPDIR}/include/easynet_cli.exports.v7" "${INCLUDE_DIR}/easynet_cli.exports.v7"
     mv "${TMPDIR}/include/easynet_cli.exports.v8" "${INCLUDE_DIR}/easynet_cli.exports.v8"
+    mv "${TMPDIR}/include/easynet_cli.exports.v9" "${INCLUDE_DIR}/easynet_cli.exports.v9"
     mv "${TMPDIR}/docs/spec/ffi-abi-v7.md" "${DOC_DIR}/ffi-abi-v7.md"
     mv "${TMPDIR}/docs/spec/ffi-abi-v8.md" "${DOC_DIR}/ffi-abi-v8.md"
+    mv "${TMPDIR}/docs/spec/ffi-abi-v9.md" "${DOC_DIR}/ffi-abi-v9.md"
 
     # Install dendrite bridge library under the REAL user's home so
     # the daemon can dlopen it without LD_LIBRARY_PATH gymnastics.

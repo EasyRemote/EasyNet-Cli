@@ -14,6 +14,7 @@ make_sandbox() {
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
     cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v9" "$sandbox/include/easynet_cli.exports.v9"
     cp -R "$REPO_ROOT/src/ffi" "$sandbox/src/ffi"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
     cp -R "$REPO_ROOT/packaging/release" "$sandbox/packaging/release"
@@ -95,7 +96,7 @@ if command -v cc >/dev/null 2>&1 && command -v nm >/dev/null 2>&1; then
     {
         while IFS= read -r symbol; do
             printf 'void %s(void) {}\n' "$symbol"
-        done <"$SB/include/easynet_cli.exports.v7"
+        done <"$SB/include/easynet_cli.exports.v9"
     } >"$C_SOURCE"
     if [[ "$(uname -s)" == "Darwin" ]]; then
         cc -dynamiclib -o "$LIB" "$C_SOURCE"

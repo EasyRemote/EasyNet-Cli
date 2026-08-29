@@ -56,6 +56,7 @@ make_sandbox() {
   cp "$ROOT/include/easynet_cli.h" "$dir/include/easynet_cli.h"
   cp "$ROOT/include/easynet_cli.exports.v7" "$dir/include/easynet_cli.exports.v7"
   cp "$ROOT/include/easynet_cli.exports.v8" "$dir/include/easynet_cli.exports.v8"
+  cp "$ROOT/include/easynet_cli.exports.v9" "$dir/include/easynet_cli.exports.v9"
   cp "$ROOT/tools/sdk-conformance-runner/Cargo.toml" "$dir/tools/sdk-conformance-runner/Cargo.toml"
   cp "$ROOT/tools/sdk-conformance-runner/src/main.rs" "$dir/tools/sdk-conformance-runner/src/main.rs"
   mkdir -p "$dir/src/ffi/features"
@@ -122,6 +123,32 @@ expect_fail "$FIXTURE"
 cp \
   "$ROOT/sdk/conformance/fixture-schema-bindings.json" \
   "$FIXTURE/sdk/conformance/fixture-schema-bindings.json"
+
+python3 - "$FIXTURE/sdk/schemas/feature-discovery.schema.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["properties"]["abi_extensions"]["required"].append("v9")
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+expect_fail "$FIXTURE"
+cp \
+  "$ROOT/sdk/schemas/feature-discovery.schema.json" \
+  "$FIXTURE/sdk/schemas/feature-discovery.schema.json"
+
+python3 - "$FIXTURE/sdk/schemas/feature-discovery.schema.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["properties"]["symbols"]["required"].append("stream_buffer_lease_v9")
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+expect_fail "$FIXTURE"
+cp \
+  "$ROOT/sdk/schemas/feature-discovery.schema.json" \
+  "$FIXTURE/sdk/schemas/feature-discovery.schema.json"
 
 rm "$FIXTURE/sdk/schemas/invocation.schema.json"
 expect_fail "$FIXTURE"

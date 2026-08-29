@@ -16,16 +16,21 @@ make_sandbox() {
     mkdir -p "$sandbox/plugins/remote-desktop/native-host/src"
     mkdir -p "$sandbox/plugins/remote-desktop/media-host/src"
     cp "$REPO_ROOT/packaging/release/build-release-tarball.sh" "$sandbox/packaging/release/build-release-tarball.sh"
+    cp "$REPO_ROOT/packaging/release/constrain-c-abi-exports.sh" "$sandbox/packaging/release/constrain-c-abi-exports.sh"
+    cp "$REPO_ROOT/packaging/release/macos-sign-runtime.sh" "$sandbox/packaging/release/macos-sign-runtime.sh"
     cp "$REPO_ROOT/packaging/release/build-windows-cli.ps1" "$sandbox/packaging/release/build-windows-cli.ps1"
     cp "$REPO_ROOT/packaging/release/e2e-release-flow.sh" "$sandbox/packaging/release/e2e-release-flow.sh"
     cp "$REPO_ROOT/packaging/release/e2e-release-install.sh" "$sandbox/packaging/release/e2e-release-install.sh"
     cp "$REPO_ROOT/packaging/release/install.sh" "$sandbox/packaging/release/install.sh"
+    cp "$REPO_ROOT/packaging/release/install.ps1" "$sandbox/packaging/release/install.ps1"
     cp "$REPO_ROOT/packaging/release/dev-install-local.sh" "$sandbox/packaging/release/dev-install-local.sh"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
     cp "$REPO_ROOT/include/easynet_cli.exports.v8" "$sandbox/include/easynet_cli.exports.v8"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v9" "$sandbox/include/easynet_cli.exports.v9"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v8.md" "$sandbox/docs/spec/ffi-abi-v8.md"
+    cp "$REPO_ROOT/docs/spec/ffi-abi-v9.md" "$sandbox/docs/spec/ffi-abi-v9.md"
     cp "$REPO_ROOT/.github/workflows/release-runtime.yml" "$sandbox/.github/workflows/release-runtime.yml"
     cp "$REPO_ROOT/plugins/remote-desktop/native-host/Cargo.toml" "$sandbox/plugins/remote-desktop/native-host/Cargo.toml"
     cp "$REPO_ROOT/plugins/remote-desktop/native-host/src/main.rs" "$sandbox/plugins/remote-desktop/native-host/src/main.rs"
@@ -72,6 +77,22 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing RemoteApp media host should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/libeasynet_cli/missing_runtime_c_abi/g' \
+    "$SB/packaging/release/build-release-tarball.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing executable C ABI library should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/run\.easynet\.remoteapp\.media-host/run.easynet.remoteapp.unstable-host/g' \
+    "$SB/packaging/release/macos-sign-runtime.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "unstable macOS media-host signing identifier should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's#include/easynet_cli\.h#include/missing_header.h#g' \

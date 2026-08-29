@@ -82,6 +82,35 @@ jobs:
           cmake --version
           cc --version
 
+      - name: Import macOS Developer ID identity
+        if: runner.os == 'macOS'
+        env:
+          EASYNET_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.EASYNET_MACOS_CERTIFICATE_P12_BASE64 }}
+          EASYNET_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.EASYNET_MACOS_CERTIFICATE_PASSWORD }}
+          EASYNET_MACOS_CODESIGN_IDENTITY_SECRET: ${{ secrets.EASYNET_MACOS_CODESIGN_IDENTITY }}
+          EASYNET_MACOS_TEAM_ID_SECRET: ${{ secrets.EASYNET_MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$EASYNET_MACOS_CERTIFICATE_P12_BASE64"
+          test -n "$EASYNET_MACOS_CERTIFICATE_PASSWORD"
+          test -n "$EASYNET_MACOS_CODESIGN_IDENTITY_SECRET"
+          test -n "$EASYNET_MACOS_TEAM_ID_SECRET"
+          SIGNING_KEYCHAIN="$RUNNER_TEMP/easynet-runtime-signing.keychain-db"
+          SIGNING_KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          CERTIFICATE_PATH="$RUNNER_TEMP/easynet-runtime-signing.p12"
+          printf '%s' "$EASYNET_MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          security create-keychain -p "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$SIGNING_KEYCHAIN"
+          security unlock-keychain -p "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security import "$CERTIFICATE_PATH" -k "$SIGNING_KEYCHAIN" \
+            -P "$EASYNET_MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security list-keychains -d user -s "$SIGNING_KEYCHAIN"
+          echo "EASYNET_MACOS_CODESIGN_IDENTITY=$EASYNET_MACOS_CODESIGN_IDENTITY_SECRET" >> "$GITHUB_ENV"
+          echo "EASYNET_MACOS_TEAM_ID=$EASYNET_MACOS_TEAM_ID_SECRET" >> "$GITHUB_ENV"
+          echo "EASYNET_MACOS_SIGNING_KEYCHAIN=$SIGNING_KEYCHAIN" >> "$GITHUB_ENV"
+
       - name: Build production-shape archive
         working-directory: EasyNet-Cli
         run: bash packaging/release/build-release-tarball.sh
@@ -101,6 +130,13 @@ jobs:
           name: easynet-runtime-${{ matrix.target }}
           path: EasyNet-Cli/target/release-tarball/easynet-${{ matrix.target }}.tar.gz
           if-no-files-found: error
+
+      - name: Remove macOS signing keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [[ -n "${EASYNET_MACOS_SIGNING_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$EASYNET_MACOS_SIGNING_KEYCHAIN" || true
+          fi
 
   build-windows:
     name: Build x86_64-pc-windows-gnu
@@ -180,6 +216,23 @@ jobs:
           $Imports = & objdump -p target\x86_64-pc-windows-gnu\release\easynet-daemon.exe
           if ($Imports -match '(?im)DLL Name:.*opus') {
             throw "release daemon unexpectedly depends on a dynamic Opus DLL"
+          }
+
+      - name: Verify Windows v9 C ABI exports
+        working-directory: EasyNet-Cli
+        shell: pwsh
+        run: |
+          $Dll = "target\windows-package\x86_64-pc-windows-gnu\easynet_cli.dll"
+          if (-not (Test-Path $Dll)) { throw "staged easynet_cli.dll is missing" }
+          $Expected = Get-Content "include\easynet_cli.exports.v9" | Sort-Object
+          $Actual = & nm --defined-only --extern-only $Dll |
+            ForEach-Object { ($_ -split '\s+')[-1] } |
+            Where-Object { $_ -match '^runtime_' } |
+            Sort-Object -Unique
+          $Diff = Compare-Object $Expected $Actual
+          if ($Diff) {
+            $Diff | Format-Table | Out-String | Write-Host
+            throw "Windows easynet_cli.dll exports do not match ABI v9"
           }
 
       - name: Upload Windows runtime archive

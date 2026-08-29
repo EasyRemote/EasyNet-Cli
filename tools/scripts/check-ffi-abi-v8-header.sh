@@ -9,6 +9,7 @@ cd "$ROOT"
 HEADER="include/easynet_cli.h"
 V7_ALLOWLIST="include/easynet_cli.exports.v7"
 V8_ALLOWLIST="include/easynet_cli.exports.v8"
+LATEST_ALLOWLIST="include/easynet_cli.exports.v9"
 FEATURE_FIXTURE="sdk/conformance/fixtures/feature-discovery.v7.json"
 SPEC="docs/spec/ffi-abi-v8.md"
 EXPECTED_V7_COUNT=56
@@ -73,10 +74,10 @@ exported_symbols() {
     local lib="$1"
     case "$(uname -s)" in
         Darwin)
-            nm -gU "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            nm -gU "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//'
             ;;
         Linux)
-            nm -D --defined-only "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            nm -D --defined-only "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/@.*//'
             ;;
         *)
             return 1
@@ -122,17 +123,17 @@ if require_file "$HEADER"; then
     require_literal "$HEADER" "typedef struct RuntimeBytesViewV8"
     require_literal "$HEADER" "typedef struct RuntimeInvocationStreamFrameV8"
     require_literal "$HEADER" "typedef void (*RuntimeInvocationStreamV8Callback)"
-    require_literal "$HEADER" "v8 frame pointers"
+    require_literal "$HEADER" "every RuntimeBytesViewV8 member"
     require_literal "$HEADER" "$V8_SYMBOL"
     extract_header_symbols "$HEADER" | LC_ALL=C sort >"$tmp/header.symbols"
-    if ! diff -u "$V8_ALLOWLIST" "$tmp/header.symbols" >"$tmp/header.diff"; then
-        record_violation "header declarations must match v8 allowlist" "$(cat "$tmp/header.diff")"
+    if ! diff -u "$LATEST_ALLOWLIST" "$tmp/header.symbols" >"$tmp/header.diff"; then
+        record_violation "header declarations must match the latest declared extension allowlist" "$(cat "$tmp/header.diff")"
     fi
 fi
 
 extract_source_symbols | LC_ALL=C sort >"$tmp/source.symbols"
-if ! diff -u "$V8_ALLOWLIST" "$tmp/source.symbols" >"$tmp/source.diff"; then
-    record_violation "Rust exported source symbols must match v8 allowlist" "$(cat "$tmp/source.diff")"
+if ! diff -u "$LATEST_ALLOWLIST" "$tmp/source.symbols" >"$tmp/source.diff"; then
+    record_violation "Rust exported source symbols must match the latest declared extension allowlist" "$(cat "$tmp/source.diff")"
 fi
 
 if require_file "$FEATURE_FIXTURE"; then
@@ -308,8 +309,8 @@ if [[ -n "$lib" && -f "$lib" ]]; then
         record_violation "nm unavailable for exact v8 export check" "$lib"
     else
         exported_symbols "$lib" | LC_ALL=C sort >"$tmp/dylib.symbols"
-        if ! diff -u "$V8_ALLOWLIST" "$tmp/dylib.symbols" >"$tmp/dylib.diff"; then
-            record_violation "dynamic-library exports must match exact v8 allowlist" \
+        if ! diff -u "$LATEST_ALLOWLIST" "$tmp/dylib.symbols" >"$tmp/dylib.diff"; then
+            record_violation "dynamic-library exports must match the latest declared extension allowlist" \
                 "$(cat "$tmp/dylib.diff")"
         fi
     fi

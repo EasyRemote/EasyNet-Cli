@@ -12,6 +12,7 @@
 #   easynet-keyring                      — device-signing vault helper
 #   easynet-remoteapp-native-host        — killable Remote Desktop native helper
 #   easynet-remoteapp-media-host         — killable native media generation host
+#   libeasynet_cli.{dylib|so}            — executable generic C ABI v7/v8/v9 provider
 #   libaxon_dendrite_bridge.{dylib|so}   — dendrite SDK shared library
 #   include/easynet_cli.h                — libeasynet_cli generic C ABI header
 #   include/easynet_cli.exports.v7       — exact 56-symbol base export allowlist
@@ -116,6 +117,7 @@ trap 'rm -rf "$stage_dir"' EXIT
 
 cargo_args_cli=(
     -p easynet
+    --lib
     --bin easynet
     --bin easynet-daemon
     --bin easynet-keyring
@@ -153,14 +155,17 @@ daemon_bin="$cli_root/target/$build_profile/easynet-daemon"
 keyring_bin="$cli_root/target/$build_profile/easynet-keyring"
 remoteapp_native_host_bin="$cli_root/target/$build_profile/easynet-remoteapp-native-host"
 remoteapp_media_host_bin="$cli_root/target/$build_profile/easynet-remoteapp-media-host"
+c_abi_lib="$cli_root/target/$build_profile/libeasynet_cli.${lib_ext}"
 bridge_lib="$bridge_crate/target/$build_profile/libaxon_dendrite_bridge.${lib_ext}"
 abi_header="$cli_root/include/easynet_cli.h"
 abi_exports="$cli_root/include/easynet_cli.exports.v7"
 abi_exports_v8="$cli_root/include/easynet_cli.exports.v8"
+abi_exports_v9="$cli_root/include/easynet_cli.exports.v9"
 abi_spec="$cli_root/docs/spec/ffi-abi-v7.md"
 abi_spec_v8="$cli_root/docs/spec/ffi-abi-v8.md"
+abi_spec_v9="$cli_root/docs/spec/ffi-abi-v9.md"
 
-for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$remoteapp_native_host_bin" "$remoteapp_media_host_bin" "$bridge_lib" "$abi_header" "$abi_exports" "$abi_exports_v8" "$abi_spec" "$abi_spec_v8"; do
+for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$remoteapp_native_host_bin" "$remoteapp_media_host_bin" "$c_abi_lib" "$bridge_lib" "$abi_header" "$abi_exports" "$abi_exports_v8" "$abi_exports_v9" "$abi_spec" "$abi_spec_v8" "$abi_spec_v9"; do
     if [ ! -f "$path" ]; then
         echo "build-release-tarball.sh: expected artefact missing: $path" >&2
         exit 1
@@ -184,18 +189,35 @@ cp "$daemon_bin" "$stage_dir/easynet-daemon"
 cp "$keyring_bin" "$stage_dir/easynet-keyring"
 cp "$remoteapp_native_host_bin" "$stage_dir/easynet-remoteapp-native-host"
 cp "$remoteapp_media_host_bin" "$stage_dir/easynet-remoteapp-media-host"
+cp "$c_abi_lib" "$stage_dir/libeasynet_cli.${lib_ext}"
 cp "$bridge_lib" "$stage_dir/libaxon_dendrite_bridge.${lib_ext}"
 mkdir -p "$stage_dir/include" "$stage_dir/docs/spec"
 cp "$abi_header" "$stage_dir/include/easynet_cli.h"
 cp "$abi_exports" "$stage_dir/include/easynet_cli.exports.v7"
 cp "$abi_exports_v8" "$stage_dir/include/easynet_cli.exports.v8"
+cp "$abi_exports_v9" "$stage_dir/include/easynet_cli.exports.v9"
 cp "$abi_spec" "$stage_dir/docs/spec/ffi-abi-v7.md"
 cp "$abi_spec_v8" "$stage_dir/docs/spec/ffi-abi-v8.md"
+cp "$abi_spec_v9" "$stage_dir/docs/spec/ffi-abi-v9.md"
 
 # Strip symbols on release builds to match what production tarballs
 # look like; debug profile keeps symbols for stack traces.
 if [ "$build_profile" = "release" ] && command -v strip >/dev/null 2>&1; then
-    strip "$stage_dir/easynet" "$stage_dir/easynet-daemon" "$stage_dir/easynet-keyring" "$stage_dir/easynet-remoteapp-native-host" "$stage_dir/easynet-remoteapp-media-host" 2>/dev/null || true
+    strip "$stage_dir/easynet" "$stage_dir/easynet-daemon" "$stage_dir/easynet-keyring" "$stage_dir/easynet-remoteapp-native-host" "$stage_dir/easynet-remoteapp-media-host" "$stage_dir/libeasynet_cli.${lib_ext}" 2>/dev/null || true
+fi
+
+bash "$script_dir/constrain-c-abi-exports.sh" \
+    --library "$stage_dir/libeasynet_cli.${lib_ext}" \
+    --allowlist "$abi_exports_v9"
+
+EASYNET_FFI_DYLIB="$stage_dir/libeasynet_cli.${lib_ext}" \
+    bash "$cli_root/tools/scripts/check-ffi-abi-v9-header.sh"
+
+# TCC grants for Screen Recording and Accessibility must bind stable product
+# identities. macOS release archives therefore fail closed unless the complete
+# Runtime process set is Developer-ID signed after the final strip mutation.
+if [ "$host_os" = "Darwin" ]; then
+    bash "$script_dir/macos-sign-runtime.sh" --stage-dir "$stage_dir"
 fi
 
 # tar -C into the staging dir so the tarball entries are flat
@@ -206,16 +228,19 @@ tar -czf "$out_file" -C "$stage_dir" \
     easynet-keyring \
     easynet-remoteapp-native-host \
     easynet-remoteapp-media-host \
+    "libeasynet_cli.${lib_ext}" \
     "libaxon_dendrite_bridge.${lib_ext}" \
     include/easynet_cli.h \
     include/easynet_cli.exports.v7 \
     include/easynet_cli.exports.v8 \
+    include/easynet_cli.exports.v9 \
     docs/spec/ffi-abi-v7.md \
-    docs/spec/ffi-abi-v8.md
+    docs/spec/ffi-abi-v8.md \
+    docs/spec/ffi-abi-v9.md
 
 echo
 echo "[OK] release tarball ready"
 echo "  path:    $out_file"
-echo "  shape:   easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, easynet-remoteapp-media-host, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, include/easynet_cli.exports.v7, include/easynet_cli.exports.v8, docs/spec/ffi-abi-v7.md, docs/spec/ffi-abi-v8.md"
+echo "  shape:   easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, easynet-remoteapp-media-host, libeasynet_cli.${lib_ext}, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, include/easynet_cli.exports.v7, include/easynet_cli.exports.v8, include/easynet_cli.exports.v9, docs/spec/ffi-abi-v7.md, docs/spec/ffi-abi-v8.md, docs/spec/ffi-abi-v9.md"
 echo "  axon-runtime: NOT shipped (production-shape contract)"
 echo "  size:    $(wc -c < "$out_file" | awk '{printf "%.1f MiB", $1/1024/1024}')"
