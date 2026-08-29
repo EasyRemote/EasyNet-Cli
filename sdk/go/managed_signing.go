@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -171,6 +172,57 @@ func (c *ManagedSigningClient) Signer(keyID string) (*ManagedSigner, error) {
 		client:     c,
 		projection: cloneManagedSigningKey(projection),
 	}, nil
+}
+
+// ActiveSignerForSubject resolves the daemon-canonical active signer for one
+// subject and purpose. Rotation may transiently expose multiple active
+// projections, so selection follows the daemon's deterministic
+// lexicographically-first key-ID rule.
+func (c *ManagedSigningClient) ActiveSignerForSubject(subjectURA, purpose string) (*ManagedSigner, error) {
+	if err := requireManagedSigningClient(c); err != nil {
+		return nil, err
+	}
+	subject, err := managedSigningRequiredText("bound subject URA", subjectURA)
+	if err != nil {
+		return nil, err
+	}
+	normalizedPurpose, err := managedSigningRequiredText("purpose", purpose)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := c.List(ManagedSigningKeyFilter{
+		Purpose: normalizedPurpose,
+		Status:  ManagedSigningStatusActive,
+	})
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]ManagedSigningKey, 0, len(keys))
+	for _, key := range keys {
+		if key.BoundSubjectURA == subject {
+			candidates = append(candidates, key)
+		}
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		return candidates[left].KeyID < candidates[right].KeyID
+	})
+	if len(candidates) == 0 {
+		return nil, &SDKError{
+			Code:      ErrCallerSignerUnavailable,
+			Stage:     "managed_signing",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   fmt.Sprintf("active managed signer is unavailable for %s", subject),
+		}
+	}
+	selected := cloneManagedSigningKey(candidates[0])
+	if selected.SignerPolicyRef == "" {
+		return nil, runtimeKeyServiceRejected(
+			"policy",
+			fmt.Sprintf("active managed signing key %q has no signer policy reference", selected.KeyID),
+		)
+	}
+	return &ManagedSigner{client: c, projection: selected}, nil
 }
 
 // KeyID returns the immutable runtime key-service inventory identifier bound to the signer.

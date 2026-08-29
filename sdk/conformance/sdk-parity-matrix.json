@@ -135064,6 +135064,10 @@
           "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
         },
         {
+          "item": "ManagedSigningClient.ActiveSignerForSubject",
+          "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
+        },
+        {
           "item": "ManagedSigningClient.AddPeer",
           "sha256": "e9e140bcc96a4d814f774b11f49798e87177abea6a772fa6dd63bc7a92585451"
         },
@@ -135341,6 +135345,10 @@
             {
               "item": "ManagedSigner.SigningPublicKey",
               "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
+            },
+            {
+              "item": "ManagedSigningClient.ActiveSignerForSubject",
+              "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
             },
             {
               "item": "ManagedSigningClient.AddPeer",
@@ -135622,6 +135630,10 @@
               "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
             },
             {
+              "item": "ManagedSigningClient.ActiveSignerForSubject",
+              "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
+            },
+            {
               "item": "ManagedSigningClient.AddPeer",
               "sha256": "e9e140bcc96a4d814f774b11f49798e87177abea6a772fa6dd63bc7a92585451"
             },
@@ -135899,6 +135911,10 @@
             {
               "item": "ManagedSigner.SigningPublicKey",
               "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
+            },
+            {
+              "item": "ManagedSigningClient.ActiveSignerForSubject",
+              "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
             },
             {
               "item": "ManagedSigningClient.AddPeer",
@@ -136180,6 +136196,10 @@
               "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
             },
             {
+              "item": "ManagedSigningClient.ActiveSignerForSubject",
+              "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
+            },
+            {
               "item": "ManagedSigningClient.AddPeer",
               "sha256": "e9e140bcc96a4d814f774b11f49798e87177abea6a772fa6dd63bc7a92585451"
             },
@@ -136457,6 +136477,10 @@
             {
               "item": "ManagedSigner.SigningPublicKey",
               "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
+            },
+            {
+              "item": "ManagedSigningClient.ActiveSignerForSubject",
+              "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
             },
             {
               "item": "ManagedSigningClient.AddPeer",
@@ -136738,6 +136762,10 @@
               "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
             },
             {
+              "item": "ManagedSigningClient.ActiveSignerForSubject",
+              "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
+            },
+            {
               "item": "ManagedSigningClient.AddPeer",
               "sha256": "e9e140bcc96a4d814f774b11f49798e87177abea6a772fa6dd63bc7a92585451"
             },
@@ -137015,6 +137043,10 @@
             {
               "item": "ManagedSigner.SigningPublicKey",
               "sha256": "20c9b4f184e0bfa568c44ebf2857bfb06dcda60cdf15a37263c78f046576adf6"
+            },
+            {
+              "item": "ManagedSigningClient.ActiveSignerForSubject",
+              "sha256": "81d2cecd6e1815bcddcaa7f68bfb8b378427c45b8ab39d76e4c9771f5ffc16a8"
             },
             {
               "item": "ManagedSigningClient.AddPeer",

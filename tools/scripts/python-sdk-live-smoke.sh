@@ -2,9 +2,10 @@
 # python-sdk-live-smoke.sh — live daemon smoke through the Python SDK facade
 # =========================================================================
 #
-# Builds generic C ABI v7 and the complete daemon process set, starts a hermetic daemon through
-# `easynet_sdk.CABIRuntimeLifecycleTransport`, then exercises Runtime Core unary, stream,
-# stream, prepare/sign/submit, and typed terminal failure paths through the Python SDK
+# Builds the base C ABI v7 plus additive ABI v9 and the complete daemon process
+# set, starts a hermetic daemon through `easynet_sdk.CABIRuntimeLifecycleTransport`,
+# then exercises Runtime Core unary, owned stream, leased stream,
+# prepare/sign/submit, and typed terminal failure paths through the Python SDK
 # object model.
 
 set -euo pipefail
@@ -14,7 +15,11 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 
 if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
-  grep -q "generic C ABI v7" "$0"
+  grep -q "base C ABI v7 plus additive ABI v9" "$0"
+  grep -q "ABI v9 LeasedStreamHandle received raw daemon payload" "$0"
+  grep -q '"resource.watch_remote_targets"' "$0"
+  grep -q "LocalRuntimeAuthorityProvider" "$0"
+  grep -q "leased_abilities.open_leased_stream" "$0"
   grep -q "typed terminal failure decoded" "$0"
   grep -q "RuntimeEventClient read live daemon handle events" "$0"
   grep -q "def system_agent_callee(" "$0"
@@ -112,8 +117,13 @@ import time
 from pathlib import Path
 
 from easynet_sdk import (
+    AddressingClient,
+    AxonAddressingTransport,
     HealthClient,
     InvocationSignature,
+    LocalRuntimeAuthorityProvider,
+    RuntimeAbilityClient,
+    RuntimeCallContext,
     RuntimeEventClient,
     RuntimeEventReadRequest,
     RuntimeEventStreamState,
@@ -234,6 +244,7 @@ transport = CABIRuntimeLifecycleTransport(RuntimeCABILibrary.load(os.environ["LI
 control = RuntimeLifecycle(transport)
 handle = None
 runtime = None
+leased_addressing = None
 try:
     handle = control.start(
         RuntimeHostStartConfig(
@@ -345,7 +356,50 @@ try:
     stream.close()
     print("[python-sdk-live-smoke] StreamHandle received receipt-backed daemon terminal frame")
 
+    leased_addressing = AddressingClient(AxonAddressingTransport())
+    leased_abilities = RuntimeAbilityClient(
+        runtime,
+        leased_addressing,
+        authority=LocalRuntimeAuthorityProvider(
+            leased_addressing,
+            key_service_path=str(Path(smoke_home) / ".easynet" / "keyring.sock"),
+        ),
+    )
+    leased_stream = leased_abilities.open_leased_stream(
+        RuntimeCallContext(
+            caller_ura=user_ura,
+            callee_ura=system_agent_callee(realm, device_id, "media"),
+            subject_ura=user_ura,
+            nonce_base64=nonce(49),
+            causal_context={"form": "none"},
+        ),
+        "resource.watch_remote_targets",
+        {"max_events": 1, "types": ["display"]},
+    )
+    leased_event = leased_stream.next(timeout=5.0)
+    assert leased_event.kind == "data", leased_event
+    assert leased_event.terminal is False, leased_event
+    assert leased_event.payload_content_type == "application/json", leased_event
+    assert leased_event.payload is not None, leased_event
+    leased_payload = leased_event.payload.to_bytes()
+    assert leased_event.payload.released is True, leased_event.payload
+    inventory_event = json.loads(leased_payload)
+    assert inventory_event["event_type"], inventory_event
+    assert isinstance(inventory_event["resources"], list), inventory_event
+    leased_terminal = leased_stream.next(timeout=5.0)
+    assert leased_terminal.kind == "terminal", leased_terminal
+    assert leased_terminal.terminal is True, leased_terminal
+    assert leased_terminal.terminal_receipt is not None, leased_terminal
+    leased_terminal.release()
+    leased_stream.close()
+    print(
+        "[python-sdk-live-smoke] ABI v9 LeasedStreamHandle received raw daemon "
+        "payload and receipt-backed terminal frame"
+    )
+
 finally:
+    if leased_addressing is not None:
+        leased_addressing.close()
     if runtime is not None:
         runtime.close()
     if handle is not None:

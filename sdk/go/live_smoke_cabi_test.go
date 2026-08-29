@@ -13,9 +13,10 @@ import (
 	"time"
 )
 
-// TestGoSDKLiveDaemonSmoke proves the generic C ABI v7 boundary through the
-// public Go facade. Product/profile helpers are deliberately absent: complete
-// Invocation descriptors are supplied to Runtime Core directly.
+// TestGoSDKLiveDaemonSmoke proves the base C ABI v7 boundary and the additive
+// ABI v9 leased-stream extension through the public Go facade. Product/profile
+// helpers are deliberately absent: complete Invocation descriptors are
+// supplied to Runtime Core directly.
 func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -231,6 +232,125 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("stream close: %v", err)
 	}
 	t.Log("StreamHandle received receipt-backed daemon terminal frame")
+
+	leasedSubjectURA, err := descriptorBoundSubjectURA(
+		ctx,
+		NewCanonicalAddressing(),
+		userURA,
+		"resource.watch_remote_targets",
+	)
+	if err != nil {
+		t.Fatalf("project resource.watch_remote_targets subject: %v", err)
+	}
+	mediaCalleeURA := goLiveSmokeSystemAgentCallee(t, realm, deviceID, "resource.watch_remote_targets")
+	managedSigning, err := NewManagedSigningClient(ManagedSigningClientOptions{
+		SocketPath: filepath.Join(home, ".easynet", "keyring.sock"),
+		Timeout:    2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewManagedSigningClient: %v", err)
+	}
+	signingIdentity, err := managedSigning.ActiveSignerForSubject(userURA, "user_signing.cli")
+	if err != nil {
+		t.Fatalf("resolve paired-user runtime signing identity: %v", err)
+	}
+	authorityClient, err := NewCanonicalAuthorityClient(signingIdentity)
+	if err != nil {
+		t.Fatalf("NewCanonicalAuthorityClient: %v", err)
+	}
+	defer func() {
+		if err := authorityClient.Close(context.Background()); err != nil {
+			t.Fatalf("close authority client: %v", err)
+		}
+	}()
+	nowMS := time.Now().UnixMilli()
+	delegation, err := authorityClient.MintDelegationProof(ctx, DelegationRequest{
+		IssuerURA:   userURA,
+		SubjectURA:  leasedSubjectURA,
+		CallerURA:   userURA,
+		Audience:    mediaCalleeURA,
+		Scopes:      []string{"resource.watch_remote_targets"},
+		IssuedAtMS:  nowMS,
+		ExpiresAtMS: nowMS + int64((5*time.Minute)/time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("mint resource.watch_remote_targets delegation: %v", err)
+	}
+	abilityClient, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	leasedStream, err := abilityClient.OpenLeasedStream(ctx, RuntimeCallContext{
+		CallerURA:     userURA,
+		CalleeURA:     mediaCalleeURA,
+		SubjectURA:    userURA,
+		NonceBase64:   goLiveSmokeNonce(49),
+		CausalContext: map[string]any{"form": "none"},
+		Authority:     delegation,
+	}, "resource.watch_remote_targets", map[string]any{"max_events": 1, "types": []string{"display"}})
+	if err != nil {
+		t.Fatalf("resource.watch_remote_targets leased stream: %v", err)
+	}
+	leasedCtx, leasedCancel := context.WithTimeout(ctx, 5*time.Second)
+	leasedEvent, err := leasedStream.Next(leasedCtx)
+	leasedCancel()
+	if err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("leased stream data next: %v", err)
+	}
+	if leasedEvent.Kind() != "data" || leasedEvent.Terminal() {
+		_ = leasedEvent.Release()
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf(
+			"leased stream data event = kind:%q terminal:%v state:%q",
+			leasedEvent.Kind(), leasedEvent.Terminal(), leasedEvent.State(),
+		)
+	}
+	if leasedEvent.PayloadContentType() != "application/json" || leasedEvent.Payload() == nil {
+		_ = leasedEvent.Release()
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf(
+			"leased stream payload = content-type:%q payload:%#v",
+			leasedEvent.PayloadContentType(), leasedEvent.Payload(),
+		)
+	}
+	leasedPayload, err := leasedEvent.Payload().ToBytes()
+	if err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("copy and release leased payload: %v", err)
+	}
+	if !leasedEvent.Payload().Released() {
+		_ = leasedStream.Close(context.Background())
+		t.Fatal("leased payload owner remained live after ToBytes")
+	}
+	var inventoryEvent map[string]any
+	if err := json.Unmarshal(leasedPayload, &inventoryEvent); err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("decode leased inventory payload: %v", err)
+	}
+	if inventoryEvent["event_type"] == "" || inventoryEvent["resources"] == nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("leased inventory payload is incomplete: %#v", inventoryEvent)
+	}
+	leasedTerminalCtx, leasedTerminalCancel := context.WithTimeout(ctx, 5*time.Second)
+	leasedTerminal, err := leasedStream.Next(leasedTerminalCtx)
+	leasedTerminalCancel()
+	if err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("leased stream terminal next: %v", err)
+	}
+	defer func() { _ = leasedTerminal.Release() }()
+	if leasedTerminal.Kind() != "terminal" || !leasedTerminal.Terminal() || leasedTerminal.TerminalReceiptJSON() == nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf(
+			"leased stream terminal event = kind:%q terminal:%v receipt:%s",
+			leasedTerminal.Kind(), leasedTerminal.Terminal(), leasedTerminal.TerminalReceiptJSON(),
+		)
+	}
+	if err := leasedStream.Close(ctx); err != nil {
+		t.Fatalf("leased stream close: %v", err)
+	}
+	t.Log("ABI v9 LeasedStreamHandle received raw daemon payload and receipt-backed terminal frame")
 }
 
 func requireLiveSmokeEnv(t *testing.T, name string) string {
@@ -327,6 +447,8 @@ func goLiveSmokeSystemAgentCallee(t *testing.T, realm, deviceID, ability string)
 		systemAgentID = "runtime-health"
 	case "session.attach":
 		systemAgentID = "session"
+	case "resource.watch_remote_targets":
+		systemAgentID = "media"
 	default:
 		t.Fatalf("Go SDK smoke does not know SystemAgent owner for %s", ability)
 	}
