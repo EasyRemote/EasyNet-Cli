@@ -297,7 +297,7 @@ if rg -q "RawStreamPacket|_stream_chunk_packet" sdk/python/easynet_sdk/providers
 fi
 
 lib="${EASYNET_FFI_DYLIB:-}"
-if [[ -z "$lib" ]]; then
+if [[ -z "$lib" && "${EASYNET_FFI_REQUIRE_DYLIB:-0}" == "1" ]]; then
     case "$(uname -s)" in
         Darwin) lib="target/debug/libeasynet_cli.dylib" ;;
         Linux) lib="target/debug/libeasynet_cli.so" ;;
