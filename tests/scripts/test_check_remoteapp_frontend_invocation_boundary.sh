@@ -56,6 +56,19 @@ function requireRemoteDesktopSessionSubject(ability: string, subjectURA: string 
 }
 TS
 
+cat >"$FRONTEND_SRC/store/remote-desktop-session-coordinator.ts" <<'TS'
+export class RemoteDesktopSessionCoordinator {
+  beginEventWatch() { return {} }
+  observeEventSequence() {}
+  eventWatchFromSequence() { return 0 }
+}
+TS
+
+cat >"$FRONTEND_SRC/store/remote-desktop-session-coordinator.test.ts" <<'TS'
+it('rejects a create result whose generation was closed', () => {})
+it('owns one monotonic replay cursor for an immutable session identity', () => {})
+TS
+
 cat >"$FRONTEND_SRC/store/media-channel-store.ts" <<'TS'
 import { remoteDesktopInputFrameAllowed, remoteDesktopSessionTerminal } from '@/lib/api/remote-desktop-protocol'
 
@@ -130,13 +143,19 @@ function stopRemoteDesktopEventWatch(key: string) {
 
 function startRemoteDesktopEventWatch(key: string, view: RemoteDesktopView) {
   const causalContext = remoteDesktopSessionCausalContext(view)
+  const identity = remoteDesktopSessionIdentity(view)
+  const watch = refs.remoteDesktopSessionCoordinator.beginEventWatch(identity)
   return invokeMediaStream(
     'remote_desktop.watch_events',
     {
       deviceUra: entries[key].deviceUra,
-      subjectURA: view.subjectUra,
+      subjectURA: identity.subjectUra,
       causalContext,
-      args: { session_id: view.sessionId, session_token: view.sessionToken },
+      args: {
+        session_id: identity.sessionId,
+        session_token: identity.sessionToken,
+        from_sequence: refs.remoteDesktopSessionCoordinator.eventWatchFromSequence(watch),
+      },
       timeoutMs: 0,
     },
   )
@@ -294,6 +313,9 @@ async function startWebRtc(
   return view
 }
 
+function preserveAmbiguousRemoteDesktopEnd(key, view, message) {}
+function reconcileRemoteDesktopClosingSession(key, identity) {}
+
 export const actions = {
   rdReportClientMediaState: (key: string, state: 'presenting' | 'stalled' | 'detached') => reportClientMediaState(key, state),
   rdSendInput: (key, frame) => {
@@ -341,9 +363,12 @@ export const actions = {
     if (remoteDesktopSessionTerminal(session)) return
     const result = await invokeRemoteDesktopEndSessionWithRetry()
     const view = projectRemoteDesktopView(result, session.sessionToken)
-    patchEntry(key, {
-      session: view ? { ...view, sessionToken: undefined } : null,
-    })
+    if (view && remoteDesktopSessionTerminal(view)) {
+      patchEntry(key, { session: { ...view, sessionToken: undefined } })
+    } else {
+      preserveAmbiguousRemoteDesktopEnd(key, view ?? session, 'end result is ambiguous')
+      reconcileRemoteDesktopClosingSession(key, remoteDesktopSessionIdentity(view ?? session))
+    }
   },
 }
 
@@ -548,16 +573,23 @@ export function DeviceMediaAccess() {
   if (!(currentAuthority.targetFocusEpoch > pending.authority.targetFocusEpoch)) return null
   const remoteTargetData = listRemoteDesktopTargets()
   const result = invokeMediaUnary('resource.refresh_remote_targets', {})
-  const screenResources = remoteTargetData.resources
-  const screenResource = screenResources.find((resource) => resource.resource_ura === selectedScreenURA)
   const session = entry.session
+  const screenResources = remoteTargetData.resources
+  const remoteDesktopSessionSubjectUra = session?.subjectUra
+  const effectiveScreenUra = remoteDesktopSessionSubjectUra ?? selectedScreenURA
+  const screenResource = screenResources.find((resource) => resource.resource_ura === effectiveScreenUra)
   const inputReadinessDetails = session ? remoteDesktopInputReadinessLabel(session) : undefined
   const terminalReceiptDetails = session?.terminalReceipt
     ? `terminal {session.terminalReceipt.reasonCode ?? session.terminalReceipt.receiptType} #${session.terminalReceipt.terminalEventSequence}`
     : undefined
+  if (remoteDesktopSessionSubjectUra) {
+    setSelectedScreenURA(remoteDesktopSessionSubjectUra)
+    return
+  }
   if (selectedScreenURA && !screenResources.some((resource) => resource.resource_ura === selectedScreenURA)) {
     setSelectedScreenURA(undefined)
   }
+  const targetSelect = <option>Active session target (not in current inventory)</option>
   const viewport = (
     <WebRtcVideoViewport
       stream={preview.mediaStream}
@@ -918,6 +950,10 @@ it('preserves one remote desktop session across device resume and explicit retry
 it('fences a stale transport retry when the device goes offline during session lookup', async () => {
   expect(useMediaChannelStore.getState().entries[key].session.sessionId).toBe('rd-1')
 })
+
+it('preserves and reconciles a closing aggregate after an ambiguous end response', async () => {
+  expect(useMediaChannelStore.getState().entries[key].session.state).toBe('closing')
+})
 TS
 
 cat >"$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx" <<'TSX'
@@ -994,6 +1030,10 @@ it('does not replay pointer input after the session target identity is rebound',
 
 it('does not send an old held-key release into a replacement RemoteApp session', async () => {
   expect(rdSendInput).toHaveBeenCalledTimes(1)
+})
+
+it('keeps the active session subject authoritative when target inventory omits it', async () => {
+  expect(screen.getByText('Active session target (not in current inventory)')).toBeInTheDocument()
 })
 TSX
 
@@ -1129,13 +1169,13 @@ fi
 perl -0pi -e 's/expect\(entry\.error\)\.toContain\('\''permission'\''\)/expect(entry.error).toBeUndefined()/' \
   "$FRONTEND_SRC/store/media-channel-store.test.ts"
 
-perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura === selectedScreenURA\)/screenResources[0]/' \
+perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura === effectiveScreenUra\)/screenResources[0]/' \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted first-target access fallback" >&2
   exit 1
 fi
-perl -0pi -e 's/screenResources\[0\]/screenResources.find((resource) => resource.resource_ura === selectedScreenURA)/' \
+perl -0pi -e 's/screenResources\[0\]/screenResources.find((resource) => resource.resource_ura === effectiveScreenUra)/' \
   "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
 
 perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura === entry\.session\?\.subjectUra\)/screenResources[0]/' \
@@ -1428,13 +1468,13 @@ fi
 perl -0pi -e "s/    inputReadiness,\\n/    inputReadiness,\\n    terminalReceipt: remoteDesktopTerminalReceiptFromResult(result),\\n/" \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 
-perl -0pi -e "s/session: view \\? \\{ \\.\\.\\.view, sessionToken: undefined \\} : null/session: null/" \
+perl -0pi -e "s/session: \\{ \\.\\.\\.view, sessionToken: undefined \\}/session: null/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted end_session clearing terminal session view" >&2
   exit 1
 fi
-perl -0pi -e "s/session: null/session: view ? { ...view, sessionToken: undefined } : null/" \
+perl -0pi -e "s/session: null/session: { ...view, sessionToken: undefined }/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e "s/\\nfunction guardTerminalRemoteDesktopSessionPatch[\\s\\S]*?\\n}\\n\\ntype RemoteDesktopSessionInputIntent/\\ntype RemoteDesktopSessionInputIntent/" \

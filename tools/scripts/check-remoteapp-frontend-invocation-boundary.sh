@@ -46,6 +46,8 @@ reject_multiline() {
 
 INVOCATION="$FRONTEND_SRC/store/media-channel-invocation.ts"
 STORE="$FRONTEND_SRC/store/media-channel-store.ts"
+SESSION_COORDINATOR="$FRONTEND_SRC/store/remote-desktop-session-coordinator.ts"
+SESSION_COORDINATOR_TEST="$FRONTEND_SRC/store/remote-desktop-session-coordinator.test.ts"
 ACCESS="$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
 INVOCATION_TEST="$FRONTEND_SRC/store/media-channel-invocation.test.ts"
 STORE_TEST="$FRONTEND_SRC/store/media-channel-store.test.ts"
@@ -54,7 +56,7 @@ WORKSPACE="$FRONTEND_SRC/pages/easynet/DeviceMediaWorkspacePage.tsx"
 PROTOCOL="$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 PROTOCOL_TEST="$FRONTEND_SRC/lib/api/remote-desktop-protocol.test.ts"
 
-for file in "$INVOCATION" "$STORE" "$ACCESS" "$INVOCATION_TEST" "$STORE_TEST" "$ACCESS_TEST" "$WORKSPACE" "$PROTOCOL" "$PROTOCOL_TEST"; do
+for file in "$INVOCATION" "$STORE" "$SESSION_COORDINATOR" "$SESSION_COORDINATOR_TEST" "$ACCESS" "$INVOCATION_TEST" "$STORE_TEST" "$ACCESS_TEST" "$WORKSPACE" "$PROTOCOL" "$PROTOCOL_TEST"; do
   [[ -f "$file" ]] || fail "missing frontend source ${file#"$FRONTEND_ROOT/"}"
 done
 
@@ -77,7 +79,7 @@ done
 for ability in \
   remote_desktop.permission_status \
   remote_desktop.request_permission; do
-  reject "'$ability'" "$INVOCATION" \
+  reject_multiline "/const REMOTE_DESKTOP_SESSION_SUBJECT_REQUIRED_ABILITIES(?:(?!\\]\\)).)*'$ability'(?:(?!\\]\\)).)*\\]\\)/s" "$INVOCATION" \
     "frontend host-local permission probe $ability must not require a target resource subject"
 done
 
@@ -209,8 +211,18 @@ require 'remoteDesktopEventsAbort\?\.abort\(\)' "$STORE" \
   'frontend must abort the remote desktop watch_events stream on close/end'
 require 'startRemoteDesktopEventWatch\(key, negotiated\)' "$STORE" \
   'frontend must start watch_events after WebRTC session negotiation'
-require_multiline 'm/invokeMediaStream\(\s*'\''remote_desktop\.watch_events'\''[\s\S]*subjectURA: view\.subjectUra[\s\S]*causalContext[\s\S]*args: \{ session_id: view\.sessionId, session_token: view\.sessionToken \}[\s\S]*timeoutMs: 0/s' "$STORE" \
-  'frontend must subscribe to remote_desktop.watch_events with the negotiated session subject, causal context, and token'
+require_multiline 'm/invokeMediaStream\(\s*'\''remote_desktop\.watch_events'\''[\s\S]*subjectURA: identity\.subjectUra[\s\S]*causalContext[\s\S]*session_id: identity\.sessionId[\s\S]*session_token: identity\.sessionToken[\s\S]*from_sequence: refs\.remoteDesktopSessionCoordinator\.eventWatchFromSequence\(watch\)[\s\S]*timeoutMs: 0/s' "$STORE" \
+  'frontend must subscribe to remote_desktop.watch_events with immutable session identity, causal context, token, and replay cursor'
+require 'class RemoteDesktopSessionCoordinator' "$SESSION_COORDINATOR" \
+  'frontend must own RemoteApp operation generations and event cursors in one explicit session coordinator'
+require 'observeEventSequence' "$SESSION_COORDINATOR" \
+  'frontend event coordinator must advance a monotonic daemon event cursor'
+require 'eventWatchFromSequence' "$SESSION_COORDINATOR" \
+  'frontend event coordinator must expose the replay cursor for reconnect'
+require 'rejects a create result whose generation was closed' "$SESSION_COORDINATOR_TEST" \
+  'frontend coordinator tests must prove stale create work cannot regain session ownership'
+require 'owns one monotonic replay cursor for an immutable session identity' "$SESSION_COORDINATOR_TEST" \
+  'frontend coordinator tests must prove event replay cursors cannot regress'
 require 'remoteDesktopSessionEventRecovery' "$STORE" \
   'frontend must map remote desktop session events into recovery UI state'
 require 'SESSION_DEGRADED' "$STORE" \
@@ -286,10 +298,16 @@ reject_multiline 'm/online === false[\s\S]{0,240}rdEnd\(channelKey\)/s' "$ACCESS
 
 require 'resource\.refresh_remote_targets' "$ACCESS" \
   'frontend display/application/window picker must use live resource.refresh_remote_targets'
-require 'screenResource = screenResources\.find\(\(resource\) => resource\.resource_ura === selectedScreenURA\)' "$ACCESS" \
-  'frontend selected target must be an exact selectedScreenURA match'
-require 'selectedScreenURA && !screenResources\.some\(\(resource\) => resource\.resource_ura === selectedScreenURA\)' "$ACCESS" \
-  'frontend selected target must clear stale selections instead of falling back'
+require 'effectiveScreenUra = remoteDesktopSessionSubjectUra \?\? selectedScreenURA' "$ACCESS" \
+  'frontend must make the immutable session subject authoritative over mutable picker selection'
+require 'screenResource = screenResources\.find\(\(resource\) => resource\.resource_ura === effectiveScreenUra\)' "$ACCESS" \
+  'frontend selected target must be an exact effective subject match'
+require_multiline 'm/if \(remoteDesktopSessionSubjectUra\) \{[\s\S]*return[\s\S]*selectedScreenURA && !screenResources\.some\(\(resource\) => resource\.resource_ura === selectedScreenURA\)/s' "$ACCESS" \
+  'frontend must clear stale picker selections without clearing an active session subject'
+require 'Active session target \(not in current inventory\)' "$ACCESS" \
+  'frontend target selector must preserve an omitted active session subject visibly'
+require 'keeps the active session subject authoritative when target inventory omits it' "$ACCESS_TEST" \
+  'frontend tests must prove inventory refresh cannot erase or retarget an active session'
 reject 'screenResources\[0\]' "$ACCESS" \
   'frontend access dialog must not fall back to the first remote target'
 require 'baseRuntimeReady' "$ACCESS" \
@@ -433,8 +451,14 @@ require 'remoteDesktopSessionTerminal\(current\)' "$STORE" \
   'frontend store terminal guard must inspect the current RemoteApp session state'
 require '!remoteDesktopSessionTerminal\(next\)' "$STORE" \
   'frontend store terminal guard must reject stale non-terminal projections over terminal sessions'
-require 'session: view \? \{ \.\.\.view, sessionToken: undefined \} : null' "$STORE" \
+require 'session: \{ \.\.\.view, sessionToken: undefined \}' "$STORE" \
   'frontend end_session must preserve daemon terminal session view while clearing the session token'
+require 'preserveAmbiguousRemoteDesktopEnd' "$STORE" \
+  'frontend must retain a closing aggregate when end_session completion is ambiguous'
+require 'reconcileRemoteDesktopClosingSession' "$STORE" \
+  'frontend must reconcile ambiguous end_session completion against the same immutable session'
+require 'preserves and reconciles a closing aggregate after an ambiguous end response' "$STORE_TEST" \
+  'frontend tests must prove ambiguous end results cannot erase session identity or terminal receipts'
 require 'view\.inputReadiness\.interactiveReady !== true' "$PROTOCOL" \
   'frontend input gating must fail closed when daemon input_readiness says interactive is not ready'
 require 'view\.inputReadiness\.pointerEnabled === true' "$PROTOCOL" \
