@@ -214,7 +214,7 @@ class AxonAddressingProviderTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(
             addressing_error_reason(caught.exception),
-            AddressingErrorReason.DEVICE_OWNED_ABILITY_MIGRATION,
+            AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
         )
         environment.close()
 
@@ -238,11 +238,11 @@ class AxonAddressingProviderTests(unittest.TestCase):
                 self.assertEqual(caught.exception.stage, "addressing")
                 self.assertEqual(
                     caught.exception.details,
-                    {"reason": "device_owned_ability_migration"},
+                    {"reason": "ability_owner_not_publisher"},
                 )
                 self.assertEqual(
                     addressing_error_reason(caught.exception),
-                    AddressingErrorReason.DEVICE_OWNED_ABILITY_MIGRATION,
+                    AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
                 )
 
         environment.close()

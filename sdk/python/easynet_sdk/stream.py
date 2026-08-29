@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import json
 import threading
+import warnings
+import weakref
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, BinaryIO, Callable, Optional, Protocol, runtime_checkable
 
 from ._carrier import CarrierState, is_local_carrier_interruption
 from .errors import ErrorCode, RetryHint, SDKError
@@ -58,6 +60,264 @@ class RawStreamPacket:
     admission_receipt_json: bytes = b""
     terminal_receipt_json: bytes = b""
     error_json: bytes = b""
+
+
+class _LeaseState:
+    """One explicit native lease reference shared with its finalizer."""
+
+    def __init__(self, lease_id: int, release: Callable[[], None]) -> None:
+        self.lease_id = lease_id
+        self._release = release
+        self._released = False
+        self._lock = threading.Lock()
+
+    @property
+    def released(self) -> bool:
+        with self._lock:
+            return self._released
+
+    def release(self) -> bool:
+        with self._lock:
+            if self._released:
+                return False
+            self._released = True
+            self._release()
+        return True
+
+    def use(self, operation: Callable[[], Any]) -> tuple[bool, Any]:
+        with self._lock:
+            if self._released:
+                return False, None
+            return True, operation()
+
+    def consume(self, operation: Callable[[], Any]) -> tuple[bool, Any]:
+        with self._lock:
+            if self._released:
+                return False, None
+            self._released = True
+            try:
+                return True, operation()
+            finally:
+                self._release()
+
+
+def _finalize_leased_payload(state: _LeaseState) -> None:
+    if state.released:
+        return
+    warnings.warn(
+        "LeasedPayload was not explicitly released; releasing it from the finalizer",
+        ResourceWarning,
+        stacklevel=2,
+    )
+    try:
+        state.release()
+    except Exception:
+        # Finalization is a diagnostic safety net. Normal correctness relies on
+        # release(), context management, or a consuming copy/write operation.
+        return
+
+
+class LeasedPayload:
+    """Explicitly owned ABI v9 payload lease.
+
+    The native pointer is deliberately not public. Callers either copy into
+    owned Python storage, write into caller-owned storage, or release the lease.
+    Every consuming operation releases this reference even when copying/writing
+    raises.
+    """
+
+    def __init__(
+        self,
+        *,
+        lease_id: int,
+        length: int,
+        copy_bytes: Callable[[], bytes],
+        copy_into: Callable[[memoryview], int],
+        retain: Callable[[], "LeasedPayload"],
+        release: Callable[[], None],
+    ) -> None:
+        if lease_id <= 0:
+            raise _invalid_stream("leased payload lease_id must be positive")
+        if length <= 0:
+            raise _invalid_stream("leased payload length must be positive")
+        self._length = length
+        self._copy_bytes = copy_bytes
+        self._copy_into = copy_into
+        self._retain = retain
+        self._state = _LeaseState(lease_id, release)
+        self._finalizer = weakref.finalize(self, _finalize_leased_payload, self._state)
+
+    @property
+    def lease_id(self) -> int:
+        """Opaque lease identity for diagnostics; it is never a memory address."""
+
+        return self._state.lease_id
+
+    @property
+    def length(self) -> int:
+        return self._length
+
+    @property
+    def released(self) -> bool:
+        return self._state.released
+
+    def retain(self) -> "LeasedPayload":
+        """Return a separately releasable reference to the same immutable bytes."""
+
+        live, retained = self._state.use(self._retain)
+        if not live:
+            raise _invalid_stream("leased payload is released")
+        return retained
+
+    def release(self) -> None:
+        """Release this reference exactly once; repeated calls are harmless."""
+
+        self._state.release()
+        self._finalizer.detach()
+
+    def to_bytes(self) -> bytes:
+        """Copy into owned ``bytes`` and consume this lease reference."""
+
+        def copy() -> bytes:
+            value = self._copy_bytes()
+            if len(value) != self._length:
+                raise _invalid_stream("leased payload copy returned an invalid length")
+            return value
+
+        live, value = self._state.consume(copy)
+        self._finalizer.detach()
+        if not live:
+            raise _invalid_stream("leased payload is released")
+        return value
+
+    def write_into(self, destination: object) -> int:
+        """Copy into writable caller-owned storage and consume this lease."""
+
+        def copy() -> int:
+            view = memoryview(destination)
+            if view.readonly:
+                raise _invalid_stream("leased payload destination must be writable")
+            try:
+                byte_view = view.cast("B")
+            except (TypeError, ValueError) as exc:
+                raise _invalid_stream(
+                    "leased payload destination must be contiguous byte-addressable storage",
+                    exc,
+                ) from exc
+            if len(byte_view) < self._length:
+                raise _invalid_stream("leased payload destination is too small")
+            written = self._copy_into(byte_view[: self._length])
+            if written != self._length:
+                raise _invalid_stream("leased payload write returned an invalid length")
+            return written
+
+        live, written = self._state.consume(copy)
+        self._finalizer.detach()
+        if not live:
+            raise _invalid_stream("leased payload is released")
+        return written
+
+    def write_to(self, destination: BinaryIO) -> int:
+        """Write owned chunks to a binary sink and consume this lease."""
+
+        def write() -> int:
+            if not callable(getattr(destination, "write", None)):
+                raise _invalid_stream(
+                    "leased payload destination must provide write(bytes)"
+                )
+            payload = self._copy_bytes()
+            if len(payload) != self._length:
+                raise _invalid_stream("leased payload copy returned an invalid length")
+            written = destination.write(payload)
+            if written is None:
+                return self._length
+            if not isinstance(written, int) or isinstance(written, bool):
+                raise _invalid_stream("leased payload writer returned an invalid count")
+            if written != self._length:
+                raise _invalid_stream("leased payload writer did not consume the full payload")
+            return written
+
+        live, written = self._state.consume(write)
+        self._finalizer.detach()
+        if not live:
+            raise _invalid_stream("leased payload is released")
+        return written
+
+    def __enter__(self) -> "LeasedPayload":
+        self._require_live()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.release()
+
+    def _require_live(self) -> None:
+        if self.released:
+            raise _invalid_stream("leased payload is released")
+
+
+@dataclass(frozen=True)
+class LeasedStreamEvent:
+    """ABI v9 stream event whose non-empty payload has explicit ownership."""
+
+    sequence: int
+    kind: str
+    state: str
+    terminal: bool
+    transport_terminal: bool
+    elapsed_ms: int
+    payload_content_type: str
+    payload: LeasedPayload | None = field(default=None, compare=False, repr=False)
+    error: Any = None
+    admission_receipt: Any = None
+    terminal_receipt: Any = None
+
+    def release(self) -> None:
+        if self.payload is not None:
+            self.payload.release()
+
+    def to_owned(self) -> "StreamEvent":
+        """Copy the payload and return the existing owned v8-style projection."""
+
+        payload_bytes = self.payload.to_bytes() if self.payload is not None else b""
+        payload_json: Any = None
+        if payload_bytes and "json" in self.payload_content_type.lower():
+            try:
+                payload_json = json.loads(payload_bytes.decode("utf-8"))
+            except Exception as exc:
+                raise _invalid_stream(
+                    f"decode leased JSON stream payload: {exc}", exc
+                ) from exc
+        return StreamEvent(
+            sequence=self.sequence,
+            kind=self.kind,
+            state=self.state,
+            terminal=self.terminal,
+            transport_terminal=self.transport_terminal,
+            payload_content_type=self.payload_content_type,
+            payload_bytes=payload_bytes,
+            payload_json=payload_json,
+            elapsed_ms=self.elapsed_ms,
+            error=self.error,
+            admission_receipt=self.admission_receipt,
+            terminal_receipt=self.terminal_receipt,
+        )
+
+    def __enter__(self) -> "LeasedStreamEvent":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.release()
+
+
+@runtime_checkable
+class LeasedStreamTransport(Protocol):
+    """Transport for the explicit ABI v9 leased-event surface."""
+
+    def recv(self, timeout: float | None = None) -> LeasedStreamEvent: ...
+
+    def cancel(self, reason: str) -> bytes: ...
+
+    def close(self) -> None: ...
 
 
 @runtime_checkable
@@ -323,6 +583,116 @@ class StreamCancel:
             state=state,
             terminal=terminal,
         )
+
+
+@dataclass
+class LeasedStreamHandle:
+    """Ordered ABI v9 stream whose payload ownership stays explicit."""
+
+    stream_id: str
+    transport: LeasedStreamTransport
+    state: StreamState = StreamState.OPENING
+    max_buffered_events: int = MAX_STREAM_BUFFERED_EVENTS
+    _last_sequence: int = field(default=0, init=False, repr=False)
+    _terminal_seen: bool = field(default=False, init=False, repr=False)
+    _receiving: bool = field(default=False, init=False, repr=False)
+    _lock: Any = field(
+        default_factory=threading.RLock, init=False, repr=False, compare=False
+    )
+
+    @classmethod
+    def from_json(
+        cls, transport: LeasedStreamTransport, raw: bytes | str
+    ) -> "LeasedStreamHandle":
+        if transport is None:
+            raise _invalid_stream("leased stream transport is required")
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            decoded = json.loads(text) if text else {}
+        except Exception as exc:
+            raise _invalid_stream(f"decode leased stream open JSON: {exc}", exc) from exc
+        if not isinstance(decoded, dict):
+            raise _invalid_stream("leased stream open JSON must be an object")
+        _reject_unknown_stream_fields(
+            decoded,
+            "leased stream open",
+            "stream_id",
+            "state",
+            "max_buffered_events",
+        )
+        state = _stream_state(
+            _optional_string(decoded.get("state"), "state") or "Opening"
+        )
+        if state not in {StreamState.OPENING, StreamState.OPEN}:
+            raise _invalid_stream("leased stream open state must be Opening or Open")
+        max_buffered = _optional_non_negative_int(
+            decoded.get("max_buffered_events"), "max_buffered_events"
+        )
+        if max_buffered == 0:
+            max_buffered = MAX_STREAM_BUFFERED_EVENTS
+        return cls(
+            stream_id=_required_string(decoded, "stream_id"),
+            transport=transport,
+            state=state,
+            max_buffered_events=max_buffered,
+        )
+
+    def next(self, timeout: float | None = None) -> LeasedStreamEvent:
+        with self._lock:
+            if self.state == StreamState.CLOSED:
+                raise _invalid_stream("leased stream is closed")
+            if self._terminal_seen:
+                raise _invalid_stream("leased stream is terminal")
+            if self._receiving:
+                raise _invalid_stream("leased stream recv is already in progress")
+            self._receiving = True
+        event: LeasedStreamEvent | None = None
+        try:
+            event = self.transport.recv(timeout)
+            with self._lock:
+                if event.sequence <= self._last_sequence:
+                    self.state = StreamState.FAILED
+                    raise _invalid_stream(
+                        "leased stream event sequence must be strictly increasing"
+                    )
+                self._last_sequence = event.sequence
+                if event.terminal:
+                    self._terminal_seen = True
+                    self.state = StreamState.TERMINAL_FRAME_SEEN
+                elif event.transport_terminal:
+                    self.state = StreamState.FAILED
+                else:
+                    self.state = StreamState.OPEN
+                return event
+        except Exception:
+            if event is not None:
+                event.release()
+            raise
+        finally:
+            with self._lock:
+                self._receiving = False
+
+    def cancel(self, reason: str = "") -> StreamCancel:
+        with self._lock:
+            if self.state == StreamState.CLOSED:
+                raise _invalid_stream("leased stream is closed")
+        outcome = StreamCancel.from_json(self.transport.cancel(reason))
+        with self._lock:
+            self.state = outcome.state
+        return outcome
+
+    def close(self) -> None:
+        with self._lock:
+            if self.state == StreamState.CLOSED:
+                return
+            self.state = StreamState.CLOSED
+        self.transport.close()
+
+    def __enter__(self) -> "LeasedStreamHandle":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
 
 
 @dataclass

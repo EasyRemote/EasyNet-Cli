@@ -39,7 +39,12 @@ from .axon_addressing import authority_ura, device_agent_ura, device_ura, parse_
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .invocation_state import InvocationLifecycleState
-from .stream import StreamHandle, StreamTransport
+from .stream import (
+    LeasedStreamHandle,
+    LeasedStreamTransport,
+    StreamHandle,
+    StreamTransport,
+)
 from .signing import (
     PreparedInvocation,
     SignedInvocation,
@@ -83,6 +88,15 @@ class _GovernanceReadTransport(Protocol):
     """Provider-backed seam for runtime governance observations."""
 
     def governance_read(self, draft_json: bytes) -> bytes: ...
+
+
+@runtime_checkable
+class _LeasedRuntimeTransport(Protocol):
+    """Optional explicit ABI v9 transport; it never replaces owned streams."""
+
+    def open_leased_stream(
+        self, draft_json: bytes
+    ) -> tuple[LeasedStreamTransport, bytes]: ...
 
 
 @runtime_checkable
@@ -1300,6 +1314,52 @@ class RuntimeClient:
         except Exception as exc:
             raise _transport_error("open signed stream transport failed", exc) from exc
         return StreamHandle.from_json(stream_transport, open_json)
+
+    def invoke_leased_stream(self, draft: InvocationDraft) -> LeasedStreamHandle:
+        """Open the explicit ABI v9 stream with caller-owned payload leases."""
+
+        transport = self._require_open()
+        if not isinstance(transport, _LeasedRuntimeTransport):
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                message="runtime transport does not expose leased streams",
+            )
+        try:
+            stream_transport, open_json = transport.open_leased_stream(
+                draft.to_json().encode("utf-8")
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("open leased stream transport failed", exc) from exc
+        return LeasedStreamHandle.from_json(stream_transport, open_json)
+
+    def open_signed_leased_stream(
+        self, signed: SignedInvocation
+    ) -> LeasedStreamHandle:
+        transport = self._require_open()
+        if not isinstance(transport, _LeasedRuntimeTransport):
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                message="runtime transport does not expose leased streams",
+            )
+        if not signed.submit_ready():
+            raise _invalid_runtime("signed invocation is not submit-ready")
+        try:
+            stream_transport, open_json = transport.open_leased_stream(
+                signed.to_invocation_draft().to_json().encode("utf-8")
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(
+                "open signed leased stream transport failed", exc
+            ) from exc
+        return LeasedStreamHandle.from_json(stream_transport, open_json)
 
     def prepare_and_open_stream(
         self,

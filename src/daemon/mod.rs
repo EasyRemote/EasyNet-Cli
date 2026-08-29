@@ -58,7 +58,8 @@ pub use boot::{
 pub use invocation::dispatch::client::{
     ClientConnectionState, DaemonBidiSession, DaemonClient, InvocationCancellationAuthority,
     InvocationHandle, InvocationOutcome, InvocationReceiptStages, InvocationResult, ReceiptSummary,
-    RuntimeClient, RuntimeErrorSummary, RuntimeHealth,
+    RuntimeClient, RuntimeErrorSummary, RuntimeHealth, StreamEvent, StreamEventKind, StreamHandle,
+    StreamState,
 };
 #[cfg(feature = "axon-pb")]
 pub use invocation::{

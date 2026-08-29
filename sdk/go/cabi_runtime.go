@@ -55,9 +55,32 @@ typedef struct runtime_invocation_stream_frame_v8 {
 	runtime_bytes_view_v8 error_json;
 } runtime_invocation_stream_frame_v8;
 typedef void (*runtime_stream_v8_callback_fn)(void *user_data, const runtime_invocation_stream_frame_v8 *frame);
+typedef struct runtime_buffer_lease_v9 {
+	uint64_t lease_id;
+	const uint8_t *data;
+	size_t len;
+} runtime_buffer_lease_v9;
+typedef struct runtime_invocation_stream_frame_v9 {
+	uint32_t struct_size;
+	uint16_t abi_version;
+	uint8_t kind;
+	uint8_t state;
+	uint32_t flags;
+	uint64_t sequence;
+	uint64_t elapsed_ms;
+	runtime_bytes_view_v8 payload_content_type;
+	runtime_buffer_lease_v9 payload;
+	runtime_bytes_view_v8 admission_receipt_json;
+	runtime_bytes_view_v8 terminal_receipt_json;
+	runtime_bytes_view_v8 error_json;
+} runtime_invocation_stream_frame_v9;
+typedef void (*runtime_stream_v9_callback_fn)(void *user_data, const runtime_invocation_stream_frame_v9 *frame);
 typedef void (*runtime_bidi_callback_fn)(void *user_data, const char *frame_json);
 typedef int32_t (*runtime_invocation_stream_open_fn)(uint64_t handle, const char *invocation_json, runtime_stream_callback_fn on_chunk, void *user_data, uint64_t *out_stream_id);
 typedef int32_t (*runtime_invocation_stream_open_v8_fn)(uint64_t handle, const char *invocation_json, runtime_stream_v8_callback_fn on_chunk, void *user_data, uint64_t *out_stream_id);
+typedef int32_t (*runtime_invocation_stream_open_v9_fn)(uint64_t handle, const char *invocation_json, runtime_stream_v9_callback_fn on_chunk, void *user_data, uint64_t *out_stream_id);
+typedef int32_t (*runtime_buffer_lease_retain_v9_fn)(uint64_t handle, uint64_t lease_id);
+typedef int32_t (*runtime_buffer_lease_release_v9_fn)(uint64_t handle, uint64_t lease_id);
 typedef int32_t (*runtime_invocation_stream_cancel_fn)(uint64_t handle, uint64_t stream_id);
 typedef int32_t (*runtime_invocation_stream_close_fn)(uint64_t handle, uint64_t stream_id);
 typedef int32_t (*runtime_invocation_bidi_open_fn)(uint64_t handle, const char *invocation_json, runtime_bidi_callback_fn on_frame, void *user_data, uint64_t *out_bidi_id);
@@ -68,6 +91,7 @@ typedef int32_t (*runtime_invocation_bidi_cancel_fn)(uint64_t handle, uint64_t b
 
 extern void easynetGoStreamCallback(void *user_data, const char *chunk_json);
 extern void easynetGoStreamV8Callback(void *user_data, const runtime_invocation_stream_frame_v8 *frame);
+extern void easynetGoStreamV9Callback(void *user_data, const runtime_invocation_stream_frame_v9 *frame);
 extern void easynetGoBidiCallback(void *user_data, const char *frame_json);
 
 static uint32_t runtime_cabi_call_abi_version(void *fn) {
@@ -186,6 +210,18 @@ static int32_t runtime_cabi_call_stream_open_v8(void *fn, uint64_t handle, const
 	return ((runtime_invocation_stream_open_v8_fn)fn)(handle, invocation_json, easynetGoStreamV8Callback, user_data, out_stream_id);
 }
 
+static int32_t runtime_cabi_call_stream_open_v9(void *fn, uint64_t handle, const char *invocation_json, void *user_data, uint64_t *out_stream_id) {
+	return ((runtime_invocation_stream_open_v9_fn)fn)(handle, invocation_json, easynetGoStreamV9Callback, user_data, out_stream_id);
+}
+
+static int32_t runtime_cabi_call_buffer_lease_retain_v9(void *fn, uint64_t handle, uint64_t lease_id) {
+	return ((runtime_buffer_lease_retain_v9_fn)fn)(handle, lease_id);
+}
+
+static int32_t runtime_cabi_call_buffer_lease_release_v9(void *fn, uint64_t handle, uint64_t lease_id) {
+	return ((runtime_buffer_lease_release_v9_fn)fn)(handle, lease_id);
+}
+
 static int32_t runtime_cabi_call_stream_cancel(void *fn, uint64_t handle, uint64_t stream_id) {
 	return ((runtime_invocation_stream_cancel_fn)fn)(handle, stream_id);
 }
@@ -221,7 +257,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -259,6 +297,9 @@ type cabiRuntimeSymbols struct {
 	signedFree            unsafe.Pointer
 	streamOpen            unsafe.Pointer
 	streamOpenV8          unsafe.Pointer
+	streamOpenV9          unsafe.Pointer
+	bufferLeaseRetainV9   unsafe.Pointer
+	bufferLeaseReleaseV9  unsafe.Pointer
 	streamCancel          unsafe.Pointer
 	streamClose           unsafe.Pointer
 	bidiOpen              unsafe.Pointer
@@ -283,6 +324,7 @@ type cabiRuntimeLifecycleTransport struct {
 
 type cabiRuntimeFeatures struct {
 	streamBinaryFrameV8 bool
+	streamBufferLeaseV9 bool
 }
 
 // openCABIRuntimeLifecycleTransport loads libeasynet_cli and assembles the
@@ -591,7 +633,10 @@ type cabiRuntimeTransport struct {
 	ownsHandle      bool
 	preparedHandles *cabiPreparedHandleRegistry
 	streams         map[*cabiStreamTransport]struct{}
+	leasedStreams   map[*cabiLeasedStreamTransport]struct{}
 	bidis           map[*cabiBidiTransport]struct{}
+	leaseMu         sync.Mutex
+	leases          map[*cabiLeasedPayloadStorage]struct{}
 	closed          bool
 }
 
@@ -603,7 +648,9 @@ func newCABIRuntimeTransport(symbols cabiRuntimeSymbols, handle uint64, ownsHand
 		ownsHandle:      ownsHandle,
 		preparedHandles: newCABIPreparedHandleRegistry(),
 		streams:         map[*cabiStreamTransport]struct{}{},
+		leasedStreams:   map[*cabiLeasedStreamTransport]struct{}{},
 		bidis:           map[*cabiBidiTransport]struct{}{},
+		leases:          map[*cabiLeasedPayloadStorage]struct{}{},
 	}
 }
 
@@ -826,6 +873,60 @@ func (t *cabiRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 	return stream, []byte(fmt.Sprintf(`{"stream_id":%q,"state":"Open","max_buffered_events":%d}`, strconv.FormatUint(streamID, 10), MaxStreamBufferedEvents)), nil
 }
 
+func (t *cabiRuntimeTransport) OpenLeasedStream(ctx context.Context, draftJSON []byte) (leasedStreamTransport, []byte, error) {
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !t.features.streamBufferLeaseV9 || t.symbols.streamOpenV9 == nil || t.symbols.bufferLeaseRetainV9 == nil || t.symbols.bufferLeaseReleaseV9 == nil {
+		return nil, nil, &SDKError{
+			Code:      ErrNotImplemented,
+			Stage:     "cabi",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   "libeasynet_cli does not expose the complete ABI v9 leased-stream contract",
+		}
+	}
+	scope := &cabiLeaseScope{}
+	inbox := newCABICallbackInbox(64, true)
+	inbox.leasedPayloadFactory = func(leaseID uint64, data unsafe.Pointer, length uint64) (leasedPayloadStorage, error) {
+		return t.newLeasedPayload(handle, scope, leaseID, data, length)
+	}
+	registration, err := registerCABICallbackInbox(inbox)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out C.uint64_t
+	code := int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
+		return C.runtime_cabi_call_stream_open_v9(t.symbols.streamOpenV9, C.uint64_t(handle), cDraft, registration.userData, &out)
+	}))
+	if code != 0 {
+		releaseCABICallbackInbox(registration)
+		return nil, nil, t.lastErrorOrCode(code, "C ABI v9 invocation stream open failed")
+	}
+	streamID := uint64(out)
+	if streamID == 0 {
+		releaseCABICallbackInbox(registration)
+		return nil, nil, invalidCABIHandle("C ABI v9 stream open returned an invalid stream id")
+	}
+	stream := &cabiLeasedStreamTransport{
+		owner:        t,
+		streamID:     streamID,
+		registration: registration,
+		inbox:        inbox,
+		leaseScope:   scope,
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = stream.closeWithHandle(handle)
+		return nil, nil, invalidRuntimeClient("C ABI runtime transport closed while opening leased stream")
+	}
+	t.leasedStreams[stream] = struct{}{}
+	t.mu.Unlock()
+	return stream, []byte(fmt.Sprintf(`{"stream_id":%q,"state":"Open","max_buffered_events":%d}`, strconv.FormatUint(streamID, 10), 64)), nil
+}
+
 func (t *cabiRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
@@ -1034,12 +1135,17 @@ func (t *cabiRuntimeTransport) Close(ctx context.Context) error {
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
+	leasedStreams := make([]*cabiLeasedStreamTransport, 0, len(t.leasedStreams))
+	for stream := range t.leasedStreams {
+		leasedStreams = append(leasedStreams, stream)
+	}
 	bidis := make([]*cabiBidiTransport, 0, len(t.bidis))
 	for bidi := range t.bidis {
 		bidis = append(bidis, bidi)
 	}
 	preparedIDs := t.preparedHandles.drain()
 	t.streams = map[*cabiStreamTransport]struct{}{}
+	t.leasedStreams = map[*cabiLeasedStreamTransport]struct{}{}
 	t.bidis = map[*cabiBidiTransport]struct{}{}
 	handle := t.handle
 	ownsHandle := t.ownsHandle
@@ -1048,6 +1154,11 @@ func (t *cabiRuntimeTransport) Close(ctx context.Context) error {
 
 	var first error
 	for _, stream := range streams {
+		if err := stream.closeFromOwner(handle); err != nil && first == nil {
+			first = err
+		}
+	}
+	for _, stream := range leasedStreams {
 		if err := stream.closeFromOwner(handle); err != nil && first == nil {
 			first = err
 		}
@@ -1062,8 +1173,13 @@ func (t *cabiRuntimeTransport) Close(ctx context.Context) error {
 			first = err
 		}
 	}
+	if err := t.releaseLeases(nil); err != nil && first == nil {
+		first = err
+	}
 	if ownsHandle && handle != 0 {
+		t.leaseMu.Lock()
 		code := int32(C.runtime_cabi_call_shutdown(t.symbols.shutdown, C.uint64_t(handle)))
+		t.leaseMu.Unlock()
 		if code != 0 && first == nil {
 			first = t.lastErrorOrCode(code, "C ABI runtime shutdown failed")
 		}
@@ -1108,6 +1224,12 @@ func (t *cabiRuntimeTransport) removeStream(stream *cabiStreamTransport) {
 	t.mu.Unlock()
 }
 
+func (t *cabiRuntimeTransport) removeLeasedStream(stream *cabiLeasedStreamTransport) {
+	t.mu.Lock()
+	delete(t.leasedStreams, stream)
+	t.mu.Unlock()
+}
+
 func (t *cabiRuntimeTransport) removeBidi(bidi *cabiBidiTransport) {
 	t.mu.Lock()
 	delete(t.bidis, bidi)
@@ -1129,6 +1251,303 @@ type cabiStreamTransport struct {
 	closed       bool
 	cancelSent   bool
 	cancelErr    error
+}
+
+type cabiLeaseScope struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+func (s *cabiLeaseScope) requireOpen() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return invalidRuntimePayload("v9 payload lease scope is closed", nil)
+	}
+	return nil
+}
+
+func (s *cabiLeaseScope) close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+}
+
+type cabiLeasedPayloadStorage struct {
+	mu       sync.Mutex
+	owner    *cabiRuntimeTransport
+	handle   uint64
+	scope    *cabiLeaseScope
+	leaseID  uint64
+	data     unsafe.Pointer
+	length   int
+	released bool
+	err      error
+}
+
+func (t *cabiRuntimeTransport) newLeasedPayload(handle uint64, scope *cabiLeaseScope, leaseID uint64, data unsafe.Pointer, length uint64) (leasedPayloadStorage, error) {
+	if length == 0 {
+		if leaseID != 0 || data != nil {
+			return nil, errors.Join(
+				invalidRuntimePayload("v9 empty payload lease must be exactly {0, NULL, 0}", nil),
+				t.releaseMalformedLease(handle, leaseID),
+			)
+		}
+		return nil, nil
+	}
+	if leaseID == 0 || data == nil {
+		return nil, errors.Join(
+			invalidRuntimePayload("v9 non-empty payload lease requires lease_id and data", nil),
+			t.releaseMalformedLease(handle, leaseID),
+		)
+	}
+	if length > maxStreamV8PayloadBytes || length > uint64(math.MaxInt) {
+		return nil, errors.Join(
+			invalidRuntimePayload("v9 payload lease exceeds the SDK bound", nil),
+			t.releaseMalformedLease(handle, leaseID),
+		)
+	}
+	if scope == nil {
+		return nil, invalidRuntimeClient("v9 payload lease scope is unavailable")
+	}
+	if err := scope.requireOpen(); err != nil {
+		return nil, err
+	}
+	payload := &cabiLeasedPayloadStorage{
+		owner: t, handle: handle, scope: scope, leaseID: leaseID, data: data, length: int(length),
+	}
+	t.leaseMu.Lock()
+	t.leases[payload] = struct{}{}
+	t.leaseMu.Unlock()
+	return payload, nil
+}
+
+func (t *cabiRuntimeTransport) releaseMalformedLease(handle uint64, leaseID uint64) error {
+	if leaseID == 0 {
+		return nil
+	}
+	t.leaseMu.Lock()
+	defer t.leaseMu.Unlock()
+	code := int32(C.runtime_cabi_call_buffer_lease_release_v9(t.symbols.bufferLeaseReleaseV9, C.uint64_t(handle), C.uint64_t(leaseID)))
+	if code != 0 {
+		return t.lastErrorOrCode(code, "C ABI v9 malformed payload lease release failed")
+	}
+	return nil
+}
+
+func (p *cabiLeasedPayloadStorage) Len() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released {
+		return 0
+	}
+	return p.length
+}
+
+func (p *cabiLeasedPayloadStorage) Released() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.released
+}
+
+func (p *cabiLeasedPayloadStorage) CopyBytes() ([]byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released || p.data == nil || p.length <= 0 {
+		return nil, invalidRuntimePayload("v9 payload lease is released", nil)
+	}
+	return C.GoBytes(p.data, C.int(p.length)), nil
+}
+
+func (p *cabiLeasedPayloadStorage) WriteTo(writer io.Writer) (int64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released || p.data == nil || p.length <= 0 {
+		return 0, invalidRuntimePayload("v9 payload lease is released", nil)
+	}
+	// io.Writer does not give this binding an enforceable ownership contract for
+	// a native-backed slice. Hand it Go-owned bytes so a writer that retains its
+	// argument cannot outlive the Runtime lease and observe freed memory.
+	view := C.GoBytes(p.data, C.int(p.length))
+	written := 0
+	for written < len(view) {
+		n, err := writer.Write(view[written:])
+		written += n
+		if err != nil {
+			return int64(written), err
+		}
+		if n == 0 {
+			return int64(written), io.ErrShortWrite
+		}
+	}
+	return int64(written), nil
+}
+
+func (p *cabiLeasedPayloadStorage) Retain() (leasedPayloadStorage, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released || p.data == nil || p.length <= 0 {
+		return nil, invalidRuntimePayload("v9 payload lease is released", nil)
+	}
+	if err := p.scope.requireOpen(); err != nil {
+		return nil, err
+	}
+	p.owner.leaseMu.Lock()
+	defer p.owner.leaseMu.Unlock()
+	code := int32(C.runtime_cabi_call_buffer_lease_retain_v9(p.owner.symbols.bufferLeaseRetainV9, C.uint64_t(p.handle), C.uint64_t(p.leaseID)))
+	if code != 0 {
+		return nil, p.owner.lastErrorOrCode(code, "C ABI v9 payload lease retain failed")
+	}
+	retained := &cabiLeasedPayloadStorage{
+		owner: p.owner, handle: p.handle, scope: p.scope, leaseID: p.leaseID, data: p.data, length: p.length,
+	}
+	p.owner.leases[retained] = struct{}{}
+	return retained, nil
+}
+
+func (p *cabiLeasedPayloadStorage) Release() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released {
+		return p.err
+	}
+	p.released = true
+	owner := p.owner
+	handle := p.handle
+	leaseID := p.leaseID
+	p.data = nil
+	p.length = 0
+
+	owner.leaseMu.Lock()
+	delete(owner.leases, p)
+	code := int32(C.runtime_cabi_call_buffer_lease_release_v9(owner.symbols.bufferLeaseReleaseV9, C.uint64_t(handle), C.uint64_t(leaseID)))
+	if code != 0 {
+		p.err = owner.lastErrorOrCode(code, "C ABI v9 payload lease release failed")
+	}
+	owner.leaseMu.Unlock()
+	return p.err
+}
+
+func (t *cabiRuntimeTransport) releaseLeases(scope *cabiLeaseScope) error {
+	if scope != nil {
+		scope.close()
+	}
+	t.leaseMu.Lock()
+	payloads := make([]*cabiLeasedPayloadStorage, 0, len(t.leases))
+	for payload := range t.leases {
+		if scope == nil || payload.scope == scope {
+			payloads = append(payloads, payload)
+		}
+	}
+	t.leaseMu.Unlock()
+	var first error
+	for _, payload := range payloads {
+		if err := payload.Release(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+type cabiLeasedStreamTransport struct {
+	mu           sync.Mutex
+	owner        *cabiRuntimeTransport
+	streamID     uint64
+	registration *cabiCallbackRegistration
+	inbox        *cabiCallbackInbox
+	leaseScope   *cabiLeaseScope
+	closed       bool
+	cancelSent   bool
+	cancelErr    error
+}
+
+func (s *cabiLeasedStreamTransport) RecvLeased(ctx context.Context) (leasedStreamPacket, error) {
+	if ctx == nil {
+		return leasedStreamPacket{}, invalidRuntimeClient("context is required")
+	}
+	if s == nil || s.inbox == nil {
+		return leasedStreamPacket{}, invalidRuntimeClient("C ABI leased stream transport is not initialized")
+	}
+	packet, err := s.inbox.recv(ctx)
+	if err != nil {
+		if !isLocalCarrierInterruption(err) {
+			if handle, handleErr := s.owner.requireOpen(context.Background()); handleErr == nil {
+				err = errors.Join(err, s.closeWithHandle(handle))
+			}
+		}
+		return leasedStreamPacket{}, err
+	}
+	if packet.leased == nil {
+		packet.release()
+		return leasedStreamPacket{}, invalidRuntimePayload("v9 callback did not provide a leased frame", nil)
+	}
+	leased := *packet.leased
+	packet.leased = nil
+	return leased, nil
+}
+
+func (s *cabiLeasedStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
+	handle, err := s.owner.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_ = reason
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, invalidRuntimePayload("leased stream carrier is closed", nil)
+	}
+	if !s.cancelSent {
+		code := int32(C.runtime_cabi_call_stream_cancel(s.owner.symbols.streamCancel, C.uint64_t(handle), C.uint64_t(s.streamID)))
+		s.cancelSent = true
+		if code != 0 {
+			s.cancelErr = s.owner.lastErrorOrCode(code, "C ABI v9 invocation stream cancel failed")
+		}
+	}
+	if s.cancelErr != nil {
+		return nil, s.cancelErr
+	}
+	return []byte(fmt.Sprintf(`{"stream_id":%q,"cancelled":false,"state":"CancelRequested","terminal":false}`, strconv.FormatUint(s.streamID, 10))), nil
+}
+
+func (s *cabiLeasedStreamTransport) Close(ctx context.Context) error {
+	if ctx == nil {
+		return invalidRuntimeClient("context is required")
+	}
+	handle, err := s.owner.requireOpen(ctx)
+	if err != nil {
+		return err
+	}
+	return s.closeWithHandle(handle)
+}
+
+func (s *cabiLeasedStreamTransport) closeFromOwner(handle uint64) error {
+	return s.closeWithHandle(handle)
+}
+
+func (s *cabiLeasedStreamTransport) closeWithHandle(handle uint64) error {
+	if s == nil || s.owner == nil {
+		return invalidRuntimeClient("C ABI leased stream transport is not initialized")
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	streamID, registration, scope := s.streamID, s.registration, s.leaseScope
+	s.mu.Unlock()
+	code := int32(C.runtime_cabi_call_stream_close(s.owner.symbols.streamClose, C.uint64_t(handle), C.uint64_t(streamID)))
+	releaseCABICallbackInbox(registration)
+	leaseErr := s.owner.releaseLeases(scope)
+	s.owner.removeLeasedStream(s)
+	if code != 0 {
+		return errors.Join(s.owner.lastErrorOrCode(code, "C ABI v9 invocation stream close failed"), leaseErr)
+	}
+	return leaseErr
 }
 
 func (s *cabiStreamTransport) Recv(ctx context.Context) ([]byte, error) {
@@ -1727,6 +2146,9 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		*binding.out = ptr
 	}
 	symbols.streamOpenV8 = optionalCABISymbol(library, "runtime_invocation_stream_open_v8")
+	symbols.streamOpenV9 = optionalCABISymbol(library, "runtime_invocation_stream_open_v9")
+	symbols.bufferLeaseRetainV9 = optionalCABISymbol(library, "runtime_buffer_lease_retain_v9")
+	symbols.bufferLeaseReleaseV9 = optionalCABISymbol(library, "runtime_buffer_lease_release_v9")
 	return symbols, nil
 }
 
@@ -1745,18 +2167,24 @@ func cabiRuntimeFeatureDiscovery(symbols cabiRuntimeSymbols) cabiRuntimeFeatures
 	if !ok {
 		return cabiRuntimeFeatures{}
 	}
-	v8, ok := extensions["v8"].(map[string]any)
-	if !ok {
-		return cabiRuntimeFeatures{}
-	}
 	featureSymbols, ok := decoded["symbols"].(map[string]any)
 	if !ok {
 		return cabiRuntimeFeatures{}
 	}
+	v8, _ := extensions["v8"].(map[string]any)
+	v9, _ := extensions["v9"].(map[string]any)
 	return cabiRuntimeFeatures{
 		streamBinaryFrameV8: v8["stream_binary_frame"] == true &&
 			v8["symbol"] == "runtime_invocation_stream_open_v8" &&
 			featureSymbols["stream_binary_frame_v8"] == true,
+		streamBufferLeaseV9: v9["stream_buffer_lease"] == true &&
+			v9["open_symbol"] == "runtime_invocation_stream_open_v9" &&
+			v9["retain_symbol"] == "runtime_buffer_lease_retain_v9" &&
+			v9["release_symbol"] == "runtime_buffer_lease_release_v9" &&
+			featureSymbols["stream_buffer_lease_v9"] == true &&
+			symbols.streamOpenV9 != nil &&
+			symbols.bufferLeaseRetainV9 != nil &&
+			symbols.bufferLeaseReleaseV9 != nil,
 	}
 }
 
@@ -2101,13 +2529,14 @@ func preparedKeyFromMap(decoded map[string]any) (string, error) {
 }
 
 type cabiCallbackInbox struct {
-	mu               sync.Mutex
-	ch               chan cabiCallbackPacket
-	rawStream        bool
-	closed           bool
-	failure          *cabiCallbackPacket
-	protocolFailure  error
-	failureDelivered bool
+	mu                   sync.Mutex
+	ch                   chan cabiCallbackPacket
+	rawStream            bool
+	closed               bool
+	failure              *cabiCallbackPacket
+	protocolFailure      error
+	failureDelivered     bool
+	leasedPayloadFactory func(uint64, unsafe.Pointer, uint64) (leasedPayloadStorage, error)
 }
 
 type cabiCallbackPacket struct {
@@ -2115,6 +2544,7 @@ type cabiCallbackPacket struct {
 	payload      []byte
 	binary       rawStreamPacket
 	hasBinary    bool
+	leased       *leasedStreamPacket
 }
 
 // Callback packet constructors consume their byte slices. Every C callback
@@ -2136,6 +2566,18 @@ func cabiBinaryCallbackPacket(packet rawStreamPacket) cabiCallbackPacket {
 	return cabiCallbackPacket{binary: packet, hasBinary: true}
 }
 
+func cabiLeasedCallbackPacket(packet leasedStreamPacket) cabiCallbackPacket {
+	return cabiCallbackPacket{leased: &packet}
+}
+
+func (p *cabiCallbackPacket) release() {
+	if p == nil || p.leased == nil {
+		return
+	}
+	_ = p.leased.release()
+	p.leased = nil
+}
+
 func newCABICallbackInbox(maxItems int, rawStream ...bool) *cabiCallbackInbox {
 	if maxItems <= 0 {
 		maxItems = 1
@@ -2148,11 +2590,13 @@ func (i *cabiCallbackInbox) push(packet cabiCallbackPacket) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.closed {
+		packet.release()
 		return
 	}
 	select {
 	case i.ch <- packet:
 	default:
+		packet.release()
 		if i.rawStream {
 			i.protocolFailure = cabiCallbackBackpressureError()
 		} else {
@@ -2161,6 +2605,7 @@ func (i *cabiCallbackInbox) push(packet cabiCallbackPacket) {
 		}
 		i.closed = true
 		close(i.ch)
+		i.drainLeasedLocked()
 	}
 }
 
@@ -2200,6 +2645,52 @@ func (i *cabiCallbackInbox) fail(err error) {
 	i.protocolFailure = err
 	i.closed = true
 	close(i.ch)
+	i.drainLeasedLocked()
+}
+
+func (i *cabiCallbackInbox) drainLeasedLocked() {
+	for {
+		select {
+		case packet, ok := <-i.ch:
+			if !ok {
+				return
+			}
+			packet.release()
+		default:
+			return
+		}
+	}
+}
+
+func (i *cabiCallbackInbox) newLeasedPayload(leaseID uint64, data unsafe.Pointer, length uint64) (leasedPayloadStorage, error) {
+	i.mu.Lock()
+	factory := i.leasedPayloadFactory
+	i.mu.Unlock()
+	if factory == nil {
+		return nil, invalidRuntimeClient("C ABI leased callback payload factory is unavailable")
+	}
+	return factory(leaseID, data, length)
+}
+
+func (i *cabiCallbackInbox) discard() {
+	i.mu.Lock()
+	if !i.closed {
+		i.closed = true
+		close(i.ch)
+	}
+	for {
+		select {
+		case packet, ok := <-i.ch:
+			if !ok {
+				i.mu.Unlock()
+				return
+			}
+			packet.release()
+		default:
+			i.mu.Unlock()
+			return
+		}
+	}
 }
 
 func cabiCallbackBackpressureFailure() []byte {
@@ -2276,7 +2767,7 @@ func releaseCABICallbackInbox(registration *cabiCallbackRegistration) {
 	cabiCallbackRegistry.Unlock()
 	C.free(registration.userData)
 	if inbox != nil {
-		inbox.close()
+		inbox.discard()
 	}
 }
 
@@ -2290,6 +2781,20 @@ func pushCABICallbackRawPayload(token uintptr, metadataJSON []byte, payload []by
 
 func pushCABICallbackBinaryFrame(token uintptr, packet rawStreamPacket) {
 	pushCABICallbackPacket(token, cabiBinaryCallbackPacket(packet))
+}
+
+func pushCABICallbackLeasedFrame(token uintptr, packet leasedStreamPacket) {
+	pushCABICallbackPacket(token, cabiLeasedCallbackPacket(packet))
+}
+
+func newCABICallbackLeasedPayload(token uintptr, leaseID uint64, data unsafe.Pointer, length uint64) (leasedPayloadStorage, error) {
+	cabiCallbackRegistry.Lock()
+	inbox := cabiCallbackRegistry.inbox[token]
+	cabiCallbackRegistry.Unlock()
+	if inbox == nil {
+		return nil, invalidRuntimeClient("C ABI leased callback inbox is unavailable")
+	}
+	return inbox.newLeasedPayload(leaseID, data, length)
 }
 
 func closeCABICallbackInbox(token uintptr) {

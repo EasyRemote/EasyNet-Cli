@@ -79,7 +79,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     ),
     (r"(bidi|duplex)", "bidi"),
     (
-        r"(stream|contentchunk|contentsegment|contentprovider|contentsession|segmenter)",
+        r"(stream|leasedpayload|contentchunk|contentsegment|contentprovider|contentsession|segmenter)",
         "stream",
     ),
     (

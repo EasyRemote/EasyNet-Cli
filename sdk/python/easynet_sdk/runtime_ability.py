@@ -40,7 +40,7 @@ from .runtime import (
 from .runtime_authority import DraftAuthorityProvider
 from ._session_authority_subjects import session_authority_admits_subject
 from .signing import SignedInvocation
-from .stream import StreamHandle
+from .stream import LeasedStreamHandle, StreamHandle
 
 __all__ = [
     "RuntimeAbilityClient",
@@ -340,6 +340,15 @@ class RuntimeAbilityClient:
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> StreamHandle:
         return self._runtime.invoke_stream(
+            self._build(call, ability_name, arguments, call_mode="stream")
+        )
+
+    def open_leased_stream(
+        self, call: RuntimeCallContext, ability_name: str, arguments: object
+    ) -> LeasedStreamHandle:
+        """Open an explicit ABI v9 lease stream for high-throughput payloads."""
+
+        return self._runtime.invoke_leased_stream(
             self._build(call, ability_name, arguments, call_mode="stream")
         )
 

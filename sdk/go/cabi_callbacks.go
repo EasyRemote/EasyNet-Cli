@@ -23,6 +23,25 @@ typedef struct runtime_invocation_stream_frame_v8 {
 	runtime_bytes_view_v8 terminal_receipt_json;
 	runtime_bytes_view_v8 error_json;
 } runtime_invocation_stream_frame_v8;
+typedef struct runtime_buffer_lease_v9 {
+	uint64_t lease_id;
+	const uint8_t *data;
+	size_t len;
+} runtime_buffer_lease_v9;
+typedef struct runtime_invocation_stream_frame_v9 {
+	uint32_t struct_size;
+	uint16_t abi_version;
+	uint8_t kind;
+	uint8_t state;
+	uint32_t flags;
+	uint64_t sequence;
+	uint64_t elapsed_ms;
+	runtime_bytes_view_v8 payload_content_type;
+	runtime_buffer_lease_v9 payload;
+	runtime_bytes_view_v8 admission_receipt_json;
+	runtime_bytes_view_v8 terminal_receipt_json;
+	runtime_bytes_view_v8 error_json;
+} runtime_invocation_stream_frame_v9;
 */
 import "C"
 
@@ -33,6 +52,7 @@ import (
 
 const (
 	streamV8ABIVersion                     = 8
+	streamV9ABIVersion                     = 9
 	streamV8FlagTerminal                   = 1 << 0
 	streamV8FlagTransportTerminal          = 1 << 1
 	streamV8FlagHasPayload                 = 1 << 2
@@ -56,6 +76,102 @@ func easynetGoStreamCallback(userData unsafe.Pointer, chunkJSON *C.char) {
 		return
 	}
 	pushCABICallbackPayload(token, []byte(C.GoString(chunkJSON)))
+}
+
+//export easynetGoStreamV9Callback
+func easynetGoStreamV9Callback(userData unsafe.Pointer, frame *C.runtime_invocation_stream_frame_v9) {
+	if userData == nil {
+		return
+	}
+	token := uintptr(*(*C.uintptr_t)(userData))
+	if frame == nil {
+		closeCABICallbackInbox(token)
+		return
+	}
+	if uint32(frame.struct_size) < uint32(C.sizeof_runtime_invocation_stream_frame_v9) || uint16(frame.abi_version) != streamV9ABIVersion {
+		failCABICallbackInbox(token, invalidRuntimePayload("v9 leased frame has an incompatible layout", nil))
+		return
+	}
+	lease, err := newCABICallbackLeasedPayload(
+		token,
+		uint64(frame.payload.lease_id),
+		unsafe.Pointer(frame.payload.data),
+		uint64(frame.payload.len),
+	)
+	if err != nil {
+		failCABICallbackInbox(token, err)
+		return
+	}
+	releaseOnFailure := func(err error) {
+		if lease != nil {
+			_ = lease.Release()
+		}
+		failCABICallbackInbox(token, err)
+	}
+	flags := uint32(frame.flags)
+	if frame.sequence == 0 || flags&^uint32(streamV8KnownFlags) != 0 {
+		releaseOnFailure(invalidRuntimePayload("v9 leased frame has an invalid sequence or flags", nil))
+		return
+	}
+	kind, ok := streamV8KindName(uint8(frame.kind))
+	if !ok {
+		releaseOnFailure(invalidRuntimePayload("v9 leased frame has an unknown kind", nil))
+		return
+	}
+	state, ok := streamV8StateName(uint8(frame.state))
+	if !ok {
+		releaseOnFailure(invalidRuntimePayload("v9 leased frame has an unknown state", nil))
+		return
+	}
+	contentType, err := copyStreamV8View(frame.payload_content_type, 4096, "payload_content_type")
+	if err != nil {
+		releaseOnFailure(err)
+		return
+	}
+	admissionReceipt, err := copyStreamV8View(frame.admission_receipt_json, maxStreamV8SidecarBytes, "admission_receipt_json")
+	if err != nil {
+		releaseOnFailure(err)
+		return
+	}
+	terminalReceipt, err := copyStreamV8View(frame.terminal_receipt_json, maxStreamV8SidecarBytes, "terminal_receipt_json")
+	if err != nil {
+		releaseOnFailure(err)
+		return
+	}
+	errorJSON, err := copyStreamV8View(frame.error_json, maxStreamV8SidecarBytes, "error_json")
+	if err != nil {
+		releaseOnFailure(err)
+		return
+	}
+	for _, presence := range []struct {
+		flag    uint32
+		present bool
+		name    string
+	}{
+		{streamV8FlagHasContentType, len(contentType) != 0, "content type"},
+		{streamV8FlagHasPayload, lease != nil, "payload"},
+		{streamV8FlagHasAdmissionReceipt, len(admissionReceipt) != 0, "admission receipt"},
+		{streamV8FlagHasTerminalReceipt, len(terminalReceipt) != 0, "terminal receipt"},
+		{streamV8FlagHasError, len(errorJSON) != 0, "error"},
+	} {
+		if (flags&presence.flag != 0) != presence.present {
+			releaseOnFailure(invalidRuntimePayload("v9 leased frame "+presence.name+" presence flag is inconsistent", nil))
+			return
+		}
+	}
+	pushCABICallbackLeasedFrame(token, leasedStreamPacket{
+		sequence:             uint64(frame.sequence),
+		kind:                 kind,
+		state:                state,
+		terminal:             flags&streamV8FlagTerminal != 0,
+		transportTerminal:    flags&streamV8FlagTransportTerminal != 0,
+		elapsedMS:            uint64(frame.elapsed_ms),
+		payloadContentType:   string(contentType),
+		payload:              lease,
+		admissionReceiptJSON: admissionReceipt,
+		terminalReceiptJSON:  terminalReceipt,
+		errorJSON:            errorJSON,
+	})
 }
 
 //export easynetGoStreamV8Callback

@@ -21,7 +21,7 @@ _T = TypeVar("_T")
 class AddressingErrorReason(StrEnum):
     """Stable reasons for Addressing failures that require caller action."""
 
-    DEVICE_OWNED_ABILITY_MIGRATION = "device_owned_ability_migration"
+    ABILITY_OWNER_NOT_PUBLISHER = "ability_owner_not_publisher"
 
 
 def addressing_error_reason(error: SDKError) -> AddressingErrorReason | None:
@@ -218,7 +218,7 @@ class AddressingClient:
         if owner_projection.kind == "device":
             _invalid_addressing(
                 "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
-                reason=AddressingErrorReason.DEVICE_OWNED_ABILITY_MIGRATION,
+                reason=AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
             )
         return self._build(
             "ability",
@@ -523,7 +523,7 @@ class AxonAddressingTransport:
             if owner.kind == "device":
                 _invalid_addressing(
                     "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
-                    reason=AddressingErrorReason.DEVICE_OWNED_ABILITY_MIGRATION,
+                    reason=AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
                 )
             return cast(
                 str,
@@ -659,7 +659,7 @@ def _reject_device_owned_ability(ability: Any) -> None:
     if ability.owner.kind == "device":
         _invalid_addressing(
             "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
-            reason=AddressingErrorReason.DEVICE_OWNED_ABILITY_MIGRATION,
+            reason=AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
         )
 
 

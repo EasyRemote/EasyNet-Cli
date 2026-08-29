@@ -1,5 +1,6 @@
 import ctypes
 import base64
+import io
 import json
 import unittest
 
@@ -12,6 +13,8 @@ from easynet_sdk import (
     RuntimeLifecycle,
     RuntimeClient,
     SDKError,
+    LeasedPayload,
+    LeasedStreamEvent,
     StreamState,
 )
 from easynet_sdk.stream import RawStreamPacket
@@ -25,7 +28,9 @@ from easynet_sdk._cabi import (
     _CABIStreamTransport,
     _CallbackInbox,
     _RuntimeBytesViewV8,
+    _RuntimeBufferLeaseV9,
     _RuntimeInvocationStreamFrameV8,
+    _RuntimeInvocationStreamFrameV9,
     _STREAM_V8_FLAG_HAS_CONTENT_TYPE,
     _STREAM_V8_FLAG_HAS_PAYLOAD,
     _cabi_bidi_frame_json,
@@ -232,6 +237,12 @@ class FakeRawCABI:
         stream_v8_feature: bool | None = None,
         stream_v8_symbol: str = "runtime_invocation_stream_open_v8",
         stream_v8_symbol_feature: bool | None = None,
+        stream_v9: bool = False,
+        stream_v9_feature: bool | None = None,
+        stream_v9_open_symbol: str = "runtime_invocation_stream_open_v9",
+        stream_v9_retain_symbol: str = "runtime_buffer_lease_retain_v9",
+        stream_v9_release_symbol: str = "runtime_buffer_lease_release_v9",
+        stream_v9_symbol_feature: bool | None = None,
     ) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
         self.callback_buffers: list[ctypes.Array[ctypes.c_char]] = []
@@ -255,6 +266,20 @@ class FakeRawCABI:
             if stream_v8_symbol_feature is None
             else stream_v8_symbol_feature
         )
+        self.stream_v9_opens = 0
+        self.stream_v9_feature = stream_v9 if stream_v9_feature is None else stream_v9_feature
+        self.stream_v9_open_symbol = stream_v9_open_symbol
+        self.stream_v9_retain_symbol = stream_v9_retain_symbol
+        self.stream_v9_release_symbol = stream_v9_release_symbol
+        self.stream_v9_symbol_feature = (
+            self.stream_v9_feature
+            if stream_v9_symbol_feature is None
+            else stream_v9_symbol_feature
+        )
+        self.lease_buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
+        self.lease_refs: dict[int, int] = {}
+        self.lease_releases: list[int] = []
+        self.lease_retains: list[int] = []
         self.bidi_sends: list[dict[str, object]] = []
         self.bidi_close_sends: list[int] = []
         self.bidi_closes: list[int] = []
@@ -323,6 +348,16 @@ class FakeRawCABI:
             self.runtime_invocation_stream_open_v8 = FakeSymbol(
                 self._invocation_stream_open_v8
             )
+        if stream_v9:
+            self.runtime_invocation_stream_open_v9 = FakeSymbol(
+                self._invocation_stream_open_v9
+            )
+            self.runtime_buffer_lease_retain_v9 = FakeSymbol(
+                self._buffer_lease_retain_v9
+            )
+            self.runtime_buffer_lease_release_v9 = FakeSymbol(
+                self._buffer_lease_release_v9
+            )
         self.runtime_invocation_stream_cancel = FakeSymbol(
             self._invocation_stream_cancel
         )
@@ -356,13 +391,20 @@ class FakeRawCABI:
                         "v8": {
                             "stream_binary_frame": self.stream_v8_feature,
                             "symbol": self.stream_v8_symbol,
-                        }
+                        },
+                        "v9": {
+                            "stream_buffer_lease": self.stream_v9_feature,
+                            "open_symbol": self.stream_v9_open_symbol,
+                            "retain_symbol": self.stream_v9_retain_symbol,
+                            "release_symbol": self.stream_v9_release_symbol,
+                        },
                     },
                     "sdk_version": "0.91.30",
                     "profiles": {"runtime_core": "provider-backed"},
                     "symbols": {
                         "generic_invocation": True,
                         "stream_binary_frame_v8": self.stream_v8_symbol_feature,
+                        "stream_buffer_lease_v9": self.stream_v9_symbol_feature,
                     },
                     "axon_pb": True,
                 },
@@ -697,6 +739,63 @@ class FakeRawCABI:
         )
         return 0
 
+    def _invocation_stream_open_v9(
+        self, handle, invocation_json, callback, user_data, out_stream_id
+    ) -> int:
+        _ = handle, invocation_json
+        self.stream_v9_opens += 1
+        out_stream_id._obj.value = 4001
+        self.stream_callbacks[4001] = (callback, user_data)
+        payload = b'{"provider":"cabi-v9"}'
+        lease_id = 9001
+        buffer = ctypes.create_string_buffer(payload)
+        self.lease_buffers[lease_id] = buffer
+        self.lease_refs[lease_id] = 1
+        content_type = ctypes.create_string_buffer(b"application/json")
+        self.callback_buffers.extend((buffer, content_type))
+        frame = _RuntimeInvocationStreamFrameV9(
+            struct_size=ctypes.sizeof(_RuntimeInvocationStreamFrameV9),
+            abi_version=9,
+            kind=1,
+            state=4,
+            flags=_STREAM_V8_FLAG_HAS_CONTENT_TYPE | _STREAM_V8_FLAG_HAS_PAYLOAD,
+            sequence=1,
+            elapsed_ms=3,
+            payload_content_type=_RuntimeBytesViewV8(
+                ctypes.addressof(content_type), len(b"application/json")
+            ),
+            payload=_RuntimeBufferLeaseV9(
+                lease_id, ctypes.addressof(buffer), len(payload)
+            ),
+            admission_receipt_json=_RuntimeBytesViewV8(None, 0),
+            terminal_receipt_json=_RuntimeBytesViewV8(None, 0),
+            error_json=_RuntimeBytesViewV8(None, 0),
+        )
+        callback(user_data, ctypes.pointer(frame))
+        return 0
+
+    def _buffer_lease_retain_v9(self, handle, lease_id) -> int:
+        _ = handle
+        native_id = int(lease_id.value)
+        if self.lease_refs.get(native_id, 0) <= 0:
+            return 4
+        self.lease_refs[native_id] += 1
+        self.lease_retains.append(native_id)
+        return 0
+
+    def _buffer_lease_release_v9(self, handle, lease_id) -> int:
+        _ = handle
+        native_id = int(lease_id.value)
+        references = self.lease_refs.get(native_id, 0)
+        if references <= 0:
+            return 4
+        self.lease_releases.append(native_id)
+        references -= 1
+        self.lease_refs[native_id] = references
+        if references == 0:
+            self.lease_buffers.pop(native_id, None)
+        return 0
+
     def _invocation_stream_cancel(self, handle, stream_id) -> int:
         _ = handle
         native_id = int(stream_id.value)
@@ -837,6 +936,23 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertFalse(wrong_symbol.stream_v8_available)
         self.assertFalse(missing_symbol_feature.stream_v8_available)
+
+    def test_library_requires_complete_exact_v9_lease_discovery(self) -> None:
+        enabled = RuntimeCABILibrary(FakeRawCABI(stream_v9=True))
+        wrong_retain = RuntimeCABILibrary(
+            FakeRawCABI(stream_v9=True, stream_v9_retain_symbol="retain_alias")
+        )
+        missing_feature = RuntimeCABILibrary(
+            FakeRawCABI(stream_v9=True, stream_v9_symbol_feature=False)
+        )
+        missing_release = FakeRawCABI(stream_v9=True)
+        del missing_release.runtime_buffer_lease_release_v9
+        incomplete = RuntimeCABILibrary(missing_release)
+
+        self.assertTrue(enabled.stream_v9_available)
+        self.assertFalse(wrong_retain.stream_v9_available)
+        self.assertFalse(missing_feature.stream_v9_available)
+        self.assertFalse(incomplete.stream_v9_available)
 
     def test_library_exposes_runtime_host_not_daemon_lifecycle_methods(self) -> None:
         lifecycle_methods = {
@@ -1309,6 +1425,217 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(event.payload_base64, "")
         self.assertEqual(event.payload_bytes, b'{"provider":"cabi"}')
         self.assertEqual(event.payload_json, {"provider": "cabi"})
+
+    def test_owned_stream_remains_v8_when_v9_is_also_available(self) -> None:
+        raw = FakeRawCABI(stream_v8=True, stream_v9=True)
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_stream(complete_draft())
+        try:
+            event = stream.next()
+        finally:
+            stream.close()
+
+        self.assertEqual(raw.stream_v8_opens, 1)
+        self.assertEqual(raw.stream_v9_opens, 0)
+        self.assertEqual(event.payload_bytes, b'{"provider":"cabi"}')
+
+    def test_v9_leased_stream_copies_and_releases_explicitly(self) -> None:
+        raw = FakeRawCABI(stream_v9=True)
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_leased_stream(complete_draft())
+        event = stream.next()
+        self.assertIsInstance(event, LeasedStreamEvent)
+        self.assertIsNotNone(event.payload)
+        payload = event.payload
+        assert payload is not None
+        self.assertEqual(payload.lease_id, 9001)
+        self.assertEqual(payload.to_bytes(), b'{"provider":"cabi-v9"}')
+        self.assertTrue(payload.released)
+        payload.release()
+        stream.close()
+
+        self.assertEqual(raw.stream_v9_opens, 1)
+        self.assertEqual(raw.lease_releases, [9001])
+        self.assertEqual(raw.lease_refs[9001], 0)
+
+    def test_explicit_leased_stream_fails_without_complete_v9_contract(self) -> None:
+        raw = FakeRawCABI(stream_v8=True, stream_v9=False)
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        with self.assertRaises(SDKError) as caught:
+            runtime.invoke_leased_stream(complete_draft())
+
+        self.assertEqual(caught.exception.code, ErrorCode.NOT_IMPLEMENTED)
+        self.assertEqual(raw.stream_v8_opens, 0)
+
+    def test_v9_lease_retain_write_into_and_write_to_are_consuming(self) -> None:
+        raw = FakeRawCABI(stream_v9=True)
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_leased_stream(complete_draft())
+        event = stream.next()
+        payload = event.payload
+        assert payload is not None
+        retained_for_buffer = payload.retain()
+        retained_for_writer = payload.retain()
+        destination = bytearray(payload.length)
+
+        self.assertEqual(retained_for_buffer.write_into(destination), payload.length)
+        writer = io.BytesIO()
+        self.assertEqual(retained_for_writer.write_to(writer), payload.length)
+        self.assertEqual(bytes(destination), b'{"provider":"cabi-v9"}')
+        self.assertEqual(writer.getvalue(), b'{"provider":"cabi-v9"}')
+        payload.release()
+        stream.close()
+
+        self.assertEqual(raw.lease_retains, [9001, 9001])
+        self.assertEqual(raw.lease_releases, [9001, 9001, 9001])
+        self.assertEqual(raw.lease_refs[9001], 0)
+
+    def test_v9_stream_close_releases_unread_queued_payload(self) -> None:
+        raw = FakeRawCABI(stream_v9=True)
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_leased_stream(complete_draft())
+        stream.close()
+
+        self.assertEqual(raw.lease_releases, [9001])
+        self.assertEqual(raw.lease_refs[9001], 0)
+
+    def test_v9_callback_queue_overflow_releases_queued_and_dropped_leases(self) -> None:
+        released: list[int] = []
+
+        def payload(lease_id: int) -> LeasedPayload:
+            raw = bytearray(b"x")
+            return LeasedPayload(
+                lease_id=lease_id,
+                length=1,
+                copy_bytes=lambda: bytes(raw),
+                copy_into=lambda destination: destination.__setitem__(0, 120) or 1,
+                retain=lambda: payload(lease_id),
+                release=lambda: released.append(lease_id),
+            )
+
+        inbox = _CallbackInbox(1, raw_stream=True)
+        inbox.push(
+            LeasedStreamEvent(1, "data", "Running", False, False, 0, "", payload(1))
+        )
+        inbox.push(
+            LeasedStreamEvent(2, "data", "Running", False, False, 0, "", payload(2))
+        )
+
+        with self.assertRaises(SDKError):
+            inbox.recv(0.01)
+        self.assertCountEqual(released, [1, 2])
+
+    def test_v9_callback_eof_preserves_queued_event_until_consumed(self) -> None:
+        released: list[int] = []
+        payload = LeasedPayload(
+            lease_id=3,
+            length=1,
+            copy_bytes=lambda: b"x",
+            copy_into=lambda destination: 1,
+            retain=lambda: self.fail("retain must not be called"),
+            release=lambda: released.append(3),
+        )
+        event = LeasedStreamEvent(1, "data", "Running", False, False, 0, "", payload)
+        inbox = _CallbackInbox(2, raw_stream=True)
+
+        inbox.push(event)
+        inbox.close()
+
+        self.assertIs(inbox.recv(0.01), event)
+        event.release()
+        with self.assertRaises(SDKError):
+            inbox.recv(0.01)
+        self.assertEqual(released, [3])
+
+    def test_v9_consuming_copy_error_still_releases_lease(self) -> None:
+        released: list[int] = []
+        payload = LeasedPayload(
+            lease_id=17,
+            length=2,
+            copy_bytes=lambda: b"x",
+            copy_into=lambda destination: 0,
+            retain=lambda: self.fail("retain must not be called"),
+            release=lambda: released.append(17),
+        )
+
+        with self.assertRaises(SDKError):
+            payload.to_bytes()
+        payload.release()
+
+        self.assertTrue(payload.released)
+        self.assertEqual(released, [17])
+
+    def test_v9_event_context_manager_releases_payload_idempotently(self) -> None:
+        released: list[int] = []
+        payload = LeasedPayload(
+            lease_id=18,
+            length=1,
+            copy_bytes=lambda: b"x",
+            copy_into=lambda destination: 1,
+            retain=lambda: self.fail("retain must not be called"),
+            release=lambda: released.append(18),
+        )
+        event = LeasedStreamEvent(
+            1, "data", "Running", False, False, 0, "application/octet-stream", payload
+        )
+
+        with event:
+            self.assertFalse(payload.released)
+        event.release()
+
+        self.assertTrue(payload.released)
+        self.assertEqual(released, [18])
+
+    def test_v9_malformed_callback_releases_new_and_already_queued_leases(self) -> None:
+        raw = FakeRawCABI(stream_v9=True)
+        runtime_transport = CABIRuntimeTransport(
+            RuntimeCABILibrary(raw), 42, owns_handle=False
+        )
+        runtime = RuntimeClient(runtime_transport)
+        self.addCleanup(runtime.close)
+        stream = runtime.invoke_leased_stream(complete_draft())
+        callback, user_data = raw.stream_callbacks[4001]
+        payload = b"bad"
+        lease_id = 9002
+        buffer = ctypes.create_string_buffer(payload)
+        raw.lease_buffers[lease_id] = buffer
+        raw.lease_refs[lease_id] = 1
+        frame = _RuntimeInvocationStreamFrameV9(
+            struct_size=1,
+            abi_version=9,
+            payload=_RuntimeBufferLeaseV9(
+                lease_id, ctypes.addressof(buffer), len(payload)
+            ),
+        )
+
+        callback(user_data, ctypes.pointer(frame))
+
+        with self.assertRaises(SDKError):
+            stream.next()
+        stream.close()
+        self.assertCountEqual(raw.lease_releases, [9001, 9002])
+        self.assertEqual(raw.lease_refs[9001], 0)
+        self.assertEqual(raw.lease_refs[9002], 0)
 
     def test_cabi_provider_falls_back_to_v7_when_v8_feature_disabled(self) -> None:
         raw = FakeRawCABI(stream_v8=True, stream_v8_feature=False)
