@@ -17,8 +17,9 @@
 //        * type ≠ camera      → terminal failure with reason="resource_type_mismatch"
 //        * resource present but unavailable → "resource_unavailable"
 //   4. Captures a still photo via the configured backend. Production
-//      uses AVCapturePhotoOutput on macOS and nokhwa on non-macOS.
-//      Tests use `SyntheticBackend` for hardware-free runs.
+//      reuses the active AVFoundation frame producer on macOS and uses
+//      nokhwa on non-macOS. Tests use `SyntheticBackend` for hardware-free
+//      runs.
 //   5. Returns the established JSON snapshot receipt with inline base64 JPEG.
 //      The high-frequency preview path is binary; this unary compatibility
 //      shape remains until a separately versioned raw-unary ABI exists.
@@ -91,6 +92,10 @@ const RECORDING_START_TIMEOUT: Duration = Duration::from_secs(10);
 const RECORDING_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const RECORDING_BOUNDARY: &str = "easynet-camera-frame";
 const MJPEG_CONTENT_TYPE: &str = "multipart/x-mixed-replace; boundary=easynet-camera-frame";
+#[cfg(all(feature = "native-media", target_os = "macos"))]
+const MACOS_SNAPSHOT_FRAME_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(all(feature = "native-media", target_os = "macos"))]
+const MACOS_SNAPSHOT_FRAME_POLL_INTERVAL: Duration = Duration::from_millis(5);
 #[cfg(all(feature = "native-media", not(target_os = "macos")))]
 const NOKHWA_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -153,6 +158,7 @@ impl EncodedFrame {
 pub(crate) enum CameraFrameUpdate {
     Pending,
     Frame(EncodedFrame),
+    #[cfg(feature = "native-media")]
     Failed(Arc<str>),
 }
 
@@ -172,6 +178,7 @@ impl CameraFrameStream {
             Ok(true) => match self.receiver.borrow_and_update().clone() {
                 CameraFrameUpdate::Pending => CameraFramePoll::Pending,
                 CameraFrameUpdate::Frame(frame) => CameraFramePoll::Frame(frame),
+                #[cfg(feature = "native-media")]
                 CameraFrameUpdate::Failed(message) => CameraFramePoll::Failed(message),
             },
             Ok(false) => CameraFramePoll::Pending,
@@ -180,9 +187,11 @@ impl CameraFrameStream {
     }
 }
 
+#[derive(Debug)]
 pub(super) enum CameraFramePoll {
     Pending,
     Frame(EncodedFrame),
+    #[cfg(feature = "native-media")]
     Failed(Arc<str>),
     Closed,
 }
@@ -198,6 +207,7 @@ pub(crate) fn publish_camera_frame(sender: &CameraFrameSender, encoded: EncodedF
     sender.send_replace(CameraFrameUpdate::Frame(encoded));
 }
 
+#[cfg(feature = "native-media")]
 pub(crate) fn publish_camera_failure(sender: &CameraFrameSender, error: impl ToString) {
     sender.send_replace(CameraFrameUpdate::Failed(Arc::from(error.to_string())));
 }
@@ -237,6 +247,24 @@ enum CameraStreamLease {
 }
 
 impl ActiveCameraStreams {
+    #[cfg(any(test, target_os = "macos"))]
+    fn subscribe_active(&self, entry: &ResourceEntry) -> Option<CameraFrameStream> {
+        let streams = self
+            .streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let active = streams.get(&entry.resource_ura)?;
+        if active.sender.receiver_count() == 0 {
+            return None;
+        }
+        let mut receiver = active.sender.subscribe();
+        // Snapshot consumes the producer's current latest frame immediately.
+        // This is safe only while another consumer keeps that producer live;
+        // inactive map entries are deliberately rejected above.
+        receiver.mark_changed();
+        Some(CameraFrameStream { receiver })
+    }
+
     fn acquire(&self, entry: &ResourceEntry, options: &CameraStreamOptions) -> CameraStreamLease {
         let mut streams = self
             .streams
@@ -333,11 +361,11 @@ impl CameraRecordingEngine for MjpegRecordingEngine {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "native-media", target_os = "macos"))]
 #[derive(Debug, Default)]
 struct AvFoundationRecordingEngine;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "native-media", target_os = "macos"))]
 impl CameraRecordingEngine for AvFoundationRecordingEngine {
     fn content_type(&self) -> &'static str {
         "video/quicktime"
@@ -453,7 +481,11 @@ impl SnapshotBackend for NokhwaBackend {
     fn capture_jpeg(&self, entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
         #[cfg(target_os = "macos")]
         {
-            super::avfoundation_camera::capture_jpeg(entry)
+            let stream = match self.active_streams.subscribe_active(entry) {
+                Some(stream) => stream,
+                None => self.open_stream_source(entry.clone(), CameraStreamOptions::default())?,
+            };
+            wait_for_macos_snapshot_frame(stream)
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -461,6 +493,17 @@ impl SnapshotBackend for NokhwaBackend {
     }
 
     fn open_stream(
+        &self,
+        entry: ResourceEntry,
+        options: CameraStreamOptions,
+    ) -> anyhow::Result<CameraFrameStream> {
+        self.open_stream_source(entry, options)
+    }
+}
+
+#[cfg(feature = "native-media")]
+impl NokhwaBackend {
+    fn open_stream_source(
         &self,
         entry: ResourceEntry,
         options: CameraStreamOptions,
@@ -478,6 +521,38 @@ impl SnapshotBackend for NokhwaBackend {
         open_stream_with_nokhwa(entry, options, sender)?;
 
         Ok(stream)
+    }
+}
+
+#[cfg(all(feature = "native-media", target_os = "macos"))]
+fn wait_for_macos_snapshot_frame(mut stream: CameraFrameStream) -> anyhow::Result<EncodedFrame> {
+    let deadline = Instant::now() + MACOS_SNAPSHOT_FRAME_TIMEOUT;
+    loop {
+        match stream.try_next() {
+            CameraFramePoll::Frame(frame) => return Ok(frame),
+            CameraFramePoll::Failed(message) => {
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    message.replacen(ABILITY_CAMERA_SUBSCRIBE, ABILITY_CAMERA_SNAPSHOT, 1)
+                ));
+            }
+            CameraFramePoll::Closed => {
+                anyhow::bail!(
+                    "{ABILITY_CAMERA_SNAPSHOT}: camera producer closed before delivering a frame; \
+                     reason={REASON_RESOURCE_UNAVAILABLE}"
+                );
+            }
+            CameraFramePoll::Pending => {}
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "{ABILITY_CAMERA_SNAPSHOT}: camera producer did not deliver a frame within {}ms; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}",
+                MACOS_SNAPSHOT_FRAME_TIMEOUT.as_millis()
+            );
+        }
+        std::thread::sleep(MACOS_SNAPSHOT_FRAME_POLL_INTERVAL);
     }
 }
 
@@ -1183,6 +1258,7 @@ fn project_camera_preview_stream(mut frames: CameraFrameStream) -> anyhow::Resul
                         frame.jpeg_bytes.as_ref().to_vec(),
                         "image/jpeg",
                     )),
+                    #[cfg(feature = "native-media")]
                     CameraFrameUpdate::Failed(message) => Err(anyhow::anyhow!(
                         "{ABILITY_CAMERA_SUBSCRIBE}: {}; reason={REASON_RESOURCE_UNAVAILABLE}",
                         message
@@ -1269,6 +1345,7 @@ fn run_mjpeg_recording_worker_inner(
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }
+            #[cfg(feature = "native-media")]
             CameraFramePoll::Failed(message) => {
                 anyhow::bail!(
                     "{ABILITY_CAMERA_RECORD_START}: camera stream failed while recording: {}; \
@@ -1676,6 +1753,75 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_subscription_reuses_only_a_live_camera_producer() {
+        let mut file = ResourcesFile::default();
+        seed_camera(&mut file, "h-cam-live-snapshot");
+        let entry = file.resources[0].clone();
+        let active_streams = ActiveCameraStreams::default();
+        let options = CameraStreamOptions::default();
+        let (sender, keepalive_stream) = match active_streams.acquire(&entry, &options) {
+            CameraStreamLease::Producer { sender, stream } => (sender, stream),
+            CameraStreamLease::Existing(_) => panic!("first lease must own the producer"),
+        };
+        publish_camera_frame(&sender, EncodedFrame::new(vec![7], 7, 7));
+
+        let mut snapshot_stream = active_streams
+            .subscribe_active(&entry)
+            .expect("live producer is snapshot-addressable");
+        match snapshot_stream.try_next() {
+            CameraFramePoll::Frame(frame) => {
+                assert_eq!(frame.jpeg_bytes.as_ref(), &[7]);
+                assert_eq!((frame.width, frame.height), (7, 7));
+            }
+            other => panic!("expected latest frame, got {other:?}"),
+        }
+
+        drop(snapshot_stream);
+        drop(keepalive_stream);
+        assert!(
+            active_streams.subscribe_active(&entry).is_none(),
+            "inactive producer frames must not be reused as snapshots"
+        );
+    }
+
+    #[cfg(all(feature = "native-media", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires a physical macOS camera and TCC authorization"]
+    fn physical_macos_snapshot_reuses_the_live_preview_frame() {
+        let mut file = ResourcesFile::default();
+        seed_camera(&mut file, "default-0");
+        let entry = file.resources[0].clone();
+        let backend = NokhwaBackend::default();
+        let mut preview = backend
+            .open_stream(entry.clone(), CameraStreamOptions::default())
+            .expect("open physical macOS camera preview");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let live_frame = loop {
+            match preview.try_next() {
+                CameraFramePoll::Frame(frame) => break frame,
+                CameraFramePoll::Failed(message) => panic!("native preview failed: {message}"),
+                CameraFramePoll::Closed => panic!("native preview closed before first frame"),
+                CameraFramePoll::Pending if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                CameraFramePoll::Pending => panic!("native preview timed out before first frame"),
+            }
+        };
+
+        let snapshot = backend
+            .capture_jpeg(&entry)
+            .expect("capture snapshot from active producer");
+        assert!(
+            Arc::ptr_eq(&live_frame.jpeg_bytes, &snapshot.jpeg_bytes),
+            "snapshot must consume the active producer's latest encoded frame"
+        );
+        assert_eq!(
+            (snapshot.width, snapshot.height),
+            (live_frame.width, live_frame.height)
+        );
+    }
+
+    #[test]
     fn snapshot_captures_a_new_photo_instead_of_reusing_preview_allocation() {
         let mut file = ResourcesFile::default();
         seed_camera(&mut file, "h-cam-live-snapshot");
@@ -1734,6 +1880,7 @@ mod tests {
         match poll {
             CameraFramePoll::Pending => "pending",
             CameraFramePoll::Frame(_) => "frame",
+            #[cfg(feature = "native-media")]
             CameraFramePoll::Failed(_) => "failed",
             CameraFramePoll::Closed => "closed",
         }

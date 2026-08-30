@@ -36,18 +36,14 @@ use crate::daemon::persistence::resources::ResourceEntry;
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::{autoreleasepool, Retained};
-use objc2::runtime::{AnyObject, Bool, ProtocolObject};
+use objc2::runtime::{AnyObject, Bool};
 use objc2::{class, define_class, msg_send, AnyThread, DefinedClass};
 use objc2_av_foundation::{
-    AVAssetWriter, AVAssetWriterInput, AVCaptureDevice, AVCaptureExposureMode, AVCaptureFocusMode,
-    AVCapturePhoto, AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput,
-    AVCapturePhotoQualityPrioritization, AVCapturePhotoSettings, AVCaptureResolvedPhotoSettings,
-    AVCaptureWhiteBalanceMode, AVFileTypeQuickTimeMovie, AVMediaTypeVideo,
+    AVAssetWriter, AVAssetWriterInput, AVCaptureDevice, AVFileTypeQuickTimeMovie, AVMediaTypeVideo,
     AVVideoAverageBitRateKey, AVVideoCodecKey, AVVideoCodecTypeH264,
     AVVideoCompressionPropertiesKey, AVVideoExpectedSourceFrameRateKey, AVVideoHeightKey,
     AVVideoMaxKeyFrameIntervalKey, AVVideoWidthKey,
 };
-use objc2_core_foundation::CGPoint;
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{
     kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_32BGRA,
@@ -57,8 +53,8 @@ use objc2_core_video::{
     CVPixelBufferUnlockBaseAddress,
 };
 use objc2_foundation::{
-    NSArray, NSDate, NSDefaultRunLoopMode, NSDictionary, NSError, NSMutableDictionary, NSNumber,
-    NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes, NSString, NSURL,
+    NSArray, NSDictionary, NSError, NSMutableDictionary, NSNumber, NSObject, NSObjectProtocol,
+    NSString, NSURL,
 };
 
 #[link(name = "AVFoundation", kind = "framework")]
@@ -66,11 +62,6 @@ unsafe extern "C" {}
 
 const AV_MEDIA_TYPE_VIDEO: &str = "vide";
 const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(30);
-const SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
-const SNAPSHOT_RUN_LOOP_SLICE: Duration = Duration::from_millis(10);
-const PHOTO_AUTO_CONTROL_MIN_WARMUP: Duration = Duration::from_millis(300);
-const PHOTO_AUTO_CONTROL_TIMEOUT: Duration = Duration::from_millis(1_500);
-const PHOTO_AUTO_CONTROL_STABLE_POLLS: u8 = 3;
 const RECORDING_START_TIMEOUT: Duration = Duration::from_secs(5);
 const RECORDING_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const RECORDING_FILE_SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
@@ -80,89 +71,6 @@ const AUTH_NOT_DETERMINED: isize = 0;
 const AUTH_RESTRICTED: isize = 1;
 const AUTH_DENIED: isize = 2;
 const AUTH_AUTHORIZED: isize = 3;
-
-struct PhotoCaptureDelegateIvars {
-    sender: Mutex<Option<SyncSender<anyhow::Result<EncodedFrame>>>>,
-}
-
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[name = "EasyNetAVFoundationPhotoCaptureDelegate"]
-    #[ivars = PhotoCaptureDelegateIvars]
-    struct PhotoCaptureDelegate;
-
-    unsafe impl NSObjectProtocol for PhotoCaptureDelegate {}
-
-    unsafe impl AVCapturePhotoCaptureDelegate for PhotoCaptureDelegate {
-        #[unsafe(method(captureOutput:didFinishProcessingPhoto:error:))]
-        unsafe fn did_finish_processing_photo(
-            &self,
-            _output: &AVCapturePhotoOutput,
-            photo: &AVCapturePhoto,
-            error: Option<&NSError>,
-        ) {
-            let Some(sender) = take_completion_sender(&self.ivars().sender) else {
-                return;
-            };
-            let result = if let Some(error) = error {
-                Err(anyhow::anyhow!(
-                    "{ABILITY_CAMERA_SNAPSHOT}: AVCapturePhotoOutput failed: {}; \
-                     reason={REASON_RESOURCE_UNAVAILABLE}",
-                    error.localizedDescription()
-                ))
-            } else {
-                let data = unsafe { photo.fileDataRepresentation() }.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "{ABILITY_CAMERA_SNAPSHOT}: AVCapturePhotoOutput returned no file data; \
-                         reason={REASON_RESOURCE_UNAVAILABLE}"
-                    )
-                });
-                data.map(|data| {
-                    let dimensions = unsafe { photo.resolvedSettings().photoDimensions() };
-                    EncodedFrame::new(
-                        data.to_vec(),
-                        dimensions.width.max(0) as u32,
-                        dimensions.height.max(0) as u32,
-                    )
-                })
-            };
-            let _ = sender.send(result);
-        }
-
-        #[unsafe(method(captureOutput:didFinishCaptureForResolvedSettings:error:))]
-        unsafe fn did_finish_capture(
-            &self,
-            _output: &AVCapturePhotoOutput,
-            _resolved_settings: &AVCaptureResolvedPhotoSettings,
-            error: Option<&NSError>,
-        ) {
-            let Some(sender) = take_completion_sender(&self.ivars().sender) else {
-                return;
-            };
-            let result = match error {
-                Some(error) => anyhow::anyhow!(
-                    "{ABILITY_CAMERA_SNAPSHOT}: AVCapturePhotoOutput capture failed: {}; \
-                     reason={REASON_RESOURCE_UNAVAILABLE}",
-                    error.localizedDescription()
-                ),
-                None => anyhow::anyhow!(
-                    "{ABILITY_CAMERA_SNAPSHOT}: AVCapturePhotoOutput completed without delivering photo data; \
-                     reason={REASON_RESOURCE_UNAVAILABLE}"
-                ),
-            };
-            let _ = sender.send(Err(result));
-        }
-    }
-);
-
-impl PhotoCaptureDelegate {
-    fn new(sender: SyncSender<anyhow::Result<EncodedFrame>>) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(PhotoCaptureDelegateIvars {
-            sender: Mutex::new(Some(sender)),
-        });
-        unsafe { msg_send![super(this), init] }
-    }
-}
 
 #[derive(Debug)]
 struct NativeRecordingCompletion {
@@ -524,192 +432,6 @@ impl LiveVideoFrameDelegate {
             failed: AtomicBool::new(false),
         });
         unsafe { msg_send![super(this), init] }
-    }
-}
-
-pub fn capture_jpeg(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
-    autoreleasepool(|_| capture_jpeg_inner(entry))
-}
-
-fn capture_jpeg_inner(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
-    ensure_camera_authorized()?;
-
-    let media_type = NSString::from_str(AV_MEDIA_TYPE_VIDEO);
-    let device = select_camera_device(&media_type, entry)?;
-    configure_photo_auto_controls(&device)?;
-    let input = device_input(&device)?;
-
-    let session: Retained<AnyObject> = unsafe { msg_send![class!(AVCaptureSession), new] };
-    let output = unsafe { AVCapturePhotoOutput::new() };
-    let (tx, rx) = sync_channel::<anyhow::Result<EncodedFrame>>(1);
-    let delegate = PhotoCaptureDelegate::new(tx);
-
-    unsafe {
-        let _: () = msg_send![&*session, beginConfiguration];
-
-        let preset = NSString::from_str("AVCaptureSessionPresetPhoto");
-        let can_set_preset: bool = msg_send![&*session, canSetSessionPreset: &*preset];
-        if can_set_preset {
-            let _: () = msg_send![&*session, setSessionPreset: &*preset];
-        }
-
-        let can_add_input: bool = msg_send![&*session, canAddInput: &*input];
-        if !can_add_input {
-            anyhow::bail!(
-                "{ABILITY_CAMERA_SNAPSHOT}: AVFoundation cannot add camera input; \
-                 reason={REASON_RESOURCE_UNAVAILABLE}"
-            );
-        }
-        let _: () = msg_send![&*session, addInput: &*input];
-
-        let can_add_output: bool = msg_send![&*session, canAddOutput: &*output];
-        if !can_add_output {
-            anyhow::bail!(
-                "{ABILITY_CAMERA_SNAPSHOT}: AVFoundation cannot add video output; \
-                 reason={REASON_RESOURCE_UNAVAILABLE}"
-            );
-        }
-        let _: () = msg_send![&*session, addOutput: &*output];
-        // A daemon capture must complete in-process and return the encoded still
-        // image to the caller. Newer macOS releases can otherwise substitute a
-        // deferred photo proxy and route delivery through a different delegate
-        // callback intended for Photos-library workflows.
-        output.setAutoDeferredPhotoDeliveryEnabled(false);
-        output.setMaxPhotoQualityPrioritization(AVCapturePhotoQualityPrioritization::Balanced);
-        let _: () = msg_send![&*session, commitConfiguration];
-        let _: () = msg_send![&*session, startRunning];
-    }
-    wait_for_photo_auto_controls(&device);
-
-    unsafe {
-        let settings = AVCapturePhotoSettings::photoSettings();
-        settings.setPhotoQualityPrioritization(AVCapturePhotoQualityPrioritization::Balanced);
-        output.capturePhotoWithSettings_delegate(&settings, ProtocolObject::from_ref(&*delegate));
-    }
-
-    let captured = match receive_while_running_current_loop(&rx, SNAPSHOT_CAPTURE_TIMEOUT) {
-        Ok(Ok(frame)) => Ok(frame),
-        Ok(Err(err)) => Err(err),
-        Err(_) => Err(anyhow::anyhow!(
-            "{ABILITY_CAMERA_SNAPSHOT}: AVCapturePhotoOutput did not finalize a photo within {}ms; \
-             reason={REASON_RESOURCE_UNAVAILABLE}",
-            SNAPSHOT_CAPTURE_TIMEOUT.as_millis()
-        )),
-    };
-
-    unsafe {
-        let _: () = msg_send![&*session, stopRunning];
-    }
-
-    drop(delegate);
-    drop(output);
-    drop(input);
-    drop(device);
-    drop(session);
-    captured
-}
-
-fn receive_while_running_current_loop<T>(
-    receiver: &mpsc::Receiver<T>,
-    timeout: Duration,
-) -> Result<T, mpsc::RecvTimeoutError> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match receiver.try_recv() {
-            Ok(result) => return Ok(result),
-            Err(mpsc::TryRecvError::Disconnected) => {
-                return Err(mpsc::RecvTimeoutError::Disconnected)
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(mpsc::RecvTimeoutError::Timeout);
-        }
-        run_current_loop_for(remaining.min(SNAPSHOT_RUN_LOOP_SLICE));
-    }
-}
-
-fn run_current_loop_for(duration: Duration) {
-    let default_mode = unsafe { NSDefaultRunLoopMode };
-    let common_modes = unsafe { NSRunLoopCommonModes };
-    let run_loop = NSRunLoop::currentRunLoop();
-    let slice_seconds = duration.as_secs_f64() / 2.0;
-    let default_until = NSDate::dateWithTimeIntervalSinceNow(slice_seconds);
-    run_loop.runMode_beforeDate(default_mode, &default_until);
-    let common_until = NSDate::dateWithTimeIntervalSinceNow(slice_seconds);
-    run_loop.runMode_beforeDate(common_modes, &common_until);
-}
-
-struct CaptureDeviceConfigurationLock<'a>(&'a AVCaptureDevice);
-
-impl Drop for CaptureDeviceConfigurationLock<'_> {
-    fn drop(&mut self) {
-        unsafe { self.0.unlockForConfiguration() };
-    }
-}
-
-fn configure_photo_auto_controls(device: &AVCaptureDevice) -> anyhow::Result<()> {
-    unsafe { device.lockForConfiguration() }.map_err(|error| {
-        anyhow::anyhow!(
-            "{ABILITY_CAMERA_SNAPSHOT}: cannot lock camera controls: {}; \
-             reason={REASON_RESOURCE_UNAVAILABLE}",
-            error.localizedDescription()
-        )
-    })?;
-    let _configuration_lock = CaptureDeviceConfigurationLock(device);
-    let center = CGPoint { x: 0.5, y: 0.5 };
-
-    unsafe {
-        if device.isFocusPointOfInterestSupported() {
-            device.setFocusPointOfInterest(center);
-        }
-        if device.isFocusModeSupported(AVCaptureFocusMode::ContinuousAutoFocus) {
-            device.setFocusMode(AVCaptureFocusMode::ContinuousAutoFocus);
-        } else if device.isFocusModeSupported(AVCaptureFocusMode::AutoFocus) {
-            device.setFocusMode(AVCaptureFocusMode::AutoFocus);
-        }
-
-        if device.isExposurePointOfInterestSupported() {
-            device.setExposurePointOfInterest(center);
-        }
-        if device.isExposureModeSupported(AVCaptureExposureMode::ContinuousAutoExposure) {
-            device.setExposureMode(AVCaptureExposureMode::ContinuousAutoExposure);
-        } else if device.isExposureModeSupported(AVCaptureExposureMode::AutoExpose) {
-            device.setExposureMode(AVCaptureExposureMode::AutoExpose);
-        }
-
-        if device.isWhiteBalanceModeSupported(AVCaptureWhiteBalanceMode::ContinuousAutoWhiteBalance)
-        {
-            device.setWhiteBalanceMode(AVCaptureWhiteBalanceMode::ContinuousAutoWhiteBalance);
-        } else if device.isWhiteBalanceModeSupported(AVCaptureWhiteBalanceMode::AutoWhiteBalance) {
-            device.setWhiteBalanceMode(AVCaptureWhiteBalanceMode::AutoWhiteBalance);
-        }
-        device.setSubjectAreaChangeMonitoringEnabled(true);
-    }
-    Ok(())
-}
-
-fn wait_for_photo_auto_controls(device: &AVCaptureDevice) {
-    let started_at = Instant::now();
-    let deadline = started_at + PHOTO_AUTO_CONTROL_TIMEOUT;
-    let mut stable_polls = 0u8;
-    while Instant::now() < deadline {
-        run_current_loop_for(SNAPSHOT_RUN_LOOP_SLICE);
-        let adjusting = unsafe {
-            device.isAdjustingFocus()
-                || device.isAdjustingExposure()
-                || device.isAdjustingWhiteBalance()
-        };
-        if started_at.elapsed() < PHOTO_AUTO_CONTROL_MIN_WARMUP || adjusting {
-            stable_polls = 0;
-            continue;
-        }
-        stable_polls += 1;
-        if stable_polls >= PHOTO_AUTO_CONTROL_STABLE_POLLS {
-            break;
-        }
     }
 }
 
