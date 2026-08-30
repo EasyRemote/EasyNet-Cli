@@ -273,6 +273,13 @@ fn pages_manifest(
 ) -> crate::daemon::ability::manifest::AbilityManifest {
     crate::daemon::ability::manifest::AbilityManifest::new(name, description, input_schema)
         .expect("static pages manifest is well-formed")
+        .with_frontend_contract(
+            crate::daemon::ability::manifest::AbilityExposure::Operator,
+            crate::daemon::ability::manifest::AbilityDedicatedSurface::Pages,
+            crate::daemon::ability::manifest::AbilitySubjectContractKind::DedicatedSurface,
+            None,
+        )
+        .expect("static pages frontend contract is well-formed")
 }
 
 /// The `{ project_id }` input schema shared by `pages.get` and
@@ -449,6 +456,18 @@ mod tests {
 
         let get = pages_manifest("get", "d", pages_project_id_schema());
         assert_eq!(get.input_schema()["required"][0], "project_id");
+        assert_eq!(
+            get.exposure(),
+            Some(crate::daemon::ability::manifest::AbilityExposure::Operator)
+        );
+        assert_eq!(
+            get.dedicated_surface(),
+            Some(crate::daemon::ability::manifest::AbilityDedicatedSurface::Pages)
+        );
+        assert_eq!(
+            get.subject_contract_kind(),
+            Some(crate::daemon::ability::manifest::AbilitySubjectContractKind::DedicatedSurface)
+        );
 
         let publish = pages_manifest(
             "publish",

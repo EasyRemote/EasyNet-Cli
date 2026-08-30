@@ -515,7 +515,16 @@ families = {
     "Mission": production_files(
         cli_root / "src/daemon/ability/builtins/automation", {".rs"}
     ),
-    "Chat": [cli_root / "src/daemon/ability/builtins/agents/chat.rs"],
+    # Chat deliberately separates implementation factories from transactional
+    # Invocation registration. `chat.rs` owns execution semantics while
+    # HotAgentRegistrar commits descriptor, authority, implementation and
+    # LocalRuntime bindings atomically. Audit both halves as one production
+    # family so moving registration out of the handler module does not look
+    # like a missing Invocation entry point.
+    "Chat": [
+        cli_root / "src/daemon/ability/builtins/agents/chat.rs",
+        cli_root / "src/daemon/axon_bridge/hot_agent_registrar.rs",
+    ],
 }
 family_anchors = {
     "EAL": re.compile(
@@ -3092,6 +3101,20 @@ for path in production_files(cli_root / "src/daemon", {".rs"}):
     text = source(path)
     for pattern, detail in manual_tuple_patterns:
         for match in pattern.finditer(text):
+            # `session.open` control frames are not Invocation envelopes. This
+            # focused adapter projects already-authenticated carrier identity
+            # into the authority-metadata verifier only; it never signs,
+            # hashes, routes, or dispatches the partial protobuf value. Keep
+            # the exemption function-bounded so ordinary production paths
+            # remain forbidden from assembling canonical Invocation tuples.
+            session_control = rust_method_body(
+                text, "verify_session_control_authority_metadata"
+            )
+            if session_control is not None:
+                session_control_offset, session_control_body = session_control
+                session_control_end = session_control_offset + len(session_control_body)
+                if session_control_offset <= match.start() <= session_control_end:
+                    continue
             add(
                 "R16D_CANONICAL_ENVELOPE_OWNER_FORK",
                 path,
@@ -9283,14 +9306,20 @@ if session_prelude.exists():
                     line_number(text, offset),
                     "paired user signer source must load the runtime caller signer for the paired User URA",
                 )
-            if "paired_user_resolve_key_args(&user_ura, presented_pubkey_b64)" not in body:
+            if not re.search(
+                r"paired_user_resolve_key_args\(\s*&?user_ura\s*,\s*&?signer_public_key_b64\s*\)",
+                body,
+            ):
                 add(
                     "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
                     session_prelude,
                     line_number(text, offset),
                     "paired user trust sync must pin resolve_key with the presented local user pubkey",
                 )
-            if "resolved_public_keys(&response.result).map_err" not in body:
+            if not re.search(
+                r"resolved_public_keys\(\s*&?resolve_response\.result\s*\)\s*\.map_err",
+                body,
+            ):
                 add(
                     "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
                     session_prelude,

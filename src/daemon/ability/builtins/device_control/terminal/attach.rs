@@ -55,8 +55,8 @@ pub const ABILITY_TERMINAL_ATTACH: &str =
 /// the control plane, this is the data plane.
 pub fn description() -> &'static str {
     "Attach to an existing PTY session over InvokeBidi: pump \
-     stdin from the wire to the PTY master, stream stdout / \
-     stderr back as raw binary frames, report bounded-buffer loss as OUTPUT_GAP, \
+     raw stdin bytes to the PTY master, stream stdout / \
+     stderr back as native application/octet-stream frames, report bounded-buffer loss as OUTPUT_GAP, \
      detach with an incremented epoch for later reattach, and surface child exit. Pair with \
      terminal.create (open the session) and \
      terminal.close (terminate it). Part of the \

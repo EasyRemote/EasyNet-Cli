@@ -47,6 +47,11 @@ jobs:
         run: |
           ./tools/scripts/check-ability-model-convergence.sh
 
+      - name: Complete system and builtin-plugin ability inventory
+        run: |
+          ./tools/scripts/check-system-ability-contract-inventory.py --self-test
+          ./tools/scripts/check-system-ability-contract-inventory.py
+
       - name: URA construction valve (F-055 — facade builders only)
         run: |
           ./tools/scripts/check-ura-construction.sh

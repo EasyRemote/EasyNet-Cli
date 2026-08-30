@@ -63,9 +63,26 @@ fi
 
 # The daemon-local loopback caller is a runtime owner, not an independent
 # process key. It may only hold a public projection and a key-service port.
-if rg -n \
-  'SigningKey|signing_key|fill_bytes\(&mut seed\)|OsRng' \
-  src/daemon/identity/local_invocation.rs; then
+if python3 - "src/daemon/identity/local_invocation.rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8", errors="replace")
+# Test fixtures may create foreign caller keypairs to verify public-key
+# resolution. They are not the production `_system.local` identity and must
+# not make this custody gate reject a source file whose production half owns
+# only a VerifyingKey plus the key-service port.
+production = text.split("#[cfg(test)]\nmod tests", 1)[0]
+pattern = re.compile(r"SigningKey|signing_key|fill_bytes\(&mut seed\)|OsRng")
+for line_number, line in enumerate(production.splitlines(), start=1):
+    if pattern.search(line):
+        print(f"{path}:{line_number}:{line}")
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+then
   echo "daemon key-service boundary violation: local system caller owns private signing material" >&2
   exit 1
 fi

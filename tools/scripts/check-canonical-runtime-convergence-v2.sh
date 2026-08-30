@@ -2,6 +2,7 @@
 set -euo pipefail
 
 python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/generate-runtime-governance-routes.py" --check
+python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-system-ability-contract-inventory.py"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
@@ -8119,17 +8120,22 @@ py_stream_projection = section(
 if '"invocation_id"' in py_stream_projection or "chunk.invocation_id" in py_stream_projection:
     raise SystemExit("sdk_python_direct_runtime_stream_projection_leaks_invocation_id")
 ffi = read(ffi_path)
-ffi_stream_projection = section(
+ffi_stream_verification = section(
     ffi,
-    r"fn stream_chunk_json\((?P<body>.*?)\n\}",
-    "ffi_stream_chunk_projection",
+    r"fn verify_stream_chunk\((?P<body>.*?)(?=\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn sdk_callback_event_sequence)",
+    "ffi_stream_chunk_verification",
+)
+ffi_stream_metadata = section(
+    ffi,
+    r"fn legacy_metadata_json\(&self\) -> serde_json::Value \{(?P<body>.*?)\n    \}",
+    "ffi_stream_chunk_metadata_projection",
 )
 for retired in ('"ok"', '"invocation_id"', '"proof_error"'):
-    if retired in ffi_stream_projection:
+    if retired in ffi_stream_metadata:
         raise SystemExit(f"ffi_stream_projection_leaks_retired_field:{retired}")
-if '"transport_terminal": error.is_some() && !proven_terminal' not in ffi_stream_projection:
+if "transport_terminal: error.is_some() && !proven_terminal" not in ffi_stream_verification:
     raise SystemExit("ffi_stream_projection_missing_transport_terminal_error_boundary")
-if "sdk_callback_event_sequence(chunk.sequence)" not in ffi_stream_projection:
+if "sdk_callback_event_sequence(chunk.sequence)" not in ffi_stream_verification:
     raise SystemExit("ffi_stream_projection_missing_proto_to_sdk_sequence_boundary")
 if "fn sdk_callback_event_sequence(protobuf_sequence: u64) -> u64" not in ffi or "protobuf_sequence.saturating_add(1)" not in ffi:
     raise SystemExit("ffi_stream_projection_sequence_boundary_not_explicit")
@@ -15635,7 +15641,7 @@ for required in (
         raise SystemExit(f"ffi_invocation_json_projection:public_tuple_gate_missing:{required}")
 for required_test in (
     "unary_result_json_rejects_declared_json_output_that_is_not_json",
-    "stream_chunk_json_rejects_declared_json_payload_that_is_not_json",
+    "verify_stream_chunk_rejects_declared_json_payload_that_is_not_json",
     "parse_invocation_json_rejects_all_zero_subject_before_daemon_io",
     "parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io",
     "parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io",
@@ -17675,7 +17681,7 @@ for retired in (
 required = (
     (manifest, "discovery-only metadata and has no executable runtime binding", "manifest_doc_missing"),
     (authoring, "no executable binding and cannot enter the live capability catalog", "authoring_reject_missing"),
-    (chat, "manifest without [exec] must not be routed through an LLM-mediated handler", "chat_reject_missing"),
+    (chat, "is not executable: its manifest has no [exec] binding", "chat_reject_missing"),
     (teach, "manifest without [exec] must remain discovery-only, not a runtime binding", "teach_runtime_binding_reject_missing"),
 )
 for text, token, code in required:
