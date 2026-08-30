@@ -76,8 +76,10 @@ principal lifecycle, trust store or canonical model.
 
 The current native surface is generic C ABI v7 with an exact 56-symbol base
 allowlist and a feature-detected v8 raw-stream extension allowlist containing
-the same base symbols plus `runtime_invocation_stream_open_v8`. Go and Python
-expose the same product-neutral capability-state matrix. Node, Java and Swift
+the same base symbols plus `runtime_invocation_stream_open_v8`; ABI v9 adds the
+bounded payload-lease open/retain/release symbols. Go and Python expose the
+same product-neutral capability-state matrix but keep their owned-byte stream
+events on v8 until an explicit leased-event lifecycle exists. Node, Java and Swift
 expose supported subsets; they do not publish placeholder product clients.
 Product-specific profiles are removed only after their generic capability has
 been extracted and consumers have migrated; no binding probes a retired C

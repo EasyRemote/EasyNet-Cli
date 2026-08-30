@@ -12,7 +12,7 @@
       "release_symbol": "runtime_buffer_lease_release_v9"
     }
   },
-  "sdk_version": "0.139.14",
+  "sdk_version": "0.148.60",
   "profiles": {
     "runtime_core": "provider-backed"
   },

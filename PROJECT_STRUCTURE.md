@@ -37,7 +37,8 @@ projections live with their semantic owners under `src/daemon/`; generic C ABI
 projection lives under `src/ffi/`.
 The C binding contract lives in `include/easynet_cli.h` and
 `docs/spec/ffi-abi-v7.md` with exact export allowlists
-`include/easynet_cli.exports.v7` and `include/easynet_cli.exports.v8`.
+`include/easynet_cli.exports.v7`, `include/easynet_cli.exports.v8`, and
+`include/easynet_cli.exports.v9`.
 
 ## Structural Rules
 

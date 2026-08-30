@@ -1,4 +1,4 @@
-# EasyNet Runtime Python SDK
+# Runtime Python SDK
 
 Install the `easynet-sdk` distribution and import it as `easynet_sdk`:
 
@@ -38,6 +38,11 @@ Missing or unavailable providers fail explicitly. The SDK does not search for
 fallback transports, parse product directories, infer runtime-host state from product
 environment variables or expose private key material.
 
+For large native binary payloads, ABI v9 is available only through the explicit
+leased-stream surface documented in [LEASED_STREAMS.md](LEASED_STREAMS.md).
+The existing owned `StreamEvent` API remains unchanged and does not silently
+switch ownership models.
+
 ## Product boundary
 
 The following belong downstream, not in this package:
@@ -70,7 +75,7 @@ covered by `../conformance/sdk-parity-matrix.json`. Product-neutrality is
 enforced by `../../tools/scripts/check-sdk-product-neutrality.sh`.
 
 Before tagging a Python SDK release, synchronize and verify its independent
-version line without changing the EasyNet Runtime version:
+version line without changing the runtime-host version:
 
 ```bash
 SDK_VERSION="$(tide mark --local-only)"
@@ -85,7 +90,7 @@ describe a different HEAD.
 ## Source release scope
 
 This distribution is a deliberately bounded public SDK, not a source release
-of every EasyNet control-plane service, research mechanism, or evaluation
-asset. The [release-scope statement](https://github.com/EasyRemote/EasyNet-Cli/blob/main/SOURCE_RELEASE_SCOPE.md)
+of every downstream control-plane service, research mechanism, or evaluation
+asset. The [release-scope statement](../../SOURCE_RELEASE_SCOPE.md)
 explains the staged policy. It does not restrict the Apache-2.0 rights granted
 for files actually included in this distribution.

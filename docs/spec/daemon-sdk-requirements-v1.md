@@ -376,6 +376,12 @@ REQ-ABI-3: Go/Python native providers require the base v7 export list. The
 be feature-detected; its presence does not change `runtime_abi_version()` from
 7.
 
+REQ-ABI-3a: ABI v9 adds a bounded payload lease to generic server streams. It
+changes only memory ownership: Runtime remains authoritative for Invocation
+sequence, lifecycle, receipts, errors and EOF. A binding may select v9 only
+when its public event API has deterministic retain/release ownership; the
+current owned-byte Go/Python `StreamEvent` APIs remain on v8.
+
 REQ-ABI-4: The header, export list, loader symbol table, release packaging and
 ABI conformance test agree exactly.
 

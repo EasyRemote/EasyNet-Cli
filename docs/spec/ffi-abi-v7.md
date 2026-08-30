@@ -1,6 +1,7 @@
 # EasyNet Generic C ABI v7
 
-Status: current release contract with feature-detected v8 raw-stream extension.
+Status: current release contract with feature-detected v8 raw-stream and v9
+buffer-lease extensions.
 
 The v7 ABI is a capability-neutral runtime boundary. It exposes daemon
 lifecycle, complete generic Invocation lifecycle, stream/bidi control, and
@@ -14,9 +15,11 @@ must not be exported from `libeasynet_cli`.
 - Header: `include/easynet_cli.h`
 - Exact base export allowlist: `include/easynet_cli.exports.v7`
 - Exact raw-stream extension allowlist: `include/easynet_cli.exports.v8`
+- Exact buffer-lease extension allowlist: `include/easynet_cli.exports.v9`
 - ABI version: `7`
 - Base export count: exactly `56`
 - v8 extension export count: exactly `57`
+- v9 extension export count: exactly `60`
 
 Release and CI checks compare both header declarations and normalized dynamic
 library exports against the allowlists. Missing and unexpected symbols are ABI
@@ -24,6 +27,11 @@ failures. The v8 allowlist must include every v7 symbol and add only
 `runtime_invocation_stream_open_v8`; `runtime_abi_version()` remains `7` and
 bindings must use `runtime_feature_discovery` before calling the v8 entry
 point. Earlier ABI documentation is historical and is not a release input.
+
+The v9 allowlist includes every v8 symbol and adds only
+`runtime_invocation_stream_open_v9`, `runtime_buffer_lease_retain_v9`, and
+`runtime_buffer_lease_release_v9`. Its ownership contract is specified by
+`docs/spec/ffi-abi-v9.md`; it does not change `runtime_abi_version()` or v8.
 
 ## Ownership state machines
 

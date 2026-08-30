@@ -16,7 +16,7 @@ mkfinal() {
   touch "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/README.md" "$dir/PROJECT_STRUCTURE.md" "$dir/build.rs"
   touch "$dir/README.pdf" "$dir/VERSION"
   mkdir -p "$dir/include"
-  touch "$dir/include/easynet_cli.h" "$dir/include/easynet_cli.exports.v7" "$dir/include/easynet_cli.exports.v8"
+  touch "$dir/include/easynet_cli.h" "$dir/include/easynet_cli.exports.v7" "$dir/include/easynet_cli.exports.v8" "$dir/include/easynet_cli.exports.v9"
 
   mkdir -p "$dir/src/bin"
   touch \

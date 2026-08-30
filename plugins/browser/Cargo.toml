@@ -1,6 +1,6 @@
 [package]
 name = "easynet-plugin-browser"
-version = "0.139.14"
+version = "0.148.60"
 edition = "2021"
 publish = false
 description = "Package-owned Chrome DevTools Protocol provider for EasyNet browser abilities."
