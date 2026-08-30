@@ -43,6 +43,8 @@ pub mod register_device_pubkey;
 #[cfg(feature = "axon-pb")]
 pub mod revoke_user_pubkey;
 #[cfg(feature = "axon-pb")]
+pub(crate) mod runtime_transaction;
+#[cfg(feature = "axon-pb")]
 pub(crate) mod runtime_trust;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod runtime_trust_invalidator;

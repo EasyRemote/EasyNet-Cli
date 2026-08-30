@@ -93,6 +93,9 @@ use crate::daemon::invocation::admission::register_device_pubkey::{
     ABILITY_IDENTITY_REGISTER_PUBKEY,
 };
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+use crate::daemon::invocation::admission::runtime_transaction::{
+    AdmissionCommitError, AdmissionTransaction, AdmissionTransactionFinalization,
+};
 use crate::daemon::invocation::admission::usage_quota::{
     QuotaDenyReason, QuotaReservation, SharedUsageQuotaGate,
 };
@@ -669,17 +672,10 @@ struct RuntimeAdmissionDecision {
     policy: VerifiedAdmissionPolicy,
 }
 
-enum RuntimeAdmissionState {
-    Pending,
-    Evaluating,
-    Verified(RuntimeAdmissionReservation),
-    Denied,
-}
-
 struct PendingRuntimeAdmission {
     id: u64,
     input: RuntimeAdmissionInput,
-    state: RuntimeAdmissionState,
+    transaction: AdmissionTransaction<RuntimeAdmissionReservation>,
 }
 
 #[derive(Default)]
@@ -788,7 +784,7 @@ impl DaemonRuntimeAdmissionCoordinator {
                     call_mode,
                     ingress,
                 },
-                state: RuntimeAdmissionState::Pending,
+                transaction: AdmissionTransaction::staged(),
             });
         registry.len += 1;
         Ok(DaemonRuntimeAdmissionLease {
@@ -861,13 +857,17 @@ impl DaemonRuntimeAdmissionCoordinator {
             };
             let pending = queue
                 .iter_mut()
-                .find(|pending| matches!(pending.state, RuntimeAdmissionState::Pending))
+                .find(|pending| pending.transaction.is_staged())
                 .ok_or_else(|| {
                     InvocationError::permission_denied(
                         "daemon_runtime_admission_context_not_pending",
                     )
                 })?;
-            pending.state = RuntimeAdmissionState::Evaluating;
+            pending.transaction.begin_evaluation().map_err(|_| {
+                InvocationError::internal(
+                    "daemon_runtime_admission_context_transition_failed_while_verifying",
+                )
+            })?;
             (pending.id, pending.input.clone())
         };
 
@@ -895,22 +895,33 @@ impl DaemonRuntimeAdmissionCoordinator {
             })?;
         match result {
             Ok(decision) => {
-                pending.state = RuntimeAdmissionState::Verified(decision.reservation);
+                pending
+                    .transaction
+                    .reserve(decision.reservation)
+                    .map_err(|_| {
+                        InvocationError::internal(
+                            "daemon_runtime_admission_context_transition_failed_after_verification",
+                        )
+                    })?;
                 Ok(decision.policy)
             }
             Err(error) => {
-                pending.state = RuntimeAdmissionState::Denied;
+                pending.transaction.deny().map_err(|_| {
+                    InvocationError::internal(
+                        "daemon_runtime_admission_context_transition_failed_after_denial",
+                    )
+                })?;
                 Err(error)
             }
         }
     }
 
     fn finish(&self, envelope_key: [u8; 32], id: u64, commit: bool) -> Result<(), Status> {
-        let state = {
+        let transaction = {
             let mut registry = self.registry.lock().map_err(|_| {
                 Status::internal("daemon runtime admission registry lock poisoned while finishing")
             })?;
-            let (state, remove_key) = {
+            let (transaction, remove_key) = {
                 let queue = registry.by_envelope.get_mut(&envelope_key).ok_or_else(|| {
                     Status::internal("daemon runtime admission lease has no staged context")
                 })?;
@@ -923,31 +934,29 @@ impl DaemonRuntimeAdmissionCoordinator {
                 let pending = queue
                     .remove(offset)
                     .expect("located daemon runtime admission must remain in queue");
-                (pending.state, queue.is_empty())
+                (pending.transaction, queue.is_empty())
             };
             registry.len = registry.len.saturating_sub(1);
             if remove_key {
                 registry.by_envelope.remove(&envelope_key);
             }
-            state
+            transaction
         };
 
-        match (commit, state) {
-            (true, RuntimeAdmissionState::Verified(reservation)) => {
+        match transaction.finish(commit) {
+            Ok(AdmissionTransactionFinalization::Committed(reservation)) => {
                 if let Some(quota) = reservation.quota {
                     quota.commit();
                 }
                 Ok(())
             }
-            (false, _) => Ok(()),
-            (true, RuntimeAdmissionState::Denied) => Err(Status::permission_denied(
+            Ok(AdmissionTransactionFinalization::RolledBack) => Ok(()),
+            Err(AdmissionCommitError::Denied) => Err(Status::permission_denied(
                 "daemon runtime admission was denied before runtime launch",
             )),
-            (true, RuntimeAdmissionState::Pending | RuntimeAdmissionState::Evaluating) => {
-                Err(Status::internal(
-                    "daemon runtime admission did not reach a terminal policy decision",
-                ))
-            }
+            Err(AdmissionCommitError::Incomplete(phase)) => Err(Status::internal(format!(
+                "daemon runtime admission did not reach a terminal policy decision: {phase:?}"
+            ))),
         }
     }
 }
