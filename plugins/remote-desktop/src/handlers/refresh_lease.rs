@@ -12,7 +12,7 @@ use crate::daemon::plugins::remote_desktop::request::{parse_lease_ttl_ms, requir
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
-use crate::daemon::plugins::remote_desktop::view::serialize_session;
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 
 /// Handle `remote_desktop.refresh_lease`.
 pub(in crate::daemon::plugins::remote_desktop) fn handle(
@@ -22,7 +22,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
 ) -> anyhow::Result<Value> {
     let session_id = require_str(&args, "session_id", ABILITY_REFRESH_LEASE)?.to_string();
     let lease_ttl_ms = parse_lease_ttl_ms(&args)?;
-    let (lease_expires_at_ms, view) =
+    let (lease_expires_at_ms, recovery_snapshot, view) =
         plugin
             .session_store()
             .with_sessions(|sessions| -> anyhow::Result<_> {
@@ -41,9 +41,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 )?;
                 let now = now_ms();
                 let lease_expires_at_ms = session.refresh_lease(now, lease_ttl_ms);
-                let view = serialize_session(session);
-                Ok((lease_expires_at_ms, view))
+                let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
+                let view = plugin.session_view(session);
+                Ok((lease_expires_at_ms, recovery_snapshot, view))
             })?;
+    plugin.persist_recovery_snapshot(&recovery_snapshot)?;
     RemoteDesktopPlugin::schedule_session_lease(&plugin, session_id, lease_expires_at_ms)?;
     Ok(view)
 }

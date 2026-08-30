@@ -121,6 +121,31 @@ by a receipt.
 | Product | [EasyNet](https://github.com/EasyRemote/EasyNet) | Web platform, federation backend, operator console, dashboards, product workflows |
 | Optimization | IntentDB (research direction) | Learn reusable hybrid execution plans from receipt-backed traces |
 
+## Network architecture roadmap
+
+The current topology is deliberately Hub-centered: local abilities execute in
+the local Runtime, remote devices maintain outbound reverse sessions to their
+realm Hub, and cross-realm calls travel through governed Hub-to-Hub federation.
+Realtime transports such as Remote Desktop may use Hub-mediated signaling to
+establish a direct data plane with relay fallback.
+
+The governing principle is stable across every stage: the Hub remains the
+trust, routing, presence, and session-control plane, but it does not need to
+carry every realtime or bulk data byte. Ability, Invocation, Admission, and
+Receipt semantics remain identical regardless of the selected transport.
+
+| Priority | Outcome | Completion criteria |
+|---|---|---|
+| **P0 — Hub HA and session recovery** | Preserve the current topology while removing single-process session ownership as a realm-wide failure point. | Hub failover and reconnect/resume use explicit lease epochs, fence stale owners, recover in-flight lifecycle state, and preserve one terminal Receipt. |
+| **P1 — Traffic-class isolation** | Isolate control frames, unary RPC, long-lived streams, and bulk data so one traffic class cannot starve another. | Each class has bounded queues, flow control, and resource budgets; bulk or stream saturation cannot incorrectly mark a healthy device offline or block session control. |
+| **P2 — Path observability** | Make route behavior and cost measurable before introducing more transport choices. | Route-labelled telemetry covers latency, Hub egress, queue saturation, reconnect rate, direct/relay selection, and terminal failure reasons with actionable dashboards and alerts. |
+| **P3 — Selective P2P session data planes** | Extend direct transport only to concrete realtime or bulk sessions such as remote desktop, voice, or file transfer. | Session setup remains an authorized Invocation; direct and relay paths form one explicit recovery state machine; endpoints remain transport metadata rather than identity; every run still closes with a verifiable Receipt. |
+| **P4 — Federation at scale** | Evolve beyond manually maintained peer maps without turning observed endpoints into implicit route authority. | Signed route advertisements, trust-policy acceptance, expiry/revocation, health selection, and bounded failure recovery support large federations while keeping Hub-to-Hub routing governed. |
+
+This roadmap does not turn EasyNet into a VPN or a generic peer-to-peer mesh.
+It evolves the transport beneath the governed capability runtime only where a
+measured use case requires it.
+
 ## Research direction: IntentDB
 
 EasyNet's receipt-backed execution history makes a higher-level system
@@ -263,6 +288,11 @@ easynet invocation list | show <request-id> | trace <request-id>
 ## License
 
 Apache-2.0 — see [LICENSE](https://github.com/EasyRemote/EasyNet-Cli/blob/main/LICENSE).
+
+This repository is a deliberately bounded public release of the wider EasyNet
+research system. See [Public Source Release Scope](./SOURCE_RELEASE_SCOPE.md)
+for what is published, what remains outside the distribution, and why releases
+are staged.
 
 ## Author
 

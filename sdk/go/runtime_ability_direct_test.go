@@ -66,7 +66,7 @@ func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := client.Invoke(context.Background(), directRuntimeAbilityCallContext(), "er.weather", map[string]any{"city": "Singapore"})
+		_, err := client.Invoke(context.Background(), directRuntimeAbilityCallContext(), "observe.health", map[string]any{"smoke": "deadline"})
 		done <- err
 	}()
 
@@ -89,7 +89,7 @@ func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 	}
 
 	daemon.configureInvokeTiming(0)
-	output, err := client.Invoke(context.Background(), directRuntimeAbilityCallContext(), "er.weather", map[string]any{"city": "Singapore"})
+	output, err := client.Invoke(context.Background(), directRuntimeAbilityCallContext(), "observe.health", map[string]any{"smoke": "retry"})
 	if err != nil {
 		t.Fatalf("retry ability Invoke after deadline cleanup: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 func directRuntimeAbilityCallContext() RuntimeCallContext {
 	return RuntimeCallContext{
 		CallerURA:     "easynet:///r/example/agent/alice.sdk",
-		CalleeURA:     "easynet:///r/example/device/dev-a",
+		CalleeURA:     runtimeTestCalleeURA,
 		SubjectURA:    "easynet:///r/example/device/dev-a",
 		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext: map[string]any{"form": "none"},

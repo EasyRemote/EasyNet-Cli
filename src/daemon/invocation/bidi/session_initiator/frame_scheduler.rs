@@ -28,7 +28,9 @@ use futures::StreamExt as _;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 
 use super::{SessionDispatchError, SessionFrameDispatcher, SessionUpSender};
-use crate::daemon::invocation::bidi::session_wire::SessionDispatch;
+use crate::daemon::invocation::bidi::session_wire::decode_carrier_bidi_input;
+#[cfg(test)]
+use crate::daemon::invocation::bidi::session_wire::{encode_carrier_bidi_input, SessionDispatch};
 use crate::daemon::invocation::bidi::state::presence::DISPATCH_CHANNEL_CAPACITY;
 
 /// One stalled call may retain a useful burst, but cannot consume the whole
@@ -126,10 +128,9 @@ fn bidi_input_call_id(frame: &InvokeBidiDown) -> Option<u64> {
     let Some(DownPayload::BinaryChunk(chunk)) = frame.payload.as_ref() else {
         return None;
     };
-    match SessionDispatch::decode_frame(&chunk.data).ok()? {
-        SessionDispatch::BidiInput { call_id, .. } => Some(call_id),
-        _ => None,
-    }
+    decode_carrier_bidi_input(&chunk.data)
+        .ok()?
+        .map(|input| input.call_id)
 }
 
 struct SessionBidiBudget {
@@ -373,31 +374,34 @@ mod tests {
                     self.heartbeats.fetch_add(1, Ordering::SeqCst);
                 }
                 Some(Payload::BinaryChunk(chunk)) => {
-                    match SessionDispatch::decode_frame(&chunk.data).map_err(|error| {
-                        SessionDispatchError::Other(format!("decode test frame: {error}"))
-                    })? {
-                        SessionDispatch::BidiInput { payload, .. } => {
-                            self.input_started.fetch_add(1, Ordering::SeqCst);
-                            let mut gate = self.input_gate.subscribe();
-                            if !*gate.borrow() {
-                                gate.wait_for(|ready| *ready).await.map_err(|_| {
-                                    SessionDispatchError::Other(
-                                        "test Opening gate closed".to_string(),
-                                    )
-                                })?;
+                    if let Some(input) =
+                        decode_carrier_bidi_input(&chunk.data).map_err(|error| {
+                            SessionDispatchError::Other(format!("decode test input: {error}"))
+                        })?
+                    {
+                        self.input_started.fetch_add(1, Ordering::SeqCst);
+                        let mut gate = self.input_gate.subscribe();
+                        if !*gate.borrow() {
+                            gate.wait_for(|ready| *ready).await.map_err(|_| {
+                                SessionDispatchError::Other("test Opening gate closed".to_string())
+                            })?;
+                        }
+                        self.inputs
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(input.payload[0]);
+                    } else {
+                        match SessionDispatch::decode_frame(&chunk.data).map_err(|error| {
+                            SessionDispatchError::Other(format!("decode test frame: {error}"))
+                        })? {
+                            SessionDispatch::RequestResult { .. } => {
+                                self.request_results.fetch_add(1, Ordering::SeqCst);
                             }
-                            self.inputs
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .push(payload[0]);
-                        }
-                        SessionDispatch::RequestResult { .. } => {
-                            self.request_results.fetch_add(1, Ordering::SeqCst);
-                        }
-                        other => {
-                            return Err(SessionDispatchError::Other(format!(
-                                "unexpected test dispatch: {other:?}"
-                            )));
+                            other => {
+                                return Err(SessionDispatchError::Other(format!(
+                                    "unexpected test dispatch: {other:?}"
+                                )));
+                            }
                         }
                     }
                 }
@@ -433,11 +437,19 @@ mod tests {
     }
 
     fn bidi_input(call_id: u64, sequence: u8) -> InvokeBidiDown {
-        session_dispatch_frame(SessionDispatch::BidiInput {
-            call_id,
-            payload: vec![sequence],
-            eof: false,
-        })
+        InvokeBidiDown {
+            payload: Some(Payload::BinaryChunk(BinaryChunk {
+                data: encode_carrier_bidi_input(
+                    call_id,
+                    "application/octet-stream",
+                    &[sequence],
+                    false,
+                )
+                .expect("test bidi input encodes"),
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        }
     }
 
     fn request_result() -> InvokeBidiDown {

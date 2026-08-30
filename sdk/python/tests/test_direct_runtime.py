@@ -55,7 +55,9 @@ invoke_pb2_grpc: Any = _invoke_pb2_grpc
 types_pb2: Any = _types_pb2
 
 DESCRIPTOR_REF = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
-ABILITY_URA = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
+ABILITY_URA = (
+    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
+)
 ABILITY_PUBLIC_NAME = "observe.health"
 DEVICE_SUBJECT_URA = "easynet:///r/example/device/dev-a"
 CALLEE_URA = "easynet:///r/example/agent/device.dev-a.runtime-health"
@@ -101,7 +103,11 @@ def _canonical_receipt(
     proof_payload = b'{"authority":"self"}'
     payload = b'{"ready":true}' if cleanup_complete else b'{"admitted":true}'
     authority = types_pb2.AuthorityBinding(
-        self_authority=types_pb2.SelfAuthority(principal_ura=caller_ura)
+        binding=types_pb2.AuthorityRelationBinding(
+            authority=types_pb2.AgentIdentity(ura=caller_ura, profile="axon-strict-v2"),
+            relation=types_pb2.AUTHORITY_RELATION_SELF,
+            identity=types_pb2.Identity(),
+        )
     )
     return invoke_pb2.InvocationReceipt(
         index=index,
@@ -201,10 +207,10 @@ def _assert_complete_receipt_projection(
     )
     test.assertEqual(receipt["causal_binding_kind"], "none")
     test.assertEqual(receipt["causal_binding"], {"form": "none"})
-    test.assertEqual(receipt["authority_binding_kind"], "self")
+    test.assertEqual(receipt["authority_binding_kind"], "self+identity")
     authority = cast(dict[str, object], receipt["authority_binding"])
     test.assertEqual(
-        authority["principal_ura"],
+        authority["authority_ura"],
         "easynet:///r/example/agent/alice.sdk",
     )
     signature = cast(dict[str, object], receipt["callee_signature"])
@@ -214,7 +220,7 @@ def _assert_complete_receipt_projection(
     test.assertEqual(signer["ura"], CALLEE_URA)
     proof = cast(dict[str, object], receipt["authority_proof"])
     test.assertEqual(proof["proof_type"], "self")
-    test.assertEqual(proof["binding_kind"], "self")
+    test.assertEqual(proof["binding_kind"], "self+identity")
     test.assertIsInstance(proof["binding"], dict)
     test.assertTrue(proof["proof_payload_base64"])
     test.assertTrue(proof["proof_hash_hex"])
@@ -812,7 +818,9 @@ class DirectRuntimeTests(unittest.TestCase):
         tuple_projection = cast(dict[str, object], result["tuple"])
         self.assertEqual(tuple_projection, draft.to_json_dict())
 
-    def test_direct_runtime_causal_context_rejects_retired_dag_proof_alias(self) -> None:
+    def test_direct_runtime_causal_context_rejects_retired_dag_proof_alias(
+        self,
+    ) -> None:
         canonical = _axon_causal_context(
             {
                 "form": "merkle",
@@ -1108,6 +1116,55 @@ class DirectRuntimeTests(unittest.TestCase):
             "easynet:///r/example/agent/alice.sdk",
         )
 
+    def test_direct_transport_projects_binary_stream_payload_bytes_from_base64(
+        self,
+    ) -> None:
+        payload = bytes(range(256)) * 4
+        servicer = RecordingInvocationServicer()
+        servicer.stream_chunks = [
+            invoke_pb2.InvokeStreamChunk(
+                invocation_id="inv-media",
+                state=types_pb2.INVOCATION_STATE_RUNNING,
+                payload=payload,
+                content_type="video/h264",
+                sequence=0,
+                terminal=False,
+                admission_receipt=_admission_receipt("inv-media"),
+            ),
+            invoke_pb2.InvokeStreamChunk(
+                invocation_id="inv-media",
+                state=types_pb2.INVOCATION_STATE_COMPLETED,
+                content_type="application/json",
+                sequence=1,
+                terminal=True,
+                terminal_receipt=_canonical_receipt(
+                    index=1,
+                    invocation_id="inv-media",
+                    receipt_type="completed",
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    cleanup_complete=True,
+                ),
+            ),
+        ]
+        with _fake_daemon(servicer) as endpoint:
+            transport = RuntimeInvocationTransport.connect_direct(
+                options=ConnectOptions(endpoint=endpoint, dial_timeout_ms=1000),
+                identity=_identity(),
+            )
+            try:
+                stream = transport.stream(_signed_draft())
+                frame = stream.recv(timeout=1)
+                terminal = stream.recv(timeout=1)
+                stream.close()
+            finally:
+                transport.close()
+
+        self.assertEqual(frame["payload_content_type"], "video/h264")
+        self.assertEqual(frame["payload_bytes"], payload)
+        self.assertEqual(frame["payload_base64"], base64.b64encode(payload).decode("ascii"))
+        self.assertIsNone(frame["payload_json"])
+        self.assertTrue(terminal["terminal"])
+
     def test_direct_transport_projects_zero_based_stream_sequence(self) -> None:
         servicer = RecordingInvocationServicer()
         servicer.stream_chunks = [
@@ -1269,7 +1326,7 @@ class DirectRuntimeTests(unittest.TestCase):
             ("causal_binding",),
             ("callee_signature",),
             ("authority_binding",),
-            ("authority_binding", "self_authority", "principal_ura"),
+            ("authority_binding", "binding", "authority", "ura"),
             ("ability_binding",),
             ("usage",),
             ("subject_ref",),
@@ -1284,8 +1341,9 @@ class DirectRuntimeTests(unittest.TestCase):
             (
                 "authority_proof",
                 "binding",
-                "self_authority",
-                "principal_ura",
+                "binding",
+                "authority",
+                "ura",
             ),
             ("authority_proof", "proof_payload"),
             ("authority_proof", "proof_hash"),
@@ -1372,83 +1430,81 @@ class DirectRuntimeTests(unittest.TestCase):
         signature = bytes.fromhex("c1" * 64)
         cases = (
             (
-                "self",
+                "self+identity",
                 types_pb2.AuthorityBinding(
-                    self_authority=types_pb2.SelfAuthority(
-                        principal_ura="easynet:///r/example/agent/alice.sdk"
+                    binding=types_pb2.AuthorityRelationBinding(
+                        authority=types_pb2.AgentIdentity(
+                            ura="easynet:///r/example/agent/alice.sdk",
+                            profile="axon-strict-v2",
+                        ),
+                        relation=types_pb2.AUTHORITY_RELATION_SELF,
+                        identity=types_pb2.Identity(),
                     )
                 ),
-                "self_authority",
-                "principal_ura",
+                lambda target: target.binding.authority.ClearField("ura"),
             ),
             (
-                "delegation",
+                "delegated_by+delegation",
                 types_pb2.AuthorityBinding(
-                    delegated_authority=types_pb2.DelegationProof(
-                        issuer_ura="easynet:///r/example/agent/authority",
-                        subject_ura=RESOURCE_SUBJECT_URA,
-                        caller_ura="easynet:///r/example/agent/alice.sdk",
-                        audience=DESCRIPTOR_REF,
-                        scopes=("invoke",),
-                        issued_at_ms=1,
-                        expires_at_ms=2,
-                        signature=signature,
+                    binding=types_pb2.AuthorityRelationBinding(
+                        authority=types_pb2.AgentIdentity(
+                            ura=RESOURCE_SUBJECT_URA,
+                            profile="axon-strict-v2",
+                        ),
+                        relation=types_pb2.AUTHORITY_RELATION_DELEGATED_BY,
+                        delegation=types_pb2.DelegationEvidence(
+                            issuer=types_pb2.AgentIdentity(
+                                ura="easynet:///r/example/agent/authority",
+                                profile="axon-strict-v2",
+                            ),
+                            audience=DESCRIPTOR_REF,
+                            scopes=("invoke",),
+                            issued_at_ms=1,
+                            expires_at_ms=2,
+                            signature=signature,
+                        ),
                     )
                 ),
-                "delegated_authority",
-                "audience",
+                lambda target: target.binding.delegation.ClearField("audience"),
             ),
             (
-                "capability",
+                "session_of+session",
                 types_pb2.AuthorityBinding(
-                    capability_grant=types_pb2.CapabilityGrant(
-                        capability_ura="easynet:///r/example/resource/capability-1"
+                    binding=types_pb2.AuthorityRelationBinding(
+                        authority=types_pb2.AgentIdentity(
+                            ura="easynet:///r/example/agent/alice",
+                            profile="axon-strict-v2",
+                        ),
+                        relation=types_pb2.AUTHORITY_RELATION_SESSION_OF,
+                        session=types_pb2.SessionEvidence(
+                            issuer=types_pb2.AgentIdentity(
+                                ura="easynet:///r/example/agent/backend",
+                                profile="axon-strict-v2",
+                            ),
+                            session_id="session-1",
+                            scopes=("invoke",),
+                            audiences=(DESCRIPTOR_REF,),
+                            issued_at_ms=1,
+                            expires_at_ms=2,
+                            signature=signature,
+                        ),
                     )
                 ),
-                "capability_grant",
-                "capability_ura",
-            ),
-            (
-                "policy",
-                types_pb2.AuthorityBinding(
-                    policy_grant=types_pb2.PolicyGrant(
-                        policy_ura="easynet:///r/example/resource/policy-1"
-                    )
-                ),
-                "policy_grant",
-                "policy_ura",
-            ),
-            (
-                "session",
-                types_pb2.AuthorityBinding(
-                    session_authority=types_pb2.SessionAuthority(
-                        issuer_ura="easynet:///r/example/agent/backend",
-                        subject_ura="easynet:///r/example/agent/alice",
-                        session_id="session-1",
-                        scopes=("invoke",),
-                        audiences=(DESCRIPTOR_REF,),
-                        issued_at_ms=1,
-                        expires_at_ms=2,
-                        signature=signature,
-                    )
-                ),
-                "session_authority",
-                "session_id",
+                lambda target: target.binding.session.ClearField("session_id"),
             ),
             (
                 "bootstrap",
                 types_pb2.AuthorityBinding(
-                    bootstrap_authority=types_pb2.BootstrapAuthority(
+                    bootstrap=types_pb2.BootstrapAuthority(
                         principal_ura="easynet:///r/example/agent/alice.sdk",
                         realm="example",
                         ability=DESCRIPTOR_REF,
                     )
                 ),
-                "bootstrap_authority",
-                "realm",
+                lambda target: target.bootstrap.ClearField("realm"),
             ),
         )
-        for kind, binding, arm, required_field in cases:
+        for kind, binding, clear_required_field in cases:
             with self.subTest(kind=kind):
                 receipt = _canonical_receipt(
                     index=1,
@@ -1463,36 +1519,38 @@ class DirectRuntimeTests(unittest.TestCase):
                 projection = _canonical_receipt_projection(receipt)
 
                 self.assertEqual(projection["authority_binding_kind"], kind)
-                if kind == "session":
+                if kind == "session_of+session":
                     binding_projection = cast(
                         dict[str, object], projection["authority_binding"]
+                    )
+                    self.assertEqual(
+                        binding_projection["authority_ura"],
+                        "easynet:///r/example/agent/alice",
                     )
                     self.assertEqual(
                         binding_projection["issuer_ura"],
                         "easynet:///r/example/agent/backend",
                     )
-                    self.assertEqual(
-                        binding_projection["subject_ura"],
-                        "easynet:///r/example/agent/alice",
-                    )
+                    self.assertNotIn("subject_ura", binding_projection)
                     self.assertNotIn("backend_ura", binding_projection)
                     self.assertNotIn("user_ura", binding_projection)
                 proof = cast(dict[str, object], projection["authority_proof"])
                 self.assertEqual(proof["binding_kind"], kind)
-                if kind == "session":
+                if kind == "session_of+session":
                     proof_binding = cast(dict[str, object], proof["binding"])
+                    self.assertEqual(
+                        proof_binding["authority_ura"],
+                        "easynet:///r/example/agent/alice",
+                    )
                     self.assertEqual(
                         proof_binding["issuer_ura"],
                         "easynet:///r/example/agent/backend",
                     )
-                    self.assertEqual(
-                        proof_binding["subject_ura"],
-                        "easynet:///r/example/agent/alice",
-                    )
+                    self.assertNotIn("subject_ura", proof_binding)
                     self.assertNotIn("backend_ura", proof_binding)
                     self.assertNotIn("user_ura", proof_binding)
 
-                getattr(receipt.authority_binding, arm).ClearField(required_field)
+                clear_required_field(receipt.authority_binding)
                 with self.assertRaises(SDKError) as raised:
                     _canonical_receipt_projection(receipt)
                 self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
@@ -1509,8 +1567,13 @@ class DirectRuntimeTests(unittest.TestCase):
         )
         receipt.authority_proof.binding.CopyFrom(
             types_pb2.AuthorityBinding(
-                policy_grant=types_pb2.PolicyGrant(
-                    policy_ura="easynet:///r/example/resource/policy-1"
+                binding=types_pb2.AuthorityRelationBinding(
+                    authority=types_pb2.AgentIdentity(
+                        ura="easynet:///r/example/agent/other",
+                        profile="axon-strict-v2",
+                    ),
+                    relation=types_pb2.AUTHORITY_RELATION_SELF,
+                    identity=types_pb2.Identity(),
                 )
             )
         )
@@ -1911,10 +1974,12 @@ class DirectRuntimeTests(unittest.TestCase):
                 stream, _ = transport.open_stream(
                     _signed_draft().to_json().encode("utf-8")
                 )
-                event = json.loads(stream.recv(timeout=1).decode("utf-8"))
+                packet = stream.recv(timeout=1)
             finally:
                 transport.close()
 
+        self.assertIsInstance(packet, bytes)
+        event = json.loads(packet.decode("utf-8"))
         receipt = cast(dict[str, object], event["admission_receipt"])
         self.assertEqual(receipt["receipt_type"], "admitted")
         _assert_complete_receipt_projection(self, receipt)
@@ -2018,6 +2083,8 @@ class DirectRuntimeTests(unittest.TestCase):
             finally:
                 transport.close()
 
+        self.assertIsInstance(raw_first, bytes)
+        self.assertIsInstance(raw_terminal, bytes)
         first = json.loads(raw_first.decode("utf-8"))
         self.assertFalse(first["terminal"])
         self.assertEqual(first["state"], "Running")
@@ -2049,11 +2116,13 @@ class DirectRuntimeTests(unittest.TestCase):
                 retry_stream, _ = transport.open_stream(
                     _signed_draft().to_json().encode("utf-8")
                 )
-                retry_event = json.loads(retry_stream.recv(timeout=1).decode("utf-8"))
+                retry_packet = retry_stream.recv(timeout=1)
                 retry_stream.close()
             finally:
                 transport.close()
 
+        self.assertIsInstance(retry_packet, bytes)
+        retry_event = json.loads(retry_packet.decode("utf-8"))
         self.assertTrue(is_code(raised.exception, ErrorCode.TIMEOUT))
         self.assertEqual(raised.exception.stage, "direct_runtime")
         self.assertEqual(

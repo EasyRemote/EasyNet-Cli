@@ -72,13 +72,22 @@ pub struct LocalBidiFrame {
     pub terminal: bool,
     /// JSON projection of the frame payload.
     pub payload: Value,
+    /// Raw bytes for a native data-plane frame. JSON controls and receipts
+    /// leave this empty; payload bytes are never Base64-expanded internally.
+    pub binary: Option<LocalBidiBinaryFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBidiBinaryFrame {
+    pub stream_id: u32,
+    pub data: Vec<u8>,
 }
 
 /// Project one Axon `InvokeBidiDown` frame into the support-layer JSON frame
 /// shape consumed by CLI/product callers.
 ///
-/// Binary chunks are payload bytes by definition, so non-JSON data is exposed
-/// losslessly as `data_b64`. Receipt payloads are different: they are receipt
+/// Binary chunks are payload bytes by definition, so data is exposed
+/// losslessly through `LocalBidiBinaryFrame`. Receipt payloads are different: they are receipt
 /// projection facts. A non-empty receipt payload must declare a JSON content
 /// type and parse as JSON, otherwise the projection fails before product code
 /// can mistake opaque bytes for verified receipt facts.
@@ -87,7 +96,6 @@ pub fn project_invoke_bidi_down_frame(
     frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
 ) -> anyhow::Result<Option<LocalBidiFrame>> {
     use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use serde_json::json;
 
     let sequence = frame.sequence;
@@ -97,18 +105,31 @@ pub fn project_invoke_bidi_down_frame(
 
     let projected = match payload {
         DownPayload::BinaryChunk(chunk) => {
-            let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
-                json!({
-                    "type": "binary",
-                    "stream_id": chunk.stream_id,
-                    "data_b64": B64.encode(&chunk.data),
-                })
-            });
-            LocalBidiFrame {
-                sequence,
-                content_type: "application/json".to_string(),
-                terminal: false,
-                payload,
+            if chunk.stream_id == crate::daemon::ability::wire::CONTROL_STREAM_ID {
+                let payload = serde_json::from_slice(&chunk.data).map_err(|error| {
+                    anyhow::anyhow!("InvokeBidi control frame is not valid JSON: {error}")
+                })?;
+                LocalBidiFrame {
+                    sequence,
+                    content_type: "application/json".to_string(),
+                    terminal: false,
+                    payload,
+                    binary: None,
+                }
+            } else {
+                LocalBidiFrame {
+                    sequence,
+                    content_type: "application/octet-stream".to_string(),
+                    terminal: false,
+                    payload: json!({
+                        "type": "binary",
+                        "stream_id": chunk.stream_id,
+                    }),
+                    binary: Some(LocalBidiBinaryFrame {
+                        stream_id: chunk.stream_id,
+                        data: chunk.data,
+                    }),
+                }
             }
         }
         DownPayload::Receipt(receipt) => {
@@ -132,6 +153,7 @@ pub fn project_invoke_bidi_down_frame(
                     })),
                     "payload": receipt_payload,
                 }),
+                binary: None,
             }
         }
         DownPayload::Control(_) => LocalBidiFrame {
@@ -139,6 +161,7 @@ pub fn project_invoke_bidi_down_frame(
             content_type: "application/json".to_string(),
             terminal: false,
             payload: json!({"type": "control"}),
+            binary: None,
         },
         DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => return Ok(None),
     };
@@ -152,12 +175,16 @@ fn project_receipt_payload_json(content_type: &str, payload: &[u8]) -> anyhow::R
         return Ok(Value::Null);
     }
     if !is_json_content_type(content_type) {
-        let content_type = if content_type.trim().is_empty() {
-            "<missing>"
-        } else {
-            content_type.trim()
-        };
-        anyhow::bail!("InvokeBidi receipt payload declares non-JSON content_type `{content_type}`");
+        return serde_json::from_slice(payload).map_err(|_| {
+            let content_type = if content_type.trim().is_empty() {
+                "<missing>"
+            } else {
+                content_type.trim()
+            };
+            anyhow::anyhow!(
+                "InvokeBidi receipt payload declares non-JSON content_type `{content_type}`"
+            )
+        });
     }
     serde_json::from_slice(payload)
         .map_err(|err| anyhow::anyhow!("InvokeBidi receipt payload is not valid JSON: {err}"))
@@ -425,6 +452,27 @@ impl LocalDaemonSystemAbilityIssuer {
             authority_metadata,
             timeout,
         )
+    }
+
+    #[cfg(feature = "axon-pb")]
+    pub(crate) async fn open_target_bidi_with_authority(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject_ura: &str,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<crate::support::platform::bidi_session::DaemonBidiSession> {
+        crate::support::platform::local_daemon_grpc::open_local_daemon_live_bidi_with_authority(
+            crate::support::platform::local_daemon_grpc::LocalDaemonLiveBidiRequest {
+                function_name: target.dispatch_name(),
+                payload_json: args,
+                callee_ura: target.callee_ura(),
+                subject_ura,
+                authority_metadata,
+                timeout,
+            },
+        )
+        .await
     }
 
     pub fn invoke_issued_target_root_timeout(
@@ -1334,9 +1382,72 @@ impl LocalRemoteDesktopSessionIssuer {
         )
     }
 
+    pub fn create_session_with_input_control(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        input_control: bool,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout_with_input_control(
+            selected_resource_ura,
+            create_session_args,
+            input_control,
+            None,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    }
+
+    pub fn create_session_with_input_control_and_nonce(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        input_control: bool,
+        invocation_nonce: [u8; 16],
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout_with_input_control(
+            selected_resource_ura,
+            create_session_args,
+            input_control,
+            Some(invocation_nonce),
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    }
+
     pub fn create_session_timeout(
         selected_resource_ura: &str,
         create_session_args: Value,
+        timeout: std::time::Duration,
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout_with_input_control(
+            selected_resource_ura,
+            create_session_args,
+            false,
+            None,
+            timeout,
+            trace_id,
+        )
+    }
+
+    fn create_session_timeout_with_input_control(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        input_control: bool,
+        create_invocation_nonce: Option<[u8; 16]>,
         timeout: std::time::Duration,
         trace_id: Option<&str>,
     ) -> anyhow::Result<(
@@ -1357,7 +1468,7 @@ impl LocalRemoteDesktopSessionIssuer {
         )?;
         let (grant, grant_meta) = invoke_local_target_with_invocation_meta(
             &grant_target,
-            serde_json::json!({ "intent": "remote_desktop_session" }),
+            remote_desktop_session_consent_args(input_control),
             grant_context,
         )?;
         let consent_ticket = grant
@@ -1376,12 +1487,21 @@ impl LocalRemoteDesktopSessionIssuer {
         let create_target = local_remote_desktop_ability_target(
             crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
         )?;
-        let create_context = LocalSystemInvocationIssuer::root_context(
-            selected_resource_ura,
-            &causal_parents,
-            timeout,
-            trace_id,
-        )?;
+        let create_context = match create_invocation_nonce {
+            Some(invocation_nonce) => LocalSystemInvocationIssuer::root_context_with_nonce(
+                selected_resource_ura,
+                invocation_nonce,
+                &causal_parents,
+                timeout,
+                trace_id,
+            )?,
+            None => LocalSystemInvocationIssuer::root_context(
+                selected_resource_ura,
+                &causal_parents,
+                timeout,
+                trace_id,
+            )?,
+        };
         let (session, create_meta) =
             invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)?;
         Ok((session, create_meta, grant_meta))
@@ -1524,6 +1644,19 @@ impl LocalRemoteDesktopSessionIssuer {
         )?;
         invoke_local_target_stream_with_invocation_context(&target, args, context, max_frames)
     }
+}
+
+#[cfg(feature = "remote-desktop")]
+fn remote_desktop_session_consent_args(input_control: bool) -> Value {
+    serde_json::json!({
+        "intent": "remote_desktop_session",
+        "input_control": input_control,
+        // Target-local pointer/keyboard control cannot make progress while the
+        // selected app/window is blurred. The CLI's explicit input-control
+        // intent therefore requests the separately audited focus scope in the
+        // same local consent decision; the daemon still enforces both grants.
+        "allow_remote_focus": input_control,
+    })
 }
 
 #[cfg(feature = "remote-desktop")]
@@ -1849,6 +1982,22 @@ impl<'a> LocalSystemInvocationContext<'a> {
 pub struct LocalSystemInvocationIssuer;
 
 impl LocalSystemInvocationIssuer {
+    pub fn root_context_with_nonce<'a>(
+        subject_ura: impl Into<String>,
+        invocation_nonce: [u8; 16],
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<LocalSystemInvocationContext<'a>> {
+        LocalSystemInvocationContext::new(
+            subject_ura,
+            invocation_nonce,
+            causal_parents,
+            step_timeout,
+            trace_id,
+        )
+    }
+
     pub fn root_context<'a>(
         subject_ura: impl Into<String>,
         causal_parents: &'a [Value],
@@ -2186,6 +2335,27 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_consent_args_preserve_explicit_input_authority() {
+        assert_eq!(
+            remote_desktop_session_consent_args(false),
+            serde_json::json!({
+                "intent": "remote_desktop_session",
+                "input_control": false,
+                "allow_remote_focus": false,
+            })
+        );
+        assert_eq!(
+            remote_desktop_session_consent_args(true),
+            serde_json::json!({
+                "intent": "remote_desktop_session",
+                "input_control": true,
+                "allow_remote_focus": true,
+            })
+        );
+    }
+
     #[test]
     fn verified_invocation_meta_projects_causal_parent_from_receipt_anchor() {
         let metadata = VerifiedLocalInvocationMeta(serde_json::json!({
@@ -2469,6 +2639,21 @@ mod tests {
     }
 
     #[test]
+    fn local_system_issuer_preserves_campaign_selected_nonce() {
+        let context = LocalSystemInvocationIssuer::root_context_with_nonce(
+            "easynet:///r/acme/resource/device.local/streams/window.7",
+            [0x5a; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            Some("remoteapp-campaign"),
+        )
+        .expect("campaign-selected context");
+
+        assert_eq!(context.invocation_nonce, [0x5a; 16]);
+        assert_eq!(context.trace_id, Some("remoteapp-campaign"));
+    }
+
+    #[test]
     fn local_system_context_for_agent_target_uses_agent_owner_subject() {
         let selector = crate::core::ura::AbilitySelector::parse(
             "easynet:///r/acme/ability/alice.claude.weather",
@@ -2545,7 +2730,7 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn bidi_down_projection_preserves_binary_chunk_as_lossless_b64() {
+    fn bidi_down_projection_preserves_binary_chunk_as_raw_bytes() {
         use axon_sdk::pb::axon::v1::{
             invoke_bidi_down::Payload as DownPayload, BinaryChunk, InvokeBidiDown,
         };
@@ -2565,7 +2750,9 @@ mod tests {
         assert_eq!(frame.sequence, 7);
         assert_eq!(frame.payload["type"], "binary");
         assert_eq!(frame.payload["stream_id"], 3);
-        assert_eq!(frame.payload["data_b64"], "/wAB");
+        let binary = frame.binary.expect("raw binary projection");
+        assert_eq!(binary.stream_id, 3);
+        assert_eq!(binary.data, [0xff, 0x00, 0x01]);
     }
 
     #[cfg(feature = "axon-pb")]
@@ -2589,6 +2776,28 @@ mod tests {
             error.to_string().contains("non-JSON content_type"),
             "wrong error: {error}"
         );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_receipt_projection_accepts_json_payload_with_octet_stream_receipt_type() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, InvocationReceipt, InvokeBidiDown,
+        };
+
+        let frame = project_invoke_bidi_down_frame(InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(InvocationReceipt {
+                payload_content_type: "application/octet-stream".to_string(),
+                payload: br#"{"type":"complete","bytes":3}"#.to_vec(),
+                ..InvocationReceipt::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect("octet-stream JSON receipt payload remains parseable")
+        .expect("receipt projects to local frame");
+
+        assert_eq!(frame.payload["payload"]["type"], "complete");
+        assert_eq!(frame.payload["payload"]["bytes"], 3);
     }
 
     #[cfg(feature = "axon-pb")]

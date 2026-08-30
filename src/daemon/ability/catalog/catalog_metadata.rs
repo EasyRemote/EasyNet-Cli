@@ -25,8 +25,8 @@ use crate::daemon::ability::builtins::{
     device_control::{
         ability_management::{ops as device_ops_ability, publish as ability_publish_ability},
         file_edit as fs_edit_ability, file_transfer as file_transfer_ability, files as fs_ability,
-        http as http_request_ability, process as process_exec_ability, session as session_ability,
-        shell as shell_run_ability,
+        http as http_request_ability, net_tunnel as net_tunnel_ability,
+        process as process_exec_ability, session as session_ability, shell as shell_run_ability,
         terminal::{
             attach as terminal_attach_ability, io as terminal_io_ability,
             lifecycle as terminal_lifecycle_ability,
@@ -54,6 +54,7 @@ use crate::daemon::ability::builtins::{
 use crate::daemon::ability::catalog::system_ability_descriptor_path;
 use crate::daemon::ability::descriptors::AbilityHints;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::manifest::AbilityBidiWireKind;
 use crate::daemon::ability::names::{
     agents as agent_names, automation as automation_names, device_control as device_names,
     federation as federation_names, governance as governance_names,
@@ -76,6 +77,7 @@ pub struct SystemAbilityContract {
     pub dedicated_surface: crate::daemon::ability::manifest::AbilityDedicatedSurface,
     pub subject_contract_kind: crate::daemon::ability::manifest::AbilitySubjectContractKind,
     pub subject_contract_ura: Option<String>,
+    pub bidi_wire_kind: Option<AbilityBidiWireKind>,
     pub input_schema: serde_json::Value,
     pub output_receipt_schema: serde_json::Value,
     pub call_mode: DescriptorCallMode,
@@ -241,6 +243,10 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
                     crate::daemon::ability::manifest::AbilitySubjectContractKind::RouteTarget,
                 ),
             subject_contract_ura: descriptor.metadata.get("subject_contract_ura").cloned(),
+            bidi_wire_kind: descriptor
+                .metadata
+                .get("bidi_wire_kind")
+                .and_then(|value| parse_descriptor_bidi_wire_kind(value)),
             input_schema,
             output_receipt_schema: match descriptor.output_receipt_schema() {
                 serde_json::Value::Null => serde_json::json!({}),
@@ -281,6 +287,10 @@ fn parse_descriptor_dedicated_surface(
 fn parse_descriptor_subject_contract_kind(
     value: &str,
 ) -> Option<crate::daemon::ability::manifest::AbilitySubjectContractKind> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+}
+
+fn parse_descriptor_bidi_wire_kind(value: &str) -> Option<AbilityBidiWireKind> {
     serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
 }
 
@@ -619,6 +629,7 @@ pub fn description_for(name: &str) -> &'static str {
         device_names::PROCESS_EXEC => process_exec_ability::description(),
         device_names::SHELL_RUN => shell_run_ability::description(),
         device_names::HTTP_REQUEST => http_request_ability::description(),
+        device_names::NET_TUNNEL => net_tunnel_ability::description(),
         governance_names::INVOCATION_HISTORY_LIST => {
             invocation_history_ability::list_history_description()
         }
@@ -951,6 +962,7 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         device_names::PROCESS_EXEC => process_exec_ability::input_schema(),
         device_names::SHELL_RUN => shell_run_ability::input_schema(),
         device_names::HTTP_REQUEST => http_request_ability::input_schema(),
+        device_names::NET_TUNNEL => net_tunnel_ability::input_schema(),
         governance_names::INVOCATION_HISTORY_LIST => {
             invocation_history_ability::list_history_input_schema()
         }
@@ -1483,6 +1495,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | device_names::PROCESS_EXEC
         | device_names::SHELL_RUN
         | device_names::HTTP_REQUEST
+        | device_names::NET_TUNNEL
         | device_names::FS_TRANSFER
         // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
         // Operational by intent: each one drives an external

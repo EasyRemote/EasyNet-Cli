@@ -13,29 +13,38 @@ use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::Track;
 use webrtc::peer_connection::PeerConnection;
+use webrtc::rtp_transceiver::RtpSender;
 
-#[cfg(feature = "native-media")]
-use crate::daemon::ability::builtins::resources::media::screen_snapshot::open_display_recorder_with_xcap;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::session_events::WebRtcFailureEventKind;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+use crate::daemon::plugins::remote_desktop::target::FrontendAction;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteAppTargetError,
+    RemoteAppTargetBinding, RemoteAppTargetError, TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::transport::media_source::{
     start_remote_app_media_source, DirectWebRtcMediaSourceFactory, MediaStartRequest,
     RemoteAppMediaSource,
 };
-#[cfg(feature = "native-media")]
-use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::{
     run_direct_webrtc_polling_stream, BaselineMediaInputs,
 };
-#[cfg(target_os = "macos")]
-use crate::daemon::plugins::remote_desktop::transport::webrtc_native_media::{
-    run_direct_webrtc_native_stream, NativeMediaInputs,
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+use crate::daemon::plugins::remote_desktop::transport::webrtc_hosted_media::{
+    run_direct_webrtc_hosted_stream, HostedMediaHostFailure,
 };
 
 /// Owned per-session context handed to the media loop's dedicated thread.
@@ -49,11 +58,33 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) epoch: TransportEpoch,
     pub(in crate::daemon::plugins::remote_desktop) peer_connection: Arc<dyn PeerConnection>,
     pub(in crate::daemon::plugins::remote_desktop) track: Arc<TrackLocalStaticSample>,
+    pub(in crate::daemon::plugins::remote_desktop) video_sender: Arc<dyn RtpSender>,
     /// Payload type selected by the completed offer/answer negotiation.
     pub(in crate::daemon::plugins::remote_desktop) payload_type: PayloadType,
+    pub(in crate::daemon::plugins::remote_desktop) audio_track: Option<Arc<TrackLocalStaticSample>>,
+    pub(in crate::daemon::plugins::remote_desktop) audio_payload_type: Option<PayloadType>,
     pub(in crate::daemon::plugins::remote_desktop) target_binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) config: BuiltinH264Config,
+}
+
+/// Borrowed media inputs shared by the daemon-owned WebRTC carrier and its
+/// selected platform media strategy.
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub(in crate::daemon::plugins::remote_desktop) struct HostedMediaInputs<'a> {
+    pub(in crate::daemon::plugins::remote_desktop) track: &'a Arc<TrackLocalStaticSample>,
+    pub(in crate::daemon::plugins::remote_desktop) video_sender: &'a Arc<dyn RtpSender>,
+    pub(in crate::daemon::plugins::remote_desktop) ssrc: u32,
+    pub(in crate::daemon::plugins::remote_desktop) payload_type: u8,
+    pub(in crate::daemon::plugins::remote_desktop) audio_track:
+        Option<&'a Arc<TrackLocalStaticSample>>,
+    pub(in crate::daemon::plugins::remote_desktop) audio_payload_type: Option<u8>,
+    pub(in crate::daemon::plugins::remote_desktop) options: &'a ScreenCaptureOptions,
+    pub(in crate::daemon::plugins::remote_desktop) config: &'a BuiltinH264Config,
+    pub(in crate::daemon::plugins::remote_desktop) target_binding: &'a RemoteAppTargetBinding,
 }
 
 /// Session-owned lifecycle and state projection shared by every direct-WebRTC
@@ -143,28 +174,31 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         epoch,
         peer_connection,
         track,
+        video_sender,
         payload_type,
+        audio_track,
+        audio_payload_type,
         target_binding,
         options,
         config,
     } = session;
     loop {
         if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
-            let _ = peer_connection.close().await;
+            let _ = close_peer_connection_bounded(&peer_connection).await;
             return;
         }
         if connected_rx.try_recv().is_ok() {
             break;
         }
         if stop_rx.has_changed().unwrap_or(false) && *stop_rx.borrow_and_update() {
-            let _ = peer_connection.close().await;
+            let _ = close_peer_connection_bounded(&peer_connection).await;
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     let Some(ssrc) = track.ssrcs().await.first().copied() else {
-        let _ = peer_connection.close().await;
+        let _ = close_peer_connection_bounded(&peer_connection).await;
         return;
     };
     let mut execution =
@@ -176,58 +210,24 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     );
     match source {
         Ok(RemoteAppMediaSource::NativeProduction) => {
-            #[cfg(target_os = "macos")]
+            #[cfg(not(all(
+                feature = "native-media",
+                any(target_os = "linux", target_os = "macos", target_os = "windows")
+            )))]
             {
-                let native_inputs =
-                    NativeMediaInputs::new(&track, ssrc, payload_type, &options, &config);
-                match run_direct_webrtc_native_stream(
-                    &mut execution,
-                    &peer_connection,
-                    &native_inputs,
-                    &target_binding,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        let _ = peer_connection.close().await;
-                        return;
-                    }
-                    Err(err) => {
-                        let failure =
-                            direct_webrtc_native_failure_projection(&err, &target_binding);
-                        crate::op_event!(
-                            component = remote_desktop,
-                            kind = direct_webrtc_native_unavailable,
-                            reason = failure.message.clone(),
-                        );
-                        sessions.mark_direct_webrtc_failed_with_context(
-                            &session_id,
-                            epoch,
-                            failure.event_kind,
-                            &failure.reason,
-                            failure.message,
-                            failure.context,
-                        );
-                        let _ = peer_connection.close().await;
-                        return;
-                    }
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                sessions.mark_direct_webrtc_failed(
+                sessions.mark_direct_webrtc_generation_failed(
                     &session_id,
                     epoch,
                     "native_media_unavailable",
                     "direct WebRTC native media is not available on this platform".to_string(),
                 );
-                let _ = peer_connection.close().await;
+                let _ = close_peer_connection_bounded(&peer_connection).await;
                 return;
             }
         }
         Err(err) => {
             let failure = direct_webrtc_target_failure_projection(&err, &target_binding);
-            sessions.mark_direct_webrtc_failed_with_context(
+            sessions.mark_direct_webrtc_generation_failed_with_context(
                 &session_id,
                 epoch,
                 failure.event_kind,
@@ -235,39 +235,83 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                 failure.message,
                 failure.context,
             );
-            let _ = peer_connection.close().await;
+            let _ = close_peer_connection_bounded(&peer_connection).await;
             return;
         }
-        Ok(RemoteAppMediaSource::DisplayBaseline) => {}
+        Ok(RemoteAppMediaSource::XcapBaseline) => {}
     }
 
+    #[cfg(not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    )))]
     let baseline_inputs = BaselineMediaInputs {
         track: &track,
+        video_sender: &video_sender,
         ssrc,
         payload_type,
+        audio_track: audio_track.as_ref(),
+        audio_payload_type,
         options: &options,
         config: &config,
+        target_binding: &target_binding,
     };
-    #[cfg(feature = "native-media")]
-    let result = {
-        let capture_subject = target_binding.diagnostic_capture_subject().clone();
-        let recorder_entry = capture_subject.to_backend_resource_entry();
-        if let Ok((recorder, rx)) = open_display_recorder_with_xcap(&recorder_entry) {
-            run_direct_webrtc_recorder_stream(&mut execution, &baseline_inputs, recorder, rx).await
-        } else {
-            run_direct_webrtc_polling_stream(&mut execution, &baseline_inputs, &capture_subject)
-                .await
-        }
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    let hosted_inputs = HostedMediaInputs {
+        track: &track,
+        video_sender: &video_sender,
+        ssrc,
+        payload_type,
+        audio_track: audio_track.as_ref(),
+        audio_payload_type,
+        options: &options,
+        config: &config,
+        target_binding: &target_binding,
     };
-    #[cfg(not(feature = "native-media"))]
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    let result = run_direct_webrtc_hosted_stream(&mut execution, &hosted_inputs).await;
+    #[cfg(not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    )))]
     let result = run_direct_webrtc_polling_stream(
         &mut execution,
         &baseline_inputs,
         target_binding.diagnostic_capture_subject(),
     )
     .await;
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     if let Err(err) = result {
-        sessions.mark_direct_webrtc_failed(
+        let failure = direct_webrtc_hosted_failure_projection(&err, &target_binding);
+        sessions.mark_direct_webrtc_generation_failed_with_context(
+            &session_id,
+            epoch,
+            failure.event_kind,
+            &failure.reason,
+            failure.message,
+            failure.context,
+        );
+        crate::op_event!(
+            component = remote_desktop,
+            kind = direct_webrtc_media_failed,
+            reason = err.to_string(),
+        );
+    }
+    #[cfg(not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    )))]
+    if let Err(err) = result {
+        sessions.mark_direct_webrtc_generation_failed(
             &session_id,
             epoch,
             "baseline_media_pipeline_failed",
@@ -279,7 +323,35 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             reason = err.to_string(),
         );
     }
-    let _ = peer_connection.close().await;
+    let _ = close_peer_connection_bounded(&peer_connection).await;
+}
+
+const PEER_CONNECTION_CLOSE_DEADLINE: Duration = Duration::from_secs(2);
+
+pub(in crate::daemon::plugins::remote_desktop) async fn close_peer_connection_bounded(
+    peer_connection: &Arc<dyn PeerConnection>,
+) -> bool {
+    close_peer_connection_until(peer_connection, PEER_CONNECTION_CLOSE_DEADLINE).await
+}
+
+pub(in crate::daemon::plugins::remote_desktop) async fn close_peer_connection_until(
+    peer_connection: &Arc<dyn PeerConnection>,
+    deadline: Duration,
+) -> bool {
+    match tokio::time::timeout(deadline, peer_connection.close()).await {
+        Ok(Ok(())) => true,
+        Ok(Err(error)) => {
+            eprintln!("[remote-desktop-webrtc] peer connection close failed: {error}");
+            false
+        }
+        Err(_) => {
+            eprintln!(
+                "[remote-desktop-webrtc] peer connection close exceeded {}ms; media task will terminate without waiting further",
+                deadline.as_millis()
+            );
+            false
+        }
+    }
 }
 
 fn direct_webrtc_target_failure_projection(
@@ -287,10 +359,18 @@ fn direct_webrtc_target_failure_projection(
     target_binding: &RemoteAppTargetBinding,
 ) -> DirectWebRtcFailureProjection {
     let target_reason = target_error.reason();
+    direct_webrtc_target_reason_projection(target_reason, target_error.to_string(), target_binding)
+}
+
+fn direct_webrtc_target_reason_projection(
+    target_reason: TargetResolutionError,
+    message: String,
+    target_binding: &RemoteAppTargetBinding,
+) -> DirectWebRtcFailureProjection {
     DirectWebRtcFailureProjection {
         event_kind: WebRtcFailureEventKind::MediaSourceLost,
         reason: target_reason.as_str().to_string(),
-        message: target_error.to_string(),
+        message,
         context: json!({
             "failure_domain": "target",
             "target_reason": target_reason.as_str(),
@@ -306,33 +386,65 @@ fn direct_webrtc_target_failure_projection(
     }
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn direct_webrtc_native_failure_projection(
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+fn direct_webrtc_hosted_failure_projection(
     err: &anyhow::Error,
     target_binding: &RemoteAppTargetBinding,
 ) -> DirectWebRtcFailureProjection {
-    let message = err.to_string();
-    let Some(target_error) = err.downcast_ref::<RemoteAppTargetError>() else {
-        return DirectWebRtcFailureProjection {
-            event_kind: WebRtcFailureEventKind::TransportFailed,
-            reason: "native_media_pipeline_failed".to_string(),
-            message,
-            context: Value::Null,
-        };
-    };
-    direct_webrtc_target_failure_projection(target_error, target_binding)
+    if let Some(failure) = err.downcast_ref::<HostedMediaHostFailure>() {
+        if let Some(target_reason) = failure.target_reason() {
+            return direct_webrtc_target_reason_projection(
+                target_reason,
+                failure.to_string(),
+                target_binding,
+            );
+        }
+    }
+    DirectWebRtcFailureProjection {
+        event_kind: WebRtcFailureEventKind::TransportFailed,
+        reason: "hosted_media_pipeline_failed".to_string(),
+        message: err.to_string(),
+        context: json!({
+            "failure_domain": "transport",
+            "reason_code": TargetResolutionError::TransportRouteUnavailable.as_str(),
+            "recoverability": "retry_session",
+            "frontend_action": FrontendAction::RetrySession.as_str(),
+        }),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    use easynet_remoteapp_native_protocol::media_session::FailureReason;
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use serde_json::json;
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
-    use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
-    };
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 
     #[test]
@@ -367,8 +479,12 @@ mod tests {
         assert!(execution.should_stop());
     }
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     #[test]
-    fn native_target_failure_preserves_frontend_recovery_context() {
+    fn hosted_target_failure_preserves_frontend_recovery_context() {
         let binding = ResourceEntryTargetResolver
             .resolve_for_session(
                 "remote_desktop.create_session",
@@ -392,15 +508,14 @@ mod tests {
                 1,
             )
             .expect("window binding");
-        let err = anyhow::Error::new(RemoteAppTargetError::new(
-            "remote_desktop.set_description",
-            TargetResolutionError::TargetIdentityChanged,
-            "live capture target no longer matches committed binding",
+        let err = anyhow::Error::new(HostedMediaHostFailure::new(
+            FailureReason::TargetInvalidated,
+            "live capture target no longer matches committed binding".into(),
         ));
 
-        let failure = direct_webrtc_native_failure_projection(&err, &binding);
+        let failure = direct_webrtc_hosted_failure_projection(&err, &binding);
 
-        assert_eq!(failure.reason, "target_identity_changed");
+        assert_eq!(failure.reason, "target_stale");
         assert_eq!(failure.event_kind, WebRtcFailureEventKind::MediaSourceLost);
         assert_eq!(failure.context["failure_domain"], json!("target"));
         assert_eq!(failure.context["frontend_action"], json!("refresh_targets"));
@@ -412,8 +527,12 @@ mod tests {
         assert_eq!(failure.context["binding_epoch"], json!(1));
     }
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     #[test]
-    fn native_non_target_failure_stays_pipeline_failure() {
+    fn hosted_non_target_failure_stays_pipeline_failure() {
         let binding = ResourceEntryTargetResolver
             .resolve_for_session(
                 "remote_desktop.create_session",
@@ -433,13 +552,16 @@ mod tests {
                 1,
             )
             .expect("display binding");
-        let err = anyhow::anyhow!("encoder queue closed");
+        let err = anyhow::Error::new(HostedMediaHostFailure::new(
+            FailureReason::EncoderUnavailable,
+            "encoder queue closed".into(),
+        ));
 
-        let failure = direct_webrtc_native_failure_projection(&err, &binding);
+        let failure = direct_webrtc_hosted_failure_projection(&err, &binding);
 
-        assert_eq!(failure.reason, "native_media_pipeline_failed");
+        assert_eq!(failure.reason, "hosted_media_pipeline_failed");
         assert_eq!(failure.event_kind, WebRtcFailureEventKind::TransportFailed);
-        assert_eq!(failure.message, "encoder queue closed");
-        assert!(failure.context.is_null());
+        assert!(failure.message.contains("encoder queue closed"));
+        assert_eq!(failure.context["failure_domain"], json!("transport"));
     }
 }

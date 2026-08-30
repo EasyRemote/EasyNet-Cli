@@ -10,8 +10,10 @@ use crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_audit_access;
-use crate::daemon::plugins::remote_desktop::view::serialize_session;
+use crate::daemon::plugins::remote_desktop::session_lifecycle::{
+    ensure_session_control_audit_access, expire_session_by_id_if_needed,
+};
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 
 /// Handle `remote_desktop.show_session`.
 pub(in crate::daemon::plugins::remote_desktop) fn handle(
@@ -20,24 +22,30 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     args: Value,
 ) -> anyhow::Result<Value> {
     let session_id = require_str(&args, "session_id", ABILITY_SHOW_SESSION)?;
-    plugin
-        .session_store()
-        .with_sessions(|sessions| -> anyhow::Result<Value> {
-            let session = sessions.get_mut(session_id).ok_or_else(|| {
-                RemoteDesktopError::SessionNotFound {
-                    ability: ABILITY_SHOW_SESSION,
-                    session_id: session_id.to_string(),
-                }
+    let _ = expire_session_by_id_if_needed(&plugin, session_id, None);
+    let (recovery_snapshot, mut view) =
+        plugin
+            .session_store()
+            .with_sessions(|sessions| -> anyhow::Result<_> {
+                let session = sessions.get_mut(session_id).ok_or_else(|| {
+                    RemoteDesktopError::SessionNotFound {
+                        ability: ABILITY_SHOW_SESSION,
+                        session_id: session_id.to_string(),
+                    }
+                })?;
+                ensure_session_control_audit_access(
+                    &plugin,
+                    ABILITY_SHOW_SESSION,
+                    &env,
+                    &args,
+                    session,
+                )?;
+                let recovery_snapshot = RemoteDesktopRecoverySnapshot::from_session(session)?;
+                Ok((recovery_snapshot, plugin.session_view(session)))
             })?;
-            ensure_session_control_audit_access(
-                &plugin,
-                ABILITY_SHOW_SESSION,
-                &env,
-                &args,
-                session,
-            )?;
-            Ok(serialize_session(session))
-        })
+    plugin.persist_recovery_snapshot(&recovery_snapshot)?;
+    view["transport_settlement_health"] = plugin.transport_manager().settlement_health().to_value();
+    Ok(view)
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/generate-runtime-governance-routes.py" --check
+python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-system-ability-contract-inventory.py"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
@@ -598,12 +599,18 @@ if legacy in production:
 
 required = {
     "struct CallbackFrameProjection": "projection_value_object_missing",
+    "struct VerifiedStreamCallbackFrame": "stream_projection_value_object_missing",
+    "enum StreamCallbackDelivery": "stream_delivery_value_object_missing",
+    "StreamCallbackDelivery::Json": "stream_json_delivery_missing",
+    "StreamCallbackDelivery::V8": "stream_v8_delivery_missing",
     "enum CallbackFrameLifecycle": "projection_lifecycle_state_missing",
     "CallbackFrameLifecycle::StopAfterFrame": "stop_after_frame_state_missing",
     "fn should_stop_after_frame(&self) -> bool": "terminal_accessor_missing",
     "fn into_json_bytes(self) -> Vec<u8>": "json_serialization_boundary_missing",
+    "fn into_delivery(": "stream_delivery_boundary_missing",
     "projection.should_stop_after_frame()": "reader_terminal_accessor_missing",
     "callback_frame_projection_lifecycle_is_not_inferred_from_json_shape": "json_independence_test_missing",
+    "stream_v8_delivery_preserves_raw_payload_without_json_projection": "v8_raw_stream_test_missing",
 }
 for needle, label in required.items():
     if needle not in text:
@@ -618,7 +625,10 @@ for fn_name in ("run_stream_reader", "run_bidi_down_reader"):
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_terminal_lookup")
     if "projection.should_stop_after_frame()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_typed_terminal_missing")
-    if "projection.into_json_bytes()" not in body:
+    if fn_name == "run_stream_reader":
+        if "projection.into_delivery(encoding)" not in body:
+            raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_delivery_boundary_missing")
+    elif "projection.into_json_bytes()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_boundary_missing")
 PY
 }
@@ -1379,8 +1389,8 @@ if '"presented_pubkey_b64"' not in production:
 if "presented_pubkey_hex" in production:
     raise SystemExit("daemon catalog schema must not expose retired presented_pubkey_hex pin")
 PY
-  if ! rg -q 'canonical Agent, Device, or Authority URA' "$surface"; then
-    fail "descriptor validation error must describe canonical Authority owners"
+  if ! rg -q 'canonical Agent, Service, or Authority URA' "$surface"; then
+    fail "descriptor validation error must describe canonical Agent, Service, or Authority owners"
   fi
 }
 
@@ -5687,7 +5697,7 @@ if py:
         "sdk_python_runtime_state_read_subject_all_zero_guard_missing",
     )
     for token in (
-        "from .axon_addressing import parse_ura, resource_ura, user_ura",
+        "from .axon_addressing import device_ura, parse_ura, resource_ura, user_ura",
         "owner_ura = user_ura(clean_realm, clean_user_id)",
         "subject = resource_ura(owner_ura, RUNTIME_STATE_READ_SUBJECT_PATH)",
     ):
@@ -5713,6 +5723,14 @@ if py:
     ):
         if token not in py_helper:
             raise SystemExit(f"sdk_python_authority_subject_structured_owner_missing:{token}")
+    for token in (
+        'subject.kind == "device"',
+        'callee.kind == "agent"',
+        'subject.components.get("device_id") == callee.components.get("device_id")',
+        "return device_ura(subject.realm, clean_device_id)",
+    ):
+        if token not in py_subjects:
+            raise SystemExit(f"sdk_python_system_agent_runtime_owner_subject_missing:{token}")
     for token in (
         "def canonical_session_authority_id(",
         "session authority session_id is not canonical",
@@ -8102,17 +8120,22 @@ py_stream_projection = section(
 if '"invocation_id"' in py_stream_projection or "chunk.invocation_id" in py_stream_projection:
     raise SystemExit("sdk_python_direct_runtime_stream_projection_leaks_invocation_id")
 ffi = read(ffi_path)
-ffi_stream_projection = section(
+ffi_stream_verification = section(
     ffi,
-    r"fn stream_chunk_json\((?P<body>.*?)\n\}",
-    "ffi_stream_chunk_projection",
+    r"fn verify_stream_chunk\((?P<body>.*?)(?=\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn sdk_callback_event_sequence)",
+    "ffi_stream_chunk_verification",
+)
+ffi_stream_metadata = section(
+    ffi,
+    r"fn legacy_metadata_json\(&self\) -> serde_json::Value \{(?P<body>.*?)\n    \}",
+    "ffi_stream_chunk_metadata_projection",
 )
 for retired in ('"ok"', '"invocation_id"', '"proof_error"'):
-    if retired in ffi_stream_projection:
+    if retired in ffi_stream_metadata:
         raise SystemExit(f"ffi_stream_projection_leaks_retired_field:{retired}")
-if '"transport_terminal": error.is_some() && !proven_terminal' not in ffi_stream_projection:
+if "transport_terminal: error.is_some() && !proven_terminal" not in ffi_stream_verification:
     raise SystemExit("ffi_stream_projection_missing_transport_terminal_error_boundary")
-if "sdk_callback_event_sequence(chunk.sequence)" not in ffi_stream_projection:
+if "sdk_callback_event_sequence(chunk.sequence)" not in ffi_stream_verification:
     raise SystemExit("ffi_stream_projection_missing_proto_to_sdk_sequence_boundary")
 if "fn sdk_callback_event_sequence(protobuf_sequence: u64) -> u64" not in ffi or "protobuf_sequence.saturating_add(1)" not in ffi:
     raise SystemExit("ffi_stream_projection_sequence_boundary_not_explicit")
@@ -8146,16 +8169,12 @@ for retired in ("ok", "message"):
 if '"kind": "error"' not in ffi_receipt_error or '"stage": "receipt_verification"' not in ffi_receipt_error:
     raise SystemExit("ffi_stream_receipt_error_missing_canonical_error")
 ffi_backpressure = read(ffi_backpressure_path)
-ffi_stream_backpressure = section(
-    ffi_backpressure,
-    r"fn stream_callback_backpressure_event\((?P<body>.*?)\n\}",
-    "ffi_stream_backpressure_projection",
-)
-for retired in ('"ok"', '"code"', '"message"'):
-    if retired in ffi_stream_backpressure:
-        raise SystemExit(f"ffi_stream_backpressure_leaks_retired_top_level:{retired}")
-if '"error": runtime_backpressure_error("stream", sequence, queue_capacity)' not in ffi_stream_backpressure:
-    raise SystemExit("ffi_stream_backpressure_missing_canonical_error")
+if "stream_callback_backpressure_event" in ffi_backpressure:
+    raise SystemExit("ffi_stream_backpressure_synthetic_terminal_not_retired")
+if "bounded_stream_callback_queue_applies_lossless_backpressure" not in ffi:
+    raise SystemExit("ffi_stream_backpressure_lossless_queue_test_missing")
+if "Server-stream delivery is lossless" not in ffi or "tx.send(delivery).await" not in ffi:
+    raise SystemExit("ffi_stream_backpressure_lossless_await_missing")
 py_tests = read(py_test_path)
 for required in (
     "test_direct_runtime_unary_rejects_unsupported_invocation_state",
@@ -15280,7 +15299,7 @@ for retired in (
 for required in (
     "enum AttachedDescriptorCatalogRoute",
     "RemoteCatalogueReadIssuer::catalogue_read_plan(",
-    "load_remote_invocation_caller_signer(",
+    "load_remote_invocation_caller_signer_at_endpoint(",
     "invoke_remote_target_with_signer_at_endpoint(",
 ):
     if required not in combined_production:
@@ -15622,7 +15641,7 @@ for required in (
         raise SystemExit(f"ffi_invocation_json_projection:public_tuple_gate_missing:{required}")
 for required_test in (
     "unary_result_json_rejects_declared_json_output_that_is_not_json",
-    "stream_chunk_json_rejects_declared_json_payload_that_is_not_json",
+    "verify_stream_chunk_rejects_declared_json_payload_that_is_not_json",
     "parse_invocation_json_rejects_all_zero_subject_before_daemon_io",
     "parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io",
     "parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io",
@@ -15979,6 +15998,10 @@ if 'Value::String("authority:broadcast".to_string())' in realm_body:
     raise SystemExit("meta_list_abilities:descriptor_source_hash_mutation")
 if 'Value::String("hub:broadcast".to_string())' in realm_body:
     raise SystemExit("meta_list_abilities:retired_hub_broadcast_source")
+if "device-owned abilities only" in meta_production:
+    raise SystemExit("meta_list_abilities:retired_device_owned_scope_description")
+if "SystemAgent- and Service-owned abilities" not in meta_production:
+    raise SystemExit("meta_list_abilities:callable_owner_scope_description_missing")
 if "fn describe_hosted_agent_count(" not in meta_production:
     raise SystemExit("meta_describe:hosted_agent_count_helper_missing")
 if re.search(
@@ -17658,7 +17681,7 @@ for retired in (
 required = (
     (manifest, "discovery-only metadata and has no executable runtime binding", "manifest_doc_missing"),
     (authoring, "no executable binding and cannot enter the live capability catalog", "authoring_reject_missing"),
-    (chat, "manifest without [exec] must not be routed through an LLM-mediated handler", "chat_reject_missing"),
+    (chat, "is not executable: its manifest has no [exec] binding", "chat_reject_missing"),
     (teach, "manifest without [exec] must remain discovery-only, not a runtime binding", "teach_runtime_binding_reject_missing"),
 )
 for text, token, code in required:
@@ -21931,36 +21954,36 @@ required_runtime_fragments = {
     "go": (
         go_runtime,
         [
+            'requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")',
             'requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")',
-            'requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")',
         ],
     ),
     "python": (
         py_runtime,
         [
+            'value.get("authority_ura")',
             'value.get("issuer_ura")',
-            'value.get("subject_ura")',
         ],
     ),
     "node": (
         node_runtime,
         [
+            "binding.authority_ura",
             "binding.issuer_ura",
-            "binding.subject_ura",
         ],
     ),
     "java": (
         java_proof,
         [
+            'requiredString(binding, "authority_ura")',
             'requiredString(binding, "issuer_ura")',
-            'requiredString(binding, "subject_ura")',
         ],
     ),
     "swift": (
         swift_runtime,
         [
+            'runtimeRequiredText(object, "authority_ura"',
             'runtimeRequiredText(object, "issuer_ura"',
-            'runtimeRequiredText(object, "subject_ura"',
         ],
     ),
 }
@@ -21975,18 +21998,19 @@ for language, source, required, forbidden in [
     (
         "go-direct",
         go_direct,
-        ['"issuer_ura":       value.GetIssuerUra()', '"subject_ura":      value.GetSubjectUra()'],
+        ['"authority_ura":    directAgentURA(value.GetAuthority())', '"issuer_ura":       directAgentURA(delegation.GetIssuer())', '"issuer_ura":       directAgentURA(session.GetIssuer())'],
         [
             '"backend_ura":      value.GetBackendUra()',
             '"user_ura":         value.GetUserUra()',
             '"issuer_ura":       value.GetBackendUra()',
             '"subject_ura":      value.GetUserUra()',
+            '"subject_ura":      value.GetSubjectUra()',
         ],
     ),
     (
         "python-direct",
         py_direct,
-        ['"issuer_ura": value.issuer_ura', '"subject_ura": value.subject_ura'],
+        ['"authority_ura": authority_ura', '"issuer_ura": issuer_ura'],
         [
             '"backend_ura": value.backend_ura',
             '"user_ura": value.user_ura',
@@ -22008,8 +22032,8 @@ for language, source, required, forbidden in [
             )
 
 for fragment in (
-    '"issuer_ura": value.issuer_ura',
-    '"subject_ura": value.subject_ura',
+    '"authority_ura": authority_ura',
+    '"issuer_ura": issuer_ura',
     "session_authority_summary_uses_public_generic_fields",
 ):
     if fragment not in daemon_dispatch_client:

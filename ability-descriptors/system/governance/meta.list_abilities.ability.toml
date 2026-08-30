@@ -29,7 +29,7 @@ description = "Canonical owner URA. Filters the catalogue to abilities published
 [input_schema.properties.scope]
 type = "string"
 enum = ["local", "realm"]
-description = "`local` (default) returns device-owned abilities only. `realm` adds hub-published abilities the realm hub broadcast at join + heartbeat (RFC-001 v4.1.7)."
+description = "`local` (default) returns this runtime's SystemAgent- and Service-owned abilities. `realm` adds realm Authority-published abilities the realm Authority broadcast at join + heartbeat (RFC-001 v4.1.7)."
 
 [input_schema.properties.subject_ura]
 type = "string"

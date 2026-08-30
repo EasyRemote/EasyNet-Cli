@@ -1,7 +1,7 @@
 schema_version = "3"
 name = "camera.snapshot"
-descriptor_version = "1.0.0"
-description = "Capture one still image from a camera resource. Subject MUST be a camera resource_ura. Returns { image_bytes_b64 OR payloadstore_ura, captured_at } in the receipt body."
+descriptor_version = "2.0.0"
+description = "Capture one native still image from a camera resource. Subject MUST be a camera resource_ura. Returns JSON snapshot metadata with image_bytes_b64; capture media is also indexed in Context."
 exposure = "task"
 dedicated_surface = "media"
 subject_contract_kind = "dedicated-surface"
@@ -24,4 +24,4 @@ additionalProperties = false
 
 [input_schema.properties.format]
 type = "string"
-enum = ["jpeg", "png"]
+enum = ["jpeg"]

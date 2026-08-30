@@ -9,6 +9,7 @@ from easynet_sdk import (
     ErrorCode,
     HealthClient,
     NativeRuntimeHandle,
+    LocalRuntimeSignerProvider,
     RuntimeClient,
     RuntimeAbilityClient,
     SDKError,
@@ -192,6 +193,14 @@ class SdkEnvironmentTests(unittest.TestCase):
             env.runtime_client()
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_environment_builds_local_runtime_signer_provider(self) -> None:
+        env = SdkEnvironment(control_path="/tmp/easynet-runtime/control.json")
+
+        provider = env.local_runtime_signer_provider()
+
+        self.assertIsInstance(provider, LocalRuntimeSignerProvider)
+        env.close()
 
 
 def _complete_draft():

@@ -1,6 +1,18 @@
 {
   "abi_version": 7,
-  "sdk_version": "0.139.14",
+  "abi_extensions": {
+    "v8": {
+      "stream_binary_frame": true,
+      "symbol": "runtime_invocation_stream_open_v8"
+    },
+    "v9": {
+      "stream_buffer_lease": true,
+      "open_symbol": "runtime_invocation_stream_open_v9",
+      "retain_symbol": "runtime_buffer_lease_retain_v9",
+      "release_symbol": "runtime_buffer_lease_release_v9"
+    }
+  },
+  "sdk_version": "0.148.60",
   "profiles": {
     "runtime_core": "provider-backed"
   },
@@ -13,6 +25,8 @@
     "runtime_health": true,
     "runtime_diagnostics": true,
     "prepare_sign_submit": true,
+    "stream_binary_frame_v8": true,
+    "stream_buffer_lease_v9": true,
     "typed_error_json": true
   },
   "axon_pb": true

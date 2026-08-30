@@ -86,7 +86,8 @@ use crate::daemon::invocation::streams::stream_dispatcher::StreamDispatcher;
 use axon_sdk::invocation::{AbilityContext, AbilityFrame, AxonError, BidiInputFrame, CallMode};
 
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
-    DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
+    DispatchResult, DispatchStreamChunk, DispatchStreamEvent, PendingDispatchMap,
+    PendingStreamDispatchMap,
 };
 use crate::daemon::invocation::bidi::state::presence::{
     DispatchFrame, DispatchSender, OfflineReason, PresenceRegistration, PresenceRegistry,
@@ -185,6 +186,7 @@ struct SessionControlRequest {
     kind: SessionControlRequestKind,
     caller_device_ura: String,
     args: Vec<u8>,
+    metadata: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -309,6 +311,7 @@ impl SessionControlRequest {
         caller_device_ura: &str,
         args: &[u8],
         args_content_envelope: &SessionContentEnvelope,
+        metadata: HashMap<String, String>,
     ) -> Result<Self, SessionRequestError> {
         Self::validate_content(kind, args_content_envelope)?;
         let caller_device_ura = caller_device_ura.trim();
@@ -332,6 +335,7 @@ impl SessionControlRequest {
             kind,
             caller_device_ura: caller_device_ura.to_string(),
             args: args.to_vec(),
+            metadata,
         })
     }
 
@@ -635,8 +639,16 @@ impl BidiDispatcher {
             ));
         };
         let request = bidi_open_to_invoke_request(envelope_open)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&request, selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
+            self.sessions.device_trust_sync.as_ref(),
+            &selected_route.execution_host_ura,
+            "InvokeBidi HubSession",
+        )
+        .await?;
         let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
         let mut handle = escalation
             .escalate_bidi(request)
@@ -689,12 +701,13 @@ impl BidiDispatcher {
                             break;
                         }
                     }
-                    DispatchStreamEvent::Chunk(bytes) => {
+                    DispatchStreamEvent::Chunk(chunk) => {
                         crate::op_event!(
                             component = daemon_invocation,
                             kind = hub_session_bidi_chunk_received,
                             call_id = call_id_hex_for_results,
-                            payload_bytes = bytes.len(),
+                            payload_bytes = chunk.payload.len(),
+                            content_type = chunk.content_type.as_str(),
                         );
                         if let Err(status) = finalization.observe_data() {
                             crate::op_event!(
@@ -706,14 +719,7 @@ impl BidiDispatcher {
                             let _ = down_tx_for_results.send(Err(status)).await;
                             break;
                         }
-                        let frame = InvokeBidiDown {
-                            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                                stream_id: stdout_stream_id,
-                                data: bytes,
-                                ..BinaryChunk::default()
-                            })),
-                            ..InvokeBidiDown::default()
-                        };
+                        let frame = bidi_down_from_dispatch_chunk(chunk, stdout_stream_id);
                         if down_tx_for_results.send(Ok(frame)).await.is_err() {
                             break;
                         }
@@ -743,9 +749,40 @@ impl BidiDispatcher {
                                     payload,
                                     result_content_type,
                                 )
-                                .map(|finalized| InvokeBidiDown {
-                                    payload: Some(DownPayload::Receipt(finalized.terminal_receipt)),
-                                    ..InvokeBidiDown::default()
+                                .and_then(|finalized| {
+                                    let carrier_terminal = InvokeBidiDown {
+                                        payload: Some(DownPayload::ReverseDispatchResult(
+                                            axon_sdk::pb::axon::v1::ReverseDispatchResult {
+                                                payload: finalized.output.clone(),
+                                                result_content_type: finalized
+                                                    .output_content_type
+                                                    .clone(),
+                                                terminal: true,
+                                                failure: finalized.failure.clone(),
+                                                admission_receipt: Some(
+                                                    finalized.admission_receipt.clone(),
+                                                ),
+                                                terminal_receipt: Some(
+                                                    finalized.terminal_receipt.clone(),
+                                                ),
+                                                ..Default::default()
+                                            },
+                                        )),
+                                        ..InvokeBidiDown::default()
+                                    };
+                                    down_tx_for_results.try_send(Ok(carrier_terminal)).map_err(
+                                        |_| {
+                                            Status::unavailable(
+                                                "remote bidi terminal carrier result dropped",
+                                            )
+                                        },
+                                    )?;
+                                    Ok(InvokeBidiDown {
+                                        payload: Some(DownPayload::Receipt(
+                                            finalized.terminal_receipt,
+                                        )),
+                                        ..InvokeBidiDown::default()
+                                    })
                                 }),
                             None => {
                                 let detail = failure
@@ -862,7 +899,8 @@ impl BidiDispatcher {
 
         let forwarded_request =
             remote_bidi_forwarded_request(selected_route, envelope_open, call_mode)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&forwarded_request, selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
             receipt_resolver.as_ref(),
@@ -938,12 +976,13 @@ impl BidiDispatcher {
                             break;
                         }
                     }
-                    DispatchStreamEvent::Chunk(bytes) => {
+                    DispatchStreamEvent::Chunk(chunk) => {
                         crate::op_event!(
                             component = daemon_invocation,
                             kind = remote_bidi_bridge_chunk_received,
                             call_id = call_id,
-                            payload_bytes = bytes.len(),
+                            payload_bytes = chunk.payload.len(),
+                            content_type = chunk.content_type.as_str(),
                         );
                         if let Err(status) = finalization.observe_data() {
                             crate::op_event!(
@@ -955,14 +994,7 @@ impl BidiDispatcher {
                             let _ = down_tx_for_results.send(Err(status)).await;
                             break;
                         }
-                        let frame = InvokeBidiDown {
-                            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                                stream_id: stdout_stream_id,
-                                data: bytes,
-                                ..BinaryChunk::default()
-                            })),
-                            ..InvokeBidiDown::default()
-                        };
+                        let frame = bidi_down_from_dispatch_chunk(chunk, stdout_stream_id);
                         if down_tx_for_results.send(Ok(frame)).await.is_err() {
                             break;
                         }
@@ -1138,9 +1170,11 @@ impl BidiDispatcher {
                 crate::support::async_bridge::discard_try_send_classify(
                     sender.try_send(Ok(build_remote_bidi_input_dispatch_frame(
                         call_id,
+                        "",
                         &[],
                         true,
-                    ))),
+                    )
+                    .expect("empty remote Bidi EOF carrier frame is encodable"))),
                     "daemon_invocation",
                     &format!("remote_bidi_eof call_id={call_id}"),
                 );
@@ -1154,21 +1188,16 @@ impl BidiDispatcher {
     }
 
     /// PTY/file-transfer bidi adapter: invoke the locally registered
-    /// Axon ability through `LocalRuntime` and bridge its JSON frame
-    /// protocol onto the gRPC `InvokeBidi` up/down streams.
+    /// Axon ability through `LocalRuntime` and bridge its typed control
+    /// and native binary frames onto the gRPC `InvokeBidi` streams.
     ///
     /// Wire-format adapter
     /// -------------------
     /// Backend's WS terminal handler emits raw PTY bytes as
     /// `InvokeBidiUp::BinaryChunk(stream_id=1, data=raw)`. The
-    /// device-side terminal attach handler expects JSON
-    /// `{"type":"stdin","data":"<base64>"}` — its on-the-wire
-    /// shape lives with the terminal system ability. We
-    /// translate at this seam: BinaryChunk → JSON stdin frame on
-    /// the up direction, JSON stdout frame → BinaryChunk on the
-    /// down direction. PtyResize control frames map to a JSON
-    /// `{"type":"resize","cols":N,"rows":N}` shape the handler
-    /// already consumes.
+    /// device-side terminal attach handler consumes and emits those
+    /// bytes unchanged. JSON is reserved for lifecycle/control frames;
+    /// PtyResize maps to its typed JSON control shape at this seam.
     async fn resolve_bidi_route(
         &self,
         envelope_open: &EnvelopeOpen,
@@ -1460,35 +1489,10 @@ impl BidiDispatcher {
                     continue;
                 };
                 match map_local_bidi_up_payload(wire_kind, payload) {
-                    LocalBidiUpFrame::Forward(jsonv) => {
-                        let Ok(payload) = serde_json::to_vec(&jsonv) else {
-                            break;
-                        };
-                        if handler_in_tx
-                            .send(
-                                BidiInputFrame::new(payload).with_content_type("application/json"),
-                            )
-                            .await
-                            .is_err()
-                        {
+                    LocalBidiUpFrame::Forward(frame) => {
+                        if handler_in_tx.send(frame).await.is_err() {
                             break;
                         }
-                    }
-                    LocalBidiUpFrame::ForwardAndClose(jsonv) => {
-                        let Ok(payload) = serde_json::to_vec(&jsonv) else {
-                            break;
-                        };
-                        if handler_in_tx
-                            .send(
-                                BidiInputFrame::new(payload).with_content_type("application/json"),
-                            )
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                        let _ = handler_in_tx.close_input().await;
-                        break;
                     }
                     LocalBidiUpFrame::Close => {
                         let _ = handler_in_tx.close_input().await;
@@ -1906,8 +1910,7 @@ impl LocalBidiHandlerFrame {
 
 #[derive(Debug)]
 pub(crate) enum LocalBidiUpFrame {
-    Forward(serde_json::Value),
-    ForwardAndClose(serde_json::Value),
+    Forward(BidiInputFrame),
     Close,
     Ignore,
 }
@@ -1918,23 +1921,37 @@ pub(crate) fn map_local_bidi_up_payload(
 ) -> LocalBidiUpFrame {
     use axon_sdk::pb::axon::v1::bidi_control::Control as ControlVariant;
     use axon_sdk::pb::axon::v1::{BidiControl, PtyResize};
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-    use serde_json::json;
-
     match (wire_kind, payload) {
-        (LocalBidiWireKind::Pty, UpPayload::BinaryChunk(chunk)) => {
-            let b64 = B64.encode(&chunk.data);
-            LocalBidiUpFrame::Forward(json!({"type": "stdin", "data": b64}))
+        (LocalBidiWireKind::Pty, UpPayload::BinaryChunk(chunk))
+            if chunk.stream_id == crate::daemon::ability::wire::CONTROL_STREAM_ID =>
+        {
+            match serde_json::from_slice::<serde_json::Value>(&chunk.data) {
+                Ok(_) => LocalBidiUpFrame::Forward(
+                    BidiInputFrame::new(chunk.data).with_content_type("application/json"),
+                ),
+                Err(_) => LocalBidiUpFrame::Ignore,
+            }
         }
+        (LocalBidiWireKind::Pty, UpPayload::BinaryChunk(chunk)) => LocalBidiUpFrame::Forward(
+            BidiInputFrame::new(chunk.data).with_content_type("application/octet-stream"),
+        ),
         (
             LocalBidiWireKind::Pty,
             UpPayload::Control(BidiControl {
                 control: Some(ctl), ..
             }),
         ) => match ctl {
-            ControlVariant::PtyResize(PtyResize { cols, rows }) => {
-                LocalBidiUpFrame::Forward(json!({"type": "resize", "cols": cols, "rows": rows}))
-            }
+            ControlVariant::PtyResize(PtyResize { cols, rows }) => LocalBidiUpFrame::Forward(
+                BidiInputFrame::new(
+                    serde_json::to_vec(&serde_json::json!({
+                        "type": "resize",
+                        "cols": cols,
+                        "rows": rows,
+                    }))
+                    .expect("PTY resize JSON serialization is infallible"),
+                )
+                .with_content_type("application/json"),
+            ),
             ControlVariant::Eof(true) => LocalBidiUpFrame::Close,
             _ => LocalBidiUpFrame::Ignore,
         },
@@ -1944,8 +1961,9 @@ pub(crate) fn map_local_bidi_up_payload(
         | (_, UpPayload::ReverseDispatchCall(_))
         | (_, UpPayload::ReverseBidiInput(_)) => LocalBidiUpFrame::Ignore,
         (LocalBidiWireKind::FileTransfer, UpPayload::BinaryChunk(chunk)) => {
-            let b64 = B64.encode(&chunk.data);
-            LocalBidiUpFrame::Forward(json!({"type": "chunk", "data": b64}))
+            LocalBidiUpFrame::Forward(
+                BidiInputFrame::new(chunk.data).with_content_type("application/octet-stream"),
+            )
         }
         (
             LocalBidiWireKind::FileTransfer,
@@ -1953,13 +1971,37 @@ pub(crate) fn map_local_bidi_up_payload(
                 control: Some(ctl), ..
             }),
         ) => match ctl {
-            ControlVariant::Eof(true) => LocalBidiUpFrame::ForwardAndClose(json!({"type": "eof"})),
+            ControlVariant::Eof(true) => LocalBidiUpFrame::Close,
             _ => LocalBidiUpFrame::Ignore,
         },
         (LocalBidiWireKind::FileTransfer, UpPayload::Control(_)) => LocalBidiUpFrame::Ignore,
+        (LocalBidiWireKind::Tunnel, UpPayload::BinaryChunk(chunk))
+            if chunk.stream_id == crate::daemon::ability::wire::CONTROL_STREAM_ID =>
+        {
+            match serde_json::from_slice::<serde_json::Value>(&chunk.data) {
+                Ok(_) => LocalBidiUpFrame::Forward(
+                    BidiInputFrame::new(chunk.data).with_content_type("application/json"),
+                ),
+                Err(_) => LocalBidiUpFrame::Ignore,
+            }
+        }
+        (LocalBidiWireKind::Tunnel, UpPayload::BinaryChunk(chunk)) => LocalBidiUpFrame::Forward(
+            BidiInputFrame::new(chunk.data)
+                .with_content_type("application/vnd.easynet.tunnel-data"),
+        ),
+        (
+            LocalBidiWireKind::Tunnel,
+            UpPayload::Control(BidiControl {
+                control: Some(ControlVariant::Eof(true)),
+                ..
+            }),
+        ) => LocalBidiUpFrame::Close,
+        (LocalBidiWireKind::Tunnel, UpPayload::Control(_)) => LocalBidiUpFrame::Ignore,
         (LocalBidiWireKind::JsonFrames, UpPayload::BinaryChunk(chunk)) => {
             match serde_json::from_slice::<serde_json::Value>(&chunk.data) {
-                Ok(jsonv) => LocalBidiUpFrame::Forward(jsonv),
+                Ok(_) => LocalBidiUpFrame::Forward(
+                    BidiInputFrame::new(chunk.data).with_content_type("application/json"),
+                ),
                 Err(_) => LocalBidiUpFrame::Ignore,
             }
         }
@@ -1988,11 +2030,7 @@ pub(crate) fn map_local_bidi_ability_frame(
     if frame.payload.is_empty() {
         return LocalBidiHandlerFrame::Ignore;
     }
-    if matches!(wire_kind, LocalBidiWireKind::JsonFrames)
-        && !frame.terminal
-        && !frame.content_type.is_empty()
-        && frame.content_type != "application/json"
-    {
+    if !frame.content_type.is_empty() && frame.content_type != "application/json" {
         return LocalBidiHandlerFrame::forward(InvokeBidiDown {
             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
                 stream_id: stdout_stream_id,
@@ -2012,12 +2050,12 @@ pub(crate) fn map_local_bidi_ability_frame(
 
 fn forward_json_bidi_frame(
     value: &serde_json::Value,
-    stdout_stream_id: u32,
+    _stdout_stream_id: u32,
 ) -> LocalBidiHandlerFrame {
     match serde_json::to_vec(value) {
         Ok(payload) => LocalBidiHandlerFrame::forward(InvokeBidiDown {
             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                stream_id: stdout_stream_id,
+                stream_id: crate::daemon::ability::wire::CONTROL_STREAM_ID,
                 data: payload,
                 ..BinaryChunk::default()
             })),
@@ -2034,34 +2072,14 @@ pub(crate) fn map_local_bidi_handler_frame(
     value: &serde_json::Value,
     stdout_stream_id: u32,
 ) -> LocalBidiHandlerFrame {
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-
     match wire_kind {
         LocalBidiWireKind::Pty => match value.get("type").and_then(|field| field.as_str()) {
-            Some("stdout") => {
-                let Some(data_b64) = value.get("data").and_then(|field| field.as_str()) else {
-                    return LocalBidiHandlerFrame::ProtocolFailure(
-                        "InvokeBidi local-dispatcher: PTY stdout frame missing `data`".to_string(),
-                    );
-                };
-                let raw = match B64.decode(data_b64) {
-                    Ok(raw) => raw,
-                    Err(err) => {
-                        return LocalBidiHandlerFrame::ProtocolFailure(format!(
-                            "InvokeBidi local-runtime: PTY stdout frame base64 decode failed: {err}"
-                        ));
-                    }
-                };
-                LocalBidiHandlerFrame::forward(InvokeBidiDown {
-                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                        stream_id: stdout_stream_id,
-                        data: raw,
-                        ..BinaryChunk::default()
-                    })),
-                    ..InvokeBidiDown::default()
-                })
+            Some("stdout") => LocalBidiHandlerFrame::ProtocolFailure(
+                "InvokeBidi local-runtime: PTY stdout must use a native binary frame".to_string(),
+            ),
+            Some("attached" | "detached" | "output_gap" | "exit" | "error") => {
+                forward_json_bidi_frame(value, stdout_stream_id)
             }
-            Some("exit") => forward_json_bidi_frame(value, stdout_stream_id),
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
                     crate::op_event!(
@@ -2077,30 +2095,10 @@ pub(crate) fn map_local_bidi_handler_frame(
         },
         LocalBidiWireKind::FileTransfer => match value.get("type").and_then(|field| field.as_str())
         {
-            Some("chunk") => {
-                let Some(data_b64) = value.get("data").and_then(|field| field.as_str()) else {
-                    return LocalBidiHandlerFrame::ProtocolFailure(
-                        "InvokeBidi local-runtime: file_transfer chunk frame missing `data`"
-                            .to_string(),
-                    );
-                };
-                let raw = match B64.decode(data_b64) {
-                    Ok(raw) => raw,
-                    Err(err) => {
-                        return LocalBidiHandlerFrame::ProtocolFailure(format!(
-                            "InvokeBidi local-runtime: file_transfer chunk frame base64 decode failed: {err}"
-                        ));
-                    }
-                };
-                LocalBidiHandlerFrame::forward(InvokeBidiDown {
-                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                        stream_id: stdout_stream_id,
-                        data: raw,
-                        ..BinaryChunk::default()
-                    })),
-                    ..InvokeBidiDown::default()
-                })
-            }
+            Some("chunk") => LocalBidiHandlerFrame::ProtocolFailure(
+                "InvokeBidi local-runtime: file-transfer data must use a native binary frame"
+                    .to_string(),
+            ),
             Some("complete" | "error") => forward_json_bidi_frame(value, stdout_stream_id),
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
@@ -2115,7 +2113,9 @@ pub(crate) fn map_local_bidi_handler_frame(
             }
             _ => LocalBidiHandlerFrame::Ignore,
         },
-        LocalBidiWireKind::JsonFrames => forward_json_bidi_frame(value, stdout_stream_id),
+        LocalBidiWireKind::Tunnel | LocalBidiWireKind::JsonFrames => {
+            forward_json_bidi_frame(value, stdout_stream_id)
+        }
     }
 }
 
@@ -2381,6 +2381,7 @@ impl BidiDispatcher {
         ability_ura: &str,
         args: &[u8],
         args_content_envelope: &SessionContentEnvelope,
+        metadata: HashMap<String, String>,
     ) -> Result<SessionControlLifecycle, SessionRequestError> {
         let kind =
             match session_control_kind_for_hub(self.identity.session_realm.as_deref(), ability_ura)
@@ -2395,6 +2396,7 @@ impl BidiDispatcher {
             caller_device_ura,
             args,
             args_content_envelope,
+            metadata,
         )?;
         Ok(SessionControlLifecycle::validated(request).schedule())
     }
@@ -2415,6 +2417,7 @@ impl BidiDispatcher {
                 .dispatch_federation_advertise_abilities_from_session(
                     &request.args,
                     &request.caller_device_ura,
+                    &request.metadata,
                 ),
             SessionControlRequestKind::NamespaceResolve => {
                 self.unary.dispatch_namespace_resolve(&request.args).await
@@ -2723,7 +2726,7 @@ pub(crate) fn pending_result_from_canonical_carrier(
 #[derive(Debug)]
 enum CarrierDispatchEvent {
     Admission(Box<axon_sdk::pb::axon::v1::InvocationReceipt>),
-    Chunk(Vec<u8>),
+    Chunk(DispatchStreamChunk),
     Terminal(Box<DispatchResult>),
 }
 
@@ -2823,7 +2826,32 @@ fn classify_canonical_carrier_result(
     if result.failure.is_some() {
         return Err((call_id, pending_result_from_canonical_carrier(&result)));
     }
-    Ok((call_id, CarrierDispatchEvent::Chunk(result.payload)))
+    Ok((
+        call_id,
+        CarrierDispatchEvent::Chunk(DispatchStreamChunk::new(
+            result.payload,
+            result.result_content_type,
+        )),
+    ))
+}
+
+fn bidi_down_from_dispatch_chunk(
+    chunk: DispatchStreamChunk,
+    stdout_stream_id: u32,
+) -> InvokeBidiDown {
+    let stream_id = if chunk.content_type == crate::daemon::ability::wire::CONTROL_CONTENT_TYPE {
+        crate::daemon::ability::wire::CONTROL_STREAM_ID
+    } else {
+        stdout_stream_id
+    };
+    InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+            stream_id,
+            data: chunk.payload,
+            ..BinaryChunk::default()
+        })),
+        ..InvokeBidiDown::default()
+    }
 }
 
 pub(crate) fn session_failure_from_axon_error(
@@ -3032,9 +3060,28 @@ fn build_reverse_dispatch_bidi_result_frame(
                     ..ReverseDispatchResult::default()
                 }
             } else {
+                let terminal_state = receipt.state;
+                let terminal_payload = receipt.payload.clone();
+                let terminal_content_type = receipt.payload_content_type.clone();
+                let terminal_failure = receipt.failure.clone();
                 ReverseDispatchResult {
                     call_id: call_id.to_vec(),
                     terminal: true,
+                    payload: if terminal_state
+                        == axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
+                    {
+                        terminal_payload
+                    } else {
+                        Vec::new()
+                    },
+                    result_content_type: if terminal_state
+                        == axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
+                    {
+                        terminal_content_type
+                    } else {
+                        String::new()
+                    },
+                    failure: terminal_failure,
                     terminal_receipt: Some(receipt),
                     ..ReverseDispatchResult::default()
                 }
@@ -3043,11 +3090,20 @@ fn build_reverse_dispatch_bidi_result_frame(
         DownPayload::BinaryChunk(chunk) => ReverseDispatchResult {
             call_id: call_id.to_vec(),
             payload: chunk.data,
+            result_content_type: if chunk.stream_id
+                == crate::daemon::ability::wire::CONTROL_STREAM_ID
+            {
+                crate::daemon::ability::wire::CONTROL_CONTENT_TYPE.to_string()
+            } else {
+                "application/octet-stream".to_string()
+            },
             ..ReverseDispatchResult::default()
         },
-        DownPayload::Control(_)
-        | DownPayload::DispatchCall(_)
-        | DownPayload::ReverseDispatchResult(_) => return None,
+        DownPayload::ReverseDispatchResult(mut result) => {
+            result.call_id = call_id.to_vec();
+            result
+        }
+        DownPayload::Control(_) | DownPayload::DispatchCall(_) => return None,
     };
     Some(DispatchFrame::control(InvokeBidiDown {
         payload: Some(DownPayload::ReverseDispatchResult(result)),
@@ -3435,10 +3491,10 @@ async fn drain_session_runtime_up_stream(
                             );
                         }
                     }
-                    Ok((call_id, CarrierDispatchEvent::Chunk(payload))) => {
+                    Ok((call_id, CarrierDispatchEvent::Chunk(chunk))) => {
                         if let Some(pending_stream) = pending_stream.as_ref() {
                             report_chunk_delivery(
-                                pending_stream.deliver_chunk(call_id, payload).await,
+                                pending_stream.deliver_chunk(call_id, chunk).await,
                                 &caller_ura,
                                 call_id,
                             );
@@ -3771,21 +3827,12 @@ async fn drain_session_runtime_up_stream(
                     );
                 }
             }
-            SessionDispatch::BidiInput { call_id, eof, .. } => {
-                crate::op_event!(
-                    component = session_accept,
-                    kind = unexpected_upstream_frame,
-                    caller = caller_ura,
-                    frame_kind = "BidiInput",
-                    call_id = call_id,
-                    eof = eof,
-                );
-            }
             SessionDispatch::Request {
                 call_id,
                 ability_ura,
                 args,
                 args_content_envelope,
+                metadata,
             } => {
                 // Daemon-owned bootstrap/publication control request.
                 // Product invocations arrive through the typed
@@ -3805,6 +3852,7 @@ async fn drain_session_runtime_up_stream(
                     &ability_ura,
                     &args,
                     &args_content_envelope,
+                    metadata,
                 ) {
                     Ok(lifecycle) => lifecycle,
                     Err(error) => {
@@ -4074,37 +4122,35 @@ fn invoke_request_to_bidi_open(request: InvokeRequest) -> Result<EnvelopeOpen, S
 
 fn build_remote_bidi_input_dispatch_frame(
     call_id: u64,
+    content_type: &str,
     payload: &[u8],
     eof: bool,
-) -> DispatchFrame {
-    let frame = SessionDispatch::BidiInput {
+) -> Result<DispatchFrame, Status> {
+    let data = crate::daemon::invocation::bidi::session_wire::encode_carrier_bidi_input(
         call_id,
-        payload: payload.to_vec(),
+        content_type,
+        payload,
         eof,
-    };
-    let data = frame
-        .encode_frame()
-        .expect("SessionDispatch::BidiInput is statically encodable");
-    DispatchFrame::normal(InvokeBidiDown {
+    )
+    .map_err(|error| Status::internal(format!("encode carrier Bidi input: {error}")))?;
+    Ok(DispatchFrame::normal(InvokeBidiDown {
         payload: Some(DownPayload::BinaryChunk(BinaryChunk {
             stream_id: crate::daemon::invocation::bidi::session_initiator::SESSION_STREAM_ID,
             data,
             ..BinaryChunk::default()
         })),
         ..InvokeBidiDown::default()
-    })
+    }))
 }
 
 fn remote_bidi_input_dispatch_frame_is_eof(frame: &DispatchFrame) -> bool {
     let Some(DownPayload::BinaryChunk(chunk)) = frame.frame.payload.as_ref() else {
         return false;
     };
-    let Ok(SessionDispatch::BidiInput { eof, .. }) =
-        SessionDispatch::decode_frame(chunk.data.as_slice())
-    else {
-        return false;
-    };
-    eof
+    crate::daemon::invocation::bidi::session_wire::decode_carrier_bidi_input(&chunk.data)
+        .ok()
+        .flatten()
+        .is_some_and(|frame| frame.eof)
 }
 
 fn build_remote_bidi_input_frame_from_canonical_payload(
@@ -4123,27 +4169,29 @@ fn build_remote_bidi_input_frame_from_canonical_payload(
     use axon_sdk::pb::axon::v1::bidi_control::Control as ControlVariant;
 
     match payload {
-        UpPayload::BinaryChunk(chunk) => Some(Ok(build_remote_bidi_input_dispatch_frame(
+        UpPayload::BinaryChunk(chunk) => Some(build_remote_bidi_input_dispatch_frame(
             call_id,
+            "application/json",
             &chunk.data,
             false,
-        ))),
-        UpPayload::Control(control) => {
-            match control.control {
-                Some(ControlVariant::Eof(true)) => Some(Ok(
-                    build_remote_bidi_input_dispatch_frame(call_id, &[], true),
-                )),
-                Some(_) | None => {
-                    crate::op_event!(
-                        component = daemon_invocation,
-                        kind = remote_bidi_non_core_control_ignored,
-                        ability = ability,
-                        call_id = call_id,
-                    );
-                    None
-                }
+        )),
+        UpPayload::Control(control) => match control.control {
+            Some(ControlVariant::Eof(true)) => Some(build_remote_bidi_input_dispatch_frame(
+                call_id,
+                "",
+                &[],
+                true,
+            )),
+            Some(_) | None => {
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = remote_bidi_non_core_control_ignored,
+                    ability = ability,
+                    call_id = call_id,
+                );
+                None
             }
-        }
+        },
         UpPayload::EnvelopeOpen(_)
         | UpPayload::DispatchResult(_)
         | UpPayload::ReverseDispatchCall(_)
@@ -4156,37 +4204,18 @@ fn build_remote_bidi_input_frame_from_mapped(
     mapped: LocalBidiUpFrame,
 ) -> Option<Result<DispatchFrame, Status>> {
     match mapped {
-        LocalBidiUpFrame::Forward(value) => {
-            let bytes = match serde_json::to_vec(&value) {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    return Some(Err(Status::internal(format!(
-                        "InvokeBidi remote bidi: encode mapped input frame: {err}"
-                    ))));
-                }
-            };
-            Some(Ok(build_remote_bidi_input_dispatch_frame(
-                call_id, &bytes, false,
-            )))
-        }
-        LocalBidiUpFrame::ForwardAndClose(value) => {
-            let bytes = match serde_json::to_vec(&value) {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    return Some(Err(Status::internal(format!(
-                        "InvokeBidi remote bidi: encode final mapped input frame: {err}"
-                    ))));
-                }
-            };
-            Some(Ok(build_remote_bidi_input_dispatch_frame(
-                call_id, &bytes, true,
-            )))
-        }
-        LocalBidiUpFrame::Close => Some(Ok(build_remote_bidi_input_dispatch_frame(
+        LocalBidiUpFrame::Forward(frame) => Some(build_remote_bidi_input_dispatch_frame(
             call_id,
+            &frame.content_type,
+            &frame.payload,
+            false,
+        )),
+        LocalBidiUpFrame::Close => Some(build_remote_bidi_input_dispatch_frame(
+            call_id,
+            "",
             &[],
             true,
-        ))),
+        )),
         LocalBidiUpFrame::Ignore => None,
     }
 }
@@ -4308,6 +4337,133 @@ mod tests {
         assert!(!failure.retryable);
     }
 
+    #[test]
+    fn reverse_bidi_result_frame_preserves_carrier_terminal_payload_type() {
+        let call_id = [4; 16];
+        let terminal = InvokeBidiDown {
+            payload: Some(DownPayload::ReverseDispatchResult(
+                axon_sdk::pb::axon::v1::ReverseDispatchResult {
+                    call_id: vec![0; 16],
+                    payload: br#"{"type":"complete"}"#.to_vec(),
+                    result_content_type: "application/json".to_string(),
+                    terminal: true,
+                    admission_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                        state: axon_sdk::invocation::InvocationState::Admitted.to_wire_i32(),
+                        ..Default::default()
+                    }),
+                    terminal_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                        state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let frame = build_reverse_dispatch_bidi_result_frame(call_id, terminal)
+            .expect("carrier terminal must be forwarded");
+        let Some(DownPayload::ReverseDispatchResult(result)) = frame.frame.payload else {
+            panic!("expected ReverseDispatchResult");
+        };
+
+        assert_eq!(result.call_id, call_id);
+        assert_eq!(result.payload, br#"{"type":"complete"}"#);
+        assert_eq!(result.result_content_type, "application/json");
+        assert!(result.terminal);
+        assert!(result.admission_receipt.is_some());
+        assert!(result.terminal_receipt.is_some());
+    }
+
+    #[test]
+    fn remote_bidi_chunk_routing_uses_content_type_without_decoding_payload() {
+        let control_payload = vec![0xff, 0x00];
+        let control = bidi_down_from_dispatch_chunk(
+            DispatchStreamChunk::new(
+                control_payload.clone(),
+                crate::daemon::ability::wire::CONTROL_CONTENT_TYPE,
+            ),
+            7,
+        );
+        let Some(DownPayload::BinaryChunk(control)) = control.payload else {
+            panic!("expected control BinaryChunk");
+        };
+        assert_eq!(
+            control.stream_id,
+            crate::daemon::ability::wire::CONTROL_STREAM_ID
+        );
+        assert_eq!(control.data, control_payload);
+
+        let native_payload = br#"{"looks":"json"}"#.to_vec();
+        let native = bidi_down_from_dispatch_chunk(
+            DispatchStreamChunk::new(native_payload.clone(), "application/octet-stream"),
+            7,
+        );
+        let Some(DownPayload::BinaryChunk(native)) = native.payload else {
+            panic!("expected native BinaryChunk");
+        };
+        assert_eq!(native.stream_id, 7);
+        assert_eq!(native.data, native_payload);
+    }
+
+    #[test]
+    fn reverse_bidi_binary_chunk_projects_stream_semantics_as_content_type() {
+        for (stream_id, expected_content_type) in [
+            (
+                crate::daemon::ability::wire::CONTROL_STREAM_ID,
+                crate::daemon::ability::wire::CONTROL_CONTENT_TYPE,
+            ),
+            (7, "application/octet-stream"),
+        ] {
+            let frame = build_reverse_dispatch_bidi_result_frame(
+                [6; 16],
+                InvokeBidiDown {
+                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                        stream_id,
+                        data: vec![1, 2, 3],
+                        ..BinaryChunk::default()
+                    })),
+                    ..InvokeBidiDown::default()
+                },
+            )
+            .expect("binary chunk must be forwarded");
+            let Some(DownPayload::ReverseDispatchResult(result)) = frame.frame.payload else {
+                panic!("expected ReverseDispatchResult");
+            };
+            assert_eq!(result.payload, vec![1, 2, 3]);
+            assert_eq!(result.result_content_type, expected_content_type);
+        }
+    }
+
+    #[test]
+    fn reverse_bidi_receipt_frame_projects_signed_terminal_payload_type() {
+        let call_id = [5; 16];
+        let terminal_payload = br#"{"type":"complete","bytes":3}"#.to_vec();
+        let terminal = InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(
+                axon_sdk::pb::axon::v1::InvocationReceipt {
+                    state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
+                    payload: terminal_payload.clone(),
+                    payload_content_type: "application/json".to_string(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let frame = build_reverse_dispatch_bidi_result_frame(call_id, terminal)
+            .expect("terminal receipt must be projected");
+        let Some(DownPayload::ReverseDispatchResult(result)) = frame.frame.payload else {
+            panic!("expected ReverseDispatchResult");
+        };
+
+        assert_eq!(result.call_id, call_id);
+        assert!(result.terminal);
+        assert_eq!(result.payload, terminal_payload);
+        assert_eq!(result.result_content_type, "application/json");
+        assert!(result.terminal_receipt.is_some());
+    }
+
     #[tokio::test]
     async fn terminal_result_backpressure_retires_session_instead_of_dropping_result() {
         let presence = Arc::new(PresenceRegistry::new());
@@ -4403,8 +4559,6 @@ mod tests {
 
     #[test]
     fn remote_bidi_input_reuses_pty_wire_mapper_for_stdin() {
-        use base64::Engine as _;
-
         let mapped = map_local_bidi_up_payload(
             LocalBidiWireKind::Pty,
             UpPayload::BinaryChunk(BinaryChunk {
@@ -4415,20 +4569,9 @@ mod tests {
         let frame = build_remote_bidi_input_frame_from_mapped(42, mapped)
             .expect("mapped pty stdin frame is forwarded")
             .expect("mapped pty stdin frame builds");
-        let payload = decode_remote_bidi_input_payload(frame);
-        let value: serde_json::Value =
-            serde_json::from_slice(&payload).expect("terminal stdin JSON");
-
-        assert_eq!(value["type"], "stdin");
-        assert!(
-            value.get("mac_base64").is_none(),
-            "transport MAC must not enter the terminal.attach business frame"
-        );
-        let data = value["data"].as_str().expect("stdin data is string");
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .expect("stdin data is base64");
-        assert_eq!(decoded, b"whoami\n");
+        let input = decode_remote_bidi_input(frame);
+        assert_eq!(input.content_type, "application/octet-stream");
+        assert_eq!(input.payload, b"whoami\n");
     }
 
     #[test]
@@ -4463,14 +4606,29 @@ mod tests {
         let eof = build_remote_bidi_input_frame_from_mapped(44, eof_mapped)
             .expect("mapped pty eof frame is forwarded")
             .expect("mapped pty eof frame builds");
-        let dispatch = decode_remote_bidi_input(eof);
-        match dispatch {
-            SessionDispatch::BidiInput { payload, eof, .. } => {
-                assert!(eof);
-                assert!(payload.is_empty());
-            }
-            other => panic!("expected remote BidiInput EOF, got {other:?}"),
-        }
+        let input = decode_remote_bidi_input(eof);
+        assert!(input.eof);
+        assert!(input.payload.is_empty());
+    }
+
+    #[test]
+    fn remote_bidi_input_preserves_reserved_pty_lifecycle_control() {
+        let mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::Pty,
+            UpPayload::BinaryChunk(BinaryChunk {
+                stream_id: crate::daemon::ability::wire::CONTROL_STREAM_ID,
+                data: serde_json::to_vec(&serde_json::json!({"type": "detach"}))
+                    .expect("detach JSON"),
+                ..BinaryChunk::default()
+            }),
+        );
+        let frame = build_remote_bidi_input_frame_from_mapped(45, mapped)
+            .expect("mapped pty control is forwarded")
+            .expect("mapped pty control builds");
+        let payload = decode_remote_bidi_input_payload(frame);
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("terminal control JSON");
+        assert_eq!(value, serde_json::json!({"type": "detach"}));
     }
 
     #[test]
@@ -4485,15 +4643,9 @@ mod tests {
             .expect("mapped file-transfer EOF is forwarded")
             .expect("mapped file-transfer EOF builds");
 
-        match decode_remote_bidi_input(frame) {
-            SessionDispatch::BidiInput { payload, eof, .. } => {
-                assert!(eof, "ForwardAndClose must retain carrier EOF");
-                let value: serde_json::Value =
-                    serde_json::from_slice(&payload).expect("file-transfer EOF JSON");
-                assert_eq!(value["type"], "eof");
-            }
-            other => panic!("expected final remote BidiInput, got {other:?}"),
-        }
+        let input = decode_remote_bidi_input(frame);
+        assert!(input.eof, "carrier EOF must be retained");
+        assert!(input.payload.is_empty());
     }
 
     #[test]
@@ -4528,30 +4680,26 @@ mod tests {
         .expect("non-core plugin EOF builds");
 
         assert!(remote_bidi_input_dispatch_frame_is_eof(&frame));
-        match decode_remote_bidi_input(frame) {
-            SessionDispatch::BidiInput { payload, eof, .. } => {
-                assert!(eof);
-                assert!(payload.is_empty());
-            }
-            other => panic!("expected remote BidiInput EOF, got {other:?}"),
-        }
+        let input = decode_remote_bidi_input(frame);
+        assert!(input.eof);
+        assert!(input.payload.is_empty());
     }
 
     fn decode_remote_bidi_input_payload(frame: DispatchFrame) -> Vec<u8> {
-        match decode_remote_bidi_input(frame) {
-            SessionDispatch::BidiInput { payload, eof, .. } => {
-                assert!(!eof, "test helper expected a data input frame");
-                payload
-            }
-            other => panic!("expected remote BidiInput, got {other:?}"),
-        }
+        let input = decode_remote_bidi_input(frame);
+        assert!(!input.eof, "test helper expected a data input frame");
+        input.payload
     }
 
-    fn decode_remote_bidi_input(frame: DispatchFrame) -> SessionDispatch {
+    fn decode_remote_bidi_input(
+        frame: DispatchFrame,
+    ) -> crate::daemon::invocation::bidi::session_wire::CarrierBidiInput {
         let Some(DownPayload::BinaryChunk(chunk)) = frame.frame.payload else {
             panic!("expected session BinaryChunk dispatch frame");
         };
-        SessionDispatch::decode_frame(&chunk.data).expect("session dispatch frame decodes")
+        crate::daemon::invocation::bidi::session_wire::decode_carrier_bidi_input(&chunk.data)
+            .expect("carrier input frame decodes")
+            .expect("frame is carrier bidi input")
     }
 
     #[test]
@@ -4940,6 +5088,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             br#"{"agent":true}"#,
             &SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )
         .expect("valid control request");
         let lifecycle = SessionControlLifecycle::validated(request).schedule();
@@ -4953,6 +5102,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             br#"{"key":true}"#,
             &SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )
         .expect("valid inline control request");
         let lifecycle = SessionControlLifecycle::validated(request).schedule();
@@ -4966,6 +5116,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             br#"{"query_name":"easynet:///r/test/device/d2","qtype":"RESOLVE_TYPE_ROUTE"}"#,
             &SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )
         .expect("valid namespace.resolve control request");
         let lifecycle = SessionControlLifecycle::validated(request).schedule();
@@ -4983,6 +5134,7 @@ mod tests {
             "easynet:///r/test/device/d1",
             b"{}",
             &encrypted,
+            HashMap::new(),
         )
         .expect_err("encrypted JSON control args fail closed");
         assert!(matches!(err, SessionRequestError::PermissionDenied { .. }));

@@ -22,7 +22,7 @@
 // Usage Contract:
 // - Run once per device. Re-running overwrites existing credentials.
 // - Principal proof options are valid only on the Hub URA path.
-// - After join, run `easynet connect` to start the device agent.
+// - After join, run `easynet runtime start` to start the device runtime.
 //
 // Architectural Position:
 // - Device lifecycle entrypoint: join → start → heartbeat → stop → reset.
@@ -535,7 +535,7 @@ fn finish_join(
     match boot {
         JoinBoot::No => {
             render_pairing_summary("Paired successfully", creds, peer_hub);
-            output::info("Run 'easynet runtime start' to start the device agent.");
+            output::info("Run 'easynet runtime start' to start the device runtime.");
             Ok(())
         }
         JoinBoot::Yes => {

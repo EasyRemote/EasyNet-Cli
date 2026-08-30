@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Mapping, TypeAlias
 
 from ._identity_guards import contains_all_zero_principal
@@ -35,10 +35,12 @@ from .runtime import (
     RuntimeRecoveryReport,
     RuntimeRecoveryRequest,
     RuntimeClient,
+    _runtime_catalogue_read_target,
 )
+from .runtime_authority import DraftAuthorityProvider
 from ._session_authority_subjects import session_authority_admits_subject
 from .signing import SignedInvocation
-from .stream import StreamHandle
+from .stream import LeasedStreamHandle, StreamHandle
 
 __all__ = [
     "RuntimeAbilityClient",
@@ -141,13 +143,19 @@ class _RuntimeAbilityProjection:
 class RuntimeAbilityClient:
     """Single generic Addressing-to-Invocation lowering path."""
 
-    def __init__(self, runtime: RuntimeClient, addressing: AddressingClient) -> None:
+    def __init__(
+        self,
+        runtime: RuntimeClient,
+        addressing: AddressingClient,
+        authority: DraftAuthorityProvider | None = None,
+    ) -> None:
         if runtime is None:
             raise _invalid("runtime client is required")
         if addressing is None:
             raise _invalid("Addressing provider is required")
         self._runtime = runtime
         self._addressing = addressing
+        self._authority = authority
 
     def build(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
@@ -171,6 +179,18 @@ class RuntimeAbilityClient:
             raise _invalid(
                 "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider"
             )
+        target = _runtime_catalogue_read_target(
+            callee_ura=call.callee_ura,
+            subject_ura=call.subject_ura,
+            ability=ability_name,
+            provider=policy.descriptor_provider,
+        )
+        if target.callee_ura != call.callee_ura or target.subject_ura != call.subject_ura:
+            call = replace(
+                call,
+                callee_ura=target.callee_ura,
+                subject_ura=target.subject_ura,
+            )
         subject_ura = self._subject_ura(call, ability_name, policy)
         descriptor_ref = self._runtime.resolve_descriptor_ref(
             callee_ura=call.callee_ura.strip(),
@@ -193,7 +213,7 @@ class RuntimeAbilityClient:
             self._addressing.parse_ura(subject_ura),
             ability,
         )
-        return (
+        draft = (
             InvocationBuilder()
             .with_caller_ura(call.caller_ura.strip())
             .with_callee_ura(call.callee_ura.strip())
@@ -206,6 +226,7 @@ class RuntimeAbilityClient:
             .with_metadata(metadata)
             .build()
         )
+        return self._authority.bind(draft) if self._authority is not None else draft
 
     def _build_governance_read(
         self,
@@ -238,7 +259,12 @@ class RuntimeAbilityClient:
     def invoke(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> dict[str, object]:
-        result = self._runtime.invoke(self.build(call, ability_name, arguments))
+        return self.invoke_draft(self.build(call, ability_name, arguments))
+
+    def invoke_draft(self, draft: InvocationDraft) -> dict[str, object]:
+        """Submit one already-finalized draft without descriptor re-resolution."""
+
+        result = self._runtime.invoke(draft)
         if not result.ok:
             raise _invocation_failure(result)
         return _runtime_ability_object_output(result)
@@ -314,6 +340,15 @@ class RuntimeAbilityClient:
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> StreamHandle:
         return self._runtime.invoke_stream(
+            self._build(call, ability_name, arguments, call_mode="stream")
+        )
+
+    def open_leased_stream(
+        self, call: RuntimeCallContext, ability_name: str, arguments: object
+    ) -> LeasedStreamHandle:
+        """Open an explicit ABI v9 lease stream for high-throughput payloads."""
+
+        return self._runtime.invoke_leased_stream(
             self._build(call, ability_name, arguments, call_mode="stream")
         )
 

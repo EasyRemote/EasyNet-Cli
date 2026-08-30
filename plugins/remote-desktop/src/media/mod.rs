@@ -33,14 +33,36 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::persistence::resources::ResourceType;
-use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteDesktopTargetKind,
-};
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
+pub(in crate::daemon::plugins::remote_desktop) mod adaptation;
+#[cfg(any(
+    test,
+    target_os = "windows",
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
+pub(in crate::daemon::plugins::remote_desktop) mod audio;
 pub(in crate::daemon::plugins::remote_desktop) mod encode;
-pub(in crate::daemon::plugins::remote_desktop) mod native;
+pub(in crate::daemon::plugins::remote_desktop) mod h264_level;
+#[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) mod host_audio;
+pub(in crate::daemon::plugins::remote_desktop) mod host_audio_capability;
+#[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) mod linux_process_tree_audio;
 
 pub const REMOTE_DESKTOP_MEDIA_SDK_ID: &str = "easynet.remote_desktop.media.v1";
+pub(in crate::daemon::plugins::remote_desktop) const MEDIA_PIPELINE_STATS_CONTRACT: &str =
+    "remoteapp_media_pipeline_stats_v1";
+pub(in crate::daemon::plugins::remote_desktop) const WEBRTC_VIDEO_TRANSPORT: &str = "webrtc";
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
+pub(in crate::daemon::plugins::remote_desktop) const H264_ANNEX_B_CONTENT_TYPE: &str =
+    "video/h264; stream-format=annexb";
 pub const XCAP_OPENH264_BACKEND_ID: &str = "builtin.xcap.openh264.annexb.v1";
 pub const XCAP_OPENH264_WEBRTC_BACKEND_ID: &str = "builtin.xcap.openh264.webrtc.v1";
 pub const MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID: &str =
@@ -221,7 +243,7 @@ pub const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
         sdk_id: REMOTE_DESKTOP_MEDIA_SDK_ID,
         kind: "builtin",
         status: "available",
-        capture_api: "xcap.avcapture_screen_input",
+        capture_api: "xcap.cross_platform_capture",
         encoder: "openh264.software",
         carrier: "axon.invoke_bidi.annexb_h264",
         max_capture_fps: XCAP_MACOS_RECORDER_MAX_FPS,
@@ -231,7 +253,7 @@ pub const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
         unavailable_reason: None,
     };
 
@@ -241,7 +263,7 @@ pub const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
         sdk_id: REMOTE_DESKTOP_MEDIA_SDK_ID,
         kind: "builtin",
         status: "available",
-        capture_api: "xcap.avcapture_screen_input",
+        capture_api: "xcap.cross_platform_capture",
         encoder: "openh264.software",
         carrier: "webrtc.rtp_srtp",
         max_capture_fps: XCAP_MACOS_RECORDER_MAX_FPS,
@@ -251,7 +273,7 @@ pub const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
         unavailable_reason: Some("native_media_plugin_required_for_flagship_quality"),
     };
 
@@ -383,7 +405,7 @@ pub fn webrtc_transport_backend_for_entry(
     if let Some(native) = production_backend_for_entry(entry) {
         return Some(native);
     }
-    if entry.kind == ResourceType::Display && xcap_supported_screen_entry(entry) {
+    if xcap_supported_screen_entry(entry) {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -395,44 +417,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_backend_for_b
     if let Some(native) = production_backend_for_binding(binding) {
         return Some(native);
     }
-    if binding.target_kind() == RemoteDesktopTargetKind::Display && binding.supports_xcap_adapter()
-    {
+    if binding.supports_xcap_adapter() {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
 }
 
-fn native_webrtc_backend_runtime_descriptor() -> RemoteDesktopMediaBackendDescriptor {
-    let mut backend = MACOS_SCK_VIDEOTOOLBOX_BACKEND;
-    if cfg!(target_os = "macos") && !platform_screen_capture_permission_granted() {
-        backend.status = "permission_denied";
-        backend.transport_ready = false;
-        backend.production_ready = false;
-        backend.unavailable_reason = Some("screen_capture_permission_denied");
-    }
-    backend
-}
-
-#[cfg(target_os = "macos")]
-fn platform_screen_capture_permission_granted() -> bool {
-    unsafe { macos_screen_capture_tcc::preflight_screen_capture_access() }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn platform_screen_capture_permission_granted() -> bool {
-    false
-}
-
-#[cfg(target_os = "macos")]
-mod macos_screen_capture_tcc {
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGPreflightScreenCaptureAccess() -> bool;
-    }
-
-    pub unsafe fn preflight_screen_capture_access() -> bool {
-        unsafe { CGPreflightScreenCaptureAccess() }
-    }
+pub(in crate::daemon::plugins::remote_desktop) fn native_webrtc_backend_runtime_descriptor(
+) -> RemoteDesktopMediaBackendDescriptor {
+    // This descriptor reports whether the platform backend is installed and
+    // transport-capable. Screen Recording authorization belongs to the signed
+    // media-host application, not the daemon process evaluating this catalog;
+    // the permission ability and media-host lifecycle enforce that state.
+    MACOS_SCK_VIDEOTOOLBOX_BACKEND
 }
 
 #[cfg(test)]
@@ -448,8 +445,7 @@ pub fn select_builtin_h264_backend(
 pub(in crate::daemon::plugins::remote_desktop) fn select_builtin_h264_backend_for_binding(
     binding: &RemoteAppTargetBinding,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
-    if binding.target_kind() == RemoteDesktopTargetKind::Display && binding.supports_xcap_adapter()
-    {
+    if binding.supports_xcap_adapter() {
         return Some(XCAP_OPENH264_BACKEND);
     }
     None
@@ -458,11 +454,30 @@ pub(in crate::daemon::plugins::remote_desktop) fn select_builtin_h264_backend_fo
 #[cfg(test)]
 fn xcap_supported_screen_entry(entry: &ResourceEntry) -> bool {
     let backend = entry.metadata.get("backend").and_then(Value::as_str);
-    entry.kind == ResourceType::Display && backend == Some("xcap")
+    backend == Some("xcap")
+        && match entry.kind {
+            ResourceType::Display => true,
+            ResourceType::Window | ResourceType::Application => {
+                screen_target_metadata_resolvable(entry)
+            }
+            _ => false,
+        }
 }
 
 #[cfg(test)]
 fn native_supported_screen_entry(entry: &ResourceEntry) -> bool {
+    let entry_platform = entry
+        .metadata
+        .get("platform")
+        .and_then(Value::as_str)
+        .unwrap_or(if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "unknown"
+        });
+    if entry_platform != "macos" {
+        return false;
+    }
     match entry.kind {
         ResourceType::Display => true,
         ResourceType::Window | ResourceType::Application => {
@@ -531,9 +546,7 @@ fn non_empty_metadata_str(entry: &ResourceEntry, key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry};
-    use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver,
-    };
+    use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
     use serde_json::json;
 
@@ -559,6 +572,7 @@ mod tests {
             hardware_id: format!("window:{backend}:123:456"),
             display_name: "Cursor - main.rs".into(),
             metadata: live_remote_target_metadata(json!({
+                "platform": "windows",
                 "backend": backend,
                 "capture_target": "window",
                 "app_name": "Cursor",
@@ -579,9 +593,9 @@ mod tests {
             hardware_id: format!("application:{backend}:1:com.apple.Safari"),
             display_name: "Safari on display 1".into(),
             metadata: live_remote_target_metadata(json!({
+                "platform": "windows",
                 "backend": backend,
                 "capture_target": "application",
-                "display_id": 1,
                 "app_name": "Safari",
                 "bundle_id": "com.apple.Safari",
                 "app_identity": "com.apple.Safari",
@@ -610,43 +624,39 @@ mod tests {
     }
 
     #[test]
-    fn xcap_baseline_catalog_is_display_only_for_remoteapp_targets() {
+    fn xcap_baseline_catalog_supports_exact_window_and_application_targets() {
         let backend = select_builtin_h264_backend(&discovered_window_entry("xcap"));
 
-        assert!(
-            backend.is_none(),
-            "diagnostic xcap baseline must not advertise app/window capture; \
-             exact remoteapp capture requires native target binding"
+        assert_eq!(
+            backend.map(RemoteDesktopMediaBackendDescriptor::backend_id),
+            Some(XCAP_OPENH264_BACKEND_ID)
         );
-        assert!(!XCAP_OPENH264_BACKEND.supports_entry(&discovered_window_entry("xcap")));
-        assert!(!XCAP_OPENH264_WEBRTC_BACKEND
-            .supports_entry(&discovered_application_entry("macos_core_graphics")));
+        assert!(XCAP_OPENH264_BACKEND.supports_entry(&discovered_window_entry("xcap")));
+        assert!(XCAP_OPENH264_WEBRTC_BACKEND.supports_entry(&discovered_application_entry("xcap")));
     }
 
     #[test]
-    fn discovered_window_targets_do_not_use_xcap_baseline_for_direct_webrtc() {
+    fn discovered_exact_window_targets_use_xcap_baseline_for_direct_webrtc() {
         let backend = webrtc_transport_backend_for_entry(&discovered_window_entry("xcap"));
-        assert!(
-            backend.is_none_or(|backend| backend.backend_id() != XCAP_OPENH264_WEBRTC_BACKEND_ID)
+        assert_eq!(
+            backend.map(RemoteDesktopMediaBackendDescriptor::backend_id),
+            Some(XCAP_OPENH264_WEBRTC_BACKEND_ID)
         );
     }
 
     #[test]
-    fn direct_webrtc_binding_never_uses_xcap_fallback_for_window_or_application() {
+    fn direct_webrtc_binding_uses_xcap_without_widening_window_or_application_scope() {
         for entry in [
             discovered_window_entry("xcap"),
-            discovered_application_entry("macos_core_graphics"),
+            discovered_application_entry("xcap"),
         ] {
             let binding = binding_for(&entry);
             let backend = webrtc_transport_backend_for_binding(&binding);
 
-            assert!(
-                backend
-                    .is_none_or(|backend| backend.backend_id() != XCAP_OPENH264_WEBRTC_BACKEND_ID),
-                "direct WebRTC app/window sessions must use native binding capture or fail typed; \
-                 target_kind={}, backend={:?}",
-                binding.target_kind().as_str(),
-                backend.map(|backend| backend.backend_id())
+            assert_eq!(
+                backend.map(RemoteDesktopMediaBackendDescriptor::backend_id),
+                Some(XCAP_OPENH264_WEBRTC_BACKEND_ID),
+                "direct WebRTC xcap app/window session must preserve the target binding"
             );
         }
     }
@@ -712,29 +722,13 @@ mod tests {
         assert_eq!(catalog[2]["external_binary_required"], json!(false));
 
         // The native ScreenCaptureKit + VideoToolbox plugin is compiled in on
-        // macOS only. Runtime permission can still make it unavailable without
-        // changing the compiled plugin descriptor.
+        // macOS only. Authorization is evaluated by the signed media-host app,
+        // not by the daemon that projects this capability catalog.
         #[cfg(target_os = "macos")]
         {
-            let native = native_webrtc_backend_runtime_descriptor();
-            assert_eq!(catalog[2]["status"], json!(native.status));
-            assert_eq!(
-                catalog[2]["transport_ready"],
-                json!(native.transport_ready())
-            );
-            assert_eq!(
-                catalog[2]["production_ready"],
-                json!(native.production_ready())
-            );
-            if native.is_available() {
-                assert_eq!(catalog[2]["status"], json!("available"));
-            } else {
-                assert_eq!(catalog[2]["status"], json!("permission_denied"));
-                assert_eq!(
-                    catalog[2]["unavailable_reason"],
-                    json!("screen_capture_permission_denied")
-                );
-            }
+            assert_eq!(catalog[2]["status"], json!("available"));
+            assert_eq!(catalog[2]["transport_ready"], json!(true));
+            assert_eq!(catalog[2]["production_ready"], json!(true));
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -769,41 +763,24 @@ mod tests {
     }
 
     // On macOS the native ScreenCaptureKit + VideoToolbox plugin is the
-    // production backend only when runtime Screen Recording permission is
-    // granted. Without that permission, direct WebRTC falls back to the
-    // baseline xcap/OpenH264 path and the production gate stays closed.
+    // production backend. Screen Recording authorization is a media-host
+    // lifecycle precondition and does not change backend installation state.
     #[cfg(target_os = "macos")]
     #[test]
-    fn native_plugin_runtime_permission_controls_production_gate_on_macos() {
+    fn native_plugin_is_the_production_backend_on_macos() {
         let entry = xcap_display_entry();
-        let native = native_webrtc_backend_runtime_descriptor();
 
-        if native.is_available() {
-            assert_eq!(
-                production_backend_for_entry(&entry).unwrap().backend_id(),
-                MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
-            );
-            assert_eq!(
-                webrtc_transport_backend_for_entry(&entry)
-                    .unwrap()
-                    .backend_id(),
-                MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
-            );
-            assert_eq!(production_gate_view()["ready"], json!(true));
-        } else {
-            assert!(production_backend_for_entry(&entry).is_none());
-            assert_eq!(
-                webrtc_transport_backend_for_entry(&entry)
-                    .unwrap()
-                    .backend_id(),
-                XCAP_OPENH264_WEBRTC_BACKEND_ID
-            );
-            assert_eq!(production_gate_view()["ready"], json!(false));
-            assert_eq!(
-                production_gate_view()["reason"],
-                json!("screen_capture_permission_denied")
-            );
-        }
+        assert_eq!(
+            production_backend_for_entry(&entry).unwrap().backend_id(),
+            MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
+        );
+        assert_eq!(
+            webrtc_transport_backend_for_entry(&entry)
+                .unwrap()
+                .backend_id(),
+            MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
+        );
+        assert_eq!(production_gate_view()["ready"], json!(true));
     }
 
     // Off macOS the native plugin is absent, so the WebRTC transport falls

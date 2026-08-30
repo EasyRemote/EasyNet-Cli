@@ -92,6 +92,7 @@ $Profile = $Configuration.ToLowerInvariant()
 
 Require-Command "cargo"
 Require-Command "rustc"
+Require-Command "cmake"
 
 $HostTarget = Get-RustHostTarget
 $TargetLabel = if ([string]::IsNullOrWhiteSpace($Target)) { $HostTarget } else { $Target }
@@ -102,16 +103,37 @@ if ([string]::IsNullOrWhiteSpace($BridgeCrate)) {
 
 $CargoArgs = @(
     "build",
+    "--locked",
+    "-p", "easynet",
+    "--lib",
     "--bin", "easynet",
     "--bin", "easynet-daemon",
     "--bin", "easynet-keyring"
 )
 
+$NativeHostCargoArgs = @(
+    "build",
+    "--locked",
+    "-p", "easynet-remoteapp-native-host",
+    "--bin", "easynet-remoteapp-native-host"
+)
+
+$MediaProbeHostCargoArgs = @(
+    "build",
+    "--locked",
+    "-p", "easynet-remoteapp-media-host",
+    "--bin", "easynet-remoteapp-media-host"
+)
+
 if ($Configuration -eq "Release") {
     $CargoArgs += "--release"
+    $NativeHostCargoArgs += "--release"
+    $MediaProbeHostCargoArgs += "--release"
 }
 if (-not [string]::IsNullOrWhiteSpace($Target)) {
     $CargoArgs += @("--target", $Target)
+    $NativeHostCargoArgs += @("--target", $Target)
+    $MediaProbeHostCargoArgs += @("--target", $Target)
 }
 if ($NoDefaultFeatures) {
     $CargoArgs += "--no-default-features"
@@ -125,14 +147,20 @@ Write-Host "    root:   $Root"
 Write-Host "    target: $TargetLabel"
 Write-Host "    config: $Configuration"
 Invoke-CargoBuild -WorkingDirectory $Root -CargoArgs $CargoArgs
+Invoke-CargoBuild -WorkingDirectory $Root -CargoArgs $NativeHostCargoArgs
+Invoke-CargoBuild -WorkingDirectory $Root -CargoArgs $MediaProbeHostCargoArgs
 
 $CliArtifactDir = Cargo-ArtifactDir -Root $Root -ExplicitTarget $Target -Profile $Profile
-$RequiredBins = @("easynet.exe", "easynet-daemon.exe", "easynet-keyring.exe")
+$RequiredBins = @("easynet.exe", "easynet-daemon.exe", "easynet-keyring.exe", "easynet-remoteapp-native-host.exe", "easynet-remoteapp-media-host.exe")
 foreach ($bin in $RequiredBins) {
     $path = Join-Path $CliArtifactDir $bin
     if (-not (Test-Path $path)) {
         throw "Expected build artifact missing: $path"
     }
+}
+$CAbiDll = Join-Path $CliArtifactDir "easynet_cli.dll"
+if (-not (Test-Path $CAbiDll)) {
+    throw "Expected C ABI build artifact missing: $CAbiDll"
 }
 
 $StageRoot = Join-Path (Join-Path $Root "target") "windows-package"
@@ -145,12 +173,13 @@ New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
 foreach ($bin in $RequiredBins) {
     Copy-Item (Join-Path $CliArtifactDir $bin) (Join-Path $StageDir $bin) -Force
 }
+Copy-Item $CAbiDll (Join-Path $StageDir "easynet_cli.dll") -Force
 
 $BridgeStaged = $false
 if (-not $SkipBridge) {
     if (Test-Path (Join-Path $BridgeCrate "Cargo.toml")) {
         Write-Host "==> [2/3] Building Axon dendrite bridge"
-        $BridgeArgs = @("build", "--lib")
+        $BridgeArgs = @("build", "--locked", "--lib")
         if ($Configuration -eq "Release") {
             $BridgeArgs += "--release"
         }
@@ -189,23 +218,23 @@ else {
     Write-Host "==> [2/3] Skipping Axon dendrite bridge"
 }
 
-$Header = Join-Path $Root "include\easynet_cli.h"
-$AbiExports = Join-Path $Root "include\easynet_cli.exports.v7"
-$AbiSpec = Join-Path $Root "docs\spec\ffi-abi-v7.md"
-if (Test-Path $Header) {
-    $HeaderOut = Join-Path $StageDir "include"
-    New-Item -ItemType Directory -Path $HeaderOut -Force | Out-Null
-    Copy-Item $Header (Join-Path $HeaderOut "easynet_cli.h") -Force
-}
-if (Test-Path $AbiExports) {
-    $HeaderOut = Join-Path $StageDir "include"
-    New-Item -ItemType Directory -Path $HeaderOut -Force | Out-Null
-    Copy-Item $AbiExports (Join-Path $HeaderOut "easynet_cli.exports.v7") -Force
-}
-if (Test-Path $AbiSpec) {
-    $SpecOut = Join-Path $StageDir "docs\spec"
-    New-Item -ItemType Directory -Path $SpecOut -Force | Out-Null
-    Copy-Item $AbiSpec (Join-Path $SpecOut "ffi-abi-v7.md") -Force
+$ContractFiles = @(
+    @{ Source = "include\easynet_cli.h"; Destination = "include\easynet_cli.h" },
+    @{ Source = "include\easynet_cli.exports.v7"; Destination = "include\easynet_cli.exports.v7" },
+    @{ Source = "include\easynet_cli.exports.v8"; Destination = "include\easynet_cli.exports.v8" },
+    @{ Source = "include\easynet_cli.exports.v9"; Destination = "include\easynet_cli.exports.v9" },
+    @{ Source = "docs\spec\ffi-abi-v7.md"; Destination = "docs\spec\ffi-abi-v7.md" },
+    @{ Source = "docs\spec\ffi-abi-v8.md"; Destination = "docs\spec\ffi-abi-v8.md" },
+    @{ Source = "docs\spec\ffi-abi-v9.md"; Destination = "docs\spec\ffi-abi-v9.md" }
+)
+foreach ($Contract in $ContractFiles) {
+    $Source = Join-Path $Root $Contract.Source
+    if (-not (Test-Path $Source)) {
+        throw "Required C ABI contract file missing: $Source"
+    }
+    $Destination = Join-Path $StageDir $Contract.Destination
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+    Copy-Item $Source $Destination -Force
 }
 
 Write-Host "==> [3/3] Staged package"

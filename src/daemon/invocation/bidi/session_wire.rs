@@ -121,14 +121,6 @@ pub enum SessionDispatch {
     /// propagates cancellation to the selected execution host, whose
     /// LocalRuntime remains the sole terminal-finalization authority.
     ReverseStreamCancel { call_id: [u8; 16], reason: String },
-    /// Hub → target device. One incremental input frame for a
-    /// previously-opened remote bidi session. `payload` carries raw
-    /// bytes; `eof=true` closes the input side after this frame.
-    BidiInput {
-        call_id: u64,
-        payload: Vec<u8>,
-        eof: bool,
-    },
     /// Device → hub daemon-owned control request. Product invocations use
     /// protobuf `ReverseDispatchCall` instead.
     ///
@@ -141,6 +133,8 @@ pub enum SessionDispatch {
         ability_ura: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
+        #[serde(default)]
+        metadata: std::collections::HashMap<String, String>,
     },
     /// Hub → device. Reverse direction of `Request`. The hub
     /// resolved the target via its PresenceRegistry (same-realm
@@ -151,6 +145,111 @@ pub enum SessionDispatch {
         call_id: [u8; 16],
         outcome: RequestOutcome,
     },
+}
+
+const CARRIER_BIDI_INPUT_MAGIC: &[u8; 4] = b"EBI1";
+const CARRIER_BIDI_INPUT_HEADER_BYTES: usize = 16;
+const CARRIER_BIDI_INPUT_EOF: u8 = 0x01;
+const MAX_CARRIER_BIDI_CONTENT_TYPE_BYTES: usize = 1024;
+
+fn is_carrier_bidi_input(frame: &[u8]) -> bool {
+    frame.starts_with(CARRIER_BIDI_INPUT_MAGIC)
+}
+
+/// Native carrier envelope for one remote Bidi input frame.
+///
+/// Session control remains JSON, but payload bytes never enter serde. The
+/// fixed header is followed by UTF-8 content type bytes and then the payload:
+/// `magic[4] | flags[1] | reserved[1] | content_len[2] | call_id[8]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CarrierBidiInput {
+    pub(crate) call_id: u64,
+    pub(crate) content_type: String,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) eof: bool,
+}
+
+struct CarrierBidiInputMetadata {
+    call_id: u64,
+    content_type: String,
+    payload_offset: usize,
+    eof: bool,
+}
+
+pub(crate) fn encode_carrier_bidi_input(
+    call_id: u64,
+    content_type: &str,
+    payload: &[u8],
+    eof: bool,
+) -> anyhow::Result<Vec<u8>> {
+    let content_type = content_type.as_bytes();
+    anyhow::ensure!(
+        content_type.len() <= MAX_CARRIER_BIDI_CONTENT_TYPE_BYTES,
+        "carrier Bidi content type exceeds {} bytes",
+        MAX_CARRIER_BIDI_CONTENT_TYPE_BYTES
+    );
+    let content_len = u16::try_from(content_type.len())
+        .map_err(|_| anyhow::anyhow!("carrier Bidi content type length overflow"))?;
+    let mut frame =
+        Vec::with_capacity(CARRIER_BIDI_INPUT_HEADER_BYTES + content_type.len() + payload.len());
+    frame.extend_from_slice(CARRIER_BIDI_INPUT_MAGIC);
+    frame.push(if eof { CARRIER_BIDI_INPUT_EOF } else { 0 });
+    frame.push(0);
+    frame.extend_from_slice(&content_len.to_be_bytes());
+    frame.extend_from_slice(&call_id.to_be_bytes());
+    frame.extend_from_slice(content_type);
+    frame.extend_from_slice(payload);
+    Ok(frame)
+}
+
+fn decode_carrier_bidi_input_metadata(
+    frame: &[u8],
+) -> anyhow::Result<Option<CarrierBidiInputMetadata>> {
+    if !is_carrier_bidi_input(frame) {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        frame.len() >= CARRIER_BIDI_INPUT_HEADER_BYTES,
+        "carrier Bidi input frame is truncated"
+    );
+    let flags = frame[4];
+    anyhow::ensure!(
+        flags & !CARRIER_BIDI_INPUT_EOF == 0 && frame[5] == 0,
+        "carrier Bidi input frame has unsupported flags"
+    );
+    let content_len = u16::from_be_bytes([frame[6], frame[7]]) as usize;
+    anyhow::ensure!(
+        content_len <= MAX_CARRIER_BIDI_CONTENT_TYPE_BYTES
+            && frame.len() >= CARRIER_BIDI_INPUT_HEADER_BYTES + content_len,
+        "carrier Bidi input content type is invalid"
+    );
+    let call_id = u64::from_be_bytes(
+        frame[8..16]
+            .try_into()
+            .expect("validated carrier Bidi header length"),
+    );
+    let content_end = CARRIER_BIDI_INPUT_HEADER_BYTES + content_len;
+    let content_type = std::str::from_utf8(&frame[CARRIER_BIDI_INPUT_HEADER_BYTES..content_end])
+        .map_err(|error| anyhow::anyhow!("carrier Bidi content type is not UTF-8: {error}"))?
+        .to_string();
+    Ok(Some(CarrierBidiInputMetadata {
+        call_id,
+        content_type,
+        payload_offset: content_end,
+        eof: flags & CARRIER_BIDI_INPUT_EOF != 0,
+    }))
+}
+
+pub(crate) fn decode_carrier_bidi_input(frame: &[u8]) -> anyhow::Result<Option<CarrierBidiInput>> {
+    let Some(metadata) = decode_carrier_bidi_input_metadata(frame)? else {
+        return Ok(None);
+    };
+    Ok(Some(CarrierBidiInput {
+        call_id: metadata.call_id,
+        content_type: metadata.content_type,
+        payload: frame[metadata.payload_offset..].to_vec(),
+        eof: metadata.eof,
+    }))
 }
 
 /// Outcome of a reverse session request resolved on the hub side. Boundary type
@@ -346,6 +445,37 @@ mod tests {
     }
 
     #[test]
+    fn native_bidi_carrier_preserves_every_payload_byte() {
+        let payload = (0_u8..=u8::MAX).collect::<Vec<_>>();
+        let encoded =
+            encode_carrier_bidi_input(u64::MAX - 7, "application/octet-stream", &payload, false)
+                .expect("encode native Bidi carrier");
+        assert_eq!(
+            encoded.len(),
+            CARRIER_BIDI_INPUT_HEADER_BYTES + "application/octet-stream".len() + payload.len()
+        );
+
+        let decoded = decode_carrier_bidi_input(&encoded)
+            .expect("decode native Bidi carrier")
+            .expect("native carrier discriminator");
+        assert_eq!(decoded.call_id, u64::MAX - 7);
+        assert_eq!(decoded.content_type, "application/octet-stream");
+        assert_eq!(decoded.payload, payload);
+        assert!(!decoded.eof);
+    }
+
+    #[test]
+    fn native_bidi_carrier_rejects_unsupported_flags() {
+        let mut encoded =
+            encode_carrier_bidi_input(9, "", &[], true).expect("encode native Bidi EOF");
+        encoded[4] |= 0x80;
+        assert!(decode_carrier_bidi_input(&encoded)
+            .expect_err("unknown carrier flag must fail closed")
+            .to_string()
+            .contains("unsupported flags"));
+    }
+
+    #[test]
     fn presence_registry_rejects_retired_carrier_versions() {
         use crate::daemon::invocation::bidi::state::presence::SessionContract;
 
@@ -397,10 +527,9 @@ mod tests {
     #[test]
     fn session_dispatch_rejects_unknown_top_level_fields() {
         let frame = serde_json::json!({
-            "type": "bidi_input",
+            "type": "stream_cancel",
             "call_id": 7,
-            "payload": [],
-            "eof": false,
+            "reason": "caller_cancelled",
             "backend_ura": "easynet:///r/realm/backend"
         });
 

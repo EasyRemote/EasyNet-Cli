@@ -228,11 +228,10 @@ const mutableAuthorityProof = (receipt) => {
 };
 
 const authorityBindingProofHashSelf = (principalURA) => {
-  const principal = Buffer.from(principalURA, "utf8");
   const canonical = Buffer.concat([
-    Buffer.from([0x01]),
-    runtimeU32(principal.length),
-    principal,
+    runtimeLengthPrefixedText(principalURA),
+    runtimeLengthPrefixedText("axon-strict-v2"),
+    Buffer.from([0x01, 0x01]),
   ]);
   return createHash("sha256").update(canonical).digest("hex");
 };
@@ -251,9 +250,11 @@ const runtimeI64 = (value) => {
 const authorityBindingProofHashSession = (binding) => {
   const signature = Buffer.from(binding.signature_base64, "base64");
   const canonical = Buffer.concat([
-    Buffer.from([0x05]),
+    runtimeLengthPrefixedText(binding.authority_ura),
+    runtimeLengthPrefixedText("axon-strict-v2"),
+    Buffer.from([0x03, 0x03]),
     runtimeLengthPrefixedText(binding.issuer_ura),
-    runtimeLengthPrefixedText(binding.subject_ura),
+    runtimeLengthPrefixedText("axon-strict-v2"),
     runtimeLengthPrefixedText(binding.session_id),
     runtimeU32(binding.scopes.length),
     ...binding.scopes.map(runtimeLengthPrefixedText),
@@ -740,9 +741,9 @@ test("runtime receipt projection is deep immutable", () => {
 
 test("runtime receipt session authority facade uses generic fields", () => {
   const sessionBinding = {
-    kind: "session",
+    kind: "session_of+session",
+    authority_ura: "easynet:///r/example/agent/alice",
     issuer_ura: "easynet:///r/example/agent/backend",
-    subject_ura: "easynet:///r/example/agent/alice",
     session_id: "session-1",
     scopes: ["invoke"],
     audiences: [descriptor],
@@ -751,18 +752,18 @@ test("runtime receipt session authority facade uses generic fields", () => {
     signature_base64: Buffer.alloc(64, 0x73).toString("base64"),
   };
   const complete = canonicalRuntimeReceipt("inv-session-authority", "completed", "Completed", 1);
-  complete.authority_binding_kind = "session";
+  complete.authority_binding_kind = "session_of+session";
   complete.authority_binding = sessionBinding;
   const proof = mutableAuthorityProof(complete);
   proof.proof_type = "session";
-  proof.binding_kind = "session";
+  proof.binding_kind = "session_of+session";
   proof.binding = { ...sessionBinding };
   proof.proof_payload_base64 = "";
   proof.proof_hash_hex = authorityBindingProofHashSession(sessionBinding);
   assert.equal(sdk.RuntimeReceipt.fromObject(complete).lifecycleState(), "COMPLETED");
 
   const retiredBinding = {
-    kind: "session",
+    kind: "session_of+session",
     backend_ura: "easynet:///r/example/agent/backend",
     user_ura: "easynet:///r/example/agent/alice",
     session_id: "session-1",
@@ -773,11 +774,11 @@ test("runtime receipt session authority facade uses generic fields", () => {
     signature_base64: Buffer.alloc(64, 0x73).toString("base64"),
   };
   const retired = canonicalRuntimeReceipt("inv-retired-session-authority", "completed", "Completed", 1);
-  retired.authority_binding_kind = "session";
+  retired.authority_binding_kind = "session_of+session";
   retired.authority_binding = retiredBinding;
   const retiredProof = mutableAuthorityProof(retired);
   retiredProof.proof_type = "session";
-  retiredProof.binding_kind = "session";
+  retiredProof.binding_kind = "session_of+session";
   retiredProof.binding = { ...retiredBinding };
   retiredProof.proof_payload_base64 = "";
   assert.throws(

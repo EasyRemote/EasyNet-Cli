@@ -11,6 +11,8 @@ mkdir -p "$SANDBOX/ability-descriptors/system"
 mkdir -p "$SANDBOX/plugins/remote-desktop/abilities"
 cp "$REPO_ROOT/ability-descriptors/system/governance/meta.list_abilities.ability.toml" \
   "$SANDBOX/ability-descriptors/system/meta.list_abilities.ability.toml"
+cp "$REPO_ROOT/ability-descriptors/system/resources/project_list.ability.toml" \
+  "$SANDBOX/ability-descriptors/system/project_list.ability.toml"
 cp "$REPO_ROOT/plugins/remote-desktop/abilities/remote_desktop.create_session.ability.toml" \
   "$SANDBOX/plugins/remote-desktop/abilities/remote_desktop.create_session.ability.toml"
 
@@ -36,6 +38,12 @@ perl -0pi -e 's/name = "meta.list_abilities"/name = "meta.remote_desktop_fake"/;
   "$SANDBOX/ability-descriptors/system/meta.list_abilities.ability.toml"
 if CHECK_FRONTEND_ABILITY_CONTRACT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "frontend contract checker accepted non-remote_desktop ability on remote_desktop surface" >&2
+  exit 1
+fi
+perl -0pi -e 's/dedicated_surface = "pages"/dedicated_surface = "none"/; s/subject_contract_kind = "dedicated-surface"/subject_contract_kind = "authenticated-user"/' \
+  "$SANDBOX/ability-descriptors/system/project_list.ability.toml"
+if CHECK_FRONTEND_ABILITY_CONTRACT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "frontend contract checker accepted pages ability without pages surface" >&2
   exit 1
 fi
 

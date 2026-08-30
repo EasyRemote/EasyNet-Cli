@@ -11,11 +11,14 @@
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashSet};
 
+use easynet_remoteapp_native_platform::CaptureEligibleSurface;
+#[cfg(not(target_os = "macos"))]
+use easynet_remoteapp_native_platform::PlatformWindowProcessIdentityProvider;
 use serde_json::{json, Value};
 
 use crate::daemon::persistence::resources::{
-    self, upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert,
-    ResourcesFile,
+    self, application_surface_layout_epoch, application_window_set_epoch_with_process_instance,
+    upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
 };
 
 /// Freshness lease for live remote target picker rows.
@@ -77,10 +80,17 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
     }
 
     let mut file = resources::load()?;
+    let observed_at_ms = unix_ms_now();
     let discovered = discover_default_resources();
     prune_retired_local_device_owner_rows(&mut file, owner_agent);
     if discovered.screen_target_discovery.permits_stale_prune() {
-        prune_stale_auto_screen_targets(&mut file, realm, owner_agent, &discovered.resources);
+        prune_stale_auto_screen_targets(
+            &mut file,
+            realm,
+            owner_agent,
+            &discovered.resources,
+            observed_at_ms,
+        );
     }
     for resource in discovered.resources {
         apply_discovered_resource(&mut file, realm, owner_agent, resource)?;
@@ -143,16 +153,16 @@ fn refresh_remote_targets_with_save_policy(
         });
     }
     let observed_at_ms = unix_ms_now();
-    let mut file = resources::load()?;
-    let before_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
     let discovered = discover_remote_target_resources();
-    let refresh =
-        apply_remote_target_refresh(&mut file, realm, owner_agent, discovered, observed_at_ms)?;
-    let after_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
-    if save_policy == RemoteTargetSavePolicy::Always || before_signature != after_signature {
-        resources::save(&file)?;
-    }
-    Ok(refresh)
+    resources::update(|file| {
+        let before_signature = stable_remote_target_cache_signature(file, realm, owner_agent);
+        let refresh =
+            apply_remote_target_refresh(file, realm, owner_agent, discovered, observed_at_ms)?;
+        let after_signature = stable_remote_target_cache_signature(file, realm, owner_agent);
+        let should_save =
+            save_policy == RemoteTargetSavePolicy::Always || before_signature != after_signature;
+        Ok((refresh, should_save))
+    })
 }
 
 fn stable_remote_target_cache_signature(
@@ -201,6 +211,7 @@ fn prune_stale_auto_screen_targets(
     realm: &str,
     owner_agent: &str,
     discovered: &[DiscoveredResource],
+    observed_at_ms: u64,
 ) {
     let live: HashSet<&str> = discovered
         .iter()
@@ -229,7 +240,29 @@ fn prune_stale_auto_screen_targets(
         !auto_prunable_screen_target
             || !owned_by_this_daemon
             || live.contains(resource.hardware_id.as_str())
+            || fresh_remote_target_lease_is_active(resource, observed_at_ms)
     });
+}
+
+fn fresh_remote_target_lease_is_active(resource: &ResourceEntry, observed_at_ms: u64) -> bool {
+    let observed = resource
+        .metadata
+        .get("observed_at_ms")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            resource
+                .metadata
+                .pointer("/freshness/observed_at_ms")
+                .and_then(Value::as_u64)
+        });
+    let ttl = resource
+        .metadata
+        .get("freshness_ttl_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(REMOTE_TARGET_FRESHNESS_TTL_MS);
+    observed
+        .and_then(|observed| observed.checked_add(ttl))
+        .is_some_and(|stale_after_ms| stale_after_ms >= observed_at_ms)
 }
 
 fn apply_remote_target_refresh(
@@ -252,7 +285,7 @@ fn apply_remote_target_refresh(
         .collect::<HashSet<_>>();
     let before_prune_count = file.resources.len();
     if discovered.screen_target_discovery.permits_stale_prune() {
-        prune_stale_auto_screen_targets(file, realm, owner_agent, &live_targets);
+        prune_stale_auto_screen_targets(file, realm, owner_agent, &live_targets, observed_at_ms);
     }
     let retired_count = before_prune_count.saturating_sub(file.resources.len());
     apply_discovered_resources_indexed(file, realm, owner_agent, live_targets)?;
@@ -566,19 +599,73 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
     let windows =
         xcap::Window::all().map_err(|err| anyhow::anyhow!("xcap Window::all failed: {err}"))?;
     let mut out = Vec::new();
-    let mut apps: BTreeMap<String, AppAggregate> = BTreeMap::new();
+    // Application resources are process instances, not display names. Grouping
+    // only by `app_name` merges two independently running instances and makes
+    // their window sets impossible to bind or track exactly.
+    let mut apps: BTreeMap<XcapApplicationOwnerKey, (Option<String>, AppAggregate)> =
+        BTreeMap::new();
+    let platform = std::env::consts::OS;
+    let mut windows_without_owner_identity = 0usize;
+    let process_identity_provider = match PlatformWindowProcessIdentityProvider::connect() {
+        Ok(provider) => Some(provider),
+        Err(error) => {
+            crate::op_event!(
+                component = media_resource_bootstrap,
+                kind = platform_window_process_identity_provider_unavailable,
+                reason = error.to_string(),
+            );
+            None
+        }
+    };
     for window in windows {
         let id = match window.id() {
             Ok(id) => id,
             Err(_) => continue,
         };
-        let pid = window.pid().ok();
+        // The native window id is the capture locator. `_NET_WM_PID` is a
+        // client-controlled diagnostic hint on X11 and must never authorize a
+        // process-scoped Window/Application binding. Linux owner identity is
+        // accepted only from X-Resource's local-client PID query.
+        let property_pid = window.pid().ok();
+        let process_instance = match process_identity_provider
+            .as_ref()
+            .map(|provider| provider.resolve_window(u64::from(id)))
+            .transpose()
+        {
+            Ok(Some(Some(instance))) => Some(instance),
+            Ok(Some(None)) | Ok(None) => None,
+            Err(error) => {
+                crate::op_event!(
+                    component = media_resource_bootstrap,
+                    kind = platform_window_process_identity_resolution_failed,
+                    window_id = id,
+                    reason = error.to_string(),
+                );
+                None
+            }
+        };
+        let pid = process_instance.as_ref().map(|instance| instance.pid());
+        #[cfg(target_os = "linux")]
+        let pid_source = pid.map(|_| "xres_local_client_pid");
+        #[cfg(target_os = "windows")]
+        let pid_source = pid.map(|_| "win32_window_process_id");
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        let pid_source: Option<&str> = None;
+        let process_start_ticks = process_instance
+            .as_ref()
+            .and_then(|instance| instance.start_ticks());
+        let process_boot_id = process_instance
+            .as_ref()
+            .and_then(|instance| instance.boot_id());
+        let process_instance_id = process_instance
+            .as_ref()
+            .map(|instance| instance.stable_id().to_string());
         let app_name = window
             .app_name()
             .ok()
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "Unknown application".to_string());
+            .filter(|s| !s.is_empty());
+        let display_app_name = app_name.as_deref().unwrap_or("Unknown application");
         let title = window
             .title()
             .ok()
@@ -588,39 +675,66 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         let y = window.y().ok().map(i64::from);
         let width = window.width().ok();
         let height = window.height().ok();
-        if !is_remote_capture_candidate(&app_name, width, height) {
+        if !is_remote_capture_candidate(display_app_name, width, height) {
             continue;
         }
         let minimized = window.is_minimized().ok();
-        if minimized == Some(true) {
+        if !CaptureEligibleSurface::xcap(
+            width.unwrap_or_default(),
+            height.unwrap_or_default(),
+            minimized.unwrap_or(true),
+        )
+        .is_eligible()
+        {
             continue;
         }
+        let (Some(pid), Some(process_instance_id)) = (pid, process_instance_id.as_deref()) else {
+            windows_without_owner_identity += 1;
+            continue;
+        };
         let focused = window.is_focused().ok();
         let display_name = match &title {
-            Some(title) => format!("{app_name} - {title}"),
-            None => app_name.clone(),
+            Some(title) => format!("{display_app_name} - {title}"),
+            None => display_app_name.to_string(),
         };
         let area = screen_target_area(width, height);
         let bounds = ScreenTargetBounds::new(x, y, width, height);
-        apps.entry(app_name.clone())
-            .or_default()
-            .record_window(AppWindowObservation {
+        record_xcap_application_window(
+            &mut apps,
+            process_instance_id,
+            app_name.clone(),
+            AppWindowObservation {
                 window_id: id,
-                pid,
+                pid: Some(pid),
                 title: title.as_deref(),
                 area,
                 focused: focused == Some(true),
                 bounds,
-                display_id: None,
+                display_ids: Vec::new(),
                 bundle_id: None,
-            });
+                process_start_ticks,
+                process_boot_id,
+                process_instance_id: Some(process_instance_id),
+            },
+        );
+        let (hardware_id, hardware_identity_source) =
+            xcap_window_hardware_identity(platform, process_instance_id, id);
         out.push(DiscoveredResource {
             kind: ResourceType::Window,
-            hardware_id: format!("window:xcap:{}:{id}", pid.unwrap_or(0)),
+            hardware_id,
             display_name,
             metadata: json!({
                 "backend": "xcap",
+                "platform": platform,
                 "capture_target": "window",
+                "hardware_identity_source": hardware_identity_source,
+                "owner_identity_available": true,
+                "process_instance_available": true,
+                "pid_source": pid_source,
+                "net_wm_pid_hint": property_pid,
+                "process_start_ticks": process_start_ticks,
+                "process_boot_id": process_boot_id,
+                "process_instance_id": process_instance_id,
                 "discovery_source": "auto_bootstrap",
                 "discovery_scope": "current_visible_windows",
                 "auto_prune": true,
@@ -638,29 +752,107 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             }),
         });
     }
-    out.extend(apps.into_iter().map(|(app_name, app)| DiscoveredResource {
-        kind: ResourceType::Application,
-        hardware_id: format!("application:xcap:{app_name}"),
-        display_name: app_name.clone(),
-        metadata: json!({
-            "backend": "xcap",
-            "capture_target": "application",
-            "discovery_source": "auto_bootstrap",
-            "discovery_scope": "current_visible_windows",
-            "auto_prune": true,
-            "platform_backend": "xcap_window_all",
-            "app_name": app_name,
-            "window_count": app.window_count,
-            "primary_window_id": app.primary_window_id,
-            "primary_pid": app.primary_pid,
-            "primary_title": app.primary_title,
-            "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
-            "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
-            "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
-            "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
-        }),
+    if windows_without_owner_identity > 0 {
+        crate::op_event!(
+            component = media_resource_bootstrap,
+            kind = windows_skipped_without_owner_identity,
+            platform = platform,
+            window_count = windows_without_owner_identity,
+            message = "Window and Application Resources require authoritative process-instance identity and were not projected",
+        );
+    }
+    out.extend(apps.into_values().map(|(app_name, app)| {
+        let window_set_epoch = app.window_set_epoch();
+        let surface_layout = app.surface_layout();
+        let surface_layout_epoch = app.surface_layout_epoch();
+        DiscoveredResource {
+            kind: ResourceType::Application,
+            hardware_id: format!(
+                "application:xcap:{platform}:process:{}",
+                app.process_instance_id
+                    .as_deref()
+                    .expect("xcap application aggregation requires process-instance identity")
+            ),
+            display_name: app_name
+                .clone()
+                .unwrap_or_else(|| "Unknown application".to_string()),
+            metadata: json!({
+                "backend": "xcap",
+                "platform": platform,
+                "capture_target": "application",
+                "discovery_source": "auto_bootstrap",
+                "discovery_scope": "process_window_set",
+                "auto_prune": true,
+                "platform_backend": "xcap_window_all",
+                "app_name": app_name,
+                "display_scoped": false,
+                "display_id": null,
+                "window_count": app.window_count,
+                "resolved_window_ids": app.window_ids,
+                "window_set_epoch": window_set_epoch,
+                "front_to_back_surfaces": surface_layout,
+                "surface_layout_epoch": surface_layout_epoch,
+                "target_identity_epoch": window_set_epoch,
+                "primary_window_id": app.primary_window_id,
+                "primary_pid": app.primary_pid,
+                "process_start_ticks": app.process_start_ticks,
+                "process_boot_id": app.process_boot_id,
+                "process_instance_id": app.process_instance_id,
+                "primary_title": app.primary_title,
+                "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
+                "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
+                "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
+                "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
+                "union_x": app.union_bounds.and_then(|bounds| bounds.x),
+                "union_y": app.union_bounds.and_then(|bounds| bounds.y),
+                "union_width": app.union_bounds.and_then(|bounds| bounds.width),
+                "union_height": app.union_bounds.and_then(|bounds| bounds.height),
+            }),
+        }
     }));
     Ok(out)
+}
+
+#[cfg(any(test, not(target_os = "macos")))]
+fn xcap_window_hardware_identity(
+    platform: &str,
+    process_instance_id: &str,
+    window_id: u32,
+) -> (String, &'static str) {
+    (
+        format!("window:xcap:{platform}:process:{process_instance_id}:window:{window_id}"),
+        "xcap_process_instance_window_id",
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum XcapApplicationOwnerKey {
+    ProcessInstance(String),
+}
+
+#[cfg(not(target_os = "macos"))]
+impl XcapApplicationOwnerKey {
+    fn from_process_instance(process_instance_id: &str) -> Self {
+        Self::ProcessInstance(process_instance_id.to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn record_xcap_application_window(
+    apps: &mut BTreeMap<XcapApplicationOwnerKey, (Option<String>, AppAggregate)>,
+    process_instance_id: &str,
+    app_name: Option<String>,
+    observation: AppWindowObservation<'_>,
+) {
+    let owner_key = XcapApplicationOwnerKey::from_process_instance(process_instance_id);
+    let (application_name, application) = apps
+        .entry(owner_key)
+        .or_insert_with(|| (app_name.clone(), AppAggregate::default()));
+    if application_name.is_none() {
+        *application_name = app_name;
+    }
+    application.record_window(observation);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -689,14 +881,25 @@ struct AppAggregate {
     primary_pid: Option<u32>,
     primary_title: Option<String>,
     primary_bounds: Option<ScreenTargetBounds>,
+    union_bounds: Option<ScreenTargetBounds>,
     primary_area: u64,
-    display_id: Option<u32>,
+    display_ids: Vec<u32>,
     bundle_id: Option<String>,
     app_identity: Option<String>,
     window_ids: Vec<u32>,
+    front_to_back_surfaces: Vec<AppWindowSurfaceObservation>,
+    process_start_ticks: Option<u64>,
+    process_boot_id: Option<String>,
+    process_instance_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AppWindowSurfaceObservation {
+    window_id: u32,
+    bounds: ScreenTargetBounds,
+}
+
+#[derive(Debug, Clone)]
 struct AppWindowObservation<'a> {
     window_id: u32,
     pid: Option<u32>,
@@ -704,8 +907,11 @@ struct AppWindowObservation<'a> {
     area: u64,
     focused: bool,
     bounds: ScreenTargetBounds,
-    display_id: Option<u32>,
+    display_ids: Vec<u32>,
     bundle_id: Option<&'a str>,
+    process_start_ticks: Option<u64>,
+    process_boot_id: Option<&'a str>,
+    process_instance_id: Option<&'a str>,
 }
 
 impl AppAggregate {
@@ -717,21 +923,38 @@ impl AppAggregate {
             area,
             focused,
             bounds,
-            display_id,
+            display_ids,
             bundle_id,
+            process_start_ticks,
+            process_boot_id,
+            process_instance_id,
         } = observation;
         self.window_count += 1;
         self.window_ids.push(window_id);
         self.window_ids.sort_unstable();
         self.window_ids.dedup();
-        if self.display_id.is_none() {
-            self.display_id = display_id;
-        }
+        self.front_to_back_surfaces
+            .retain(|surface| surface.window_id != window_id);
+        self.front_to_back_surfaces
+            .push(AppWindowSurfaceObservation { window_id, bounds });
+        self.display_ids.extend(display_ids);
+        self.display_ids.sort_unstable();
+        self.display_ids.dedup();
+        self.union_bounds = union_screen_target_bounds(self.union_bounds, bounds);
         if self.bundle_id.is_none() {
             self.bundle_id = bundle_id.map(ToOwned::to_owned);
         }
         if self.app_identity.is_none() {
             self.app_identity = bundle_id.map(ToOwned::to_owned);
+        }
+        if self.process_start_ticks.is_none() {
+            self.process_start_ticks = process_start_ticks;
+        }
+        if self.process_boot_id.is_none() {
+            self.process_boot_id = process_boot_id.map(ToOwned::to_owned);
+        }
+        if self.process_instance_id.is_none() {
+            self.process_instance_id = process_instance_id.map(ToOwned::to_owned);
         }
         let better_primary =
             focused || self.primary_window_id.is_none() || area > self.primary_area;
@@ -745,16 +968,78 @@ impl AppAggregate {
     }
 
     fn window_set_epoch(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        self.display_id.hash(&mut hasher);
-        self.bundle_id.hash(&mut hasher);
-        self.primary_pid.hash(&mut hasher);
-        self.window_ids.hash(&mut hasher);
-        hasher.finish()
+        let window_ids = self
+            .window_ids
+            .iter()
+            .copied()
+            .map(u64::from)
+            .collect::<Vec<_>>();
+        application_window_set_epoch_with_process_instance(
+            None,
+            self.bundle_id.as_deref(),
+            self.primary_pid.map(i64::from),
+            self.process_instance_id.as_deref(),
+            &window_ids,
+        )
     }
+
+    fn surface_layout(&self) -> Vec<Value> {
+        self.front_to_back_surfaces
+            .iter()
+            .filter_map(|surface| {
+                Some(json!({
+                    "window_id": surface.window_id,
+                    "x": surface.bounds.x?,
+                    "y": surface.bounds.y?,
+                    "width": surface.bounds.width?,
+                    "height": surface.bounds.height?,
+                }))
+            })
+            .collect()
+    }
+
+    fn surface_layout_epoch(&self) -> Option<u64> {
+        let surfaces = self
+            .front_to_back_surfaces
+            .iter()
+            .map(|surface| {
+                Some((
+                    u64::from(surface.window_id),
+                    surface.bounds.x?,
+                    surface.bounds.y?,
+                    u64::from(surface.bounds.width?),
+                    u64::from(surface.bounds.height?),
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!surfaces.is_empty()).then(|| application_surface_layout_epoch(&surfaces))
+    }
+}
+
+fn union_screen_target_bounds(
+    current: Option<ScreenTargetBounds>,
+    next: ScreenTargetBounds,
+) -> Option<ScreenTargetBounds> {
+    let (next_x, next_y, next_width, next_height) = (next.x?, next.y?, next.width?, next.height?);
+    let next_max_x = next_x.checked_add(i64::from(next_width))?;
+    let next_max_y = next_y.checked_add(i64::from(next_height))?;
+    let Some(current) = current else {
+        return Some(next);
+    };
+    let (current_x, current_y, current_width, current_height) =
+        (current.x?, current.y?, current.width?, current.height?);
+    let current_max_x = current_x.checked_add(i64::from(current_width))?;
+    let current_max_y = current_y.checked_add(i64::from(current_height))?;
+    let min_x = current_x.min(next_x);
+    let min_y = current_y.min(next_y);
+    let max_x = current_max_x.max(next_max_x);
+    let max_y = current_max_y.max(next_max_y);
+    Some(ScreenTargetBounds::new(
+        Some(min_x),
+        Some(min_y),
+        u32::try_from(max_x.checked_sub(min_x)?).ok(),
+        u32::try_from(max_y.checked_sub(min_y)?).ok(),
+    ))
 }
 
 fn screen_target_area(width: Option<u32>, height: Option<u32>) -> u64 {
@@ -775,6 +1060,7 @@ mod macos_screen_targets {
     use objc2_app_kit::NSRunningApplication;
 
     type CFArrayRef = *const c_void;
+    type CFBooleanRef = *const c_void;
     type CFDictionaryRef = *const c_void;
     type CFIndex = isize;
     type CFNumberRef = *const c_void;
@@ -828,6 +1114,8 @@ mod macos_screen_targets {
     unsafe extern "C" {
         fn CFArrayGetCount(array: CFArrayRef) -> CFIndex;
         fn CFArrayGetValueAtIndex(array: CFArrayRef, idx: CFIndex) -> *const c_void;
+        fn CFBooleanGetTypeID() -> CFTypeID;
+        fn CFBooleanGetValue(boolean: CFBooleanRef) -> u8;
         fn CFDictionaryGetValueIfPresent(
             dict: CFDictionaryRef,
             key: *const c_void,
@@ -891,6 +1179,7 @@ mod macos_screen_targets {
         number: CfOwned,
         owner_name: CfOwned,
         owner_pid: CfOwned,
+        onscreen: CfOwned,
     }
 
     impl WindowKeys {
@@ -903,6 +1192,7 @@ mod macos_screen_targets {
                 number: CfOwned::new_string("kCGWindowNumber")?,
                 owner_name: CfOwned::new_string("kCGWindowOwnerName")?,
                 owner_pid: CfOwned::new_string("kCGWindowOwnerPID")?,
+                onscreen: CfOwned::new_string("kCGWindowIsOnscreen")?,
             })
         }
     }
@@ -949,12 +1239,18 @@ mod macos_screen_targets {
             if !super::is_remote_capture_candidate(&app_name, Some(width), Some(height)) {
                 continue;
             }
-            let layer = get_i64(dict, keys.layer.as_ptr()).unwrap_or(0);
-            if layer != 0 {
+            let Some(layer) = get_i64(dict, keys.layer.as_ptr()) else {
                 continue;
-            }
-            let alpha = get_f64(dict, keys.alpha.as_ptr()).unwrap_or(1.0);
-            if alpha <= 0.01 {
+            };
+            let Some(alpha) = get_f64(dict, keys.alpha.as_ptr()) else {
+                continue;
+            };
+            let Some(on_screen) = get_bool(dict, keys.onscreen.as_ptr()) else {
+                continue;
+            };
+            if !super::CaptureEligibleSurface::macos_shareable(width, height, layer, alpha)
+                .is_eligible()
+            {
                 continue;
             }
             let Some(window_id) =
@@ -980,10 +1276,11 @@ mod macos_screen_targets {
                 Some(width),
                 Some(height),
             );
-            let display_id = display_id_for_rect(rect);
+            let display_ids = display_ids_for_rect(rect);
+            let display_id = display_ids.first().copied();
             let bundle_id = pid.and_then(bundle_id_for_pid);
             let app_identity = bundle_id.as_deref();
-            if let Some(app_key) = app_aggregate_key(display_id, pid, app_identity) {
+            if let Some(app_key) = app_aggregate_key(pid, app_identity) {
                 apps.entry(app_key)
                     .or_insert_with(|| (app_name.clone(), AppAggregate::default()))
                     .1
@@ -994,8 +1291,11 @@ mod macos_screen_targets {
                         area,
                         focused: false,
                         bounds,
-                        display_id,
+                        display_ids: display_ids.clone(),
                         bundle_id: app_identity,
+                        process_start_ticks: None,
+                        process_boot_id: None,
+                        process_instance_id: None,
                     });
             }
             out.push(DiscoveredResource {
@@ -1011,7 +1311,9 @@ mod macos_screen_targets {
                     "platform_backend": "core_graphics_cgwindowlist",
                     "window_id": window_id,
                     "pid": pid,
+                    "is_on_screen": on_screen,
                     "display_id": display_id,
+                    "display_ids": display_ids,
                     "bundle_id": bundle_id,
                     "app_identity": app_identity,
                     "app_name": app_name,
@@ -1028,34 +1330,38 @@ mod macos_screen_targets {
 
         out.extend(apps.into_iter().map(|(_key, (app_name, app))| {
             let window_set_epoch = app.window_set_epoch();
-            let display_id = app
-                .display_id
-                .expect("macOS application aggregate keys require display_id");
+            let surface_layout = app.surface_layout();
+            let surface_layout_epoch = app.surface_layout_epoch();
+            let primary_pid = app
+                .primary_pid
+                .expect("macOS application aggregate keys require a process id");
             let identity_suffix = app
                 .bundle_id
                 .as_deref()
-                .map(|bundle_id| format!("bundle:{bundle_id}"))
-                .or_else(|| app.primary_pid.map(|pid| format!("pid:{pid}")))
-                .expect("macOS application aggregate keys require bundle_id or primary_pid");
+                .map(|bundle_id| format!("pid:{primary_pid}:bundle:{bundle_id}"))
+                .unwrap_or_else(|| format!("pid:{primary_pid}"));
             DiscoveredResource {
                 kind: ResourceType::Application,
-                hardware_id: format!("application:macos:cgwindow:{display_id}:{identity_suffix}"),
-                display_name: format!("{app_name} on display {display_id}"),
+                hardware_id: format!("application:macos:cgwindow:{identity_suffix}"),
+                display_name: app_name.clone(),
                 metadata: serde_json::json!({
                     "backend": "macos_core_graphics",
                     "capture_target": "application",
                     "discovery_source": "auto_bootstrap",
-                    "discovery_scope": "display_scoped_windows",
+                    "discovery_scope": "application_window_set",
                     "auto_prune": true,
                     "platform_backend": "core_graphics_cgwindowlist",
-                    "display_scoped": true,
-                    "display_id": display_id,
+                    "display_scoped": false,
+                    "display_id": null,
+                    "display_ids": app.display_ids,
                     "app_name": app_name,
                     "bundle_id": app.bundle_id,
                     "app_identity": app.app_identity,
                     "window_count": app.window_count,
                     "resolved_window_ids": app.window_ids,
                     "window_set_epoch": window_set_epoch,
+                    "front_to_back_surfaces": surface_layout,
+                    "surface_layout_epoch": surface_layout_epoch,
                     "target_identity_epoch": window_set_epoch,
                     "primary_window_id": app.primary_window_id,
                     "primary_pid": app.primary_pid,
@@ -1064,13 +1370,17 @@ mod macos_screen_targets {
                     "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
                     "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
                     "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
+                    "union_x": app.union_bounds.and_then(|bounds| bounds.x),
+                    "union_y": app.union_bounds.and_then(|bounds| bounds.y),
+                    "union_width": app.union_bounds.and_then(|bounds| bounds.width),
+                    "union_height": app.union_bounds.and_then(|bounds| bounds.height),
                 }),
             }
         }));
         Ok(out)
     }
 
-    fn display_id_for_rect(rect: CGRect) -> Option<u32> {
+    fn display_ids_for_rect(rect: CGRect) -> Vec<u32> {
         let mut displays = [0_u32; 8];
         let mut count = 0_u32;
         let error = unsafe {
@@ -1082,12 +1392,16 @@ mod macos_screen_targets {
             )
         };
         if error != 0 || count == 0 {
-            return None;
+            return Vec::new();
         }
-        displays
-            .first()
+        let mut display_ids = displays[..usize::try_from(count).unwrap_or(0).min(displays.len())]
+            .iter()
             .copied()
             .filter(|display_id| *display_id != 0)
+            .collect::<Vec<_>>();
+        display_ids.sort_unstable();
+        display_ids.dedup();
+        display_ids
     }
 
     fn bundle_id_for_pid(pid: u32) -> Option<String> {
@@ -1099,17 +1413,15 @@ mod macos_screen_targets {
             .filter(|bundle_id| !bundle_id.is_empty())
     }
 
-    fn app_aggregate_key(
-        display_id: Option<u32>,
-        pid: Option<u32>,
-        app_identity: Option<&str>,
-    ) -> Option<String> {
-        let display_id = display_id?;
-        app_identity
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|identity| format!("{display_id}:bundle:{identity}"))
-            .or_else(|| pid.map(|pid| format!("{display_id}:pid:{pid}")))
+    fn app_aggregate_key(pid: Option<u32>, app_identity: Option<&str>) -> Option<String> {
+        let pid = pid?;
+        Some(
+            app_identity
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|identity| format!("pid:{pid}:bundle:{identity}"))
+                .unwrap_or_else(|| format!("pid:{pid}")),
+        )
     }
 
     fn positive_dimension(value: f64) -> Option<u32> {
@@ -1172,6 +1484,12 @@ mod macos_screen_targets {
             )
         };
         (ok != 0).then_some(out)
+    }
+
+    fn get_bool(dict: CFDictionaryRef, key: *const c_void) -> Option<bool> {
+        let value = get_value(dict, key)? as CFBooleanRef;
+        let is_boolean = unsafe { CFGetTypeID(value) == CFBooleanGetTypeID() };
+        is_boolean.then(|| unsafe { CFBooleanGetValue(value) != 0 })
     }
 
     fn get_f64(dict: CFDictionaryRef, key: *const c_void) -> Option<f64> {
@@ -1270,6 +1588,85 @@ fn discover_cameras() -> Vec<DiscoveredResource> {
 mod tests {
     use super::*;
     use crate::daemon::persistence::resources::{self, filter_by_kinds};
+
+    #[test]
+    fn xcap_process_instance_identity_prevents_pid_reuse_aliasing() {
+        assert_eq!(
+            xcap_window_hardware_identity("linux", "linux:boot-a:42:987654", 100),
+            (
+                "window:xcap:linux:process:linux:boot-a:42:987654:window:100".to_string(),
+                "xcap_process_instance_window_id"
+            )
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xcap_application_projection_groups_one_process_despite_name_drift() {
+        let mut apps = BTreeMap::new();
+        for (window_id, app_name) in [
+            (10, "EasyNetRemoteAppSentinel"),
+            (11, "Easynetremoteappsentinel"),
+        ] {
+            record_xcap_application_window(
+                &mut apps,
+                "linux:boot-a:2229:987654",
+                Some(app_name.to_string()),
+                AppWindowObservation {
+                    window_id,
+                    pid: Some(2229),
+                    title: None,
+                    area: 10_000,
+                    focused: false,
+                    bounds: ScreenTargetBounds::new(Some(0), Some(0), Some(100), Some(100)),
+                    display_ids: Vec::new(),
+                    bundle_id: None,
+                    process_start_ticks: Some(987654),
+                    process_boot_id: Some("boot-a"),
+                    process_instance_id: Some("linux:boot-a:2229:987654"),
+                },
+            );
+        }
+
+        assert_eq!(apps.len(), 1);
+        let (app_name, aggregate) = apps
+            .get(&XcapApplicationOwnerKey::ProcessInstance(
+                "linux:boot-a:2229:987654".to_string(),
+            ))
+            .expect("process-instance aggregate");
+        assert_eq!(app_name.as_deref(), Some("EasyNetRemoteAppSentinel"));
+        assert_eq!(aggregate.window_count, 2);
+        assert_eq!(aggregate.window_ids, vec![10, 11]);
+    }
+
+    #[cfg(all(not(target_os = "macos"), target_os = "linux"))]
+    #[test]
+    fn xcap_application_projection_never_merges_reused_pid_process_instances() {
+        let mut apps = BTreeMap::new();
+        for (window_id, start_ticks) in [(10, 100_u64), (11, 200_u64)] {
+            let process_instance_id = format!("linux:boot-a:2229:{start_ticks}");
+            record_xcap_application_window(
+                &mut apps,
+                &process_instance_id,
+                Some("Same name".to_string()),
+                AppWindowObservation {
+                    window_id,
+                    pid: Some(2229),
+                    title: None,
+                    area: 10_000,
+                    focused: false,
+                    bounds: ScreenTargetBounds::new(Some(0), Some(0), Some(100), Some(100)),
+                    display_ids: Vec::new(),
+                    bundle_id: None,
+                    process_start_ticks: Some(start_ticks),
+                    process_boot_id: Some("boot-a"),
+                    process_instance_id: Some(&process_instance_id),
+                },
+            );
+        }
+
+        assert_eq!(apps.len(), 2, "PID reuse must create two typed owners");
+    }
 
     #[test]
     fn apply_discovered_resource_mints_stable_resource_ura() {
@@ -1444,6 +1841,7 @@ mod tests {
                 display_name: "Live".into(),
                 metadata: json!({"backend": "xcap"}),
             }],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 1);
@@ -1482,6 +1880,7 @@ mod tests {
                 display_name: "display:xcap:live".into(),
                 metadata: json!({"backend": "xcap"}),
             }],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 1);
@@ -1509,6 +1908,7 @@ mod tests {
             "acme",
             "easynet:///r/acme/agent/device.node-1.media",
             &[],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 1);
@@ -1560,6 +1960,7 @@ mod tests {
             "acme",
             "easynet:///r/acme/agent/device.node-1.media",
             &[],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 2);
@@ -1599,6 +2000,7 @@ mod tests {
                 "acme",
                 "easynet:///r/acme/agent/device.node-1.media",
                 &discovered.resources,
+                123_456,
             );
         }
 
@@ -1776,12 +2178,91 @@ mod tests {
                 "acme",
                 "easynet:///r/acme/agent/device.node-1.media",
                 &discovered.resources,
+                123_456,
             );
         }
 
         assert!(
             file.resources.is_empty(),
             "authoritative empty scans should prune stale auto-bootstrap targets"
+        );
+    }
+
+    #[test]
+    fn prune_stale_auto_screen_targets_keeps_recent_live_refresh_lease() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResource {
+                kind: ResourceType::Application,
+                hardware_id: "application:xcap:42:com.example.Selected".into(),
+                display_name: "Selected App".into(),
+                metadata: json!({
+                    "backend": "xcap",
+                    "discovery_source": "resource.refresh_remote_targets",
+                    "auto_prune": true,
+                    "observed_at_ms": 1_000,
+                    "freshness_ttl_ms": REMOTE_TARGET_FRESHNESS_TTL_MS,
+                    "freshness": {
+                        "observed_at_ms": 1_000,
+                        "stale_after_ms": 1_000 + REMOTE_TARGET_FRESHNESS_TTL_MS,
+                        "source": "live_refresh"
+                    }
+                }),
+            },
+        )
+        .expect("seed selected application");
+
+        prune_stale_auto_screen_targets(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            &[],
+            1_000 + REMOTE_TARGET_FRESHNESS_TTL_MS - 1,
+        );
+
+        assert_eq!(file.resources.len(), 1);
+        assert_eq!(
+            file.resources[0].hardware_id, "application:xcap:42:com.example.Selected",
+            "a freshly selected application resource must survive the session setup lease"
+        );
+    }
+
+    #[test]
+    fn prune_stale_auto_screen_targets_removes_expired_live_refresh_lease() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResource {
+                kind: ResourceType::Application,
+                hardware_id: "application:xcap:42:com.example.Closed".into(),
+                display_name: "Closed App".into(),
+                metadata: json!({
+                    "backend": "xcap",
+                    "discovery_source": "resource.refresh_remote_targets",
+                    "auto_prune": true,
+                    "observed_at_ms": 1_000,
+                    "freshness_ttl_ms": REMOTE_TARGET_FRESHNESS_TTL_MS
+                }),
+            },
+        )
+        .expect("seed expired application");
+
+        prune_stale_auto_screen_targets(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            &[],
+            1_000 + REMOTE_TARGET_FRESHNESS_TTL_MS + 1,
+        );
+
+        assert!(
+            file.resources.is_empty(),
+            "expired live-refresh leases should not accumulate stale application rows"
         );
     }
 
@@ -1910,7 +2391,7 @@ mod tests {
     }
 
     #[test]
-    fn app_aggregate_preserves_primary_window_bounds() {
+    fn app_aggregate_preserves_global_surface_layout_and_primary_window() {
         let mut aggregate = AppAggregate::default();
         aggregate.record_window(AppWindowObservation {
             window_id: 10,
@@ -1919,8 +2400,11 @@ mod tests {
             area: 10_000,
             focused: false,
             bounds: ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
-            display_id: Some(42),
+            display_ids: vec![42],
             bundle_id: Some("com.example.app"),
+            process_start_ticks: None,
+            process_boot_id: None,
+            process_instance_id: None,
         });
         aggregate.record_window(AppWindowObservation {
             window_id: 11,
@@ -1929,16 +2413,31 @@ mod tests {
             area: 9_000,
             focused: true,
             bounds: ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
-            display_id: Some(42),
+            display_ids: vec![43],
             bundle_id: Some("com.example.app"),
+            process_start_ticks: None,
+            process_boot_id: None,
+            process_instance_id: None,
         });
 
         assert_eq!(aggregate.primary_window_id, Some(11));
-        assert_eq!(aggregate.display_id, Some(42));
+        assert_eq!(aggregate.display_ids, vec![42, 43]);
         assert_eq!(aggregate.bundle_id.as_deref(), Some("com.example.app"));
         assert_eq!(aggregate.app_identity.as_deref(), Some("com.example.app"));
         assert_eq!(aggregate.window_ids, vec![10, 11]);
         assert_ne!(aggregate.window_set_epoch(), 0);
+        assert!(aggregate
+            .surface_layout_epoch()
+            .is_some_and(|epoch| epoch != 0));
+        assert_eq!(
+            aggregate
+                .surface_layout()
+                .iter()
+                .map(|surface| surface["window_id"].as_u64())
+                .collect::<Vec<_>>(),
+            vec![Some(10), Some(11)],
+            "resource inventory must preserve the platform front-to-back enumeration order"
+        );
         assert_eq!(
             aggregate.primary_bounds,
             Some(ScreenTargetBounds::new(
@@ -1946,6 +2445,15 @@ mod tests {
                 Some(400),
                 Some(90),
                 Some(100)
+            ))
+        );
+        assert_eq!(
+            aggregate.union_bounds,
+            Some(ScreenTargetBounds::new(
+                Some(10),
+                Some(20),
+                Some(380),
+                Some(480)
             ))
         );
     }

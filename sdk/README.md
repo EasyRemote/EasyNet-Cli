@@ -48,9 +48,20 @@ ABI v7 is a hard major cut. The authoritative header and export list are:
 
 - [`../include/easynet_cli.h`](../include/easynet_cli.h)
 - [`../include/easynet_cli.exports.v7`](../include/easynet_cli.exports.v7)
+- [`../include/easynet_cli.exports.v8`](../include/easynet_cli.exports.v8)
+- [`../include/easynet_cli.exports.v9`](../include/easynet_cli.exports.v9)
 - [`../docs/spec/ffi-abi-v7.md`](../docs/spec/ffi-abi-v7.md)
+- [`../docs/spec/ffi-abi-v9.md`](../docs/spec/ffi-abi-v9.md)
 
 There is no v4 domain-symbol compatibility path.
+
+ABI v9 is an additive native C lease capability. Go and Python expose it only
+through their explicit `LeasedStreamHandle` / `LeasedPayload` APIs; the existing
+owned `StreamEvent` APIs remain on v8 and never silently change ownership.
+Bindings do not expose the callback pointer, and deterministic release remains
+the correctness path. Rust consumes the daemon stream directly and moves
+payloads into owned `Vec<u8>` events, so it preserves the same canonical stream
+semantics without manufacturing a C-ABI lease inside one ownership domain.
 
 ## Capability state
 

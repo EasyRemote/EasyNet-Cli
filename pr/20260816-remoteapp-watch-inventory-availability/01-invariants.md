@@ -7,3 +7,4 @@
 5. The watch signature must include discovery availability state so available-empty and unavailable-empty observations are not coalesced.
 6. Freshness-only timestamp changes must still be ignored for stable inventory equality.
 7. Inventory logic remains daemon resource-layer code; remote desktop session code remains a consumer of selected resource subjects only.
+8. The stream descriptor schema source must not duplicate JSON object keys; descriptor hash inputs must be single-source and auditable.

@@ -19,7 +19,7 @@ cp "$SCRIPT" "$SB/tools/scripts/check-invocation-wire-entity-ref-kind-resolution
 
 cat >"$SB/src/daemon/invocation/dispatch/invocation_wire.rs" <<'RS'
 enum EntityRefKindResolution {
-    Agent,
+    CallableActor,
     Ability,
     Device,
     Resource,
@@ -31,14 +31,20 @@ enum EntityRefKindResolution {
 impl EntityRefKindResolution {
     fn from_ura(ura: &str) -> anyhow::Result<Self> {
         match crate::core::ura::parse_ura(ura.trim()).map(|parsed| parsed.kind) {
-            Ok(crate::core::ura::URAKind::Authority) => Ok(Self::Agent),
+            Ok(crate::core::ura::URAKind::Agent) => Ok(Self::CallableActor),
+            Ok(crate::core::ura::URAKind::Service) => Ok(Self::CallableActor),
+            Ok(crate::core::ura::URAKind::Authority) => Ok(Self::CallableActor),
             Ok(crate::core::ura::URAKind::Device) => Ok(Self::Device),
             _ => anyhow::bail!("subject_ref_kind_unsupported:User"),
         }
     }
 
     fn protobuf_kind(self) -> EntityRefKind {
-        EntityRefKind::Device
+        match self {
+            Self::CallableActor => EntityRefKind::Agent,
+            Self::Device => EntityRefKind::Device,
+            _ => EntityRefKind::Resource,
+        }
     }
 }
 

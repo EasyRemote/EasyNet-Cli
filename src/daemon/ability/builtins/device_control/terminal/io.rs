@@ -3,25 +3,16 @@
 //
 // File: src/daemon/ability/builtins/device_control/terminal/io.rs
 //
-// The unary-RPC half of the PTY data-plane. Pairs with
-// `terminal_lifecycle_ability` (create / close) and `terminal_attach_ability`
-// (bidi attach). Backend's PTYDriver — the production path used by
-// every Frontend Terminal session before the WS bidi optimisation
-// lands — depends on this trio:
+// Unary compatibility surface over the same supervisor-owned PTY state used
+// by terminal.attach. It pairs with terminal lifecycle and InvokeBidi attach:
 //
 //   * `terminal.input`  (RPC) — push base64 stdin bytes
 //   * `terminal.read`   (RPC) — drain stdout up to timeout
 //   * `terminal.resize` (RPC) — set cols × rows
 //
-// Why a separate file from `terminal_lifecycle_ability`
-// ------------------------------------------------
-// Lifecycle owns the session-table mutations (create row / drop
-// row). I/O owns the per-session continuous reader thread + the
-// output buffer + the cached writer. Bundling them would force
-// every test that wants a no-op lifecycle (or a no-op I/O) to set
-// up the other half. Splitting also makes the C-M3-vs-C-M-PTY-IO
-// commit history readable: lifecycle landed in C-M3a; this is
-// PTY-IO-1.
+// Production delegates write/read/resize and attachment leases to the
+// per-user session supervisor. Unit tests use the in-process implementation
+// below so state-machine behavior is deterministic.
 //
 // Reader-buffer design
 // --------------------
@@ -34,22 +25,15 @@
 //   * `terminal.read` waits on the Condvar with a timeout;
 //     returns the drained bytes (or empty if the timeout hit).
 //
-// The thread is created lazily on the first read call so a
-// session that's only ever attached via `terminal.attach`
-// (bidi mode) never spins up a competing reader. Once started,
-// the buffer collects until `terminal.close` fires (which
-// purges the I/O state row).
+// The test reader is created lazily. Production has one supervisor reader and
+// one bounded ring buffer per session, shared across detach/reattach and daemon
+// restart.
 //
 // Coexistence rule
 // ----------------
-// `terminal.attach` (bidi) and the unary read path are
-// MUTUALLY EXCLUSIVE per session. portable-pty's
-// `try_clone_reader` returns a fresh fd dup, so two readers
-// would race for incoming bytes — each would see ~half. We
-// document that constraint here and rely on the operator picking
-// one mode per session. A future axis-tagged mode field on
-// `terminal.create` could enforce it; v1 ships the
-// documentation gate.
+// Attachment claims are mutually exclusive and epoch-checked. Both unary reads
+// and Bidi attaches consume the single supervisor buffer; two OS-level PTY
+// readers are never created in production.
 //
 // Why a writer cache (instead of `take_writer()` per call)
 // ---------------------------------------------------------
@@ -128,6 +112,103 @@ struct SessionIo {
     /// next loop iteration. The thread also exits naturally on
     /// EOF; this flag is the close-side cooperative signal.
     dropped: Arc<std::sync::atomic::AtomicBool>,
+    attachment: Mutex<AttachmentState>,
+}
+
+#[derive(Debug, Default)]
+struct AttachmentState {
+    epoch: u64,
+    active: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PtyIoReadOutcome {
+    pub data: Vec<u8>,
+    pub closed: bool,
+    pub dropped_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PtyIoWriteOutcome {
+    Written(usize),
+    Closed,
+}
+
+struct PtyAttachmentLeaseInner {
+    backend: PtyAttachmentLeaseBackend,
+    attachment_id: String,
+    attached_epoch: u64,
+    released: std::sync::atomic::AtomicBool,
+}
+
+enum PtyAttachmentLeaseBackend {
+    Local(Arc<SessionIo>),
+    Supervised {
+        pty: Arc<PtyService>,
+        session_id: PtySessionId,
+    },
+}
+
+impl PtyAttachmentLeaseInner {
+    fn release(&self) -> u64 {
+        if self
+            .released
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return match &self.backend {
+                PtyAttachmentLeaseBackend::Local(row) => {
+                    row.attachment
+                        .lock()
+                        .expect("pty attachment state lock")
+                        .epoch
+                }
+                PtyAttachmentLeaseBackend::Supervised { pty, session_id } => pty
+                    .supervised_attachment(session_id)
+                    .and_then(Result::ok)
+                    .map(|(epoch, _)| epoch)
+                    .unwrap_or(self.attached_epoch),
+            };
+        }
+        match &self.backend {
+            PtyAttachmentLeaseBackend::Local(row) => {
+                let mut state = row.attachment.lock().expect("pty attachment state lock");
+                if state.epoch == self.attached_epoch
+                    && state.active.as_deref() == Some(self.attachment_id.as_str())
+                {
+                    state.active = None;
+                    state.epoch = state.epoch.saturating_add(1);
+                }
+                state.epoch
+            }
+            PtyAttachmentLeaseBackend::Supervised { pty, session_id } => pty
+                .supervised_release(session_id, &self.attachment_id, self.attached_epoch)
+                .and_then(Result::ok)
+                .unwrap_or(self.attached_epoch),
+        }
+    }
+}
+
+impl Drop for PtyAttachmentLeaseInner {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PtyAttachmentLease(Arc<PtyAttachmentLeaseInner>);
+
+impl PtyAttachmentLease {
+    pub(crate) fn attachment_id(&self) -> &str {
+        &self.0.attachment_id
+    }
+
+    pub(crate) fn attached_epoch(&self) -> u64 {
+        self.0.attached_epoch
+    }
+
+    pub(crate) fn release(&self) -> u64 {
+        self.0.release()
+    }
 }
 
 #[derive(Default)]
@@ -305,6 +386,7 @@ impl PtyIoService {
             writer: Mutex::new(None),
             _reader: reader,
             dropped,
+            attachment: Mutex::new(AttachmentState::default()),
         });
 
         // Insert + double-check: if another thread won the race
@@ -327,6 +409,162 @@ impl PtyIoService {
                 Ok(io)
             }
         }
+    }
+
+    pub(crate) fn claim_attachment(
+        &self,
+        pty: &Arc<PtyService>,
+        id: &PtySessionId,
+        attachment_id: &str,
+        expected_epoch: u64,
+    ) -> anyhow::Result<PtyAttachmentLease> {
+        if let Some(claimed) = pty.supervised_claim(id, attachment_id, expected_epoch) {
+            let attached_epoch = claimed?;
+            return Ok(PtyAttachmentLease(Arc::new(PtyAttachmentLeaseInner {
+                backend: PtyAttachmentLeaseBackend::Supervised {
+                    pty: Arc::clone(pty),
+                    session_id: id.clone(),
+                },
+                attachment_id: attachment_id.to_string(),
+                attached_epoch,
+                released: std::sync::atomic::AtomicBool::new(false),
+            })));
+        }
+        let row = self.get_or_init(pty, id)?;
+        let attached_epoch = {
+            let mut state = row.attachment.lock().expect("pty attachment state lock");
+            if state.epoch != expected_epoch {
+                anyhow::bail!(
+                    "ATTACHMENT_STALE: session `{}` epoch is {}, caller expected {}",
+                    id.as_str(),
+                    state.epoch,
+                    expected_epoch
+                );
+            }
+            if let Some(active) = state.active.as_deref() {
+                anyhow::bail!(
+                    "SESSION_ALREADY_ATTACHED: session `{}` is attached as `{active}`",
+                    id.as_str()
+                );
+            }
+            state.epoch = state.epoch.saturating_add(1);
+            state.active = Some(attachment_id.to_string());
+            state.epoch
+        };
+        Ok(PtyAttachmentLease(Arc::new(PtyAttachmentLeaseInner {
+            backend: PtyAttachmentLeaseBackend::Local(row),
+            attachment_id: attachment_id.to_string(),
+            attached_epoch,
+            released: std::sync::atomic::AtomicBool::new(false),
+        })))
+    }
+
+    pub(crate) fn attachment_snapshot(
+        &self,
+        pty: &Arc<PtyService>,
+        id: &PtySessionId,
+    ) -> (u64, Option<String>) {
+        if let Some(snapshot) = pty.supervised_attachment(id) {
+            return snapshot.unwrap_or((0, None));
+        }
+        let Some(row) = self.get_existing(id) else {
+            return (0, None);
+        };
+        let state = row.attachment.lock().expect("pty attachment state lock");
+        (state.epoch, state.active.clone())
+    }
+
+    pub(crate) fn write_bytes(
+        &self,
+        pty: &Arc<PtyService>,
+        id: &PtySessionId,
+        bytes: &[u8],
+    ) -> anyhow::Result<PtyIoWriteOutcome> {
+        if bytes.is_empty() {
+            return Ok(PtyIoWriteOutcome::Written(0));
+        }
+        if let Some(written) = pty.supervised_write(id, bytes) {
+            return Ok(if written? {
+                PtyIoWriteOutcome::Written(bytes.len())
+            } else {
+                PtyIoWriteOutcome::Closed
+            });
+        }
+        let row = self.get_or_init(pty, id)?;
+        {
+            let mut writer = row.writer.lock().expect("pty io writer slot");
+            if writer.is_none() {
+                let session = pty
+                    .get(id)
+                    .ok_or_else(|| anyhow::anyhow!("unknown session_id `{}`", id.as_str()))?;
+                *writer = Some(
+                    futures::executor::block_on(async {
+                        let master = session.master.lock().await;
+                        master.take_writer()
+                    })
+                    .map_err(|error| anyhow::anyhow!("take_writer: {error}"))?,
+                );
+            }
+        }
+        let mut writer = row.writer.lock().expect("pty io writer slot");
+        let writer = writer
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("writer disappeared between init and use"))?;
+        use std::io::Write;
+        if writer
+            .write_all(bytes)
+            .and_then(|()| writer.flush())
+            .is_err()
+        {
+            let (lock, cv) = &*row.output;
+            if let Ok(mut state) = lock.lock() {
+                state.closed = true;
+                cv.notify_all();
+            }
+            return Ok(PtyIoWriteOutcome::Closed);
+        }
+        Ok(PtyIoWriteOutcome::Written(bytes.len()))
+    }
+
+    pub(crate) fn read_bytes(
+        &self,
+        pty: &Arc<PtyService>,
+        id: &PtySessionId,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> anyhow::Result<PtyIoReadOutcome> {
+        if let Some(outcome) = pty.supervised_read(id, timeout, max_bytes) {
+            let outcome = outcome?;
+            return Ok(PtyIoReadOutcome {
+                data: outcome.data,
+                closed: outcome.closed,
+                dropped_bytes: outcome.dropped_bytes,
+            });
+        }
+        let row = self.get_or_init(pty, id)?;
+        let (lock, cv) = &*row.output;
+        let mut state = lock.lock().expect("pty io output lock");
+        let deadline = Instant::now() + timeout;
+        while state.buf.is_empty() && !state.closed {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let (next, timed_out) = cv
+                .wait_timeout(state, deadline - now)
+                .expect("pty io output wait");
+            state = next;
+            if timed_out.timed_out() {
+                break;
+            }
+        }
+        let take = state.buf.len().min(max_bytes);
+        let data = state.buf.drain(..take).collect();
+        Ok(PtyIoReadOutcome {
+            data,
+            closed: state.closed,
+            dropped_bytes: 0,
+        })
     }
 }
 
@@ -397,64 +635,15 @@ fn input_session(
     input_args: TerminalInputArgs,
 ) -> anyhow::Result<Value> {
     let bytes = input_args.bytes;
-    if bytes.is_empty() {
-        // No-op write is idempotent and cheap; ack so a caller
-        // pushing an empty heartbeat doesn't get an error.
-        return Ok(json!({"ack": true, "bytes_written": 0}));
+    let id = PtySessionId::new(input_args.session_id);
+    match io.write_bytes(pty, &id, &bytes)? {
+        PtyIoWriteOutcome::Written(written) => Ok(json!({"ack": true, "bytes_written": written})),
+        PtyIoWriteOutcome::Closed => Ok(json!({
+            "ack": false,
+            "bytes_written": 0,
+            "code": "session_dead",
+        })),
     }
-
-    let session_id = input_args.session_id;
-    let id = PtySessionId::new(&session_id);
-    let row = io.get_or_init(pty, &id)?;
-
-    // Take the writer once (cached). Subsequent calls reuse it.
-    {
-        let mut w_slot = row.writer.lock().expect("pty io writer slot");
-        if w_slot.is_none() {
-            // The lifecycle PtySession's master is async-locked.
-            // Bridge with a tiny block_on like the reader thread does.
-            let session = pty
-                .get(&id)
-                .ok_or_else(|| anyhow::anyhow!("unknown session_id `{session_id}`"))?;
-            let writer = futures::executor::block_on(async {
-                let m = session.master.lock().await;
-                m.take_writer()
-            })
-            .map_err(|e| anyhow::anyhow!("take_writer: {e}"))?;
-            *w_slot = Some(writer);
-        }
-    }
-
-    // Write under the writer lock. We hold the lock across
-    // write_all + flush so concurrent inputs don't interleave at
-    // the byte level; for a PTY that means newlines stay paired
-    // with their preceding chunks.
-    let written = {
-        let mut w_slot = row.writer.lock().expect("pty io writer slot");
-        let writer = w_slot
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("writer disappeared between init and use"))?;
-        use std::io::Write;
-        match writer.write_all(&bytes).and_then(|()| writer.flush()) {
-            Ok(()) => bytes.len(),
-            Err(_) => {
-                // PTY died between get_or_init and write. Mark
-                // closed so the next read returns session_dead too.
-                let (lock, cv) = &*row.output;
-                if let Ok(mut s) = lock.lock() {
-                    s.closed = true;
-                    cv.notify_all();
-                }
-                return Ok(json!({
-                    "ack": false,
-                    "bytes_written": 0,
-                    "code": "session_dead",
-                }));
-            }
-        }
-    };
-
-    Ok(json!({"ack": true, "bytes_written": written}))
 }
 
 /// `terminal.read` handler.
@@ -482,7 +671,7 @@ fn read_session(
     let session_id = read_args.session_id;
     let id = PtySessionId::new(&session_id);
 
-    if pty.get(&id).is_none() {
+    if !pty.try_contains(&id)? {
         return Ok(json!({
             "output": "",
             "bytes": 0,
@@ -506,7 +695,7 @@ fn read_session(
     //      semantically-correct answer. The next call with
     //      timeout>0 lazily initialises the reader, restoring
     //      catch-up behaviour identical to the pre-fastpath path.
-    if timeout_secs == 0.0 {
+    if timeout_secs == 0.0 && !pty.is_supervised() {
         let Some(row) = io.get_existing(&id) else {
             return Ok(json!({
                 "output": "",
@@ -529,41 +718,23 @@ fn read_session(
         return Ok(resp);
     }
 
-    // Blocking (positive-timeout) path.
-    let row = io.get_or_init(pty, &id)?;
-
-    let (lock, cv) = &*row.output;
-    let mut state = lock.lock().expect("pty io output lock");
-
-    // Loop because Condvar can fire spuriously per std-lib contract.
-    {
-        let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs);
-        // Wait for bytes OR closed OR deadline. Loop because Condvar
-        // can fire spuriously per std-lib contract.
-        while state.buf.is_empty() && !state.closed {
-            let now = Instant::now();
-            if now >= deadline {
-                break;
-            }
-            let remaining = deadline - now;
-            let (s2, timed_out) = cv.wait_timeout(state, remaining).expect("cv wait_timeout");
-            state = s2;
-            if timed_out.timed_out() {
-                break;
-            }
-        }
-    }
-
-    // Drain up to MAX_READ_CHUNK_BYTES.
-    let take = state.buf.len().min(MAX_READ_CHUNK_BYTES);
-    let chunk: Vec<u8> = state.buf.drain(..take).collect();
-    let closed = state.closed;
-    drop(state);
+    let outcome = io.read_bytes(
+        pty,
+        &id,
+        Duration::from_secs_f64(timeout_secs),
+        MAX_READ_CHUNK_BYTES,
+    )?;
+    let chunk = outcome.data;
+    let closed = outcome.closed;
+    let dropped_bytes = outcome.dropped_bytes;
 
     let mut resp = json!({
         "bytes": chunk.len(),
         "output": base64::engine::general_purpose::STANDARD.encode(&chunk),
     });
+    if dropped_bytes > 0 {
+        resp["output_gap_bytes"] = json!(dropped_bytes);
+    }
     // session_dead = closed AND buffer fully drained. The reader
     // does NOT echo session_dead while there's still queued
     // output, because the backend's caller will keep reading and
@@ -587,11 +758,10 @@ fn resize_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 
 fn resize_session(pty: &Arc<PtyService>, resize_args: TerminalResizeArgs) -> anyhow::Result<Value> {
     let id = PtySessionId::new(&resize_args.session_id);
-    let session = match pty.get(&id) {
-        Some(s) => s,
-        None => return Ok(json!({"ack": false})),
-    };
-    futures::executor::block_on(session.resize(resize_args.cols, resize_args.rows))?;
+    if !pty.try_contains(&id)? {
+        return Ok(json!({"ack": false}));
+    }
+    futures::executor::block_on(pty.resize_session(&id, resize_args.cols, resize_args.rows))?;
     Ok(json!({"ack": true}))
 }
 

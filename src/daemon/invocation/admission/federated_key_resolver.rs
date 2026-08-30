@@ -120,11 +120,11 @@ impl SharedHubAttestedCallerKeys {
         }
     }
 
-    /// Admit exactly the external principal key pinned by the forwarded signed
+    /// Admit exactly the principal key pinned by the forwarded signed
     /// envelope. The upstream Hub may return the User's complete active
     /// keyset, but this Device caches only the presented key whose membership
     /// the response proved. That keeps each trust decision request-scoped.
-    pub(crate) fn attest_external_caller_key(
+    pub(crate) fn attest_caller_key(
         &self,
         caller_ura: &str,
         presented_pubkey_b64: &str,
@@ -194,11 +194,14 @@ impl SharedHubAttestedCallerKeys {
     }
 
     pub(crate) fn contains(&self, caller_ura: &str, key_b64: &str) -> bool {
-        let Ok(key) = Self::decode_key(key_b64) else {
-            return false;
-        };
-        self.resolve_all(caller_ura)
-            .is_some_and(|keys| keys.contains(&key))
+        self.resolve_exact(caller_ura, key_b64).is_some()
+    }
+
+    fn resolve_exact(&self, caller_ura: &str, key_b64: &str) -> Option<VerifyingKey> {
+        let key = Self::decode_key(key_b64).ok()?;
+        self.resolve_all(caller_ura)?
+            .into_iter()
+            .find(|candidate| candidate == &key)
     }
 
     /// Whether the authenticated upstream Hub currently attests at least one
@@ -568,11 +571,16 @@ impl FederatedKeyResolver {
         if let Some(key) = self.resolve_principal_lifecycle_local_key(caller_ura)? {
             return Ok(key);
         }
-        if let Some(key) = self
-            .hub_attested_caller_keys
-            .resolve_all(caller_ura)
-            .and_then(|keys| keys.into_iter().next())
-        {
+        let hub_attested = match self.presented_pubkey_b64.as_deref() {
+            Some(presented) => self
+                .hub_attested_caller_keys
+                .resolve_exact(caller_ura, presented),
+            None => self
+                .hub_attested_caller_keys
+                .resolve_all(caller_ura)
+                .and_then(|keys| keys.into_iter().next()),
+        };
+        if let Some(key) = hub_attested {
             return Ok(key);
         }
         Err(LocalKeyResolutionError::Missing)
@@ -954,6 +962,22 @@ impl KeyResolver for FederatedKeyResolver {
             Err(LocalKeyResolutionError::InvalidAuthority(error)) => Err(error),
         }
     }
+
+    fn resolve_signature_keys(
+        &self,
+        caller_ura: &str,
+        key_id_hint: &str,
+    ) -> Result<Vec<VerifyingKey>, AxonError> {
+        let presented = key_id_hint.trim();
+        let is_public_key_projection = BASE64_STANDARD
+            .decode(presented)
+            .is_ok_and(|bytes| bytes.len() == ed25519_dalek::PUBLIC_KEY_LENGTH);
+        if presented.is_empty() || !is_public_key_projection {
+            return self.resolve_all(caller_ura);
+        }
+        self.request_scoped_with_presented_pubkey_b64(presented.to_string())
+            .resolve_all(caller_ura)
+    }
 }
 
 /// Wrap a federated-resolve failure as a caller key-resolution
@@ -1020,7 +1044,7 @@ mod tests {
         let user_ura = "easynet:///r/peer-realm/user/alice";
 
         let error = projection
-            .attest_external_caller_key(user_ura, &presented, &[other])
+            .attest_caller_key(user_ura, &presented, &[other])
             .expect_err("un-pinned Hub response must fail closed");
 
         assert!(error
@@ -1036,7 +1060,7 @@ mod tests {
         let user_ura = "easynet:///r/peer-realm/user/alice";
 
         projection
-            .attest_external_caller_key(user_ura, &presented, std::slice::from_ref(&presented))
+            .attest_caller_key(user_ura, &presented, std::slice::from_ref(&presented))
             .expect("exact Hub attestation is accepted");
 
         assert!(
@@ -1279,6 +1303,64 @@ mod tests {
         assert_eq!(got.len(), 2, "all trusted User keys must be admissible");
         assert!(got.contains(&pk_a));
         assert!(got.contains(&pk_b));
+    }
+
+    #[test]
+    fn signature_resolution_selects_exact_hub_attested_user_key_over_durable_signer() {
+        let durable = SigningKey::from_bytes(&[0x41; 32]);
+        let browser = SigningKey::from_bytes(&[0x42; 32]);
+        let durable_b64 = BASE64_STANDARD.encode(durable.verifying_key().to_bytes());
+        let browser_b64 = BASE64_STANDARD.encode(browser.verifying_key().to_bytes());
+        let user = "easynet:///r/realm-a/user/alice";
+        let resolver = test_resolver(
+            Arc::new(
+                RealmTrustAnchor::from_entries(vec![user_entry(user, &durable_b64)])
+                    .expect("durable managed signer"),
+            ),
+            Some(Arc::new(DialFailedClient)),
+            Arc::new(BTreeMap::new()),
+            Some("realm-a".to_string()),
+        );
+        resolver
+            .hub_attested_caller_keys()
+            .attest_caller_key(user, &browser_b64, std::slice::from_ref(&browser_b64))
+            .expect("Hub attests the exact browser key");
+
+        let keys = resolver
+            .resolve_signature_keys(user, &browser_b64)
+            .expect("request-aware resolution must see the browser key");
+
+        assert_eq!(keys, vec![browser.verifying_key()]);
+    }
+
+    #[test]
+    fn signature_resolution_rejects_unattested_user_key_instead_of_substituting_cached_key() {
+        let durable = SigningKey::from_bytes(&[0x43; 32]);
+        let attested_browser = SigningKey::from_bytes(&[0x44; 32]);
+        let untrusted_browser = SigningKey::from_bytes(&[0x45; 32]);
+        let durable_b64 = BASE64_STANDARD.encode(durable.verifying_key().to_bytes());
+        let attested_b64 = BASE64_STANDARD.encode(attested_browser.verifying_key().to_bytes());
+        let untrusted_b64 = BASE64_STANDARD.encode(untrusted_browser.verifying_key().to_bytes());
+        let user = "easynet:///r/realm-a/user/alice";
+        let resolver = test_resolver(
+            Arc::new(
+                RealmTrustAnchor::from_entries(vec![user_entry(user, &durable_b64)])
+                    .expect("durable managed signer"),
+            ),
+            None,
+            Arc::new(BTreeMap::new()),
+            Some("realm-a".to_string()),
+        );
+        resolver
+            .hub_attested_caller_keys()
+            .attest_caller_key(user, &attested_b64, std::slice::from_ref(&attested_b64))
+            .expect("Hub attests another browser key");
+
+        let error = resolver
+            .resolve_signature_keys(user, &untrusted_b64)
+            .expect_err("an untrusted selector must not receive another cached key");
+
+        assert_eq!(error.reason, ErrorCode::CallerKeyNotFound.as_str());
     }
 
     #[test]

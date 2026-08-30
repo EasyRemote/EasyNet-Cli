@@ -31,7 +31,7 @@ public final class SidecarRuntimeTest {
 
     check("call-1".equals(invocation.callId()), "call id");
     check("easynet:///r/hub/user/alice".equals(invocation.callerURA()), "caller_ura");
-    check("easynet:///r/hub/device/provider".equals(invocation.calleeURA()), "callee_ura");
+    check("easynet:///r/hub/service/alice.provider".equals(invocation.calleeURA()), "callee_ura");
     check("demo.echo".equals(invocation.abilityURA()), "ability_ura");
     check("easynet:///r/hub/resource/demo".equals(invocation.subjectURA()), "subject_ura");
     check(invocation.invocationNonce().equals(canonicalNonce()), "nonce");
@@ -123,7 +123,7 @@ public final class SidecarRuntimeTest {
     StringWriter output = new StringWriter();
     String frame =
         """
-        {"type":"invoke","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
+        {"type":"invoke","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/service/alice.provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
         """;
 
     SidecarRuntime.serve(
@@ -141,7 +141,7 @@ public final class SidecarRuntimeTest {
     StringWriter output = new StringWriter();
     String frame =
         """
-        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"},"descriptor_ref":"retired-provider-leak"}}
+        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/service/alice.provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"},"descriptor_ref":"retired-provider-leak"}}
         """;
 
     SidecarRuntime.serve(
@@ -170,7 +170,7 @@ public final class SidecarRuntimeTest {
     java.util.Map<String, Object> invocation = new java.util.LinkedHashMap<>();
     invocation.put("caller_ura", "easynet:///r/hub/user/alice");
     invocation.put("caller", "easynet:///r/hub/user/bob");
-    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("callee_ura", "easynet:///r/hub/service/alice.provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
     invocation.put("invocation_nonce", canonicalNonce());
@@ -191,7 +191,7 @@ public final class SidecarRuntimeTest {
   static void sidecarInvocationRejectsUnknownInvocationFields() {
     java.util.Map<String, Object> invocation = new java.util.LinkedHashMap<>();
     invocation.put("caller_ura", "easynet:///r/hub/user/alice");
-    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("callee_ura", "easynet:///r/hub/service/alice.provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
     invocation.put("invocation_nonce", canonicalNonce());
@@ -211,7 +211,7 @@ public final class SidecarRuntimeTest {
   static void sidecarInvocationRejectsUnknownRequestFields() {
     java.util.Map<String, Object> invocation = new java.util.LinkedHashMap<>();
     invocation.put("caller_ura", "easynet:///r/hub/user/alice");
-    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("callee_ura", "easynet:///r/hub/service/alice.provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
     invocation.put("invocation_nonce", canonicalNonce());
@@ -298,7 +298,7 @@ public final class SidecarRuntimeTest {
   private static java.util.LinkedHashMap<String, Object> canonicalInvocation() {
     java.util.LinkedHashMap<String, Object> invocation = new java.util.LinkedHashMap<>();
     invocation.put("caller_ura", "easynet:///r/hub/user/alice");
-    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("callee_ura", "easynet:///r/hub/service/alice.provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
     invocation.put("invocation_nonce", canonicalNonce());
@@ -309,7 +309,7 @@ public final class SidecarRuntimeTest {
 
   private static String frameJSON() {
     return """
-        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
+        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/service/alice.provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
         """;
   }
 

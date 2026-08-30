@@ -413,6 +413,7 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("shell.run", SystemAgent),
     local_rpc!("http.request", SystemAgent),
     local_bidi!("fs.transfer", SystemAgent),
+    local_bidi!("net.tunnel", SystemAgent),
     local_rpc!("terminal.create", SystemAgent),
     local_rpc!("terminal.list", SystemAgent),
     local_bidi!("terminal.attach", SystemAgent),
@@ -494,6 +495,7 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
 #[cfg(feature = "remote-desktop")]
 const REMOTE_DESKTOP_SYSTEM_AGENT_BASELINE: &[BaselineAbility] = &[
     local_rpc!("remote_desktop.create_session", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.focus_target", RemoteDesktopSystemAgent),
     local_rpc!("remote_desktop.show_session", RemoteDesktopSystemAgent),
     local_rpc!("remote_desktop.set_description", RemoteDesktopSystemAgent),
     local_rpc!("remote_desktop.add_ice_candidate", RemoteDesktopSystemAgent),

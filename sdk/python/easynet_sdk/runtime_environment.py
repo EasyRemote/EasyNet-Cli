@@ -11,12 +11,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .providers.runtime.control import _default_control_path
+from .axon_addressing import user_ura
 from .errors import ErrorCode, RetryHint, SDKError
+from .providers.runtime.control import _default_control_path
 
 _CREDENTIALS_FILENAME = "credentials.json"
 _RUNTIME_IDENTITY_PROJECTION_FIELDS = frozenset(
-    {"realm", "runtime_instance_id", "principal", "control_plane_endpoint"}
+    {
+        "realm",
+        "runtime_instance_id",
+        "principal",
+        "principal_display_name",
+        "control_plane_endpoint",
+    }
 )
 
 
@@ -32,6 +39,7 @@ class RuntimeIdentityProjection:
     realm: str
     runtime_instance_id: str
     principal: str = ""
+    principal_display_name: str = ""
     control_plane_endpoint: str = ""
 
 
@@ -132,6 +140,45 @@ def read_runtime_identity_projection(
     return runtime_identity_projection_from_json(raw)
 
 
+def read_paired_runtime_identity_projection(
+    credentials_path: str | Path = "",
+    *,
+    control_path: str | Path = "",
+) -> RuntimeIdentityProjection:
+    """Project public paired identity facts from the runtime credential store.
+
+    The EasyNet-Cli SDK owns the secret-bearing persistence schema. Consumers
+    receive only routable identity and display/endpoint facts and never decode
+    or retain credential, deployment-signature, or trust-anchor material.
+    When control discovery is available, its runtime identity must match the
+    credential projection exactly before the paired principal is returned.
+    """
+
+    path = (
+        Path(credentials_path)
+        if credentials_path
+        else runtime_credentials_path(control_path)
+    )
+    decoded = _read_json_object(path, "paired runtime credentials")
+    realm = _required_projection_text(decoded, "realm")
+    runtime_instance_id = _required_projection_text(decoded, "node_id")
+    user_id = _optional_projection_text(decoded, "user_id")
+    principal = user_ura(realm, user_id) if user_id else ""
+    projection = RuntimeIdentityProjection(
+        realm=realm,
+        runtime_instance_id=runtime_instance_id,
+        principal=principal,
+        principal_display_name=_optional_projection_text(decoded, "username"),
+        control_plane_endpoint=_required_projection_text(decoded, "hub_endpoint"),
+    )
+    if control_path:
+        _validate_control_identity_binding(
+            projection,
+            read_runtime_control_discovery(control_path),
+        )
+    return projection
+
+
 def runtime_identity_projection_from_json(
     raw: bytes | str,
 ) -> RuntimeIdentityProjection:
@@ -154,9 +201,64 @@ def runtime_identity_projection_from_json(
         realm=realm,
         runtime_instance_id=runtime_instance_id,
         principal=_optional_projection_text(decoded, "principal"),
+        principal_display_name=_optional_projection_text(
+            decoded, "principal_display_name"
+        ),
         control_plane_endpoint=_optional_projection_text(
             decoded, "control_plane_endpoint"
         ),
+    )
+
+
+def _read_json_object(path: Path, label: str) -> Mapping[str, object]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise SDKError(
+            code=ErrorCode.CALLER_IDENTITY_UNAVAILABLE,
+            stage="runtime_environment",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=f"{label} not readable at {path}",
+            details={"credentials_path": str(path)},
+            cause=exc,
+        ) from exc
+    except OSError as exc:
+        raise _invalid(f"read {label} at {path}: {exc}", exc) from exc
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise _invalid(f"decode {label} JSON: {exc}", exc) from exc
+    if not isinstance(decoded, Mapping):
+        raise _invalid(f"{label} must be a JSON object")
+    return decoded
+
+
+def _validate_control_identity_binding(
+    projection: RuntimeIdentityProjection,
+    discovery: RuntimeControlDiscovery,
+) -> None:
+    identity = discovery.runtime_host_identity
+    if identity is None:
+        raise _identity_unavailable(
+            "runtime control discovery has no runtime host identity"
+        )
+    if (
+        identity.realm.strip() != projection.realm
+        or identity.runtime_instance_id.strip() != projection.runtime_instance_id
+    ):
+        raise _identity_unavailable(
+            "paired credentials do not match the attached runtime host identity"
+        )
+
+
+def _identity_unavailable(message: str) -> SDKError:
+    return SDKError(
+        code=ErrorCode.CALLER_IDENTITY_UNAVAILABLE,
+        stage="runtime_environment",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
     )
 
 

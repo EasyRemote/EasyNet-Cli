@@ -7,10 +7,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 use bytes::Bytes;
 use openh264::encoder::{
-    BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod, Level, Profile,
-    RateControlMode, UsageType,
+    BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod,
+    Level as OpenH264Level, Profile, RateControlMode, UsageType,
 };
 use openh264::formats::{RgbSliceU8, YUVBuffer};
 use openh264::{OpenH264API, Timestamp};
@@ -18,12 +22,18 @@ use serde_json::json;
 #[cfg(feature = "native-media")]
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use tokio::sync::{mpsc, watch};
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
 #[cfg(feature = "native-media")]
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::open_display_recorder_with_xcap;
 #[cfg(feature = "native-media")]
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::rgba_bytes_to_rgb_frame;
+#[cfg(test)]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::CaptureResizeMode;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     capture_rgb_with_xcap, RawRgbFrame, ScreenCaptureOptions,
 };
@@ -36,6 +46,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     NATIVE_MAX_BITRATE_KBPS, NATIVE_MIN_BITRATE_KBPS, REASON_PREVIEW_CAPTURE_FAILED,
     REASON_PREVIEW_CLIENT_CLOSED, REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
+use crate::daemon::plugins::remote_desktop::media::h264_level::H264Level;
 #[cfg(test)]
 use crate::daemon::plugins::remote_desktop::media::webrtc_transport_backend_for_entry;
 use crate::daemon::plugins::remote_desktop::media::{
@@ -65,6 +76,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct BuiltinH264Config {
     pub(in crate::daemon::plugins::remote_desktop) requested_fps: u32,
     pub(in crate::daemon::plugins::remote_desktop) fps: u32,
     pub(in crate::daemon::plugins::remote_desktop) bitrate_kbps: u32,
+    pub(in crate::daemon::plugins::remote_desktop) h264_level: H264Level,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) max_frame_queue_depth: usize,
     pub(in crate::daemon::plugins::remote_desktop) keyframe_interval_frames: u32,
@@ -103,11 +115,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_builtin_h264_stream(
     stop_rx: watch::Receiver<bool>,
     terminal_guard: BidiTerminalGuard,
     terminal_callback: BuiltinH264TerminalCallback,
-) -> bool {
+) -> Option<std::thread::JoinHandle<()>> {
     let Some(config) =
         build_builtin_h264_config_for_binding(&binding, &options, max_frame_queue_depth)
     else {
-        return false;
+        return None;
     };
     let capture_subject = binding.diagnostic_capture_subject().clone();
     std::thread::Builder::new()
@@ -123,14 +135,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_builtin_h264_stream(
             );
             terminal_callback(terminal);
         })
-        .map(|_| true)
+        .map(Some)
         .unwrap_or_else(|err| {
             crate::op_event!(
                 component = remote_desktop,
                 kind = builtin_h264_spawn_failed,
                 reason = err.to_string(),
             );
-            false
+            None
         })
 }
 
@@ -147,6 +159,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn build_builtin_h264_config_for_
         requested_fps,
         fps: actual_fps,
         bitrate_kbps: DEFAULT_VIDEO_STREAM_BITRATE_KBPS,
+        h264_level: H264Level::Level5_1,
         max_frame_queue_depth: max_frame_queue_depth.max(MIN_FRAME_QUEUE_DEPTH),
         keyframe_interval_frames: actual_fps.clamp(1, DIAGNOSTIC_RELAY_GOP_MAX_FRAMES),
     })
@@ -167,6 +180,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn build_builtin_h264_config(
         requested_fps,
         fps: actual_fps,
         bitrate_kbps: DEFAULT_VIDEO_STREAM_BITRATE_KBPS,
+        h264_level: H264Level::Level5_1,
         max_frame_queue_depth: max_frame_queue_depth.max(MIN_FRAME_QUEUE_DEPTH),
         keyframe_interval_frames: actual_fps.clamp(1, DIAGNOSTIC_RELAY_GOP_MAX_FRAMES),
     })
@@ -187,6 +201,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn build_direct_webrtc_h264_confi
         requested_fps,
         fps: actual_fps,
         bitrate_kbps: target_bitrate_kbps.clamp(NATIVE_MIN_BITRATE_KBPS, NATIVE_MAX_BITRATE_KBPS),
+        h264_level: H264Level::Level5_1,
         max_frame_queue_depth: max_frame_queue_depth.clamp(1, MAX_FRAME_QUEUE_DEPTH as usize),
         keyframe_interval_frames: actual_fps.clamp(1, DIAGNOSTIC_RELAY_GOP_MAX_FRAMES),
     };
@@ -208,6 +223,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn build_direct_webrtc_h264_confi
         requested_fps,
         fps: actual_fps,
         bitrate_kbps: target_bitrate_kbps.clamp(NATIVE_MIN_BITRATE_KBPS, NATIVE_MAX_BITRATE_KBPS),
+        h264_level: H264Level::Level5_1,
         max_frame_queue_depth: max_frame_queue_depth.clamp(1, MAX_FRAME_QUEUE_DEPTH as usize),
         keyframe_interval_frames: actual_fps.clamp(1, DIAGNOSTIC_RELAY_GOP_MAX_FRAMES),
     };
@@ -374,13 +390,24 @@ fn run_builtin_h264_recorder_stream(
 #[cfg(feature = "native-media")]
 pub(in crate::daemon::plugins::remote_desktop) fn latest_recorder_frame(
     rx: &std::sync::mpsc::Receiver<xcap::Frame>,
-    mut frame: xcap::Frame,
+    frame: xcap::Frame,
 ) -> xcap::Frame {
+    latest_recorder_frame_with_drop_count(rx, frame).0
+}
+
+#[cfg(feature = "native-media")]
+pub(in crate::daemon::plugins::remote_desktop) fn latest_recorder_frame_with_drop_count(
+    rx: &std::sync::mpsc::Receiver<xcap::Frame>,
+    mut frame: xcap::Frame,
+) -> (xcap::Frame, u64) {
+    let mut dropped = 0_u64;
     loop {
         match rx.try_recv() {
-            Ok(next) => frame = next,
-            Err(TryRecvError::Empty) => return frame,
-            Err(TryRecvError::Disconnected) => return frame,
+            Ok(next) => {
+                frame = next;
+                dropped = dropped.saturating_add(1);
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return (frame, dropped),
         }
     }
 }
@@ -519,11 +546,33 @@ pub(in crate::daemon::plugins::remote_desktop) fn build_openh264_encoder(
         .bitrate(BitRate::from_bps(bitrate_bps))
         .max_frame_rate(FrameRate::from_hz(config.fps as f32))
         .profile(Profile::Baseline)
-        .level(Level::Level_5_1)
+        .level(openh264_level(config.h264_level))
         .complexity(Complexity::Low)
         .intra_frame_period(IntraFramePeriod::from_num_frames(keyframe_interval));
     Encoder::with_api_config(OpenH264API::from_source(), encoder_config)
         .map_err(|err| anyhow::anyhow!("{err}"))
+}
+
+fn openh264_level(level: H264Level) -> OpenH264Level {
+    match level {
+        H264Level::Level1_0 => OpenH264Level::Level_1_0,
+        H264Level::Level1B => OpenH264Level::Level_1_B,
+        H264Level::Level1_1 => OpenH264Level::Level_1_1,
+        H264Level::Level1_2 => OpenH264Level::Level_1_2,
+        H264Level::Level1_3 => OpenH264Level::Level_1_3,
+        H264Level::Level2_0 => OpenH264Level::Level_2_0,
+        H264Level::Level2_1 => OpenH264Level::Level_2_1,
+        H264Level::Level2_2 => OpenH264Level::Level_2_2,
+        H264Level::Level3_0 => OpenH264Level::Level_3_0,
+        H264Level::Level3_1 => OpenH264Level::Level_3_1,
+        H264Level::Level3_2 => OpenH264Level::Level_3_2,
+        H264Level::Level4_0 => OpenH264Level::Level_4_0,
+        H264Level::Level4_1 => OpenH264Level::Level_4_1,
+        H264Level::Level4_2 => OpenH264Level::Level_4_2,
+        H264Level::Level5_0 => OpenH264Level::Level_5_0,
+        H264Level::Level5_1 => OpenH264Level::Level_5_1,
+        H264Level::Level5_2 => OpenH264Level::Level_5_2,
+    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn encode_openh264_frame(
@@ -532,16 +581,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn encode_openh264_frame(
     seq: u64,
     fps: u32,
 ) -> anyhow::Result<Vec<u8>> {
-    let rgb = RgbSliceU8::new(
-        &frame.rgb_bytes,
-        (frame.width as usize, frame.height as usize),
-    );
-    let yuv = YUVBuffer::from_rgb8_source(rgb);
     let timestamp_ms = seq.saturating_mul(1000) / fps.max(1) as u64;
-    let bitstream = encoder
-        .encode_at(&yuv, Timestamp::from_millis(timestamp_ms))
-        .map_err(|err| anyhow::anyhow!("OpenH264 encode failed: {err}"))?;
-    Ok(bitstream.to_vec())
+    encode_openh264_frame_at(encoder, frame, timestamp_ms)
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn even_rgb_frame(
@@ -562,31 +603,54 @@ pub(in crate::daemon::plugins::remote_desktop) fn even_rgb_frame(
         rgb_bytes: rgb,
         width,
         height,
+        native_width: frame.native_width,
+        native_height: frame.native_height,
     }
 }
 
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 pub(in crate::daemon::plugins::remote_desktop) async fn write_h264_sample(
     track: &TrackLocalStaticSample,
     ssrc: u32,
     payload_type: u8,
     encoder: &mut Encoder,
     frame: &RawRgbFrame,
-    seq: u64,
-    fps: u32,
-) -> anyhow::Result<bool> {
-    let bytes = encode_openh264_frame(encoder, frame, seq, fps)?;
+    timestamp_ms: u64,
+    sample_duration: Duration,
+) -> anyhow::Result<Option<usize>> {
+    let bytes = encode_openh264_frame_at(encoder, frame, timestamp_ms)?;
     if bytes.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
+    let bytes_len = bytes.len();
     track
         .sample_writer(ssrc, payload_type)
         .write_sample(&rtc::media::Sample {
             data: Bytes::from(bytes),
-            duration: Duration::from_secs_f64(1.0 / fps.max(1) as f64),
+            duration: sample_duration,
             ..Default::default()
         })
         .await?;
-    Ok(true)
+    Ok(Some(bytes_len))
+}
+
+fn encode_openh264_frame_at(
+    encoder: &mut Encoder,
+    frame: &RawRgbFrame,
+    timestamp_ms: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let rgb = RgbSliceU8::new(
+        &frame.rgb_bytes,
+        (frame.width as usize, frame.height as usize),
+    );
+    let yuv = YUVBuffer::from_rgb8_source(rgb);
+    let bitstream = encoder
+        .encode_at(&yuv, Timestamp::from_millis(timestamp_ms))
+        .map_err(|err| anyhow::anyhow!("OpenH264 encode failed: {err}"))?;
+    Ok(bitstream.to_vec())
 }
 
 #[cfg(test)]
@@ -613,6 +677,7 @@ mod tests {
             &ScreenCaptureOptions {
                 resolution: None,
                 fps: 144,
+                resize_mode: CaptureResizeMode::FitWithin,
                 region: None,
             },
             DEFAULT_FRAME_QUEUE_DEPTH as usize,
@@ -639,6 +704,7 @@ mod tests {
         let options = ScreenCaptureOptions {
             resolution: None,
             fps: 144,
+            resize_mode: CaptureResizeMode::FitWithin,
             region: None,
         };
 
@@ -655,5 +721,82 @@ mod tests {
         assert_eq!(config.bitrate_kbps, DEFAULT_TARGET_BITRATE_KBPS);
         assert_eq!(config.max_frame_queue_depth, 1);
         assert_eq!(config.keyframe_interval_frames, 30);
+    }
+
+    #[test]
+    fn openh264_sps_uses_the_negotiated_browser_receive_level() {
+        let mut file = ResourcesFile::default();
+        let ura = seed_xcap_display(&mut file, "remote-desktop-negotiated-h264-level");
+        let entry = resources::lookup_by_ura(&file, &ura).unwrap();
+        let mut config = build_direct_webrtc_h264_config(
+            entry,
+            &ScreenCaptureOptions {
+                resolution: Some(
+                    crate::daemon::ability::builtins::resources::media::screen_snapshot::VideoResolution {
+                        width: 320,
+                        height: 180,
+                    },
+                ),
+                fps: 30,
+                resize_mode: CaptureResizeMode::FitWithin,
+                region: None,
+            },
+            6_000,
+            1,
+        )
+        .unwrap();
+        config.h264_level = H264Level::Level3_1;
+        let mut encoder = build_openh264_encoder(&config).unwrap();
+        let access_unit = encode_openh264_frame(
+            &mut encoder,
+            &RawRgbFrame {
+                rgb_bytes: vec![0; 320 * 180 * 3],
+                width: 320,
+                height: 180,
+                native_width: 320,
+                native_height: 180,
+            },
+            0,
+            30,
+        )
+        .unwrap();
+        let sps = annex_b_nal_payload(&access_unit, 7).expect("first access unit contains SPS");
+
+        assert_eq!(sps[0], 66, "OpenH264 must emit Baseline profile_idc");
+        assert_eq!(sps[2], 31, "SPS level_idc must match negotiated Level 3.1");
+    }
+
+    #[test]
+    fn even_frame_normalization_preserves_native_capture_dimensions() {
+        let frame = even_rgb_frame(RawRgbFrame {
+            rgb_bytes: vec![0; 5 * 3 * 3],
+            width: 5,
+            height: 3,
+            native_width: 840,
+            native_height: 500,
+        });
+
+        assert_eq!((frame.width, frame.height), (4, 2));
+        assert_eq!(frame.native_dimensions(), (840, 500));
+    }
+
+    fn annex_b_nal_payload(bytes: &[u8], nal_type: u8) -> Option<&[u8]> {
+        let mut offset = 0;
+        while offset + 4 <= bytes.len() {
+            let start_len = if bytes[offset..].starts_with(&[0, 0, 0, 1]) {
+                4
+            } else if bytes[offset..].starts_with(&[0, 0, 1]) {
+                3
+            } else {
+                offset += 1;
+                continue;
+            };
+            let header = offset + start_len;
+            if header < bytes.len() && bytes[header] & 0x1f == nal_type {
+                return bytes.get(header + 1..);
+            }
+            offset = header.saturating_add(1);
+        }
+        None
     }
 }

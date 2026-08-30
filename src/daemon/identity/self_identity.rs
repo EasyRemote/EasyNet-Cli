@@ -55,7 +55,8 @@ mod managed_user_signing;
 use managed_user_signing::ManagedRuntimeSigningIdentity;
 pub use managed_user_signing::{
     ensure_user_runtime_signing_identity, prove_user_runtime_signing_projection_custody,
-    EnsuredUserRuntimeSigningIdentity, USER_SIGNING_CLI_PURPOSE,
+    rotate_user_runtime_signing_identity_after_revocation, EnsuredUserRuntimeSigningIdentity,
+    UserRuntimeSigningRotation, USER_SIGNING_CLI_PURPOSE,
 };
 
 /// Errors surfaced by `SelfIdentity` callers. Most are 1:1 with
@@ -1406,6 +1407,56 @@ mod tests {
             .unwrap()
             .verify(b"canonical user call", &signature)
             .expect("managed signature verifies");
+        server.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_user_runtime_signing_rotation_is_cas_bound_and_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("key-service.sock");
+        let vault_path = temp.path().join("key-service.enc");
+        let user_ura = "easynet:///r/acme/user/alice";
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let socket_for_server = socket.clone();
+        let server = std::thread::spawn(move || {
+            crate::daemon::keyring::service::run_test_unix_key_service_with_purpose(
+                socket_for_server,
+                vault_path,
+                "test-passphrase".to_string(),
+                user_ura.to_string(),
+                USER_SIGNING_CLI_PURPOSE.to_string(),
+                5,
+                ready_tx,
+            );
+        });
+        let predecessor = ready_rx
+            .recv()
+            .expect("test key service reports readiness")
+            .expect("test key service starts");
+        let provider = KeyringClient::new(socket);
+
+        let first = rotate_user_runtime_signing_identity_after_revocation(
+            &provider,
+            user_ura,
+            &predecessor.public_key_b64,
+        )
+        .expect("rejected predecessor rotates");
+        assert!(first.rotated);
+        assert_eq!(
+            first.projection.rotated_from.as_deref(),
+            Some(predecessor.key_id.as_str())
+        );
+        assert_ne!(first.projection.public_key_b64, predecessor.public_key_b64);
+
+        let replay = rotate_user_runtime_signing_identity_after_revocation(
+            &provider,
+            user_ura,
+            &predecessor.public_key_b64,
+        )
+        .expect("replayed rejected-key transition reuses the active successor");
+        assert!(!replay.rotated);
+        assert_eq!(replay.projection, first.projection);
         server.join().unwrap();
     }
 

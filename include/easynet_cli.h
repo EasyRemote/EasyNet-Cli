@@ -8,6 +8,7 @@
  * to language SDKs and are intentionally absent from this header.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -15,6 +16,8 @@ extern "C" {
 #endif
 
 #define RUNTIME_ABI_VERSION 7u
+#define RUNTIME_ABI_V8_EXTENSION_VERSION 8u
+#define RUNTIME_ABI_V9_EXTENSION_VERSION 9u
 
 #define RUNTIME_OK 0
 #define ERR_GENERIC 1
@@ -42,15 +45,132 @@ typedef uint64_t RuntimeInvocationBuilderId;
 typedef uint64_t RuntimePreparedInvocationId;
 typedef uint64_t RuntimeSignedInvocationId;
 typedef uint64_t RuntimeInvocationHandleId;
+typedef uint64_t RuntimeBufferLeaseId;
 
 /*
- * Callbacks run on library-owned threads. JSON pointers are borrowed for the
- * duration of the call and must be copied by bindings that retain them.
+ * Callbacks run on library-owned threads. JSON pointers, frame pointers, and
+ * every RuntimeBytesViewV8 member are borrowed for the duration of the call
+ * and must be copied or consumed before the callback returns. ABI v9 extends
+ * only payload.data through RuntimeBufferLeaseV9's explicit lifetime.
  * `close_send` is a half-close; cancel/close/shutdown are terminal actions.
+ * Stream close and RuntimeHandle shutdown suppress later callbacks and wait
+ * for an in-flight callback to return. A callback may close its own stream or
+ * RuntimeHandle; that reentrant close returns without self-wait and no later
+ * frame or EOF callback is made with the same user_data.
  */
 typedef void (*RuntimeInvocationStreamCallback)(
     void *user_data,
     const char *chunk_json
+);
+
+#define RUNTIME_STREAM_FRAME_V8_ABI_VERSION 8u
+
+#define RUNTIME_STREAM_FRAME_V8_KIND_DATA 1u
+#define RUNTIME_STREAM_FRAME_V8_KIND_TERMINAL 2u
+#define RUNTIME_STREAM_FRAME_V8_KIND_ERROR 3u
+#define RUNTIME_STREAM_FRAME_V8_KIND_CANCELLED 4u
+#define RUNTIME_STREAM_FRAME_V8_KIND_TIMEOUT 5u
+#define RUNTIME_STREAM_FRAME_V8_KIND_RECEIPT_VERIFICATION_ERROR 6u
+
+#define RUNTIME_STREAM_FRAME_V8_STATE_ACCEPTED 1u
+#define RUNTIME_STREAM_FRAME_V8_STATE_ADMITTED 2u
+#define RUNTIME_STREAM_FRAME_V8_STATE_DISPATCHED 3u
+#define RUNTIME_STREAM_FRAME_V8_STATE_RUNNING 4u
+#define RUNTIME_STREAM_FRAME_V8_STATE_COMPLETED 5u
+#define RUNTIME_STREAM_FRAME_V8_STATE_FAILED 6u
+#define RUNTIME_STREAM_FRAME_V8_STATE_TIMED_OUT 7u
+#define RUNTIME_STREAM_FRAME_V8_STATE_CANCELLED 8u
+
+#define RUNTIME_STREAM_FRAME_V8_FLAG_TERMINAL (1u << 0)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL (1u << 1)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_PAYLOAD (1u << 2)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE (1u << 3)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_ADMISSION_RECEIPT (1u << 4)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_TERMINAL_RECEIPT (1u << 5)
+#define RUNTIME_STREAM_FRAME_V8_FLAG_HAS_ERROR (1u << 6)
+
+typedef struct RuntimeBytesViewV8 {
+    const uint8_t *data;
+    size_t len;
+} RuntimeBytesViewV8;
+
+typedef struct RuntimeInvocationStreamFrameV8 {
+    uint32_t struct_size;
+    uint16_t abi_version;
+    uint8_t kind;
+    uint8_t state;
+    uint32_t flags;
+    uint64_t sequence;
+    uint64_t elapsed_ms;
+    RuntimeBytesViewV8 payload_content_type;
+    RuntimeBytesViewV8 payload;
+    RuntimeBytesViewV8 admission_receipt_json;
+    RuntimeBytesViewV8 terminal_receipt_json;
+    RuntimeBytesViewV8 error_json;
+} RuntimeInvocationStreamFrameV8;
+
+typedef void (*RuntimeInvocationStreamV8Callback)(
+    void *user_data,
+    const RuntimeInvocationStreamFrameV8 *frame
+);
+
+/*
+ * ABI v9 keeps the v8 fixed lifecycle header and sparse callback-borrowed
+ * sidecars, but gives a non-empty payload one owning lease reference. The
+ * pointer remains valid after callback return until the final successful
+ * runtime_buffer_lease_release_v9, or until RuntimeHandle shutdown. Empty
+ * payloads are exactly {0, NULL, 0}.
+ */
+#define RUNTIME_STREAM_FRAME_V9_ABI_VERSION 9u
+
+#define RUNTIME_STREAM_FRAME_V9_KIND_DATA RUNTIME_STREAM_FRAME_V8_KIND_DATA
+#define RUNTIME_STREAM_FRAME_V9_KIND_TERMINAL RUNTIME_STREAM_FRAME_V8_KIND_TERMINAL
+#define RUNTIME_STREAM_FRAME_V9_KIND_ERROR RUNTIME_STREAM_FRAME_V8_KIND_ERROR
+#define RUNTIME_STREAM_FRAME_V9_KIND_CANCELLED RUNTIME_STREAM_FRAME_V8_KIND_CANCELLED
+#define RUNTIME_STREAM_FRAME_V9_KIND_TIMEOUT RUNTIME_STREAM_FRAME_V8_KIND_TIMEOUT
+#define RUNTIME_STREAM_FRAME_V9_KIND_RECEIPT_VERIFICATION_ERROR RUNTIME_STREAM_FRAME_V8_KIND_RECEIPT_VERIFICATION_ERROR
+
+#define RUNTIME_STREAM_FRAME_V9_STATE_ACCEPTED RUNTIME_STREAM_FRAME_V8_STATE_ACCEPTED
+#define RUNTIME_STREAM_FRAME_V9_STATE_ADMITTED RUNTIME_STREAM_FRAME_V8_STATE_ADMITTED
+#define RUNTIME_STREAM_FRAME_V9_STATE_DISPATCHED RUNTIME_STREAM_FRAME_V8_STATE_DISPATCHED
+#define RUNTIME_STREAM_FRAME_V9_STATE_RUNNING RUNTIME_STREAM_FRAME_V8_STATE_RUNNING
+#define RUNTIME_STREAM_FRAME_V9_STATE_COMPLETED RUNTIME_STREAM_FRAME_V8_STATE_COMPLETED
+#define RUNTIME_STREAM_FRAME_V9_STATE_FAILED RUNTIME_STREAM_FRAME_V8_STATE_FAILED
+#define RUNTIME_STREAM_FRAME_V9_STATE_TIMED_OUT RUNTIME_STREAM_FRAME_V8_STATE_TIMED_OUT
+#define RUNTIME_STREAM_FRAME_V9_STATE_CANCELLED RUNTIME_STREAM_FRAME_V8_STATE_CANCELLED
+
+#define RUNTIME_STREAM_FRAME_V9_FLAG_TERMINAL RUNTIME_STREAM_FRAME_V8_FLAG_TERMINAL
+#define RUNTIME_STREAM_FRAME_V9_FLAG_TRANSPORT_TERMINAL RUNTIME_STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL
+#define RUNTIME_STREAM_FRAME_V9_FLAG_HAS_PAYLOAD RUNTIME_STREAM_FRAME_V8_FLAG_HAS_PAYLOAD
+#define RUNTIME_STREAM_FRAME_V9_FLAG_HAS_CONTENT_TYPE RUNTIME_STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE
+#define RUNTIME_STREAM_FRAME_V9_FLAG_HAS_ADMISSION_RECEIPT RUNTIME_STREAM_FRAME_V8_FLAG_HAS_ADMISSION_RECEIPT
+#define RUNTIME_STREAM_FRAME_V9_FLAG_HAS_TERMINAL_RECEIPT RUNTIME_STREAM_FRAME_V8_FLAG_HAS_TERMINAL_RECEIPT
+#define RUNTIME_STREAM_FRAME_V9_FLAG_HAS_ERROR RUNTIME_STREAM_FRAME_V8_FLAG_HAS_ERROR
+
+typedef struct RuntimeBufferLeaseV9 {
+    RuntimeBufferLeaseId lease_id;
+    const uint8_t *data;
+    size_t len;
+} RuntimeBufferLeaseV9;
+
+typedef struct RuntimeInvocationStreamFrameV9 {
+    uint32_t struct_size;
+    uint16_t abi_version;
+    uint8_t kind;
+    uint8_t state;
+    uint32_t flags;
+    uint64_t sequence;
+    uint64_t elapsed_ms;
+    RuntimeBytesViewV8 payload_content_type;
+    RuntimeBufferLeaseV9 payload;
+    RuntimeBytesViewV8 admission_receipt_json;
+    RuntimeBytesViewV8 terminal_receipt_json;
+    RuntimeBytesViewV8 error_json;
+} RuntimeInvocationStreamFrameV9;
+
+typedef void (*RuntimeInvocationStreamV9Callback)(
+    void *user_data,
+    const RuntimeInvocationStreamFrameV9 *frame
 );
 
 typedef void (*RuntimeInvocationBidiCallback)(
@@ -258,6 +378,28 @@ int32_t runtime_invocation_stream_open(
     RuntimeInvocationStreamCallback on_chunk,
     void *user_data,
     RuntimeInvocationStreamId *out_stream_id
+);
+int32_t runtime_invocation_stream_open_v8(
+    RuntimeHandle handle,
+    const char *invocation_json,
+    RuntimeInvocationStreamV8Callback on_chunk,
+    void *user_data,
+    RuntimeInvocationStreamId *out_stream_id
+);
+int32_t runtime_invocation_stream_open_v9(
+    RuntimeHandle handle,
+    const char *invocation_json,
+    RuntimeInvocationStreamV9Callback on_chunk,
+    void *user_data,
+    RuntimeInvocationStreamId *out_stream_id
+);
+int32_t runtime_buffer_lease_retain_v9(
+    RuntimeHandle handle,
+    RuntimeBufferLeaseId lease_id
+);
+int32_t runtime_buffer_lease_release_v9(
+    RuntimeHandle handle,
+    RuntimeBufferLeaseId lease_id
 );
 int32_t runtime_invocation_stream_cancel(
     RuntimeHandle handle,

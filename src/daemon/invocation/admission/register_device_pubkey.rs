@@ -334,13 +334,18 @@ pub fn handle_protecting(
     let (args, role) = decode_register_args(arguments)?;
 
     let owner = trusted_principal_owner_from_args(&args)?;
-    RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_protecting(
-        args.principal_ura,
-        args.public_key_b64,
-        role,
-        owner,
-        protected_public_key_b64,
-    )?;
+    let trust = RuntimeTrust::new(daemon_realm, trust_anchor_path, cell);
+    if let Some(protected_public_key_b64) = protected_public_key_b64 {
+        trust.register_pubkey_protecting(
+            args.principal_ura,
+            args.public_key_b64,
+            role,
+            owner,
+            Some(protected_public_key_b64),
+        )?;
+    } else {
+        trust.register_pubkey_with_owner(args.principal_ura, args.public_key_b64, role, owner)?;
+    }
 
     serde_json::to_vec(&RegisterResponse { ok: true }).map_err(|err| {
         Status::internal(format!(

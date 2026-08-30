@@ -360,6 +360,39 @@ impl RuntimeClient {
         Ok(InvocationHandle { outcome })
     }
 
+    /// Open a signed server-stream Invocation through the owned-byte Rust SDK
+    /// facade.
+    ///
+    /// The returned handle owns every payload it yields and exposes no tonic or
+    /// protobuf type. It verifies receipt checkpoints before projecting them,
+    /// enforces strictly increasing public event sequences, and recognizes a
+    /// Runtime terminal state only when a terminal receipt verifies. Call
+    /// [`StreamHandle::request_cancel`] and keep draining when the caller needs
+    /// the target Invocation's receipt-backed cancellation outcome; closing or
+    /// dropping the handle only closes the local transport carrier.
+    pub async fn submit_stream_signed(&self, signed: SignedInvocation) -> Result<StreamHandle> {
+        if self.state != ClientConnectionState::Ready {
+            return Err(DaemonError::InvocationEndpointDown {
+                endpoint: self.inner.endpoint().to_path_buf(),
+            });
+        }
+        let tuple = signed.prepared().tuple();
+        let ability = signed.prepared().descriptor_ref().to_string();
+        let stream = self.inner.invoke_stream(signed.clone()).await?;
+        let verifier_tuple = tuple.clone();
+        Ok(StreamHandle::new(
+            ability,
+            tuple,
+            stream,
+            StreamCheckpointVerifier::for_daemon_endpoint(
+                self.inner.endpoint().to_path_buf(),
+                verifier_tuple,
+            ),
+            self.clone(),
+            signed,
+        ))
+    }
+
     /// Submit an independently signed `invocation.cancel` command for a target
     /// Invocation. The returned handle proves only the command lifecycle; the
     /// target's terminal outcome remains observable through its original
@@ -367,6 +400,14 @@ impl RuntimeClient {
     pub async fn request_cancel_signed(
         &self,
         signed: SignedInvocation,
+        reason: String,
+    ) -> Result<InvocationHandle> {
+        self.request_cancel_for_target(&signed, reason).await
+    }
+
+    async fn request_cancel_for_target(
+        &self,
+        signed: &SignedInvocation,
         reason: String,
     ) -> Result<InvocationHandle> {
         if self.state != ClientConnectionState::Ready {
@@ -413,6 +454,484 @@ impl RuntimeClient {
     pub fn close(&mut self) {
         self.state = ClientConnectionState::Closed;
     }
+}
+
+/// Public lifecycle state for one Rust SDK server-stream handle.
+///
+/// Runtime terminal authority and local carrier ownership are intentionally
+/// distinct: `Terminal` means a terminal receipt was verified, while `Closed`
+/// means only that this SDK object no longer owns a transport carrier.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum StreamState {
+    Open,
+    CancelRequested,
+    Terminal,
+    Failed,
+    Closed,
+}
+
+impl StreamState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::CancelRequested => "CancelRequested",
+            Self::Terminal => "Terminal",
+            Self::Failed => "Failed",
+            Self::Closed => "Closed",
+        }
+    }
+}
+
+/// Semantic kind of an owned Rust SDK server-stream event.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum StreamEventKind {
+    Data,
+    Terminal,
+    Error,
+}
+
+impl StreamEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Data => "data",
+            Self::Terminal => "terminal",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// One validated, fully owned server-stream event.
+///
+/// `payload` is the exact Runtime payload bytes. No base64 expansion, callback
+/// borrow, buffer lease, protobuf object, or transport object crosses this
+/// boundary. Receipt summaries are emitted only after cryptographic checkpoint
+/// verification. `terminal` therefore represents Runtime authority rather than
+/// the untrusted wire `terminal` flag.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct StreamEvent {
+    pub invocation_id: String,
+    /// One-based SDK event sequence. Axon's zero-based wire sequence is
+    /// projected exactly once at this boundary.
+    pub sequence: u64,
+    pub kind: StreamEventKind,
+    pub state: String,
+    pub terminal: bool,
+    /// True only for a receipt-free error that ends the carrier. It is not a
+    /// canonical Invocation terminal fact.
+    pub transport_terminal: bool,
+    pub payload_content_type: String,
+    pub payload: Vec<u8>,
+    pub elapsed_ms: u64,
+    pub admission_receipt: Option<ReceiptSummary>,
+    pub terminal_receipt: Option<ReceiptSummary>,
+    pub error: Option<RuntimeErrorSummary>,
+}
+
+/// SDK-owned server-stream handle over the daemon Invocation endpoint.
+///
+/// State machine:
+///
+/// `Open -> CancelRequested -> Terminal -> Closed`
+///
+/// with `Open | CancelRequested -> Failed -> Closed` for transport/proof
+/// failure, and any live state -> `Closed` for local carrier closure. A local
+/// close never fabricates Runtime cancellation or a terminal receipt.
+#[cfg(feature = "axon-pb")]
+pub struct StreamHandle {
+    ability: String,
+    tuple: InvocationTuple,
+    stream: Option<tonic::Streaming<axon_sdk::pb::axon::v1::InvokeStreamChunk>>,
+    verifier: StreamCheckpointVerifier,
+    cancellation_client: RuntimeClient,
+    signed_target: SignedInvocation,
+    state: StreamState,
+    invocation_id: Option<String>,
+    last_sequence: Option<u64>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl std::fmt::Debug for StreamHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StreamHandle")
+            .field("ability", &self.ability)
+            .field("tuple", &self.tuple)
+            .field("state", &self.state)
+            .field("invocation_id", &self.invocation_id)
+            .field("last_sequence", &self.last_sequence)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl StreamHandle {
+    fn new(
+        ability: String,
+        tuple: InvocationTuple,
+        stream: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeStreamChunk>,
+        verifier: StreamCheckpointVerifier,
+        cancellation_client: RuntimeClient,
+        signed_target: SignedInvocation,
+    ) -> Self {
+        Self {
+            ability,
+            tuple,
+            stream: Some(stream),
+            verifier,
+            cancellation_client,
+            signed_target,
+            state: StreamState::Open,
+            invocation_id: None,
+            last_sequence: None,
+        }
+    }
+
+    /// Complete Invocation tuple submitted to open this stream.
+    pub fn tuple(&self) -> &InvocationTuple {
+        &self.tuple
+    }
+
+    /// Current explicit SDK lifecycle state.
+    pub fn state(&self) -> StreamState {
+        self.state
+    }
+
+    /// Canonical runtime invocation id after the first validated event.
+    pub fn invocation_id(&self) -> Option<&str> {
+        self.invocation_id.as_deref()
+    }
+
+    /// Receive the next owned event.
+    ///
+    /// A verified terminal event is returned once. The following call closes
+    /// the local carrier and returns `Ok(None)`. EOF before that verified
+    /// terminal is a fail-closed protocol error.
+    pub async fn next_event(&mut self) -> Result<Option<StreamEvent>> {
+        match self.state {
+            StreamState::Terminal => {
+                self.close();
+                return Ok(None);
+            }
+            StreamState::Closed => return Ok(None),
+            StreamState::Failed => {
+                return Err(DaemonError::InvalidInvocation(
+                    "server stream is failed".to_string(),
+                ))
+            }
+            StreamState::Open | StreamState::CancelRequested => {}
+        }
+
+        let message = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| {
+                DaemonError::InvalidInvocation(
+                    "server stream carrier is unavailable while handle is live".to_string(),
+                )
+            })?
+            .message()
+            .await;
+        let chunk = match message {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => {
+                self.fail_and_close_carrier();
+                return Err(DaemonError::InvalidInvocation(
+                    "server stream carrier ended before a verified terminal receipt".to_string(),
+                ));
+            }
+            Err(status) => {
+                self.fail_and_close_carrier();
+                return Err(DaemonError::InvokeStreamStatus {
+                    ability: self.ability.clone(),
+                    code: status.code(),
+                    message: status.message().to_string(),
+                });
+            }
+        };
+
+        let event = match self.verifier.project(chunk) {
+            Ok(event) => event,
+            Err(error) => {
+                self.fail_and_close_carrier();
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.accept_event_identity_and_sequence(&event) {
+            self.fail_and_close_carrier();
+            return Err(error);
+        }
+        if event.terminal {
+            self.state = StreamState::Terminal;
+        } else if event.transport_terminal {
+            self.fail_and_close_carrier();
+        }
+        Ok(Some(event))
+    }
+
+    /// Submit a separately signed canonical `invocation.cancel` command.
+    ///
+    /// The returned handle proves the cancel-command lifecycle only. Continue
+    /// calling [`Self::next_event`] until a receipt-backed terminal event is
+    /// observed to prove the target stream's cancellation outcome.
+    pub async fn request_cancel(&mut self, reason: impl Into<String>) -> Result<InvocationHandle> {
+        if !matches!(self.state, StreamState::Open | StreamState::CancelRequested) {
+            return Err(DaemonError::InvalidInvocation(format!(
+                "server stream cancellation requires Open or CancelRequested state, got {}",
+                self.state.as_str()
+            )));
+        }
+        let command = self
+            .cancellation_client
+            .request_cancel_for_target(&self.signed_target, reason.into())
+            .await?;
+        self.state = StreamState::CancelRequested;
+        Ok(command)
+    }
+
+    /// Close the local stream carrier without fabricating Runtime terminal
+    /// authority. This operation is idempotent.
+    pub fn close(&mut self) {
+        self.stream.take();
+        self.state = StreamState::Closed;
+    }
+
+    fn accept_event_identity_and_sequence(&mut self, event: &StreamEvent) -> Result<()> {
+        accept_stream_event_identity_and_sequence(
+            &mut self.invocation_id,
+            &mut self.last_sequence,
+            event,
+        )
+    }
+
+    fn fail_and_close_carrier(&mut self) {
+        self.stream.take();
+        self.state = StreamState::Failed;
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn accept_stream_event_identity_and_sequence(
+    invocation_id: &mut Option<String>,
+    last_sequence: &mut Option<u64>,
+    event: &StreamEvent,
+) -> Result<()> {
+    match invocation_id.as_deref() {
+        Some(expected) if expected != event.invocation_id => {
+            return Err(DaemonError::InvalidInvocation(format!(
+                "server stream invocation_id changed from `{expected}` to `{}`",
+                event.invocation_id
+            )))
+        }
+        None => *invocation_id = Some(event.invocation_id.clone()),
+        Some(_) => {}
+    }
+    if last_sequence.is_some_and(|previous| event.sequence <= previous) {
+        return Err(DaemonError::InvalidInvocation(format!(
+            "server stream sequence must increase strictly: previous={}, received={}",
+            last_sequence.unwrap_or_default(),
+            event.sequence
+        )));
+    }
+    *last_sequence = Some(event.sequence);
+    Ok(())
+}
+
+#[cfg(feature = "axon-pb")]
+impl Drop for StreamHandle {
+    fn drop(&mut self) {
+        self.stream.take();
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct StreamCheckpointVerifier {
+    resolver: local_daemon_grpc::CanonicalRuntimeReceiptResolver,
+    expected_tuple: InvocationTuple,
+    admission: Option<axon_sdk::invocation::SignedInvocationReceipt>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl StreamCheckpointVerifier {
+    fn for_daemon_endpoint(endpoint: PathBuf, expected_tuple: InvocationTuple) -> Self {
+        Self {
+            resolver: local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(
+                endpoint,
+            ),
+            expected_tuple,
+            admission: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test(expected_tuple: InvocationTuple) -> Self {
+        Self {
+            resolver: local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
+            expected_tuple,
+            admission: None,
+        }
+    }
+
+    fn project(&mut self, chunk: axon_sdk::pb::axon::v1::InvokeStreamChunk) -> Result<StreamEvent> {
+        use axon_sdk::invocation::InvocationState;
+
+        if chunk.invocation_id.trim().is_empty() {
+            return Err(DaemonError::InvalidInvocation(
+                "server stream frame invocation_id must not be empty".to_string(),
+            ));
+        }
+        if chunk.header.as_ref().is_some_and(|header| {
+            !header.request_id.is_empty() && header.request_id != chunk.invocation_id
+        }) {
+            return Err(DaemonError::InvalidInvocation(
+                "server stream response header request_id disagrees with invocation_id".to_string(),
+            ));
+        }
+        let state = InvocationState::try_from(chunk.state).map_err(|error| {
+            DaemonError::InvalidInvocation(format!("server stream frame state is invalid: {error}"))
+        })?;
+        let elapsed_ms = u64::try_from(chunk.elapsed_ms).map_err(|_| {
+            DaemonError::InvalidInvocation(
+                "server stream frame elapsed_ms must be non-negative".to_string(),
+            )
+        })?;
+        let sequence = chunk.sequence.checked_add(1).ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "server stream wire sequence cannot be projected to SDK sequence".to_string(),
+            )
+        })?;
+
+        let admission_receipt = chunk
+            .admission_receipt
+            .map(|receipt| self.verify_admission(receipt))
+            .transpose()?;
+        let terminal_receipt = chunk
+            .terminal_receipt
+            .map(|receipt| self.verify_terminal(receipt, state))
+            .transpose()?;
+        if admission_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.invocation_id != chunk.invocation_id)
+            || terminal_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.invocation_id != chunk.invocation_id)
+        {
+            return Err(DaemonError::InvalidInvocation(
+                "verified stream receipt invocation_id disagrees with stream frame invocation_id"
+                    .to_string(),
+            ));
+        }
+        let error = chunk
+            .error
+            .as_ref()
+            .or(chunk.proof_error.as_ref())
+            .map(RuntimeErrorSummary::from_wire);
+        let terminal = terminal_receipt.is_some();
+        let transport_terminal = error.is_some() && !terminal;
+        let kind = if error.is_some() {
+            StreamEventKind::Error
+        } else if terminal {
+            StreamEventKind::Terminal
+        } else {
+            StreamEventKind::Data
+        };
+
+        Ok(StreamEvent {
+            invocation_id: chunk.invocation_id,
+            sequence,
+            kind,
+            state: invocation_state_name(chunk.state),
+            terminal,
+            transport_terminal,
+            payload_content_type: chunk.content_type,
+            payload: chunk.payload,
+            elapsed_ms,
+            admission_receipt,
+            terminal_receipt,
+            error,
+        })
+    }
+
+    fn verify_admission(
+        &mut self,
+        receipt: axon_sdk::pb::axon::v1::InvocationReceipt,
+    ) -> Result<ReceiptSummary> {
+        if self.admission.is_some() {
+            return Err(DaemonError::InvalidInvocation(
+                "server stream carried more than one admission receipt".to_string(),
+            ));
+        }
+        let signed = crate::daemon::invocation::receipts::finalization_projection::verify_admission_checkpoint(
+            receipt,
+            &self.resolver,
+        )
+        .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let summary = ReceiptSummary::from_signed(&signed)?;
+        validate_stream_receipt_tuple(&summary, &self.expected_tuple)?;
+        self.admission = Some(signed);
+        Ok(summary)
+    }
+
+    fn verify_terminal(
+        &self,
+        receipt: axon_sdk::pb::axon::v1::InvocationReceipt,
+        frame_state: axon_sdk::invocation::InvocationState,
+    ) -> Result<ReceiptSummary> {
+        let terminal = crate::daemon::invocation::receipts::finalization_projection::verify_terminal_checkpoint(
+            receipt,
+            &self.resolver,
+        )
+        .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let admission = self.admission.as_ref().ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "server stream terminal receipt arrived before admission receipt".to_string(),
+            )
+        })?;
+        let verified = crate::daemon::invocation::receipts::finalization_projection::verify_signed_finalization_checkpoints(
+            admission,
+            &terminal,
+            &self.resolver,
+        )
+        .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        if verified.terminal().state() != frame_state {
+            return Err(DaemonError::InvalidInvocation(
+                "verified terminal receipt state disagrees with stream frame state".to_string(),
+            ));
+        }
+        let summary = ReceiptSummary::from_signed(verified.terminal())?;
+        validate_stream_receipt_tuple(&summary, &self.expected_tuple)?;
+        Ok(summary)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_stream_receipt_tuple(
+    receipt: &ReceiptSummary,
+    expected: &InvocationTuple,
+) -> Result<()> {
+    let caller = receipt
+        .caller_binding
+        .as_ref()
+        .map(|binding| binding.ura.as_str());
+    let callee = receipt
+        .callee_binding
+        .as_ref()
+        .map(|binding| binding.ura.as_str());
+    let subject = receipt
+        .subject_binding
+        .as_ref()
+        .map(|binding| binding.ura.as_str());
+    if caller != Some(expected.caller_ura.as_str())
+        || callee != Some(expected.callee_ura.as_str())
+        || subject != Some(expected.subject_ura.as_str())
+        || receipt.ability_binding != expected.descriptor_ref
+        || receipt.invocation_nonce_base64 != expected.nonce_base64
+        || receipt.input_hash_hex != expected.args_digest_hex
+    {
+        return Err(DaemonError::InvalidInvocation(
+            "verified stream receipt is not bound to the submitted Invocation tuple".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Typed runtime health projection.
@@ -984,27 +1503,41 @@ fn authority_binding_summary(
                     "kind": "self+identity",
                     "authority_ura": authority_ura,
                 }),
-                Some(Evidence::Delegation(value)) => serde_json::json!({
-                    "kind": "delegated_by+delegation",
-                    "authority_ura": authority_ura,
-                    "issuer_ura": value.issuer.as_ref().map(|i| i.ura.as_str()).unwrap_or_default(),
-                    "audience": value.audience,
-                    "scopes": value.scopes,
-                    "issued_at_ms": value.issued_at_ms,
-                    "expires_at_ms": value.expires_at_ms,
-                    "signature_base64": base64_bytes(&value.signature),
-                }),
-                Some(Evidence::Session(value)) => serde_json::json!({
-                    "kind": "session_of+session",
-                    "authority_ura": authority_ura,
-                    "issuer_ura": value.issuer.as_ref().map(|i| i.ura.as_str()).unwrap_or_default(),
-                    "session_id": value.session_id,
-                    "scopes": value.scopes,
-                    "audiences": value.audiences,
-                    "issued_at_ms": value.issued_at_ms,
-                    "expires_at_ms": value.expires_at_ms,
-                    "signature_base64": base64_bytes(&value.signature),
-                }),
+                Some(Evidence::Delegation(value)) => {
+                    let issuer_ura = value
+                        .issuer
+                        .as_ref()
+                        .map(|identity| identity.ura.as_str())
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "kind": "delegated_by+delegation",
+                        "authority_ura": authority_ura,
+                        "issuer_ura": issuer_ura,
+                        "audience": value.audience,
+                        "scopes": value.scopes,
+                        "issued_at_ms": value.issued_at_ms,
+                        "expires_at_ms": value.expires_at_ms,
+                        "signature_base64": base64_bytes(&value.signature),
+                    })
+                }
+                Some(Evidence::Session(value)) => {
+                    let issuer_ura = value
+                        .issuer
+                        .as_ref()
+                        .map(|identity| identity.ura.as_str())
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "kind": "session_of+session",
+                        "authority_ura": authority_ura,
+                        "issuer_ura": issuer_ura,
+                        "session_id": value.session_id,
+                        "scopes": value.scopes,
+                        "audiences": value.audiences,
+                        "issued_at_ms": value.issued_at_ms,
+                        "expires_at_ms": value.expires_at_ms,
+                        "signature_base64": base64_bytes(&value.signature),
+                    })
+                }
                 Some(Evidence::Attestation(_)) => serde_json::json!({
                     "kind": "credential_of+attestation",
                     "authority_ura": authority_ura,
@@ -1196,6 +1729,190 @@ impl DaemonBidiSession {
             "bidi EOF send requires an explicit frame-chain MAC; use a frame-chain aware sender"
                 .to_string(),
         ))
+    }
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod stream_facade_tests {
+    use super::*;
+    use axon_sdk::invocation::InvocationState;
+    use axon_sdk::pb::axon::v1::{Error, ErrorStage, InvokeStreamChunk, ResponseHeader};
+
+    fn tuple() -> InvocationTuple {
+        InvocationTuple {
+            caller_ura: "easynet:///r/example/user/alice".to_string(),
+            callee_ura: "easynet:///r/example/agent/capture".to_string(),
+            descriptor_ref: "easynet:///r/example/ability/capture.stream@1.0.0#descriptor!stream"
+                .to_string(),
+            subject_ura: "easynet:///r/example/resource/display/1".to_string(),
+            nonce_base64: "AAAAAAAAAAAAAAAAAAAAAA==".to_string(),
+            causal_context: serde_json::json!({"form": "none"}),
+            args_digest_hex: "00".repeat(32),
+            content_type: "application/json".to_string(),
+            metadata: std::collections::HashMap::new(),
+            timeout_seconds: Some(30),
+        }
+    }
+
+    fn data_chunk(sequence: u64, payload: Vec<u8>) -> InvokeStreamChunk {
+        InvokeStreamChunk {
+            header: Some(ResponseHeader {
+                request_id: "inv-stream-1".to_string(),
+                ..ResponseHeader::default()
+            }),
+            invocation_id: "inv-stream-1".to_string(),
+            state: InvocationState::Running.to_wire_i32(),
+            payload,
+            content_type: "video/h264".to_string(),
+            sequence,
+            ..InvokeStreamChunk::default()
+        }
+    }
+
+    #[test]
+    fn stream_projection_returns_exact_owned_payload_without_trusting_wire_terminal() {
+        let payload = vec![0, 255, 1, 2, 3, 128];
+        let mut chunk = data_chunk(0, payload.clone());
+        chunk.terminal = true;
+
+        let event = StreamCheckpointVerifier::for_test(tuple())
+            .project(chunk)
+            .expect("raw payload projection");
+
+        assert_eq!(event.sequence, 1);
+        assert_eq!(event.kind, StreamEventKind::Data);
+        assert_eq!(event.state, "Running");
+        assert!(!event.terminal, "wire terminal is not terminal authority");
+        assert!(!event.transport_terminal);
+        assert_eq!(event.payload_content_type, "video/h264");
+        assert_eq!(event.payload, payload);
+        assert!(event.admission_receipt.is_none());
+        assert!(event.terminal_receipt.is_none());
+    }
+
+    #[test]
+    fn stream_projection_rejects_sequence_overflow_and_negative_elapsed_time() {
+        let mut overflow = data_chunk(u64::MAX, vec![]);
+        let error = StreamCheckpointVerifier::for_test(tuple())
+            .project(overflow.clone())
+            .expect_err("wire sequence must fit the public one-based coordinate");
+        assert!(error
+            .to_string()
+            .contains("cannot be projected to SDK sequence"));
+
+        overflow.sequence = 0;
+        overflow.elapsed_ms = -1;
+        let error = StreamCheckpointVerifier::for_test(tuple())
+            .project(overflow)
+            .expect_err("negative elapsed time must fail closed");
+        assert!(error.to_string().contains("must be non-negative"));
+    }
+
+    #[test]
+    fn receipt_free_error_is_transport_terminal_not_runtime_terminal() {
+        let mut chunk = data_chunk(3, vec![]);
+        chunk.state = InvocationState::Failed.to_wire_i32();
+        chunk.error = Some(Error {
+            code: "TRANSPORT_CLOSED".to_string(),
+            message: "carrier ended".to_string(),
+            stage: ErrorStage::Transport as i32,
+            ..Error::default()
+        });
+
+        let event = StreamCheckpointVerifier::for_test(tuple())
+            .project(chunk)
+            .expect("typed transport terminal");
+
+        assert_eq!(event.kind, StreamEventKind::Error);
+        assert!(!event.terminal);
+        assert!(event.transport_terminal);
+        assert_eq!(
+            event.error.as_ref().map(|error| error.code.as_str()),
+            Some("TRANSPORT_CLOSED")
+        );
+        assert!(event.terminal_receipt.is_none());
+    }
+
+    #[test]
+    fn stream_identity_and_sequence_are_monotonic() {
+        let mut invocation_id = None;
+        let mut last_sequence = None;
+        let first = StreamCheckpointVerifier::for_test(tuple())
+            .project(data_chunk(0, vec![1]))
+            .expect("first frame");
+        accept_stream_event_identity_and_sequence(&mut invocation_id, &mut last_sequence, &first)
+            .expect("first identity and sequence");
+        assert_eq!(invocation_id.as_deref(), Some("inv-stream-1"));
+        assert_eq!(last_sequence, Some(1));
+
+        let duplicate = StreamCheckpointVerifier::for_test(tuple())
+            .project(data_chunk(0, vec![2]))
+            .expect("duplicate sequence frame projection");
+        let error = accept_stream_event_identity_and_sequence(
+            &mut invocation_id,
+            &mut last_sequence,
+            &duplicate,
+        )
+        .expect_err("duplicate sequence must fail closed");
+        assert!(error.to_string().contains("increase strictly"));
+
+        let mut changed = data_chunk(1, vec![3]);
+        changed.invocation_id = "inv-stream-2".to_string();
+        changed.header.as_mut().unwrap().request_id = "inv-stream-2".to_string();
+        let changed = StreamCheckpointVerifier::for_test(tuple())
+            .project(changed)
+            .expect("changed identity frame projection");
+        let error = accept_stream_event_identity_and_sequence(
+            &mut invocation_id,
+            &mut last_sequence,
+            &changed,
+        )
+        .expect_err("invocation identity change must fail closed");
+        assert!(error.to_string().contains("invocation_id changed"));
+    }
+
+    #[test]
+    fn response_header_must_bind_the_same_invocation_id() {
+        let mut chunk = data_chunk(0, vec![]);
+        chunk.header.as_mut().unwrap().request_id = "other-request".to_string();
+
+        let error = StreamCheckpointVerifier::for_test(tuple())
+            .project(chunk)
+            .expect_err("header mismatch must fail closed");
+
+        assert!(error.to_string().contains("request_id disagrees"));
+    }
+
+    #[test]
+    fn verified_receipt_projection_must_bind_the_submitted_tuple() {
+        let expected = tuple();
+        let mut summary = ReceiptSummary::from_verified_wire(
+            &axon_sdk::pb::axon::v1::InvocationReceipt::default(),
+            "easynet:///r/example/invocation/1/receipt/0".to_string(),
+        );
+        summary.caller_binding = Some(ReceiptAgentBindingSummary {
+            ura: expected.caller_ura.clone(),
+            profile: "axon-strict-v2".to_string(),
+        });
+        summary.callee_binding = Some(ReceiptAgentBindingSummary {
+            ura: expected.callee_ura.clone(),
+            profile: "axon-strict-v2".to_string(),
+        });
+        summary.subject_binding = Some(ReceiptSubjectBindingSummary {
+            ura: expected.subject_ura.clone(),
+            profile: "axon-strict-v2".to_string(),
+        });
+        summary.ability_binding = expected.descriptor_ref.clone();
+        summary.invocation_nonce_base64 = expected.nonce_base64.clone();
+        summary.input_hash_hex = expected.args_digest_hex.clone();
+
+        validate_stream_receipt_tuple(&summary, &expected).expect("exact tuple binding");
+
+        summary.subject_binding.as_mut().unwrap().ura =
+            "easynet:///r/example/resource/display/other".to_string();
+        let error = validate_stream_receipt_tuple(&summary, &expected)
+            .expect_err("receipt for another subject must fail closed");
+        assert!(error.to_string().contains("submitted Invocation tuple"));
     }
 }
 

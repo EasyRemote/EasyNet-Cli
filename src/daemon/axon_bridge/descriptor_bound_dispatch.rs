@@ -275,6 +275,7 @@ pub struct RpcDispatchOutcome {
     pub invocation_id: Option<String>,
     pub state: InvocationState,
     pub payload_bytes: Vec<u8>,
+    pub payload_content_type: String,
     pub error: Option<AxonError>,
     /// Admission receipt minted by Axon for the descriptor-bound call,
     /// when admission reached the runtime.
@@ -300,6 +301,11 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
                 } else {
                     Vec::new()
                 },
+                payload_content_type: if completed {
+                    finalized.output_content_type().to_string()
+                } else {
+                    String::new()
+                },
                 error: finalized.failure,
                 admission_receipt: Some(finalized.admission_receipt),
                 terminal_receipt: Some(finalized.terminal_receipt),
@@ -319,6 +325,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
                 invocation_id,
                 state,
                 payload_bytes: Vec::new(),
+                payload_content_type: String::new(),
                 error: Some(error),
                 admission_receipt: None,
                 terminal_receipt: None,
@@ -361,6 +368,7 @@ async fn dispatch_rpc(
                 invocation_id: None,
                 state: InvocationState::Failed,
                 payload_bytes: Vec::new(),
+                payload_content_type: String::new(),
                 error: Some(err),
                 admission_receipt: None,
                 terminal_receipt: None,
@@ -434,6 +442,7 @@ async fn dispatch_rpc(
                 invocation_id: None,
                 state: InvocationState::Failed,
                 payload_bytes: Vec::new(),
+                payload_content_type: String::new(),
                 error: Some(err),
                 admission_receipt: None,
                 terminal_receipt: None,
@@ -455,6 +464,7 @@ fn cancellation_error_outcome(
         invocation_id: None,
         state: InvocationState::Failed,
         payload_bytes: Vec::new(),
+        payload_content_type: String::new(),
         error: Some(AxonError::unavailable(format!(
             "invocation_cancel_request_failed:{error}"
         ))),
@@ -609,6 +619,7 @@ pub async fn dispatch_rpc_local_explicit_subject(
                 invocation_id: None,
                 state: InvocationState::Failed,
                 payload_bytes: Vec::new(),
+                payload_content_type: String::new(),
                 error: Some(err),
                 admission_receipt: None,
                 terminal_receipt: None,
@@ -630,6 +641,7 @@ pub async fn dispatch_rpc_local_explicit_subject(
                 invocation_id: None,
                 state: InvocationState::Failed,
                 payload_bytes: Vec::new(),
+                payload_content_type: String::new(),
                 error: Some(err),
                 admission_receipt: None,
                 terminal_receipt: None,
@@ -643,6 +655,7 @@ pub async fn dispatch_rpc_local_explicit_subject(
             invocation_id: None,
             state: InvocationState::Failed,
             payload_bytes: Vec::new(),
+            payload_content_type: String::new(),
             error: Some(err),
             admission_receipt: None,
             terminal_receipt: None,

@@ -9,6 +9,7 @@ pub mod file_edit;
 pub mod file_transfer;
 pub mod files;
 pub mod http;
+pub mod net_tunnel;
 pub mod process;
 pub mod session;
 pub mod shell;

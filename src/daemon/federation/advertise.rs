@@ -17,10 +17,33 @@ use crate::daemon::federation::read_model::owner_projection::{
 /// response with `ack=false`, and an acknowledged response must account for
 /// the exact complete set sent by the Device (including zero for tombstones).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct AdvertiseAbilitiesResponse {
     pub(crate) ack: bool,
     pub(crate) count: usize,
+    /// Hub read-model outcome for the admitted projection write.
+    ///
+    /// This is optional for forward/backward JSON compatibility. Older Hubs
+    /// only return `ack` and `count`; newer Hubs include the concrete revision
+    /// fence outcome so callers can distinguish transport/admission failures
+    /// from a non-selected owner projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) outcome: Option<String>,
+}
+
+impl AdvertiseAbilitiesResponse {
+    #[must_use]
+    pub(crate) fn outcome_str(&self) -> Option<&str> {
+        self.outcome.as_deref()
+    }
+
+    #[must_use]
+    pub(crate) fn is_read_model_rejection(&self) -> bool {
+        !self.ack
+            && matches!(
+                self.outcome_str(),
+                Some("ignored_stale" | "rejected_conflict")
+            )
+    }
 }
 
 /// Decode and validate the terminal Hub receipt for
@@ -32,18 +55,33 @@ pub(crate) fn decode_advertise_abilities_response(
     result_bytes: &[u8],
     expected_count: usize,
 ) -> Result<AdvertiseAbilitiesResponse, String> {
-    let response: AdvertiseAbilitiesResponse = serde_json::from_slice(result_bytes)
-        .map_err(|error| format!("decode federation.advertise_abilities response: {error}"))?;
+    let response = parse_advertise_abilities_response(result_bytes)?;
+    validate_advertise_abilities_response(response, expected_count)
+}
+
+pub(crate) fn parse_advertise_abilities_response(
+    result_bytes: &[u8],
+) -> Result<AdvertiseAbilitiesResponse, String> {
+    serde_json::from_slice(result_bytes)
+        .map_err(|error| format!("decode federation.advertise_abilities response: {error}"))
+}
+
+pub(crate) fn validate_advertise_abilities_response(
+    response: AdvertiseAbilitiesResponse,
+    expected_count: usize,
+) -> Result<AdvertiseAbilitiesResponse, String> {
     if !response.ack {
         return Err(format!(
-            "Hub rejected federation.advertise_abilities publication (accepted_count={}, expected_count={expected_count})",
-            response.count
+            "Hub rejected federation.advertise_abilities publication (accepted_count={}, expected_count={expected_count}, outcome={})",
+            response.count,
+            response.outcome_str().unwrap_or("unknown")
         ));
     }
     if response.count != expected_count {
         return Err(format!(
-            "Hub acknowledged federation.advertise_abilities with count mismatch (accepted_count={}, expected_count={expected_count})",
-            response.count
+            "Hub acknowledged federation.advertise_abilities with count mismatch (accepted_count={}, expected_count={expected_count}, outcome={})",
+            response.count,
+            response.outcome_str().unwrap_or("unknown")
         ));
     }
     Ok(response)
@@ -137,7 +175,8 @@ mod tests {
             response,
             AdvertiseAbilitiesResponse {
                 ack: true,
-                count: 0
+                count: 0,
+                outcome: None,
             }
         );
     }

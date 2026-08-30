@@ -1,7 +1,7 @@
 schema_version = "3"
 name = "remote_desktop.request_permission"
 descriptor_version = "1.0.0"
-description = "Ask the operating system for the screen-capture permission required by native remote desktop. On macOS this calls CoreGraphics' Screen Recording TCC request API from the daemon-side ability process."
+description = "Ask the operating system for the host permissions required by native remote desktop. On macOS this requests Screen Recording for capture and Accessibility for pointer/keyboard input injection from the daemon-side ability process."
 exposure = "operator"
 dedicated_surface = "remote_desktop"
 subject_contract_kind = "dedicated-surface"

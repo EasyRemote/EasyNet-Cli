@@ -53,7 +53,7 @@ pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<Ability
             ..Default::default()
         })?;
     }
-    manifest
+    manifest = manifest
         .with_descriptor_version(contract.descriptor_version)?
         .with_admission_action(contract.admission_action.as_str())?
         .with_frontend_contract(
@@ -61,7 +61,11 @@ pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<Ability
             contract.dedicated_surface,
             contract.subject_contract_kind,
             contract.subject_contract_ura,
-        )
+        )?;
+    if let Some(bidi_wire_kind) = contract.bidi_wire_kind {
+        manifest = manifest.with_bidi_wire_kind(bidi_wire_kind)?;
+    }
+    Ok(manifest)
 }
 
 /// Build the manifest metadata attached to a daemon-owned ability registration.
@@ -91,7 +95,7 @@ pub(crate) fn registry_manifest(
                 panic!("{ability_key} output receipt schema must be valid: {error}")
             });
     }
-    manifest
+    manifest = manifest
         .with_descriptor_version(contract.descriptor_version)
         .and_then(|manifest| manifest.with_admission_action(contract.admission_action.as_str()))
         .and_then(|manifest| {
@@ -104,5 +108,11 @@ pub(crate) fn registry_manifest(
         })
         .unwrap_or_else(|error| {
             panic!("{ability_key} governed manifest fields are invalid: {error}")
-        })
+        });
+    if let Some(bidi_wire_kind) = contract.bidi_wire_kind {
+        manifest = manifest
+            .with_bidi_wire_kind(bidi_wire_kind)
+            .unwrap_or_else(|error| panic!("{ability_key} bidi wire kind is invalid: {error}"));
+    }
+    manifest
 }

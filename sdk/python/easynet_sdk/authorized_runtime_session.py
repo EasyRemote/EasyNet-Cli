@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 from enum import StrEnum
 from typing import Mapping, Protocol
 
@@ -39,6 +39,7 @@ from ._runtime_governance import governance_descriptor_provider_for_ability
 from ._runtime_subjects import runtime_governance_read_subject_ura
 from ._session_authority_subjects import session_authority_admits_subject
 from ._receipt_history_admission import validate_receipt_history_request
+from .axon_addressing import parse_ura, project_descriptor_ref
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 
 
@@ -124,6 +125,7 @@ class DescriptorResolutionRequest:
 class DescriptorResolution:
     state: DescriptorResolutionState
     descriptor_ref: str = ""
+    resolved_callee_ura: str = ""
     descriptor_fingerprint: str = ""
     owner_principal: PrincipalRef = PrincipalRef("")
     reason: str = ""
@@ -300,11 +302,13 @@ class AuthorizedRuntimeSession:
             _descriptor_request_from_intent(intent)
         )
         _validate_descriptor_resolution(resolution)
+        callee_ura = _resolved_descriptor_callee_ura(resolution)
+        resolution = dataclass_replace(resolution, resolved_callee_ura=callee_ura)
         metadata = _runtime_session_intent_metadata(intent, resolution)
         draft = (
             InvocationBuilder()
             .with_caller_ura(intent.caller_identity.principal.ura)
-            .with_callee_ura(intent.target.ura)
+            .with_callee_ura(callee_ura)
             .with_subject_ura(intent.subject.ura)
             .with_descriptor_ref(resolution.descriptor_ref)
             .with_nonce_base64(self._clock.new_nonce_base64())
@@ -631,6 +635,7 @@ class RuntimeClientDescriptorProvider:
         return DescriptorResolution(
             state=DescriptorResolutionState.RESOLVED,
             descriptor_ref=ref,
+            resolved_callee_ura=_descriptor_ref_owner_ura(ref),
             descriptor_fingerprint=_descriptor_fingerprint(ref),
         )
 
@@ -669,6 +674,7 @@ def _prepared_state(
         "caller": intent.caller_identity.principal.ura,
         "acting_principal": intent.acting_principal.principal.ura,
         "target": intent.target.ura,
+        "callee": draft.callee_ura,
         "ability": intent.ability.name,
         "subject": intent.subject.ura,
         "call_mode": intent.call_mode,
@@ -743,6 +749,7 @@ def _runtime_session_intent_metadata(
         "caller_ura": intent.caller_identity.principal.ura,
         "acting_principal_ura": intent.acting_principal.principal.ura,
         "target_ura": intent.target.ura,
+        "callee_ura": resolution.resolved_callee_ura,
         "ability": intent.ability.name,
         "subject_ura": intent.subject.ura,
         "subject_derivation": intent.subject.derivation_rule,
@@ -861,6 +868,55 @@ def _validate_descriptor_resolution(resolution: DescriptorResolution) -> None:
     raise _session_error(code, "descriptor", message, {"reason": resolution.reason})
 
 
+def _resolved_descriptor_callee_ura(resolution: DescriptorResolution) -> str:
+    if resolution.resolved_callee_ura.strip():
+        _validate_callable_callee_ura(
+            "resolved descriptor callee_ura", resolution.resolved_callee_ura
+        )
+        return resolution.resolved_callee_ura.strip()
+    try:
+        projection = project_descriptor_ref(resolution.descriptor_ref)
+    except SDKError as exc:
+        raise _session_error(
+            ErrorCode.DESCRIPTOR_NOT_FOUND,
+            "descriptor",
+            "resolved descriptor_ref does not project to a callable owner",
+            {"descriptor_ref": resolution.descriptor_ref},
+            exc,
+        ) from exc
+    owner_ura = str(projection.components.get("owner_ura", "")).strip()
+    _validate_callable_callee_ura("resolved descriptor callee_ura", owner_ura)
+    return owner_ura
+
+
+def _descriptor_ref_owner_ura(descriptor_ref: str) -> str:
+    try:
+        projection = project_descriptor_ref(descriptor_ref)
+    except SDKError:
+        return ""
+    return str(projection.components.get("owner_ura", "")).strip()
+
+
+def _validate_callable_callee_ura(label: str, callee_ura: str) -> None:
+    try:
+        projection = parse_ura(callee_ura.strip())
+    except SDKError as exc:
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "descriptor",
+            f"{label} must be a canonical Agent, Service, or Authority URA",
+            {"callee_ura": callee_ura},
+            exc,
+        ) from exc
+    if projection.kind not in {"agent", "service", "authority"}:
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "descriptor",
+            f"{label} must identify a callable Agent, Service, or Authority principal",
+            {"callee_ura": callee_ura},
+        )
+
+
 def _validate_authorized_binding(
     artifact: AuthorityArtifact,
     prepared: PreparedInvocationState,
@@ -886,11 +942,11 @@ def _validate_authorized_binding(
                 "authority subject does not admit invocation subject",
                 details,
             )
-        if not authority.matches_audience(intent.target.ura) or not authority.matches_scope(intent.ability.name):
+        if not authority.matches_audience(prepared.draft.callee_ura) or not authority.matches_scope(intent.ability.name):
             raise _session_error(
                 ErrorCode.AUTHORITY_DENIED,
                 "authorize",
-                "authority does not admit target or ability",
+                "authority does not admit resolved callee or ability",
                 details,
             )
         return
@@ -902,11 +958,11 @@ def _validate_authorized_binding(
             "authority issuer does not match caller identity",
             details,
         )
-    if authority.callee_ura.strip() != intent.target.ura.strip():
+    if authority.callee_ura.strip() != prepared.draft.callee_ura.strip():
         raise _session_error(
             ErrorCode.AUTHORITY_DENIED,
             "authorize",
-            "authority target does not match invocation target",
+            "authority callee does not match resolved descriptor callee",
             details,
         )
     if not session_authority_admits_subject(authority, intent.subject.ura):
@@ -916,11 +972,11 @@ def _validate_authorized_binding(
             "authority subject does not admit invocation subject",
             details,
         )
-    if not authority.matches_audience(intent.target.ura) or not authority.matches_scope(intent.ability.name):
+    if not authority.matches_audience(prepared.draft.callee_ura) or not authority.matches_scope(intent.ability.name):
         raise _session_error(
             ErrorCode.AUTHORITY_DENIED,
             "authorize",
-            "authority does not admit target or ability",
+            "authority does not admit resolved callee or ability",
             details,
         )
 
@@ -980,6 +1036,7 @@ def _intent_details(intent: InvocationIntent) -> dict[str, object]:
 def _prepared_details(prepared: PreparedInvocationState) -> dict[str, object]:
     details = _intent_details(prepared.intent)
     details["descriptor_ref"] = prepared.descriptor_ref
+    details["callee_ura"] = prepared.draft.callee_ura
     details["descriptor_fingerprint"] = prepared.descriptor_fingerprint
     details["preparation_fingerprint"] = prepared.preparation_fingerprint
     details["owner_principal"] = prepared.owner_principal.ura

@@ -23,6 +23,12 @@ type = "object"
 required = ["intent"]
 additionalProperties = false
 
+[input_schema.properties.allow_remote_focus]
+type = "boolean"
+
+[input_schema.properties.input_control]
+type = "boolean"
+
 [input_schema.properties.intent]
 type = "string"
 enum = ["remote_desktop_session"]

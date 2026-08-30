@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::daemon::ability::descriptors::{AbilityHints, AdmissionAction};
 use crate::daemon::ability::manifest::{
-    AbilityDedicatedSurface, AbilityExposure, AbilitySubjectContractKind,
+    AbilityBidiWireKind, AbilityDedicatedSurface, AbilityExposure, AbilitySubjectContractKind,
 };
 use crate::daemon::ability::CallMode;
 use sha2::{Digest, Sha256};
@@ -179,6 +179,13 @@ pub struct BuiltinPluginAbilitySpec {
     pub input_schema: fn() -> Value,
 }
 
+fn plugin_bidi_wire_kind_to_descriptor(kind: PluginBidiWireKind) -> AbilityBidiWireKind {
+    match kind {
+        PluginBidiWireKind::JsonFrames => AbilityBidiWireKind::JsonFrames,
+        PluginBidiWireKind::MetadataJsonPlusBinary => AbilityBidiWireKind::MetadataJsonPlusBinary,
+    }
+}
+
 impl BuiltinPluginAbilitySpec {
     /// Project this compiled builtin plugin spec into the daemon registry
     /// manifest shape used by `meta.list_abilities`.
@@ -219,6 +226,14 @@ impl BuiltinPluginAbilitySpec {
                 ability: self.name.to_string(),
                 reason: source.to_string(),
             })?;
+        if let Some(bidi_wire_kind) = self.bidi_wire_kind {
+            manifest = manifest
+                .with_bidi_wire_kind(plugin_bidi_wire_kind_to_descriptor(bidi_wire_kind))
+                .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                    ability: self.name.to_string(),
+                    reason: source.to_string(),
+                })?;
+        }
         if !self.subject_ura_kinds.is_empty() {
             manifest = manifest
                 .with_subject_scope(
@@ -254,6 +269,7 @@ pub struct PluginAbilityDescriptor {
     dedicated_surface: AbilityDedicatedSurface,
     subject_contract_kind: AbilitySubjectContractKind,
     subject_contract_ura: Option<String>,
+    bidi_wire_kind: Option<AbilityBidiWireKind>,
 }
 
 impl PluginAbilityDescriptor {
@@ -310,6 +326,10 @@ impl PluginAbilityDescriptor {
         self.subject_contract_ura.as_deref()
     }
 
+    pub fn bidi_wire_kind(&self) -> Option<AbilityBidiWireKind> {
+        self.bidi_wire_kind
+    }
+
     /// Project this plugin descriptor into the daemon registry manifest shape.
     ///
     /// What this is NOT: the package truth. The descriptor remains the package
@@ -359,6 +379,14 @@ impl PluginAbilityDescriptor {
                 ability: self.name.clone(),
                 reason: source.to_string(),
             })?;
+        if let Some(bidi_wire_kind) = self.bidi_wire_kind {
+            manifest = manifest
+                .with_bidi_wire_kind(bidi_wire_kind)
+                .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                    ability: self.name.clone(),
+                    reason: source.to_string(),
+                })?;
+        }
         if let Some(output_schema) = &self.output_schema {
             manifest = manifest
                 .with_output_schema(output_schema.clone())
@@ -611,6 +639,8 @@ struct RawPluginAbilityDescriptor {
     subject_contract_kind: AbilitySubjectContractKind,
     #[serde(default)]
     subject_contract_ura: Option<String>,
+    #[serde(default)]
+    bidi_wire_kind: Option<AbilityBidiWireKind>,
     admission_action: AdmissionAction,
     input_schema: Value,
     #[serde(default)]
@@ -652,6 +682,7 @@ fn builtin_descriptors(
                     .frontend_contract
                     .subject_contract_ura
                     .map(str::to_string),
+                bidi_wire_kind: spec.bidi_wire_kind.map(plugin_bidi_wire_kind_to_descriptor),
             }),
         );
     }
@@ -677,7 +708,14 @@ fn installed_descriptors(
                 path: path.clone(),
                 source,
             })?;
-        let descriptor = validate_descriptor(&path, ability.name(), raw)?;
+        let descriptor = validate_descriptor(
+            &path,
+            ability.name(),
+            ability
+                .bidi_wire_kind()
+                .map(plugin_bidi_wire_kind_to_descriptor),
+            raw,
+        )?;
         if out
             .insert(ability.name().to_string(), Arc::new(descriptor))
             .is_some()
@@ -693,6 +731,7 @@ fn installed_descriptors(
 fn validate_descriptor(
     path: &Path,
     expected_name: &str,
+    expected_bidi_wire_kind: Option<AbilityBidiWireKind>,
     raw: RawPluginAbilityDescriptor,
 ) -> Result<PluginAbilityDescriptor> {
     if raw.schema_version != crate::daemon::ability::catalog::ability_toml::CONTRACT_SCHEMA_VERSION
@@ -715,6 +754,15 @@ fn validate_descriptor(
         return Err(PluginHostError::InvalidAbilityDescriptor {
             path: path.to_path_buf(),
             reason: "description must be non-empty".to_string(),
+        });
+    }
+    if raw.bidi_wire_kind != expected_bidi_wire_kind {
+        return Err(PluginHostError::InvalidAbilityDescriptor {
+            path: path.to_path_buf(),
+            reason: format!(
+                "bidi_wire_kind {:?} does not match plugin.toml {:?}",
+                raw.bidi_wire_kind, expected_bidi_wire_kind
+            ),
         });
     }
     crate::daemon::ability::descriptors::AbilityDescriptorVersion::new(&raw.descriptor_version)
@@ -776,6 +824,7 @@ fn validate_descriptor(
         dedicated_surface: raw.dedicated_surface,
         subject_contract_kind: raw.subject_contract_kind,
         subject_contract_ura: raw.subject_contract_ura,
+        bidi_wire_kind: raw.bidi_wire_kind,
     })
 }
 

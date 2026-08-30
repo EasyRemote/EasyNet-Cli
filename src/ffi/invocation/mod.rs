@@ -23,6 +23,8 @@
 //   all go through the daemon's Axon Invocation gRPC endpoint.
 
 #[cfg(feature = "axon-pb")]
+use bytes::Bytes;
+#[cfg(feature = "axon-pb")]
 use rand::{rngs::OsRng, RngCore};
 use std::os::raw::{c_char, c_void};
 #[cfg(feature = "axon-pb")]
@@ -34,9 +36,21 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 #[cfg(feature = "axon-pb")]
 mod backpressure;
+#[cfg(feature = "axon-pb")]
+mod buffer_lease;
 
 #[cfg(feature = "axon-pb")]
-use self::backpressure::{bidi_callback_backpressure_frame, stream_callback_backpressure_event};
+use self::backpressure::bidi_callback_backpressure_frame;
+#[cfg(all(test, feature = "axon-pb"))]
+use self::buffer_lease::{allocate as allocate_buffer_lease, STREAM_V9_MAX_OUTSTANDING_LEASES};
+#[cfg(feature = "axon-pb")]
+use self::buffer_lease::{
+    allocate_with_budget as allocate_buffer_lease_with_budget,
+    close_stream as close_buffer_lease_stream, purge_owner as purge_buffer_leases_for_binding,
+    register_stream as register_buffer_lease_stream, release as release_buffer_lease,
+    retain as retain_buffer_lease, BufferLeaseAccessError, BufferLeaseAllocationError,
+    STREAM_V9_MAX_OUTSTANDING_BYTES,
+};
 #[cfg(feature = "axon-pb")]
 use crate::daemon::ability::AbilityCatalogQuery;
 #[cfg(feature = "axon-pb")]
@@ -44,20 +58,20 @@ use crate::daemon::axon_bridge::runtime_descriptor_provider::{
     DescriptorCatalogReadContext, DescriptorResolutionError, RuntimeDescriptorCatalogReader,
     RuntimeDescriptorResolutionProvider,
 };
+use crate::ffi::client::handle::{binding_for_handle, get, RuntimeHandle};
 #[cfg(feature = "axon-pb")]
-use crate::ffi::client::handle::{binding_for_handle, lib_runtime, ClientSessionBinding};
-use crate::ffi::client::handle::{get, RuntimeHandle};
+use crate::ffi::client::handle::{lib_runtime, ClientSessionBinding};
 #[cfg(not(feature = "axon-pb"))]
 use crate::ffi::errors::ERR_NOT_IMPLEMENTED;
 #[cfg(feature = "axon-pb")]
 use crate::ffi::errors::{
     clear_last_error, ERR_ABILITY_FAILED, ERR_CANCELLED, ERR_DAEMON_DOWN, ERR_GENERIC,
-    ERR_INVALID_ARG, ERR_NOT_FOUND, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED, ERR_PROTOCOL,
-    ERR_TIMEOUT, RUNTIME_OK,
+    ERR_NOT_FOUND, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED, ERR_PROTOCOL, ERR_TIMEOUT,
+    RUNTIME_OK,
 };
 use crate::ffi::errors::{
-    set_last_error_code, set_last_error_projection, ErrorProjection, ERR_INVALID_HANDLE,
-    ERR_INVALID_UTF8, ERR_NULL_POINTER,
+    set_last_error_code, set_last_error_projection, ErrorProjection, ERR_INVALID_ARG,
+    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
 };
 #[cfg(feature = "axon-pb")]
 use crate::ffi::strings::alloc_output_cstring;
@@ -70,6 +84,11 @@ use crate::ffi::strings::{read_cstr, StringError};
 /// process-local; they are not Axon protocol ids and must not be
 /// serialized as receipt or invocation identifiers.
 pub type InvocationStreamId = u64;
+
+/// Opaque id for an ABI v9 payload lease. Lease ids are process-local,
+/// session-bound capabilities and must never be serialized into Invocation
+/// metadata.
+pub type RuntimeBufferLeaseId = u64;
 
 /// Opaque id for an InvokeBidi session opened through
 /// `runtime_invocation_bidi_open`.
@@ -104,6 +123,280 @@ pub type InvocationHandleId = u64;
 /// only unambiguous EOF signal for a queue-backed consumer.
 pub type InvocationStreamCallback =
     unsafe extern "C" fn(user_data: *mut c_void, chunk_json: *const c_char);
+
+const STREAM_FRAME_V8_ABI_VERSION: u16 = 8;
+const STREAM_FRAME_V8_KIND_DATA: u8 = 1;
+const STREAM_FRAME_V8_KIND_TERMINAL: u8 = 2;
+const STREAM_FRAME_V8_KIND_ERROR: u8 = 3;
+const STREAM_FRAME_V8_KIND_CANCELLED: u8 = 4;
+const STREAM_FRAME_V8_KIND_TIMEOUT: u8 = 5;
+const STREAM_FRAME_V8_KIND_RECEIPT_VERIFICATION_ERROR: u8 = 6;
+const STREAM_FRAME_V8_STATE_ACCEPTED: u8 = 1;
+const STREAM_FRAME_V8_STATE_ADMITTED: u8 = 2;
+const STREAM_FRAME_V8_STATE_DISPATCHED: u8 = 3;
+const STREAM_FRAME_V8_STATE_RUNNING: u8 = 4;
+const STREAM_FRAME_V8_STATE_COMPLETED: u8 = 5;
+const STREAM_FRAME_V8_STATE_FAILED: u8 = 6;
+const STREAM_FRAME_V8_STATE_TIMED_OUT: u8 = 7;
+const STREAM_FRAME_V8_STATE_CANCELLED: u8 = 8;
+const STREAM_FRAME_V8_FLAG_TERMINAL: u32 = 1 << 0;
+const STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL: u32 = 1 << 1;
+const STREAM_FRAME_V8_FLAG_HAS_PAYLOAD: u32 = 1 << 2;
+const STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE: u32 = 1 << 3;
+const STREAM_FRAME_V8_FLAG_HAS_ADMISSION_RECEIPT: u32 = 1 << 4;
+const STREAM_FRAME_V8_FLAG_HAS_TERMINAL_RECEIPT: u32 = 1 << 5;
+const STREAM_FRAME_V8_FLAG_HAS_ERROR: u32 = 1 << 6;
+
+const STREAM_FRAME_V9_ABI_VERSION: u16 = 9;
+
+#[repr(C)]
+pub struct RuntimeBytesViewV8 {
+    data: *const u8,
+    len: usize,
+}
+
+impl RuntimeBytesViewV8 {
+    fn borrowed(bytes: &[u8]) -> Self {
+        Self {
+            data: if bytes.is_empty() {
+                std::ptr::null()
+            } else {
+                bytes.as_ptr()
+            },
+            len: bytes.len(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct RuntimeInvocationStreamFrameV8 {
+    struct_size: u32,
+    abi_version: u16,
+    kind: u8,
+    state: u8,
+    flags: u32,
+    sequence: u64,
+    elapsed_ms: u64,
+    payload_content_type: RuntimeBytesViewV8,
+    payload: RuntimeBytesViewV8,
+    admission_receipt_json: RuntimeBytesViewV8,
+    terminal_receipt_json: RuntimeBytesViewV8,
+    error_json: RuntimeBytesViewV8,
+}
+
+/// ABI v8 binary-frame callback. Scalar lifecycle fields live in the fixed
+/// header, payload/content type are length-delimited bytes, and JSON is used
+/// only for sparse receipt/error sidecars. EOF is exactly one null `frame`.
+pub type InvocationStreamV8Callback =
+    unsafe extern "C" fn(user_data: *mut c_void, frame: *const RuntimeInvocationStreamFrameV8);
+
+/// ABI v9 immutable payload lease. Empty payloads use the canonical
+/// `{ lease_id: 0, data: NULL, len: 0 }` representation. A non-empty payload
+/// owns one reference which the callback consumer must eventually release.
+#[repr(C)]
+pub struct RuntimeBufferLeaseV9 {
+    lease_id: RuntimeBufferLeaseId,
+    data: *const u8,
+    len: usize,
+}
+
+impl RuntimeBufferLeaseV9 {
+    fn empty() -> Self {
+        Self {
+            lease_id: 0,
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+
+    #[cfg(feature = "axon-pb")]
+    fn borrowed(lease_id: RuntimeBufferLeaseId, payload: &Bytes) -> Self {
+        if payload.is_empty() {
+            return Self::empty();
+        }
+        Self {
+            lease_id,
+            data: payload.as_ptr(),
+            len: payload.len(),
+        }
+    }
+}
+
+/// ABI v9 fixed-layout stream frame. Lifecycle and sidecar semantics are
+/// identical to v8; only the payload view becomes an explicitly owned lease.
+#[repr(C)]
+pub struct RuntimeInvocationStreamFrameV9 {
+    struct_size: u32,
+    abi_version: u16,
+    kind: u8,
+    state: u8,
+    flags: u32,
+    sequence: u64,
+    elapsed_ms: u64,
+    payload_content_type: RuntimeBytesViewV8,
+    payload: RuntimeBufferLeaseV9,
+    admission_receipt_json: RuntimeBytesViewV8,
+    terminal_receipt_json: RuntimeBytesViewV8,
+    error_json: RuntimeBytesViewV8,
+}
+
+pub type InvocationStreamV9Callback =
+    unsafe extern "C" fn(user_data: *mut c_void, frame: *const RuntimeInvocationStreamFrameV9);
+
+#[derive(Clone, Copy)]
+enum InvocationStreamCallbackTarget {
+    Json(InvocationStreamCallback),
+    V8(InvocationStreamV8Callback),
+    V9(InvocationStreamV9Callback),
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Clone, Copy)]
+enum StreamCallbackEncoding {
+    Json,
+    V8,
+    V9,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationStreamCallbackTarget {
+    fn encoding(self) -> StreamCallbackEncoding {
+        match self {
+            Self::Json(_) => StreamCallbackEncoding::Json,
+            Self::V8(_) => StreamCallbackEncoding::V8,
+            Self::V9(_) => StreamCallbackEncoding::V9,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+enum StreamCallbackDelivery {
+    Json(Vec<u8>),
+    V8(BinaryStreamFrameV8),
+    V9(BinaryStreamFrameV9),
+}
+
+#[cfg(feature = "axon-pb")]
+impl StreamCallbackDelivery {
+    async fn reserve_v9_payload_budget(
+        self,
+        budget: Option<Arc<tokio::sync::Semaphore>>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<(Self, bool), ()> {
+        let Self::V9(mut frame) = self else {
+            return Ok((self, false));
+        };
+        let bytes = frame.payload.len();
+        if bytes > STREAM_V9_MAX_OUTSTANDING_BYTES {
+            return Ok((
+                Self::V9(v9_payload_too_large_delivery(
+                    frame.sequence,
+                    frame.elapsed_ms,
+                    bytes,
+                )),
+                true,
+            ));
+        }
+        if bytes == 0 {
+            return Ok((Self::V9(frame), false));
+        }
+        let Some(budget) = budget else {
+            return Err(());
+        };
+        let permits = u32::try_from(bytes).map_err(|_| ())?;
+        let permit = tokio::select! {
+            _ = cancel.cancelled() => return Err(()),
+            permit = budget.acquire_many_owned(permits) => permit.map_err(|_| ())?,
+        };
+        frame.payload_budget = Some(permit);
+        Ok((Self::V9(frame), false))
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct BinaryStreamFrameV8 {
+    kind: u8,
+    state: u8,
+    flags: u32,
+    sequence: u64,
+    elapsed_ms: u64,
+    payload_content_type: Vec<u8>,
+    payload: Vec<u8>,
+    admission_receipt_json: Vec<u8>,
+    terminal_receipt_json: Vec<u8>,
+    error_json: Vec<u8>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl BinaryStreamFrameV8 {
+    fn borrowed_frame(&self) -> RuntimeInvocationStreamFrameV8 {
+        RuntimeInvocationStreamFrameV8 {
+            struct_size: std::mem::size_of::<RuntimeInvocationStreamFrameV8>() as u32,
+            abi_version: STREAM_FRAME_V8_ABI_VERSION,
+            kind: self.kind,
+            state: self.state,
+            flags: self.flags,
+            sequence: self.sequence,
+            elapsed_ms: self.elapsed_ms,
+            payload_content_type: RuntimeBytesViewV8::borrowed(&self.payload_content_type),
+            payload: RuntimeBytesViewV8::borrowed(&self.payload),
+            admission_receipt_json: RuntimeBytesViewV8::borrowed(&self.admission_receipt_json),
+            terminal_receipt_json: RuntimeBytesViewV8::borrowed(&self.terminal_receipt_json),
+            error_json: RuntimeBytesViewV8::borrowed(&self.error_json),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct BinaryStreamFrameV9 {
+    kind: u8,
+    state: u8,
+    flags: u32,
+    sequence: u64,
+    elapsed_ms: u64,
+    payload_content_type: Vec<u8>,
+    payload: Bytes,
+    payload_budget: Option<tokio::sync::OwnedSemaphorePermit>,
+    admission_receipt_json: Vec<u8>,
+    terminal_receipt_json: Vec<u8>,
+    error_json: Vec<u8>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl BinaryStreamFrameV9 {
+    fn from_v8(frame: BinaryStreamFrameV8) -> Self {
+        Self {
+            kind: frame.kind,
+            state: frame.state,
+            flags: frame.flags,
+            sequence: frame.sequence,
+            elapsed_ms: frame.elapsed_ms,
+            payload_content_type: frame.payload_content_type,
+            payload: Bytes::from(frame.payload),
+            payload_budget: None,
+            admission_receipt_json: frame.admission_receipt_json,
+            terminal_receipt_json: frame.terminal_receipt_json,
+            error_json: frame.error_json,
+        }
+    }
+
+    fn borrowed_frame(&self, lease_id: RuntimeBufferLeaseId) -> RuntimeInvocationStreamFrameV9 {
+        RuntimeInvocationStreamFrameV9 {
+            struct_size: std::mem::size_of::<RuntimeInvocationStreamFrameV9>() as u32,
+            abi_version: STREAM_FRAME_V9_ABI_VERSION,
+            kind: self.kind,
+            state: self.state,
+            flags: self.flags,
+            sequence: self.sequence,
+            elapsed_ms: self.elapsed_ms,
+            payload_content_type: RuntimeBytesViewV8::borrowed(&self.payload_content_type),
+            payload: RuntimeBufferLeaseV9::borrowed(lease_id, &self.payload),
+            admission_receipt_json: RuntimeBytesViewV8::borrowed(&self.admission_receipt_json),
+            terminal_receipt_json: RuntimeBytesViewV8::borrowed(&self.terminal_receipt_json),
+            error_json: RuntimeBytesViewV8::borrowed(&self.error_json),
+        }
+    }
+}
 
 /// Callback invoked once per decoded `InvokeBidiDown` frame summary.
 ///
@@ -1362,10 +1655,163 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
 ) -> i32 {
+    let Some(on_chunk) = on_chunk else {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "runtime_invocation_stream_open: on_chunk callback is null",
+        );
+    };
+    runtime_invocation_stream_open_inner(
+        handle,
+        invocation_json,
+        InvocationStreamCallbackTarget::Json(on_chunk),
+        user_data,
+        out_stream_id,
+        "runtime_invocation_stream_open",
+    )
+}
+
+/// Open an ABI v8 binary-frame server stream.
+///
+/// This is a transport representation extension only: the fixed frame header
+/// carries sequence/lifecycle state, raw views carry content type and payload,
+/// and JSON appears only in sparse receipt/error sidecars. Raw payload bytes
+/// never bypass Runtime Core stream validation.
+#[no_mangle]
+pub unsafe extern "C" fn runtime_invocation_stream_open_v8(
+    handle: RuntimeHandle,
+    invocation_json: *const c_char,
+    on_chunk: Option<InvocationStreamV8Callback>,
+    user_data: *mut c_void,
+    out_stream_id: *mut InvocationStreamId,
+) -> i32 {
+    let Some(on_chunk) = on_chunk else {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "runtime_invocation_stream_open_v8: on_chunk callback is null",
+        );
+    };
+    runtime_invocation_stream_open_inner(
+        handle,
+        invocation_json,
+        InvocationStreamCallbackTarget::V8(on_chunk),
+        user_data,
+        out_stream_id,
+        "runtime_invocation_stream_open_v8",
+    )
+}
+
+/// Open an ABI v9 binary-frame server stream with an explicitly retained
+/// payload lease. The callback receives one owning reference for every
+/// non-empty payload and must release it with
+/// `runtime_buffer_lease_release_v9`.
+#[no_mangle]
+pub unsafe extern "C" fn runtime_invocation_stream_open_v9(
+    handle: RuntimeHandle,
+    invocation_json: *const c_char,
+    on_chunk: Option<InvocationStreamV9Callback>,
+    user_data: *mut c_void,
+    out_stream_id: *mut InvocationStreamId,
+) -> i32 {
+    let Some(on_chunk) = on_chunk else {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "runtime_invocation_stream_open_v9: on_chunk callback is null",
+        );
+    };
+    runtime_invocation_stream_open_inner(
+        handle,
+        invocation_json,
+        InvocationStreamCallbackTarget::V9(on_chunk),
+        user_data,
+        out_stream_id,
+        "runtime_invocation_stream_open_v9",
+    )
+}
+
+/// Retain one additional reference to a live ABI v9 payload lease.
+#[no_mangle]
+pub extern "C" fn runtime_buffer_lease_retain_v9(
+    handle: RuntimeHandle,
+    lease_id: RuntimeBufferLeaseId,
+) -> i32 {
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("runtime_buffer_lease_retain_v9: handle {handle} is not registered"),
+        );
+    };
+    if lease_id == 0 {
+        return record_invocation_error(
+            ERR_INVALID_ARG,
+            "runtime_buffer_lease_retain_v9: lease_id must be non-zero",
+        );
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (owner, lease_id);
+        record_invocation_feature_disabled("runtime_buffer_lease_retain_v9")
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        ffi_buffer_lease_result(
+            "runtime_buffer_lease_retain_v9",
+            handle,
+            retain_buffer_lease(owner, lease_id),
+        )
+    }
+}
+
+/// Release one reference to a live ABI v9 payload lease. The payload pointer
+/// becomes invalid after the final successful release.
+#[no_mangle]
+pub extern "C" fn runtime_buffer_lease_release_v9(
+    handle: RuntimeHandle,
+    lease_id: RuntimeBufferLeaseId,
+) -> i32 {
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("runtime_buffer_lease_release_v9: handle {handle} is not registered"),
+        );
+    };
+    if lease_id == 0 {
+        return record_invocation_error(
+            ERR_INVALID_ARG,
+            "runtime_buffer_lease_release_v9: lease_id must be non-zero",
+        );
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (owner, lease_id);
+        record_invocation_feature_disabled("runtime_buffer_lease_release_v9")
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        ffi_buffer_lease_result(
+            "runtime_buffer_lease_release_v9",
+            handle,
+            release_buffer_lease(owner, lease_id),
+        )
+    }
+}
+
+unsafe fn runtime_invocation_stream_open_inner(
+    handle: RuntimeHandle,
+    invocation_json: *const c_char,
+    callback: InvocationStreamCallbackTarget,
+    user_data: *mut c_void,
+    out_stream_id: *mut InvocationStreamId,
+    operation: &'static str,
+) -> i32 {
     if out_stream_id.is_null() {
         return record_invocation_error(
             ERR_NULL_POINTER,
-            "runtime_invocation_stream_open: out_stream_id pointer is null",
+            format!("{operation}: out_stream_id pointer is null"),
         );
     }
     unsafe { *out_stream_id = 0 };
@@ -1375,16 +1821,9 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
         None => {
             return record_invocation_error(
                 ERR_INVALID_HANDLE,
-                format!("runtime_invocation_stream_open: handle {handle} is not registered"),
+                format!("{operation}: handle {handle} is not registered"),
             );
         }
-    };
-
-    let Some(on_chunk) = on_chunk else {
-        return record_invocation_error(
-            ERR_NULL_POINTER,
-            "runtime_invocation_stream_open: on_chunk callback is null",
-        );
     };
 
     let raw = match read_cstr(invocation_json) {
@@ -1392,26 +1831,34 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
         Err(StringError::Null) => {
             return record_invocation_error(
                 ERR_NULL_POINTER,
-                "runtime_invocation_stream_open: invocation_json pointer is null",
+                format!("{operation}: invocation_json pointer is null"),
             );
         }
         Err(StringError::NotUtf8) => {
             return record_invocation_error(
                 ERR_INVALID_UTF8,
-                "runtime_invocation_stream_open: invocation_json is not valid UTF-8",
+                format!("{operation}: invocation_json is not valid UTF-8"),
             );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = (session, raw, on_chunk, user_data);
-        record_invocation_feature_disabled("runtime_invocation_stream_open")
+        let _ = (session, raw, callback, user_data);
+        record_invocation_feature_disabled(operation)
     }
 
     #[cfg(feature = "axon-pb")]
     {
-        stream_open_with_axon_pb(handle, session, raw, on_chunk, user_data, out_stream_id)
+        stream_open_with_axon_pb(
+            handle,
+            session,
+            raw,
+            callback,
+            user_data,
+            out_stream_id,
+            operation,
+        )
     }
 }
 
@@ -2243,8 +2690,24 @@ fn admit_remote_descriptor_catalog_caller(
             "remote descriptor catalogue SessionAuthority shape is invalid: {error}"
         ))
     })?;
-    let callee_ura = context.callee_ura().unwrap_or_default();
-    let subject_ura = context.subject_ura().unwrap_or_default();
+    let callee_ura = context
+        .callee_ura()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            DescriptorResolutionError::runtime_attachment_unavailable(
+                "remote descriptor catalogue SessionAuthority requires descriptor request callee_ura",
+            )
+        })?;
+    let subject_ura = context
+        .subject_ura()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            DescriptorResolutionError::runtime_attachment_unavailable(
+                "remote descriptor catalogue SessionAuthority requires descriptor request subject_ura",
+            )
+        })?;
     if wire.payload.issuer_ura != caller_ura
         || wire.payload.callee_ura != callee_ura
         || wire.payload.subject_ura != subject_ura
@@ -3341,46 +3804,38 @@ fn stream_open_with_axon_pb(
     handle: RuntimeHandle,
     session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
     raw: &str,
-    on_chunk: InvocationStreamCallback,
+    callback: InvocationStreamCallbackTarget,
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
+    operation: &'static str,
 ) -> i32 {
     let registration = match session.resource_registration_guard(handle) {
         Ok(registration) => registration,
         Err(_) => {
             return record_invocation_error(
                 ERR_INVALID_HANDLE,
-                format!("runtime_invocation_stream_open: handle {handle} is closing or released"),
+                format!("{operation}: handle {handle} is closing or released"),
             );
         }
     };
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
-            return record_invocation_error(
-                ERR_INVALID_ARG,
-                format!("runtime_invocation_stream_open: {err}"),
-            );
+            return record_invocation_error(ERR_INVALID_ARG, format!("{operation}: {err}"));
         }
     };
 
     let invocation = match spec.into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
-            return record_invocation_error(
-                ERR_INVALID_ARG,
-                format!("runtime_invocation_stream_open: {err}"),
-            );
+            return record_invocation_error(ERR_INVALID_ARG, format!("{operation}: {err}"));
         }
     };
 
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            return record_invocation_error(
-                ERR_GENERIC,
-                format!("runtime_invocation_stream_open: {err}"),
-            );
+            return record_invocation_error(ERR_GENERIC, format!("{operation}: {err}"));
         }
     };
 
@@ -3402,34 +3857,67 @@ fn stream_open_with_axon_pb(
         ))
     }) {
         Ok(opened) => opened,
-        Err(err) => return ffi_daemon_error("runtime_invocation_stream_open", err),
+        Err(err) => return ffi_daemon_error(operation, err),
     };
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(STREAM_CALLBACK_QUEUE_CAPACITY);
-    let callback_user_data = CallbackUserData(user_data);
-    let dispatcher = std::thread::Builder::new()
-        .name("easynet-inv-stream-callback".to_string())
-        .spawn(move || dispatch_stream_callbacks(rx, on_chunk, callback_user_data));
-    if let Err(err) = dispatcher {
-        return record_invocation_error(
-            ERR_GENERIC,
-            format!("runtime_invocation_stream_open: spawn callback dispatcher failed: {err}"),
-        );
-    }
 
     let cancel = tokio_util::sync::CancellationToken::new();
     let owner = registration.binding();
-    let stream_id = insert_stream(ActiveInvocationStream::new(
-        owner,
-        cancel.clone(),
-        cancellation,
-    ));
+    let active_stream = ActiveInvocationStream::new(owner, cancel.clone(), cancellation);
+    let callback_dispatcher = active_stream.callback_dispatcher.clone();
+    callback_dispatcher.arm();
+    let stream_id = match try_insert_stream(active_stream) {
+        Ok(stream_id) => stream_id,
+        Err(limit) => {
+            cancel.cancel();
+            return record_invocation_error(
+                ERR_ABILITY_FAILED,
+                format!(
+                    "{operation}: active stream limit reached ({limit:?}); per_handle={MAX_ACTIVE_STREAMS_PER_OWNER}, global={MAX_ACTIVE_STREAMS_GLOBAL}"
+                ),
+            );
+        }
+    };
+    if matches!(callback, InvocationStreamCallbackTarget::V9(_)) {
+        register_buffer_lease_stream(owner, stream_id);
+    }
+
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<StreamCallbackDelivery>(STREAM_CALLBACK_QUEUE_CAPACITY);
+    let callback_user_data = CallbackUserData(user_data);
+    let dispatcher = std::thread::Builder::new()
+        .name("easynet-inv-stream-callback".to_string())
+        .spawn(move || {
+            dispatch_stream_callbacks(
+                rx,
+                callback,
+                callback_user_data,
+                owner,
+                stream_id,
+                callback_dispatcher,
+            )
+        });
+    if let Err(err) = dispatcher {
+        if let Ok(Some(stream)) = get_stream_for_handle(owner, stream_id) {
+            stream.callback_dispatcher.mark_complete();
+        }
+        let _ = remove_stream_for_handle(owner, stream_id);
+        close_buffer_lease_stream(owner, stream_id);
+        cancel.cancel();
+        return record_invocation_error(
+            ERR_GENERIC,
+            format!("{operation}: spawn callback dispatcher failed: {err}"),
+        );
+    }
+
     rt.spawn(run_stream_reader(
         stream_id,
         stream_endpoint,
         stream,
         cancel,
         tx,
+        callback.encoding(),
+        matches!(callback, InvocationStreamCallbackTarget::V9(_))
+            .then(|| Arc::new(tokio::sync::Semaphore::new(STREAM_V9_MAX_OUTSTANDING_BYTES))),
     ));
     drop(registration);
 
@@ -3656,9 +4144,12 @@ fn release_stream_with_reader_cancel(
 ) -> i32 {
     match remove_stream_for_handle(owner, stream_id) {
         Ok(Some(stream)) => {
+            stream.request_callback_stop();
+            close_buffer_lease_stream(owner, stream_id);
             if !stream.reader_finished() {
                 stream.reader_cancel.cancel();
             }
+            stream.wait_for_callback_quiescence();
             clear_last_error();
             RUNTIME_OK
         }
@@ -4076,11 +4567,98 @@ trait ProviderCancellableResource {
 }
 
 #[cfg(feature = "axon-pb")]
+struct CallbackDispatcherState {
+    thread_id: Option<std::thread::ThreadId>,
+    complete: bool,
+}
+
+#[cfg(feature = "axon-pb")]
+impl Default for CallbackDispatcherState {
+    fn default() -> Self {
+        Self {
+            thread_id: None,
+            complete: true,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct CallbackDispatcherFence {
+    stop_requested: AtomicBool,
+    state: Mutex<CallbackDispatcherState>,
+    changed: Condvar,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CallbackDispatcherFence {
+    fn new() -> Self {
+        Self {
+            stop_requested: AtomicBool::new(false),
+            state: Mutex::new(CallbackDispatcherState::default()),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn mark_started(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.thread_id = Some(std::thread::current().id());
+    }
+
+    fn arm(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.complete = false;
+        state.thread_id = None;
+        self.stop_requested.store(false, Ordering::Release);
+    }
+
+    fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::Release);
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop_requested.load(Ordering::Acquire)
+    }
+
+    fn mark_complete(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.complete = true;
+        self.changed.notify_all();
+    }
+
+    fn wait_for_quiescence(&self) {
+        let current = std::thread::current().id();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.thread_id.as_ref() == Some(&current) {
+            return;
+        }
+        while !state.complete {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 struct ActiveInvocationStream {
     owner: ClientSessionBinding,
     reader_cancel: tokio_util::sync::CancellationToken,
     cancellation: Arc<ProviderCancellationControl>,
     reader_finished: AtomicBool,
+    callback_dispatcher: Arc<CallbackDispatcherFence>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4095,6 +4673,7 @@ impl ActiveInvocationStream {
             reader_cancel,
             cancellation,
             reader_finished: AtomicBool::new(false),
+            callback_dispatcher: Arc::new(CallbackDispatcherFence::new()),
         }
     }
 
@@ -4104,6 +4683,14 @@ impl ActiveInvocationStream {
 
     fn reader_finished(&self) -> bool {
         self.reader_finished.load(Ordering::Acquire)
+    }
+
+    fn request_callback_stop(&self) {
+        self.callback_dispatcher.request_stop();
+    }
+
+    fn wait_for_callback_quiescence(&self) {
+        self.callback_dispatcher.wait_for_quiescence();
     }
 }
 
@@ -4725,6 +5312,18 @@ struct StreamRegistry {
 }
 
 #[cfg(feature = "axon-pb")]
+const MAX_ACTIVE_STREAMS_PER_OWNER: usize = 32;
+#[cfg(feature = "axon-pb")]
+const MAX_ACTIVE_STREAMS_GLOBAL: usize = 256;
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamRegistrationError {
+    OwnerLimit,
+    GlobalLimit,
+}
+
+#[cfg(feature = "axon-pb")]
 struct BidiRegistry {
     next: AtomicU64,
     entries: Mutex<std::collections::HashMap<InvocationBidiId, Arc<ActiveInvocationBidi>>>,
@@ -4761,6 +5360,32 @@ fn stream_registry() -> &'static StreamRegistry {
         next: AtomicU64::new(1),
         entries: Mutex::new(std::collections::HashMap::new()),
     })
+}
+
+#[cfg(feature = "axon-pb")]
+fn ffi_buffer_lease_result(
+    function: &str,
+    handle: RuntimeHandle,
+    result: Result<(), BufferLeaseAccessError>,
+) -> i32 {
+    match result {
+        Ok(()) => {
+            clear_last_error();
+            RUNTIME_OK
+        }
+        Err(BufferLeaseAccessError::NotFound) => record_invocation_error(
+            ERR_NOT_FOUND,
+            format!("{function}: lease is unknown, released, or revoked"),
+        ),
+        Err(BufferLeaseAccessError::OwnerMismatch) => record_invocation_error(
+            ERR_PERMISSION_DENIED,
+            format!("{function}: lease does not belong to handle {handle}"),
+        ),
+        Err(BufferLeaseAccessError::ReferenceOverflow) => record_invocation_error(
+            ERR_ABILITY_FAILED,
+            format!("{function}: lease reference count overflow"),
+        ),
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4871,12 +5496,34 @@ fn lock_signed_entries(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[cfg(feature = "axon-pb")]
+#[cfg(all(test, feature = "axon-pb"))]
 fn insert_stream(stream: ActiveInvocationStream) -> InvocationStreamId {
     let registry = stream_registry();
     let stream_id = registry.next.fetch_add(1, Ordering::Relaxed);
     lock_stream_entries(registry).insert(stream_id, Arc::new(stream));
     stream_id
+}
+
+#[cfg(feature = "axon-pb")]
+fn try_insert_stream(
+    stream: ActiveInvocationStream,
+) -> Result<InvocationStreamId, StreamRegistrationError> {
+    let registry = stream_registry();
+    let mut entries = lock_stream_entries(registry);
+    if entries.len() >= MAX_ACTIVE_STREAMS_GLOBAL {
+        return Err(StreamRegistrationError::GlobalLimit);
+    }
+    if entries
+        .values()
+        .filter(|active| active.owner == stream.owner)
+        .count()
+        >= MAX_ACTIVE_STREAMS_PER_OWNER
+    {
+        return Err(StreamRegistrationError::OwnerLimit);
+    }
+    let stream_id = registry.next.fetch_add(1, Ordering::Relaxed);
+    entries.insert(stream_id, Arc::new(stream));
+    Ok(stream_id)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5131,12 +5778,20 @@ pub(crate) fn cancel_invocations_for_binding(owner: ClientSessionBinding) {
             .collect::<Vec<_>>();
         owned_ids
             .into_iter()
-            .filter_map(|id| entries.remove(&id))
+            .filter_map(|id| entries.remove(&id).map(|stream| (id, stream)))
             .collect::<Vec<_>>()
     };
-    for stream in streams {
+    for (stream_id, stream) in &streams {
+        stream.request_callback_stop();
+        close_buffer_lease_stream(owner, *stream_id);
         stream.reader_cancel.cancel();
     }
+
+    for (_, stream) in streams {
+        stream.wait_for_callback_quiescence();
+    }
+
+    purge_buffer_leases_for_binding(owner);
 
     let bidis = {
         let registry = bidi_registry();
@@ -5272,28 +5927,125 @@ fn ffi_status_code_to_error(code: tonic::Code) -> i32 {
 
 #[cfg(feature = "axon-pb")]
 fn dispatch_stream_callbacks(
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    on_chunk: InvocationStreamCallback,
+    mut rx: tokio::sync::mpsc::Receiver<StreamCallbackDelivery>,
+    callback: InvocationStreamCallbackTarget,
     user_data: CallbackUserData,
+    owner: ClientSessionBinding,
+    stream_id: InvocationStreamId,
+    dispatcher: Arc<CallbackDispatcherFence>,
 ) {
+    dispatcher.mark_started();
     let raw_user_data = user_data.raw();
-    while let Some(json_bytes) = rx.blocking_recv() {
-        let cstr = match std::ffi::CString::new(json_bytes) {
-            Ok(cstr) => cstr,
-            Err(_) => continue,
-        };
-        unsafe {
-            on_chunk(raw_user_data, cstr.as_ptr());
+    while let Some(delivery) = rx.blocking_recv() {
+        if dispatcher.should_stop() {
+            break;
+        }
+        match (callback, delivery) {
+            (
+                InvocationStreamCallbackTarget::Json(on_chunk),
+                StreamCallbackDelivery::Json(json),
+            ) => {
+                let cstr = match std::ffi::CString::new(json) {
+                    Ok(cstr) => cstr,
+                    Err(_) => continue,
+                };
+                unsafe { on_chunk(raw_user_data, cstr.as_ptr()) };
+            }
+            (
+                InvocationStreamCallbackTarget::V8(on_chunk),
+                StreamCallbackDelivery::V8(delivery),
+            ) => {
+                let frame = delivery.borrowed_frame();
+                unsafe { on_chunk(raw_user_data, &frame) };
+            }
+            (
+                InvocationStreamCallbackTarget::V9(on_chunk),
+                StreamCallbackDelivery::V9(mut delivery),
+            ) => {
+                let payload_budget = delivery.payload_budget.take();
+                let lease_id = match allocate_buffer_lease_with_budget(
+                    owner,
+                    stream_id,
+                    delivery.payload.clone(),
+                    payload_budget,
+                ) {
+                    Ok(lease_id) => lease_id,
+                    Err(BufferLeaseAllocationError::StreamClosed) => break,
+                    Err(BufferLeaseAllocationError::PayloadTooLarge { bytes }) => {
+                        let failure = v9_payload_too_large_delivery(
+                            delivery.sequence,
+                            delivery.elapsed_ms,
+                            bytes,
+                        );
+                        let frame = failure.borrowed_frame(0);
+                        unsafe { on_chunk(raw_user_data, &frame) };
+                        break;
+                    }
+                };
+                if dispatcher.should_stop() {
+                    if lease_id != 0 {
+                        let _ = release_buffer_lease(owner, lease_id);
+                    }
+                    break;
+                }
+                let frame = delivery.borrowed_frame(lease_id);
+                unsafe { on_chunk(raw_user_data, &frame) };
+            }
+            _ => continue,
         }
     }
+    close_buffer_lease_stream(owner, stream_id);
     // End-of-stream signal: the daemon stream closed (terminal frame
     // delivered, or transport ended). Deliver ONE final callback with a
     // null `chunk_json` so the consumer has an unambiguous EOF marker —
     // without it a queue-backed consumer blocks forever waiting on a
     // frame that will never arrive. Bindings treat a null chunk as
     // "stream finished", never as a data frame.
-    unsafe {
-        on_chunk(raw_user_data, std::ptr::null());
+    if !dispatcher.should_stop() {
+        unsafe {
+            match callback {
+                InvocationStreamCallbackTarget::Json(on_chunk) => {
+                    on_chunk(raw_user_data, std::ptr::null())
+                }
+                InvocationStreamCallbackTarget::V8(on_chunk) => {
+                    on_chunk(raw_user_data, std::ptr::null())
+                }
+                InvocationStreamCallbackTarget::V9(on_chunk) => {
+                    on_chunk(raw_user_data, std::ptr::null())
+                }
+            }
+        }
+    }
+    dispatcher.mark_complete();
+}
+
+#[cfg(feature = "axon-pb")]
+fn v9_payload_too_large_delivery(
+    sequence: u64,
+    elapsed_ms: u64,
+    bytes: usize,
+) -> BinaryStreamFrameV9 {
+    BinaryStreamFrameV9 {
+        kind: STREAM_FRAME_V8_KIND_ERROR,
+        state: STREAM_FRAME_V8_STATE_FAILED,
+        flags: STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL | STREAM_FRAME_V8_FLAG_HAS_ERROR,
+        sequence,
+        elapsed_ms,
+        payload_content_type: Vec::new(),
+        payload: Bytes::new(),
+        payload_budget: None,
+        admission_receipt_json: Vec::new(),
+        terminal_receipt_json: Vec::new(),
+        error_json: serde_json::json!({
+            "code": "PAYLOAD_TOO_LARGE",
+            "stage": "stream_projection",
+            "message": format!(
+                "ABI v9 payload {bytes} bytes exceeds the bounded lease carrier"
+            ),
+            "retryable": false,
+        })
+        .to_string()
+        .into_bytes(),
     }
 }
 
@@ -5321,7 +6073,9 @@ async fn run_stream_reader(
     endpoint: PathBuf,
     mut stream: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeStreamChunk>,
     cancel: tokio_util::sync::CancellationToken,
-    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    tx: tokio::sync::mpsc::Sender<StreamCallbackDelivery>,
+    encoding: StreamCallbackEncoding,
+    v9_payload_budget: Option<Arc<tokio::sync::Semaphore>>,
 ) {
     let mut next_error_sequence = 1;
     let mut receipt_verifier = InboundReceiptCheckpointVerifier::for_daemon_endpoint(endpoint);
@@ -5332,35 +6086,54 @@ async fn run_stream_reader(
                 Ok(Some(chunk)) => {
                     let sequence = sdk_callback_event_sequence(chunk.sequence);
                     next_error_sequence = sequence.saturating_add(1);
-                    let projection = match stream_chunk_json(&mut receipt_verifier, chunk) {
+                    let projection = match verify_stream_chunk(&mut receipt_verifier, chunk) {
                         Ok(projection) => projection,
                         Err(message) => {
                             let _ = tx
-                                .send(
-                                    stream_receipt_verification_error_json(sequence, message)
-                                        .to_string()
-                                        .into_bytes(),
-                                )
+                                .send(stream_callback_error_delivery(
+                                    encoding,
+                                    stream_receipt_verification_error_json(sequence, message),
+                                ))
                                 .await;
                             break;
                         }
                     };
-                    let terminal = projection.should_stop_after_frame();
-                    let bytes = projection.into_json_bytes();
-                    let sent = send_callback_frame_or_backpressure(
-                        &tx,
-                        bytes,
-                        stream_callback_backpressure_event(sequence, STREAM_CALLBACK_QUEUE_CAPACITY),
-                    )
-                    .await;
-                    if !sent || terminal {
+                    let mut terminal = projection.should_stop_after_frame();
+                    let delivery = match projection.into_delivery(encoding) {
+                        Ok(delivery) => delivery,
+                        Err(message) => {
+                            let _ = tx
+                                .send(stream_callback_error_delivery(
+                                    encoding,
+                                    stream_receipt_verification_error_json(sequence, message),
+                                ))
+                                .await;
+                            break;
+                        }
+                    };
+                    let (delivery, budget_terminal) = match delivery
+                        .reserve_v9_payload_budget(v9_payload_budget.clone(), &cancel)
+                        .await
+                    {
+                        Ok(delivery) => delivery,
+                        Err(()) => break,
+                    };
+                    terminal |= budget_terminal;
+                    // Server-stream delivery is lossless. Awaiting this bounded
+                    // channel propagates consumer pressure through tonic instead
+                    // of replacing data with a synthetic overflow terminal.
+                    if tx.send(delivery).await.is_err() || terminal {
                         break;
                     }
                 }
                 Ok(None) => break,
                 Err(status) => {
-                    let bytes = stream_status_error_json(status, next_error_sequence).to_string().into_bytes();
-                    let _ = tx.send(bytes).await;
+                    let _ = tx
+                        .send(stream_callback_error_delivery(
+                            encoding,
+                            stream_status_error_json(status, next_error_sequence),
+                        ))
+                        .await;
                     break;
                 }
             }
@@ -5369,6 +6142,133 @@ async fn run_stream_reader(
     if let Some(stream) = get_stream(stream_id) {
         stream.mark_reader_finished();
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn stream_callback_error_delivery(
+    encoding: StreamCallbackEncoding,
+    metadata: serde_json::Value,
+) -> StreamCallbackDelivery {
+    match encoding {
+        StreamCallbackEncoding::Json => {
+            StreamCallbackDelivery::Json(metadata.to_string().into_bytes())
+        }
+        StreamCallbackEncoding::V8 => {
+            StreamCallbackDelivery::V8(binary_v8_error_delivery_or_fallback(&metadata))
+        }
+        StreamCallbackEncoding::V9 => StreamCallbackDelivery::V9(BinaryStreamFrameV9::from_v8(
+            binary_v8_error_delivery_or_fallback(&metadata),
+        )),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn binary_v8_error_delivery_or_fallback(metadata: &serde_json::Value) -> BinaryStreamFrameV8 {
+    binary_v8_error_delivery(metadata).unwrap_or_else(|message| BinaryStreamFrameV8 {
+        kind: STREAM_FRAME_V8_KIND_ERROR,
+        state: STREAM_FRAME_V8_STATE_FAILED,
+        flags: STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL | STREAM_FRAME_V8_FLAG_HAS_ERROR,
+        sequence: 1,
+        elapsed_ms: 0,
+        payload_content_type: Vec::new(),
+        payload: Vec::new(),
+        admission_receipt_json: Vec::new(),
+        terminal_receipt_json: Vec::new(),
+        error_json: serde_json::json!({
+            "code": "PROTOCOL_ERROR",
+            "stage": "stream_projection",
+            "message": message,
+            "retryable": false,
+        })
+        .to_string()
+        .into_bytes(),
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn binary_v8_error_delivery(metadata: &serde_json::Value) -> Result<BinaryStreamFrameV8, String> {
+    let object = metadata
+        .as_object()
+        .ok_or_else(|| "v8 error frame is not an object".to_string())?;
+    let kind_name = object
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "v8 error frame has no kind".to_string())?;
+    let state_name = object
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "v8 error frame has no state".to_string())?;
+    let sequence = object
+        .get("sequence")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value != 0)
+        .ok_or_else(|| "v8 error frame has no positive sequence".to_string())?;
+    let terminal = object
+        .get("terminal")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let transport_terminal = object
+        .get("transport_terminal")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let payload_content_type = object
+        .get("payload_content_type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .as_bytes()
+        .to_vec();
+    let admission_receipt_json = optional_sidecar_json(
+        object
+            .get("admission_receipt")
+            .filter(|value| !value.is_null())
+            .cloned(),
+    )?;
+    let terminal_receipt_json = optional_sidecar_json(
+        object
+            .get("terminal_receipt")
+            .filter(|value| !value.is_null())
+            .cloned(),
+    )?;
+    let error_json = optional_sidecar_json(
+        object
+            .get("error")
+            .filter(|value| !value.is_null())
+            .cloned(),
+    )?;
+    let mut flags = 0;
+    if terminal {
+        flags |= STREAM_FRAME_V8_FLAG_TERMINAL;
+    }
+    if transport_terminal {
+        flags |= STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL;
+    }
+    if !payload_content_type.is_empty() {
+        flags |= STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE;
+    }
+    if !admission_receipt_json.is_empty() {
+        flags |= STREAM_FRAME_V8_FLAG_HAS_ADMISSION_RECEIPT;
+    }
+    if !terminal_receipt_json.is_empty() {
+        flags |= STREAM_FRAME_V8_FLAG_HAS_TERMINAL_RECEIPT;
+    }
+    if !error_json.is_empty() {
+        flags |= STREAM_FRAME_V8_FLAG_HAS_ERROR;
+    }
+    Ok(BinaryStreamFrameV8 {
+        kind: binary_v8_kind(kind_name)?,
+        state: binary_v8_state_name(state_name)?,
+        flags,
+        sequence,
+        elapsed_ms: object
+            .get("elapsed_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        payload_content_type,
+        payload: Vec::new(),
+        admission_receipt_json,
+        terminal_receipt_json,
+        error_json,
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5445,22 +6345,6 @@ async fn run_bidi_down_reader(
         }
     }
     let _ = remove_bidi(bidi_id);
-}
-
-#[cfg(feature = "axon-pb")]
-async fn send_callback_frame_or_backpressure(
-    tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
-    bytes: Vec<u8>,
-    backpressure: serde_json::Value,
-) -> bool {
-    match tx.try_send(bytes) {
-        Ok(()) => true,
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            let _ = tx.send(backpressure.to_string().into_bytes()).await;
-            false
-        }
-    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -7023,6 +7907,24 @@ struct CallbackFrameProjection {
 
 #[cfg(feature = "axon-pb")]
 #[derive(Clone, Debug)]
+struct VerifiedStreamCallbackFrame {
+    kind: &'static str,
+    state: i32,
+    sequence: u64,
+    terminal: bool,
+    transport_terminal: bool,
+    elapsed_ms: u64,
+    payload_content_type: String,
+    admission_receipt: Option<serde_json::Value>,
+    terminal_receipt: Option<serde_json::Value>,
+    error: Option<serde_json::Value>,
+    payload: Vec<u8>,
+    payload_json: Option<serde_json::Value>,
+    lifecycle: CallbackFrameLifecycle,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Clone, Debug)]
 struct CallbackFrameProjectionError {
     kind: &'static str,
     message: String,
@@ -7086,14 +7988,165 @@ impl CallbackFrameProjection {
 }
 
 #[cfg(feature = "axon-pb")]
-fn stream_chunk_json(
+impl VerifiedStreamCallbackFrame {
+    fn should_stop_after_frame(&self) -> bool {
+        self.lifecycle == CallbackFrameLifecycle::StopAfterFrame
+    }
+
+    fn legacy_metadata_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "kind": self.kind,
+            "state": self.state,
+            "sequence": self.sequence,
+            "terminal": self.terminal,
+            "transport_terminal": self.transport_terminal,
+            "elapsed_ms": self.elapsed_ms,
+            "payload_content_type": self.payload_content_type,
+            "admission_receipt": self.admission_receipt,
+            "terminal_receipt": self.terminal_receipt,
+            "error": self.error,
+        })
+    }
+
+    #[cfg(test)]
+    fn json(&self) -> serde_json::Value {
+        let mut metadata = self.legacy_metadata_json();
+        let payload_json = self.payload_json.clone().unwrap_or(serde_json::Value::Null);
+        Self::add_json_payload_projection(&mut metadata, &self.payload, &payload_json)
+            .expect("stream test metadata must be an object");
+        metadata
+    }
+
+    fn into_delivery(
+        self,
+        encoding: StreamCallbackEncoding,
+    ) -> Result<StreamCallbackDelivery, String> {
+        match encoding {
+            StreamCallbackEncoding::Json => {
+                let payload_json = self.payload_json.clone().unwrap_or(serde_json::Value::Null);
+                let mut metadata = self.legacy_metadata_json();
+                Self::add_json_payload_projection(&mut metadata, &self.payload, &payload_json)?;
+                Ok(StreamCallbackDelivery::Json(
+                    metadata.to_string().into_bytes(),
+                ))
+            }
+            StreamCallbackEncoding::V8 => Ok(StreamCallbackDelivery::V8(self.into_binary_v8()?)),
+            StreamCallbackEncoding::V9 => Ok(StreamCallbackDelivery::V9(
+                BinaryStreamFrameV9::from_v8(self.into_binary_v8()?),
+            )),
+        }
+    }
+
+    fn into_binary_v8(self) -> Result<BinaryStreamFrameV8, String> {
+        let state = binary_v8_state(self.state)?;
+        let kind = binary_v8_kind(self.kind)?;
+        let mut flags = 0;
+        if self.terminal {
+            flags |= STREAM_FRAME_V8_FLAG_TERMINAL;
+        }
+        if self.transport_terminal {
+            flags |= STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL;
+        }
+        if !self.payload.is_empty() {
+            flags |= STREAM_FRAME_V8_FLAG_HAS_PAYLOAD;
+        }
+        if !self.payload_content_type.is_empty() {
+            flags |= STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE;
+        }
+        let admission_receipt_json = optional_sidecar_json(self.admission_receipt)?;
+        if !admission_receipt_json.is_empty() {
+            flags |= STREAM_FRAME_V8_FLAG_HAS_ADMISSION_RECEIPT;
+        }
+        let terminal_receipt_json = optional_sidecar_json(self.terminal_receipt)?;
+        if !terminal_receipt_json.is_empty() {
+            flags |= STREAM_FRAME_V8_FLAG_HAS_TERMINAL_RECEIPT;
+        }
+        let error_json = optional_sidecar_json(self.error)?;
+        if !error_json.is_empty() {
+            flags |= STREAM_FRAME_V8_FLAG_HAS_ERROR;
+        }
+        Ok(BinaryStreamFrameV8 {
+            kind,
+            state,
+            flags,
+            sequence: self.sequence,
+            elapsed_ms: self.elapsed_ms,
+            payload_content_type: self.payload_content_type.into_bytes(),
+            payload: self.payload,
+            admission_receipt_json,
+            terminal_receipt_json,
+            error_json,
+        })
+    }
+
+    fn add_json_payload_projection(
+        metadata: &mut serde_json::Value,
+        payload: &[u8],
+        payload_json: &serde_json::Value,
+    ) -> Result<(), String> {
+        use base64::Engine;
+        let object = metadata
+            .as_object_mut()
+            .ok_or_else(|| "stream callback metadata is not an object".to_string())?;
+        object.insert(
+            "payload_base64".to_string(),
+            serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(payload)),
+        );
+        object.insert("payload_json".to_string(), payload_json.clone());
+        Ok(())
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn binary_v8_state(state_number: i32) -> Result<u8, String> {
+    let state = axon_sdk::invocation::InvocationState::try_from(state_number)
+        .map_err(|error| format!("v8 stream callback state is invalid: {error}"))?;
+    binary_v8_state_name(&format!("{state:?}"))
+}
+
+#[cfg(feature = "axon-pb")]
+fn binary_v8_state_name(state: &str) -> Result<u8, String> {
+    match state {
+        "Accepted" => Ok(STREAM_FRAME_V8_STATE_ACCEPTED),
+        "Admitted" => Ok(STREAM_FRAME_V8_STATE_ADMITTED),
+        "Dispatched" => Ok(STREAM_FRAME_V8_STATE_DISPATCHED),
+        "Running" => Ok(STREAM_FRAME_V8_STATE_RUNNING),
+        "Completed" => Ok(STREAM_FRAME_V8_STATE_COMPLETED),
+        "Failed" => Ok(STREAM_FRAME_V8_STATE_FAILED),
+        "TimedOut" => Ok(STREAM_FRAME_V8_STATE_TIMED_OUT),
+        "Cancelled" => Ok(STREAM_FRAME_V8_STATE_CANCELLED),
+        other => Err(format!(
+            "v8 stream callback state is not canonical: {other}"
+        )),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn binary_v8_kind(kind: &str) -> Result<u8, String> {
+    match kind {
+        "data" => Ok(STREAM_FRAME_V8_KIND_DATA),
+        "terminal" => Ok(STREAM_FRAME_V8_KIND_TERMINAL),
+        "error" => Ok(STREAM_FRAME_V8_KIND_ERROR),
+        "cancelled" => Ok(STREAM_FRAME_V8_KIND_CANCELLED),
+        "timeout" => Ok(STREAM_FRAME_V8_KIND_TIMEOUT),
+        "receipt_verification_error" => Ok(STREAM_FRAME_V8_KIND_RECEIPT_VERIFICATION_ERROR),
+        other => Err(format!("v8 stream callback kind is not canonical: {other}")),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn optional_sidecar_json(value: Option<serde_json::Value>) -> Result<Vec<u8>, String> {
+    value
+        .map(|value| serde_json::to_vec(&value).map_err(|error| error.to_string()))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+#[cfg(feature = "axon-pb")]
+fn verify_stream_chunk(
     verifier: &mut InboundReceiptCheckpointVerifier,
     chunk: axon_sdk::pb::axon::v1::InvokeStreamChunk,
-) -> Result<CallbackFrameProjection, String> {
-    use base64::Engine;
-    let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.payload);
-    let payload_json =
-        runtime_json_projection(&chunk.payload, &chunk.content_type, "payload_json")?;
+) -> Result<VerifiedStreamCallbackFrame, String> {
     let admission_receipt = chunk
         .admission_receipt
         .map(|receipt| verifier.verify_admission(receipt))
@@ -7122,23 +8175,25 @@ fn stream_chunk_json(
         "data"
     };
     let sequence = sdk_callback_event_sequence(chunk.sequence);
-    Ok(CallbackFrameProjection::new(
-        serde_json::json!({
-            "kind": kind,
-            "state": chunk.state,
-            "sequence": sequence,
-            "terminal": proven_terminal,
-            "transport_terminal": error.is_some() && !proven_terminal,
-            "elapsed_ms": chunk.elapsed_ms,
-            "payload_content_type": chunk.content_type,
-            "payload_base64": payload_base64,
-            "payload_json": payload_json,
-            "admission_receipt": admission_receipt,
-            "terminal_receipt": terminal_receipt,
-            "error": error,
-        }),
+    let elapsed_ms = u64::try_from(chunk.elapsed_ms)
+        .map_err(|_| "stream callback elapsed_ms must be non-negative".to_string())?;
+    let payload_json =
+        runtime_json_projection(&chunk.payload, &chunk.content_type, "payload_json")?;
+    Ok(VerifiedStreamCallbackFrame {
+        kind,
+        state: chunk.state,
+        sequence,
+        terminal: proven_terminal,
+        transport_terminal: error.is_some() && !proven_terminal,
+        elapsed_ms,
+        payload_content_type: chunk.content_type,
+        admission_receipt,
+        terminal_receipt,
+        error,
+        payload: chunk.payload,
+        payload_json,
         lifecycle,
-    ))
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -7154,6 +8209,9 @@ fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json:
         "sequence": sequence.max(1),
         "terminal": false,
         "transport_terminal": true,
+        "payload_content_type": "",
+        "admission_receipt": null,
+        "terminal_receipt": null,
         "error": {
             "code": format!("{:?}", status.code()),
             "stage": "stream_transport",
@@ -7174,6 +8232,9 @@ fn stream_receipt_verification_error_json(
         "sequence": sequence.max(1),
         "terminal": false,
         "transport_terminal": true,
+        "payload_content_type": "",
+        "admission_receipt": null,
+        "terminal_receipt": null,
         "error": {
             "code": "RECEIPT_VERIFICATION_FAILED",
             "stage": "receipt_verification",
@@ -8178,6 +9239,64 @@ mod tests {
         )
         .expect_err("SessionAuthority subject mismatch must fail closed");
         assert!(error.to_string().contains("does not bind"), "{error}");
+
+        let missing_callee_request = serde_json::json!({
+            "caller_ura": caller_ura,
+            "subject_ura": subject_ura,
+            "authority_metadata": {
+                crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY: raw_authority,
+            },
+        });
+        let missing_callee_context = DescriptorCatalogReadContext::from_request(
+            missing_callee_request
+                .as_object()
+                .expect("missing-callee descriptor request object"),
+            "",
+        );
+        let error = admit_remote_descriptor_catalog_caller(
+            &session,
+            &runtime_owner_ura,
+            &caller_ura,
+            &missing_callee_context,
+            &query,
+            &signer,
+        )
+        .expect_err("SessionAuthority catalogue reads must require explicit callee_ura");
+        assert!(
+            error
+                .to_string()
+                .contains("requires descriptor request callee_ura"),
+            "{error}"
+        );
+
+        let missing_subject_request = serde_json::json!({
+            "caller_ura": caller_ura,
+            "callee_ura": caller_ura,
+            "authority_metadata": {
+                crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY: raw_authority,
+            },
+        });
+        let missing_subject_context = DescriptorCatalogReadContext::from_request(
+            missing_subject_request
+                .as_object()
+                .expect("missing-subject descriptor request object"),
+            &caller_ura,
+        );
+        let error = admit_remote_descriptor_catalog_caller(
+            &session,
+            &runtime_owner_ura,
+            &caller_ura,
+            &missing_subject_context,
+            &query,
+            &signer,
+        )
+        .expect_err("SessionAuthority catalogue reads must require explicit subject_ura");
+        assert!(
+            error
+                .to_string()
+                .contains("requires descriptor request subject_ura"),
+            "{error}"
+        );
     }
 
     fn write_runtime_discovery(
@@ -12827,7 +13946,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_chunk_json_decodes_json_payload() {
+    fn verify_stream_chunk_decodes_json_payload() {
         let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
             invocation_id: "inv-1".to_string(),
             state: 2,
@@ -12838,7 +13957,7 @@ mod tests {
             ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
         };
         let projection =
-            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+            verify_stream_chunk(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
         let value = projection.json();
         assert!(!projection.should_stop_after_frame());
         assert!(value.get("ok").is_none());
@@ -12854,7 +13973,97 @@ mod tests {
     }
 
     #[test]
-    fn stream_chunk_json_projects_proto_zero_sequence_to_sdk_first_event() {
+    fn stream_delivery_preserves_non_json_payload_as_base64_projection() {
+        let payload = vec![0_u8, 255, 1, 2, 3];
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-raw-1".to_string(),
+            state: 4,
+            payload: payload.clone(),
+            content_type: "video/h264".to_string(),
+            sequence: 0,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let projection =
+            verify_stream_chunk(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let metadata = projection.json();
+        assert_eq!(metadata["payload_content_type"], "video/h264");
+        assert_eq!(metadata["payload_base64"], "AP8BAgM=");
+        assert!(metadata["payload_json"].is_null());
+    }
+
+    #[test]
+    fn stream_v8_delivery_preserves_raw_payload_without_json_projection() {
+        let payload = vec![0_u8, 255, 1, 2, 3];
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-raw-v8".to_string(),
+            state: 4,
+            payload: payload.clone(),
+            content_type: "video/h264".to_string(),
+            sequence: 0,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let projection =
+            verify_stream_chunk(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let StreamCallbackDelivery::V8(frame) = projection
+            .into_delivery(StreamCallbackEncoding::V8)
+            .unwrap()
+        else {
+            panic!("expected v8 raw stream delivery")
+        };
+        assert_eq!(frame.payload, payload);
+        assert_eq!(frame.payload_content_type, b"video/h264");
+        assert_eq!(frame.kind, STREAM_FRAME_V8_KIND_DATA);
+        assert_eq!(frame.state, STREAM_FRAME_V8_STATE_RUNNING);
+        assert_eq!(
+            frame.flags,
+            STREAM_FRAME_V8_FLAG_HAS_PAYLOAD | STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE
+        );
+        assert!(frame.admission_receipt_json.is_empty());
+        assert!(frame.terminal_receipt_json.is_empty());
+        assert!(frame.error_json.is_empty());
+    }
+
+    #[test]
+    fn stream_v8_header_uses_canonical_wire_types() {
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-v8-metadata".to_string(),
+            state: 4,
+            payload: Vec::new(),
+            content_type: "application/octet-stream".to_string(),
+            sequence: 0,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let projection =
+            verify_stream_chunk(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let StreamCallbackDelivery::V8(frame) = projection
+            .into_delivery(StreamCallbackEncoding::V8)
+            .unwrap()
+        else {
+            panic!("expected v8 raw stream delivery")
+        };
+
+        assert_eq!(frame.sequence, 1);
+        assert_eq!(frame.kind, STREAM_FRAME_V8_KIND_DATA);
+        assert_eq!(frame.state, STREAM_FRAME_V8_STATE_RUNNING);
+        assert_eq!(frame.flags, STREAM_FRAME_V8_FLAG_HAS_CONTENT_TYPE);
+        assert_eq!(frame.payload_content_type, b"application/octet-stream");
+        assert!(frame.admission_receipt_json.is_empty());
+        assert!(frame.terminal_receipt_json.is_empty());
+        assert!(frame.error_json.is_empty());
+    }
+
+    #[test]
+    fn stream_v8_header_rejects_noncanonical_state_name() {
+        let error = binary_v8_state_name("running").unwrap_err();
+
+        assert!(error.contains("state is not canonical"));
+    }
+
+    #[test]
+    fn verify_stream_chunk_projects_proto_zero_sequence_to_sdk_first_event() {
         let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
             invocation_id: "inv-1".to_string(),
             state: 2,
@@ -12866,13 +14075,13 @@ mod tests {
         };
 
         let projection =
-            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+            verify_stream_chunk(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
 
         assert_eq!(projection.json()["sequence"], 1);
     }
 
     #[test]
-    fn stream_chunk_json_rejects_declared_json_payload_that_is_not_json() {
+    fn verify_stream_chunk_rejects_declared_json_payload_that_is_not_json() {
         let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
             invocation_id: "inv-1".to_string(),
             state: 2,
@@ -12883,14 +14092,14 @@ mod tests {
             ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
         };
 
-        let error = stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk)
+        let error = verify_stream_chunk(&mut InboundReceiptCheckpointVerifier::new(), chunk)
             .expect_err("declared JSON stream payload must fail closed");
         assert!(error.contains("payload_json declares JSON content type"));
         assert!(error.contains("payload is not valid JSON"));
     }
 
     #[test]
-    fn stream_chunk_json_projects_empty_declared_json_payload_as_no_value() {
+    fn verify_stream_chunk_projects_empty_declared_json_payload_as_no_value() {
         let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
             invocation_id: "inv-1".to_string(),
             state: 2,
@@ -12902,7 +14111,7 @@ mod tests {
         };
 
         let projection =
-            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+            verify_stream_chunk(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
         let value = projection.json();
 
         assert_eq!(value["payload_content_type"], "application/json");
@@ -12937,13 +14146,33 @@ mod tests {
         assert_eq!(value["sequence"], 4);
         assert_eq!(value["terminal"], false);
         assert_eq!(value["transport_terminal"], true);
+        assert_eq!(value["payload_content_type"], "");
+        assert!(value["admission_receipt"].is_null());
+        assert!(value["terminal_receipt"].is_null());
         assert_eq!(value["error"]["code"], "Unavailable");
         assert_eq!(value["error"]["stage"], "stream_transport");
         assert_eq!(value["error"]["message"], "stream transport closed");
     }
 
     #[test]
-    fn bounded_callback_enqueue_reports_transport_terminal_backpressure_when_full() {
+    fn stream_receipt_verification_error_carries_v8_metadata_contract() {
+        let value = stream_receipt_verification_error_json(0, "bad receipt");
+
+        assert_eq!(value["kind"], "error");
+        assert_eq!(value["state"], "Failed");
+        assert_eq!(value["sequence"], 1);
+        assert_eq!(value["terminal"], false);
+        assert_eq!(value["transport_terminal"], true);
+        assert_eq!(value["payload_content_type"], "");
+        assert!(value["admission_receipt"].is_null());
+        assert!(value["terminal_receipt"].is_null());
+        assert_eq!(value["error"]["code"], "RECEIPT_VERIFICATION_FAILED");
+        assert_eq!(value["error"]["stage"], "receipt_verification");
+        assert_eq!(value["error"]["message"], "bad receipt");
+    }
+
+    #[test]
+    fn bounded_stream_callback_queue_applies_lossless_backpressure() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -12951,38 +14180,17 @@ mod tests {
 
         rt.block_on(async {
             let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-            tx.try_send(br#"{"sequence":1,"kind":"data"}"#.to_vec())
-                .unwrap();
+            tx.try_send(b"first".to_vec()).unwrap();
 
-            let sender = tokio::spawn(async move {
-                send_callback_frame_or_backpressure(
-                    &tx,
-                    br#"{"sequence":2,"kind":"data"}"#.to_vec(),
-                    stream_callback_backpressure_event(2, 1),
-                )
-                .await
-            });
+            let sender = tokio::spawn(async move { tx.send(b"second".to_vec()).await });
             tokio::task::yield_now().await;
+            assert!(!sender.is_finished());
 
-            assert_eq!(
-                rx.recv().await.unwrap(),
-                br#"{"sequence":1,"kind":"data"}"#.to_vec()
-            );
-            assert!(!sender.await.unwrap());
-            let value =
-                serde_json::from_slice::<serde_json::Value>(&rx.recv().await.unwrap()).unwrap();
-            assert_eq!(value["kind"], "error");
-            assert_eq!(value["sequence"], 2);
-            assert_eq!(value["terminal"], false);
-            assert_eq!(value["transport_terminal"], true);
-            assert!(value.get("ok").is_none());
-            assert!(value.get("code").is_none());
-            assert!(value.get("message").is_none());
-            assert_eq!(
-                value["error"]["details"]["reason"],
-                "callback_queue_overflow"
-            );
-            assert_eq!(value["error"]["details"]["queue_capacity"], 1);
+            let first = rx.recv().await.unwrap();
+            assert_eq!(first, b"first");
+            assert!(sender.await.unwrap().is_ok());
+            let second = rx.recv().await.unwrap();
+            assert_eq!(second, b"second");
         });
     }
 
@@ -13090,5 +14298,391 @@ mod tests {
             "runtime bidi frame did not include a payload"
         );
         assert_ne!(value["kind"], "unknown");
+    }
+
+    struct BlockingStreamCallbackState {
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        frames: AtomicUsize,
+        eof: AtomicUsize,
+    }
+
+    unsafe extern "C" fn blocking_stream_callback(user_data: *mut c_void, chunk: *const c_char) {
+        let state = unsafe { &*(user_data.cast::<BlockingStreamCallbackState>()) };
+        if chunk.is_null() {
+            state.eof.fetch_add(1, AtomicOrdering::SeqCst);
+            return;
+        }
+        state.frames.fetch_add(1, AtomicOrdering::SeqCst);
+        state.entered.send(()).unwrap();
+        state
+            .release
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .recv()
+            .unwrap();
+    }
+
+    #[test]
+    fn stream_close_waits_for_inflight_callback_and_suppresses_late_eof() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let state = Box::new(BlockingStreamCallbackState {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            frames: AtomicUsize::new(0),
+            eof: AtomicUsize::new(0),
+        });
+        let state_ptr = Box::into_raw(state);
+        let fence = Arc::new(CallbackDispatcherFence::new());
+        fence.arm();
+        let dispatcher_fence = fence.clone();
+        let callback_user_data = CallbackUserData(state_ptr.cast());
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let dispatcher = std::thread::spawn(move || {
+            dispatch_stream_callbacks(
+                rx,
+                InvocationStreamCallbackTarget::Json(blocking_stream_callback),
+                callback_user_data,
+                ClientSessionBinding {
+                    handle: 91,
+                    incarnation: 17,
+                },
+                44,
+                dispatcher_fence,
+            )
+        });
+        tx.blocking_send(StreamCallbackDelivery::Json(b"{}".to_vec()))
+            .unwrap();
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("callback must enter");
+
+        fence.request_stop();
+        drop(tx);
+        let (quiesced_tx, quiesced_rx) = std::sync::mpsc::channel();
+        let waiter_fence = fence.clone();
+        let waiter = std::thread::spawn(move || {
+            waiter_fence.wait_for_quiescence();
+            quiesced_tx.send(()).unwrap();
+        });
+        assert!(
+            quiesced_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "close must not return while user_data is in an active callback"
+        );
+        release_tx.send(()).unwrap();
+        quiesced_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("callback completion must release close waiter");
+        waiter.join().unwrap();
+        dispatcher.join().unwrap();
+
+        let state = unsafe { Box::from_raw(state_ptr) };
+        assert_eq!(state.frames.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(state.eof.load(AtomicOrdering::SeqCst), 0);
+    }
+
+    #[test]
+    fn v9_empty_payload_rejects_closed_stream_before_canonicalizing_empty_lease() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+        close_buffer_lease_stream(owner, stream_id);
+
+        assert_eq!(
+            allocate_buffer_lease(owner, stream_id, Bytes::new()),
+            Err(BufferLeaseAllocationError::StreamClosed)
+        );
+
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn v9_queue_budget_remains_held_by_delivered_lease() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+        let budget = Arc::new(tokio::sync::Semaphore::new(4));
+        let delivery =
+            StreamCallbackDelivery::V9(BinaryStreamFrameV9::from_v8(BinaryStreamFrameV8 {
+                kind: STREAM_FRAME_V8_KIND_DATA,
+                state: STREAM_FRAME_V8_STATE_RUNNING,
+                flags: STREAM_FRAME_V8_FLAG_HAS_PAYLOAD,
+                sequence: 1,
+                elapsed_ms: 0,
+                payload_content_type: Vec::new(),
+                payload: b"four".to_vec(),
+                admission_receipt_json: Vec::new(),
+                terminal_receipt_json: Vec::new(),
+                error_json: Vec::new(),
+            }));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (delivery, terminal) = runtime
+            .block_on(delivery.reserve_v9_payload_budget(
+                Some(budget.clone()),
+                &tokio_util::sync::CancellationToken::new(),
+            ))
+            .unwrap();
+        assert!(!terminal);
+        assert_eq!(budget.available_permits(), 0);
+        let StreamCallbackDelivery::V9(mut frame) = delivery else {
+            panic!("expected v9 delivery")
+        };
+        let lease_id = allocate_buffer_lease_with_budget(
+            owner,
+            stream_id,
+            frame.payload.clone(),
+            frame.payload_budget.take(),
+        )
+        .unwrap();
+        assert_eq!(budget.available_permits(), 0);
+        assert_eq!(release_buffer_lease(owner, lease_id), Ok(()));
+        assert_eq!(budget.available_permits(), 4);
+
+        close_buffer_lease_stream(owner, stream_id);
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn stream_registry_enforces_per_handle_limit() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let mut stream_ids = Vec::new();
+        for _ in 0..MAX_ACTIVE_STREAMS_PER_OWNER {
+            stream_ids.push(
+                try_insert_stream(ActiveInvocationStream::new(
+                    owner,
+                    tokio_util::sync::CancellationToken::new(),
+                    test_cancellation_control(),
+                ))
+                .expect("within per-handle limit"),
+            );
+        }
+        assert_eq!(
+            try_insert_stream(ActiveInvocationStream::new(
+                owner,
+                tokio_util::sync::CancellationToken::new(),
+                test_cancellation_control(),
+            )),
+            Err(StreamRegistrationError::OwnerLimit)
+        );
+        for stream_id in stream_ids {
+            let _ = remove_stream(stream_id);
+        }
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn v9_payload_moves_from_vec_and_remains_valid_until_final_release() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+
+        let mut source = b"v9-binary-payload\0with-nul".to_vec();
+        source.shrink_to_fit();
+        let source_ptr = source.as_ptr();
+        let delivery = BinaryStreamFrameV9::from_v8(BinaryStreamFrameV8 {
+            kind: STREAM_FRAME_V8_KIND_DATA,
+            state: STREAM_FRAME_V8_STATE_RUNNING,
+            flags: STREAM_FRAME_V8_FLAG_HAS_PAYLOAD,
+            sequence: 7,
+            elapsed_ms: 3,
+            payload_content_type: b"application/octet-stream".to_vec(),
+            payload: source,
+            admission_receipt_json: Vec::new(),
+            terminal_receipt_json: Vec::new(),
+            error_json: Vec::new(),
+        });
+        assert_eq!(
+            delivery.payload.as_ptr(),
+            source_ptr,
+            "Vec<u8> -> Bytes must move the decoded allocation instead of copying it"
+        );
+
+        let lease_id = allocate_buffer_lease(owner, stream_id, delivery.payload.clone()).unwrap();
+        let frame = delivery.borrowed_frame(lease_id);
+        assert_eq!(frame.abi_version, 9);
+        assert_eq!(frame.payload.lease_id, lease_id);
+        assert_eq!(frame.payload.data, source_ptr);
+        assert_eq!(frame.payload.len, delivery.payload.len());
+
+        assert_eq!(runtime_buffer_lease_retain_v9(handle, lease_id), RUNTIME_OK);
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            RUNTIME_OK
+        );
+        close_buffer_lease_stream(owner, stream_id);
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            RUNTIME_OK,
+            "a delivered lease remains valid after stream close"
+        );
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            ERR_NOT_FOUND,
+            "final release must make the opaque id stale"
+        );
+
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn v9_lease_rejects_cross_session_access_and_shutdown_purges_owner() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let (other_handle, _) = alloc(test_session());
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+        let lease_id = allocate_buffer_lease(owner, stream_id, Bytes::from_static(b"owned"))
+            .expect("allocate owner lease");
+
+        assert_eq!(
+            runtime_buffer_lease_retain_v9(other_handle, lease_id),
+            ERR_PERMISSION_DENIED
+        );
+        assert_eq!(
+            runtime_buffer_lease_release_v9(other_handle, lease_id),
+            ERR_PERMISSION_DENIED
+        );
+
+        cancel_invocations_for_binding(owner);
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, lease_id),
+            ERR_NOT_FOUND,
+            "RuntimeHandle shutdown cleanup must revoke all owned leases"
+        );
+        crate::ffi::client::handle::release(handle);
+        crate::ffi::client::handle::release(other_handle);
+    }
+
+    #[test]
+    fn v9_oversized_payload_projects_an_explicit_error_before_eof() {
+        let delivery = v9_payload_too_large_delivery(17, 23, 300 * 1024 * 1024);
+        let frame = delivery.borrowed_frame(0);
+
+        assert_eq!(frame.kind, STREAM_FRAME_V8_KIND_ERROR);
+        assert_eq!(frame.state, STREAM_FRAME_V8_STATE_FAILED);
+        assert_eq!(frame.sequence, 17);
+        assert_eq!(frame.elapsed_ms, 23);
+        assert_eq!(frame.payload.lease_id, 0);
+        assert!(frame.payload.data.is_null());
+        assert_eq!(frame.payload.len, 0);
+        assert_ne!(frame.flags & STREAM_FRAME_V8_FLAG_HAS_ERROR, 0);
+        assert_ne!(frame.flags & STREAM_FRAME_V8_FLAG_TRANSPORT_TERMINAL, 0);
+        let error: serde_json::Value =
+            serde_json::from_slice(&delivery.error_json).expect("v9 error sidecar");
+        assert_eq!(error["code"], "PAYLOAD_TOO_LARGE");
+        assert_eq!(error["stage"], "stream_projection");
+        assert_eq!(error["retryable"], false);
+    }
+
+    #[test]
+    fn v9_lease_bound_backpressures_and_stream_close_wakes_waiters() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            tokio_util::sync::CancellationToken::new(),
+            test_cancellation_control(),
+        ));
+        register_buffer_lease_stream(owner, stream_id);
+
+        let leases = (0..STREAM_V9_MAX_OUTSTANDING_LEASES)
+            .map(|_| {
+                allocate_buffer_lease(owner, stream_id, Bytes::from_static(b"x"))
+                    .expect("fill lease capacity")
+            })
+            .collect::<Vec<_>>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            result_tx
+                .send(allocate_buffer_lease(
+                    owner,
+                    stream_id,
+                    Bytes::from_static(b"unblocked"),
+                ))
+                .unwrap();
+        });
+
+        assert!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "the 65th outstanding lease must wait instead of allocating"
+        );
+        assert_eq!(
+            runtime_buffer_lease_release_v9(handle, leases[0]),
+            RUNTIME_OK
+        );
+        let unblocked = result_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("release must wake the bounded allocator")
+            .expect("stream remains open");
+        waiter.join().unwrap();
+
+        let (close_tx, close_rx) = std::sync::mpsc::channel();
+        let close_waiter = std::thread::spawn(move || {
+            close_tx
+                .send(allocate_buffer_lease(
+                    owner,
+                    stream_id,
+                    Bytes::from_static(b"must-not-deliver"),
+                ))
+                .unwrap();
+        });
+        assert!(
+            close_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "a full stream must keep applying backpressure"
+        );
+        close_buffer_lease_stream(owner, stream_id);
+        assert_eq!(
+            close_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("stream close must wake the allocator"),
+            Err(BufferLeaseAllocationError::StreamClosed)
+        );
+        close_waiter.join().unwrap();
+
+        for lease_id in leases.into_iter().skip(1).chain(std::iter::once(unblocked)) {
+            assert_eq!(
+                runtime_buffer_lease_release_v9(handle, lease_id),
+                RUNTIME_OK
+            );
+        }
+        let _ = remove_stream(stream_id);
+        purge_buffer_leases_for_binding(owner);
+        crate::ffi::client::handle::release(handle);
     }
 }

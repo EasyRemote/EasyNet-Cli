@@ -147,6 +147,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q -- "--format json" "$0"
   grep -q "provider.ability" "$0"
   grep -q "nativeer.native_echo" "$0"
+  grep -q '"protocol": "binary_v1"' "$0"
   grep -q '"schema_version": "1"' "$0"
   grep -q "client.functions(scope=\"user\")" "$0"
   grep -q "canonical_ura_call" "$0"
@@ -157,10 +158,10 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "user_plugin.echo" "$0"
   grep -q "plugin init" "$0"
   grep -q "PYTHONPATH: /work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python" "$0"
-  grep -q "project_sdk_runtime_identity" "$0"
-  grep -q "EASYNET_CREDENTIALS=/home/provider/.runtime-host/credentials.json" "$0"
+  grep -q "assert_sdk_paired_credentials" "$0"
+  grep -q "EASYNET_CREDENTIALS=/home/provider/.easynet/credentials.json" "$0"
   grep -q "EASYNET_CONTROL_JSON=/home/provider/.easynet/control.json" "$0"
-  grep -q "EASYNET_CREDENTIALS=/home/caller/.runtime-host/credentials.json" "$0"
+  grep -q "EASYNET_CREDENTIALS=/home/caller/.easynet/credentials.json" "$0"
   grep -q "EASYNET_CONTROL_JSON=/home/caller/.easynet/control.json" "$0"
   grep -q "plugin install" "$0"
   grep -q "plugin remove" "$0"
@@ -170,6 +171,8 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_cli_remote_deployed_native_easynet_ability" "$0"
   grep -q "provider-invocation-list-native-after-easyremote" "$0"
   grep -q "native_easynet_receipt_chains_projected" "$0"
+  grep -q "stopping EasyRemote provider lifecycle" "$0"
+  grep -q "caller_observed_easyremote_provider_stop_removed_abilities" "$0"
   grep -q "caller_observed_native_easynet_ability_removed" "$0"
   grep -q "provider-hosted user external Agent" "$0"
   grep -q "caller_invoked_user_agent_chat_through_canonical_invoke" "$0"
@@ -180,8 +183,13 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_device_exec_one_verified_receipt_chain" "$0"
   grep -q "caller_device_terminal_session_completed" "$0"
   grep -q "caller_device_terminal_create_one_verified_receipt_chain" "$0"
+  grep -q "caller_device_cp_round_trip_completed" "$0"
+  grep -q "caller_device_cp_private_asset_denied" "$0"
+  grep -q "caller_device_proxy_tunnel_completed" "$0"
   grep -q "device exec" "$0"
   grep -q "device terminal" "$0"
+  grep -q "device cp" "$0"
+  grep -q "device proxy" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
@@ -532,6 +540,26 @@ wait_caller_ability_absent() {
   return 1
 }
 
+stop_easyremote_provider_lifecycle() {
+  service_exec provider '
+    if [ ! -s /shared/easyremote-provider.pid ]; then
+      echo "missing /shared/easyremote-provider.pid" >&2
+      exit 1
+    fi
+    pid="$(cat /shared/easyremote-provider.pid)"
+    kill -TERM "$pid" 2>/dev/null || exit 0
+    i=0
+    while kill -0 "$pid" 2>/dev/null; do
+      i=$((i + 1))
+      if [ "$i" -ge 120 ]; then
+        kill -KILL "$pid" 2>/dev/null || true
+        exit 1
+      fi
+      sleep 0.5
+    done
+  '
+}
+
 wait_file() {
   local path="$1"
   for _ in $(seq 1 120); do
@@ -543,10 +571,10 @@ wait_file() {
   return 1
 }
 
-project_sdk_runtime_identity() {
+assert_sdk_paired_credentials() {
   local service="$1"
   local home="$2"
-  service_exec "$service" "mkdir -p '$home/.runtime-host' && jq '{realm: .realm, runtime_instance_id: .node_id, principal: (.username // .user_id // \"\"), control_plane_endpoint: (.hub_endpoint // \"\")}' '$home/.easynet/credentials.json' > '$home/.runtime-host/credentials.json'"
+  service_exec "$service" "jq -e '(.realm | type == \"string\" and length > 0) and (.node_id | type == \"string\" and length > 0) and (.hub_endpoint | type == \"string\" and length > 0)' '$home/.easynet/credentials.json' >/dev/null"
 }
 
 json_arg() {
@@ -706,8 +734,8 @@ provider_cli "runtime start" >"$OUT_DIR/provider-start.txt" 2>"$OUT_DIR/provider
 caller_cli "runtime start" >"$OUT_DIR/caller-start.txt" 2>"$OUT_DIR/caller-start.err"
 wait_runtime provider /home/provider provider
 wait_runtime caller /home/caller caller
-project_sdk_runtime_identity provider /home/provider
-project_sdk_runtime_identity caller /home/caller
+assert_sdk_paired_credentials provider /home/provider
+assert_sdk_paired_credentials caller /home/caller
 wait_hub_device "$PROVIDER_NODE"
 wait_hub_device "$CALLER_NODE"
 wait_caller_device "$PROVIDER_NODE"
@@ -734,8 +762,14 @@ echo "==> exercising caller device list/abilities/exec/terminal public contract"
 wait_caller_remote_ability_list "$PROVIDER_URA"
 PROCESS_EXEC_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "process.exec")"
 TERMINAL_CREATE_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "terminal.create")"
+TERMINAL_ATTACH_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "terminal.attach")"
+FS_TRANSFER_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "fs.transfer")"
+NET_TUNNEL_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "net.tunnel")"
 [[ "$PROCESS_EXEC_URA" == easynet://* ]] || die "device abilities did not expose process.exec"
 [[ "$TERMINAL_CREATE_URA" == easynet://* ]] || die "device abilities did not expose terminal.create"
+[[ "$TERMINAL_ATTACH_URA" == easynet://* ]] || die "device abilities did not expose terminal.attach"
+[[ "$FS_TRANSFER_URA" == easynet://* ]] || die "device abilities did not expose fs.transfer"
+[[ "$NET_TUNNEL_URA" == easynet://* ]] || die "device abilities did not expose net.tunnel"
 caller_cli "device exec '$PROVIDER_URA' -- /usr/bin/printf DEVICE_EXEC_CANONICAL_OK" \
   >"$OUT_DIR/caller-device-exec-provider.txt" 2>"$OUT_DIR/caller-device-exec-provider.err"
 provider_cli "invocation list --ability-ura '$PROCESS_EXEC_URA' --format json" \
@@ -744,6 +778,70 @@ collect_complete_invocation_records provider \
   "$OUT_DIR/provider-invocation-list-device-exec.json" \
   "$OUT_DIR/provider-invocation-records-device-exec.json" \
   "$OUT_DIR/provider-invocation-records-device-exec.err"
+
+echo "==> exercising governed cross-device file transfer"
+COPY_MARKER="device-cp-round-trip-${TIMESTAMP}"
+service_exec caller "printf '%s' '$COPY_MARKER' > /home/caller/device-cp-source.txt"
+caller_cli "device cp /home/caller/device-cp-source.txt '$PROVIDER_URA:/tmp/device-cp-remote.txt' --overwrite" \
+  >"$OUT_DIR/caller-device-cp-upload.txt" 2>"$OUT_DIR/caller-device-cp-upload.err"
+service_exec provider "test \"\$(cat /tmp/device-cp-remote.txt)\" = '$COPY_MARKER'" || \
+  die "device cp upload did not atomically materialize expected remote bytes"
+caller_cli "device cp '$PROVIDER_URA:/tmp/device-cp-remote.txt' /home/caller/device-cp-download.txt --overwrite" \
+  >"$OUT_DIR/caller-device-cp-download.txt" 2>"$OUT_DIR/caller-device-cp-download.err"
+service_exec caller "cmp /home/caller/device-cp-source.txt /home/caller/device-cp-download.txt" || \
+  die "device cp download did not preserve bytes"
+
+echo "==> proving authority-bearing provider asset cannot cross the file boundary"
+PRIVATE_ASSET_MARKER="provider-private-asset-${TIMESTAMP}"
+service_exec provider "mkdir -p /opt/easynet-private; printf '%s' '$PRIVATE_ASSET_MARKER' > /opt/easynet-private/asset.txt; ln -sfn /opt/easynet-private/asset.txt /tmp/device-cp-private-link"
+if caller_cli "device cp '$PROVIDER_URA:/tmp/device-cp-private-link' /home/caller/device-cp-private-asset.txt --overwrite" \
+  >"$OUT_DIR/caller-device-cp-private-asset.txt" \
+  2>"$OUT_DIR/caller-device-cp-private-asset.err"
+then
+  die "device cp crossed a symlink outside the provider virtual-root boundary"
+fi
+service_exec caller "test ! -e /home/caller/device-cp-private-asset.txt" || \
+  die "denied private asset left a caller-side file"
+if grep -R -F -q -- "$PRIVATE_ASSET_MARKER" "$OUT_DIR"; then
+  die "authority-bearing private asset bytes leaked into caller artifacts or receipts"
+fi
+
+echo "==> exercising governed cross-device TCP proxy"
+cat >"$SHARED_DIR/net_tunnel_peer.py" <<'PY'
+import pathlib
+import socket
+
+with socket.socket() as listener:
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 19090))
+    listener.listen(1)
+    pathlib.Path("/shared/net-tunnel-peer.ready").write_text("ready", encoding="utf-8")
+    stream, _ = listener.accept()
+    with stream:
+        request = bytearray()
+        while True:
+            chunk = stream.recv(65536)
+            if not chunk:
+                break
+            request.extend(chunk)
+        stream.sendall(b"device-proxy-tunnel-ok:" + bytes(request))
+PY
+service_exec provider "rm -f /shared/net-tunnel-peer.ready; nohup python3 /shared/net_tunnel_peer.py >/shared/net-tunnel-peer.log 2>&1 &"
+for _ in $(seq 1 40); do
+  [[ -f "$SHARED_DIR/net-tunnel-peer.ready" ]] && break
+  sleep 0.1
+done
+[[ -f "$SHARED_DIR/net-tunnel-peer.ready" ]] || die "net.tunnel peer did not become ready"
+service_exec caller "printf 'ping' > /home/caller/device-proxy-input.txt"
+caller_cli "device proxy '$PROVIDER_URA' 127.0.0.1 19090 < /home/caller/device-proxy-input.txt" \
+  >"$OUT_DIR/caller-device-proxy-provider.txt" 2>"$OUT_DIR/caller-device-proxy-provider.err"
+grep -q "device-proxy-tunnel-ok:ping" "$OUT_DIR/caller-device-proxy-provider.txt" || \
+  die "device proxy did not round-trip bytes through net.tunnel"
+
+# Structural report tokens: both probes above are fail-fast under set -e.
+# caller_device_cp_round_trip_completed
+# caller_device_cp_private_asset_denied
+# caller_device_proxy_tunnel_completed
 
 cat >"$SHARED_DIR/device_terminal_probe.py" <<'PY'
 import os
@@ -954,6 +1052,7 @@ cat >"$SHARED_DIR/native-easynet-ability/ability.json" <<JSON
   },
   "exec": {
     "kind": "host_stream",
+    "protocol": "binary_v1",
     "host_socket": "${NATIVE_SOCKET}",
     "function": "${NATIVE_QUALIFIED}"
   }
@@ -1102,7 +1201,7 @@ try:
 finally:
     node.stop()
 PY
-service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/provider/.runtime-host/credentials.json EASYNET_CONTROL_JSON=/home/provider/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 -u /shared/easyremote_provider.py > /shared/easyremote-provider.log 2>&1 & echo \$! > /shared/easyremote-provider.pid"
+service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/provider/.easynet/credentials.json EASYNET_CONTROL_JSON=/home/provider/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 -u /shared/easyremote_provider.py > /shared/easyremote-provider.log 2>&1 & echo \$! > /shared/easyremote-provider.pid"
 wait_file "$SHARED_DIR/easyremote-ready.json" || die "EasyRemote provider did not publish readiness"
 cp "$SHARED_DIR/easyremote-ready.json" "$OUT_DIR/easyremote-ready.json"
 ADD_URA="$(jq -r '.abilities.add.ura' "$OUT_DIR/easyremote-ready.json")"
@@ -1292,7 +1391,7 @@ results = {
 }
 print(json.dumps(results, indent=2, sort_keys=True))
 PY
-if ! service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/caller/.runtime-host/credentials.json EASYNET_CONTROL_JSON=/home/caller/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
+if ! service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/caller/.easynet/credentials.json EASYNET_CONTROL_JSON=/home/caller/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
   >"$OUT_DIR/easyremote-remote-results.json" 2>"$SHARED_DIR/easyremote-caller.log"; then
   cp "$SHARED_DIR/easyremote-caller.log" "$OUT_DIR/easyremote-caller.log"
   die "EasyRemote caller matrix failed; see $OUT_DIR/easyremote-caller.log"
@@ -1305,13 +1404,16 @@ collect_complete_invocation_records provider \
   "$OUT_DIR/provider-invocation-records-native-after-easyremote.json" \
   "$OUT_DIR/provider-invocation-records-native-after-easyremote.err"
 
-echo "==> uninstalling one provider EasyRemote ability and verifying caller sees removal"
-provider_cli "ability uninstall '$ADD_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-add.json" 2>"$OUT_DIR/provider-ability-uninstall-add.err"
-caller_cli "ability list --node '$PROVIDER_URA' --format json" \
-  >"$OUT_DIR/caller-ability-list-provider-after-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-uninstall.err"
+echo "==> stopping EasyRemote provider lifecycle and verifying caller sees all EasyRemote abilities removed"
+stop_easyremote_provider_lifecycle >"$OUT_DIR/provider-easyremote-stop.txt" 2>"$OUT_DIR/provider-easyremote-stop.err"
+cp "$SHARED_DIR/easyremote-provider.log" "$OUT_DIR/easyremote-provider.log" 2>/dev/null || true
+for ability_name in er.add er.total er.merge er.defaulted er.summarize er.bundle er.countdown er.whoami; do
+  wait_caller_ability_absent "$PROVIDER_URA" "$ability_name" "caller-ability-list-provider-after-easyremote-stop-${ability_name//./-}"
+done
+cp "$OUT_DIR/caller-ability-list-provider-after-easyremote-stop-er-add.json" \
+  "$OUT_DIR/caller-ability-list-provider-after-easyremote-stop.json"
 provider_cli "ability uninstall '$NATIVE_ABILITY_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-native.json" 2>"$OUT_DIR/provider-ability-uninstall-native.err"
-caller_cli "ability list --node '$PROVIDER_URA' --format json" \
-  >"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.err"
+wait_caller_ability_absent "$PROVIDER_URA" "$NATIVE_QUALIFIED" "caller-ability-list-provider-after-native-uninstall"
 
 python3 - "$OUT_DIR" "$PROVIDER_NODE" "$CALLER_NODE" "$PROVIDER_URA" "$CALLER_URA" "$AGENT_NAME" "$TMP_AGENT" "$HUB_URA" \
   "$PROVIDER_AGENT_NAME" "$PROVIDER_AGENT_CHAT_ABILITY" "$PROVIDER_AGENT_CHAT_URA" "$PROVIDER_AGENT_PROMPT" \
@@ -1484,7 +1586,7 @@ provider_agent_rows_after_remove = ability_rows("caller-ability-list-provider-af
 user_plugin_rows = ability_rows("caller-ability-list-provider-plugin.json")
 user_plugin_rows_after_remove = ability_rows("caller-ability-list-provider-after-plugin-remove.json")
 caller_rows = ability_rows("caller-ability-list-provider.json")
-caller_rows_after_uninstall = ability_rows("caller-ability-list-provider-after-uninstall.json")
+caller_rows_after_easyremote_stop = ability_rows("caller-ability-list-provider-after-easyremote-stop.json")
 caller_rows_after_native_uninstall = ability_rows("caller-ability-list-provider-after-native-uninstall.json")
 
 def row_has_ura(rows, ability_ura: str) -> bool:
@@ -1500,10 +1602,9 @@ provider_agent_visible = row_has_ura(provider_agent_rows, provider_agent_chat_ur
 provider_agent_removed = not row_has_ura(provider_agent_rows_after_remove, provider_agent_chat_ura)
 user_plugin_visible = row_has_ura(user_plugin_rows, user_plugin_ability_ura)
 user_plugin_removed = not row_has_ura(user_plugin_rows_after_remove, user_plugin_ability_ura)
-add_removed = not row_has_ura(caller_rows_after_uninstall, ability_uras["add"])
-other_abilities_remain = all(
-    row_has_ura(caller_rows_after_uninstall, ability_uras[name])
-    for name in ("total", "merge", "defaulted", "summarize", "bundle", "countdown", "whoami")
+easyremote_abilities_removed = all(
+    not row_has_ura(caller_rows_after_easyremote_stop, ura)
+    for ura in ability_uras.values()
 )
 native_removed = not row_has_ura(caller_rows_after_native_uninstall, native_ability_ura)
 def plugin_package_rows(report):
@@ -1928,8 +2029,7 @@ report = {
             native_dispatch_ids_match_ledger
         ),
         "native_easynet_receipt_chains_projected": native_receipt_chains_verified,
-        "caller_observed_provider_ability_removed": add_removed,
-        "provider_other_abilities_remained_after_delete": other_abilities_remain,
+        "caller_observed_easyremote_provider_stop_removed_abilities": easyremote_abilities_removed,
         "caller_observed_native_easynet_ability_removed": native_removed,
     },
     "provider_user_agent_invocation_records": provider_agent_records,
@@ -2001,8 +2101,7 @@ jq -e '
   and .assertions.six_native_runtime_invocation_records
   and .assertions.native_easynet_one_daemon_record_per_easyremote_dispatch
   and .assertions.native_easynet_receipt_chains_projected
-  and .assertions.caller_observed_provider_ability_removed
-  and .assertions.provider_other_abilities_remained_after_delete
+  and .assertions.caller_observed_easyremote_provider_stop_removed_abilities
   and .assertions.caller_observed_native_easynet_ability_removed
 ' "$OUT_DIR/report.json" >/dev/null
 

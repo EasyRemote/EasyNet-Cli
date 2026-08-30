@@ -16,7 +16,7 @@ function requestFrame() {
     call_id: "call-1",
     invocation: {
       caller_ura: "easynet:///r/hub/user/alice",
-      callee_ura: "easynet:///r/hub/device/provider",
+      callee_ura: "easynet:///r/hub/service/alice.provider",
       ability_ura: "demo.echo",
       subject_ura: "easynet:///r/hub/resource/demo",
       invocation_nonce: [...canonicalNonce],
@@ -51,7 +51,7 @@ test("SidecarInvocation projects daemon frame", () => {
 
   assert.equal(invocation.callID, "call-1");
   assert.equal(invocation.callerURA, "easynet:///r/hub/user/alice");
-  assert.equal(invocation.calleeURA, "easynet:///r/hub/device/provider");
+  assert.equal(invocation.calleeURA, "easynet:///r/hub/service/alice.provider");
   assert.equal(invocation.abilityURA, "demo.echo");
   assert.equal(invocation.subjectURA, "easynet:///r/hub/resource/demo");
   assert.deepEqual(invocation.invocationNonce, canonicalNonce);

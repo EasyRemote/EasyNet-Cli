@@ -27,6 +27,7 @@ pub(crate) enum RemoteTargetSystemAbility {
     NodeDescribe,
     ProcessExec,
     TerminalCreate,
+    TerminalList,
 }
 
 impl RemoteTargetSystemAbility {
@@ -35,24 +36,19 @@ impl RemoteTargetSystemAbility {
             Self::NodeDescribe => "node.describe",
             Self::ProcessExec => "process.exec",
             Self::TerminalCreate => "terminal.create",
+            Self::TerminalList => "terminal.list",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteDeviceSessionAbility {
-    Input,
-    Read,
-    Resize,
     Close,
 }
 
 impl RemoteDeviceSessionAbility {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Input => "terminal.input",
-            Self::Read => "terminal.read",
-            Self::Resize => "terminal.resize",
             Self::Close => "terminal.close",
         }
     }
@@ -160,6 +156,98 @@ pub(crate) fn invoke_remote_device_session_ability(
             ability.as_str()
         )
     })
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) async fn open_remote_terminal_attach(
+    target_ura: &str,
+    caller_ura: &str,
+    subject_ura: &str,
+    session_id: &str,
+    attachment_id: &str,
+    expected_epoch: u64,
+    authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    signer: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationCallerSigner,
+    timeout: std::time::Duration,
+) -> anyhow::Result<crate::support::platform::bidi_session::DaemonBidiSession> {
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
+    let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector_for_mode(
+        &target_ura,
+        crate::daemon::ability::names::device_control::TERMINAL_ATTACH,
+        crate::daemon::ability::CallMode::Bidi,
+    )?;
+    let request = RemoteSessionInvocationIssuer::followup_root_plan(
+        &target_call,
+        caller_ura,
+        subject_ura,
+        serde_json::json!({
+            "session_id": session_id,
+            "attachment_id": attachment_id,
+            "expected_epoch": expected_epoch,
+        }),
+        timeout,
+    )?
+    .into_request()?
+    .with_authority_metadata(authority_metadata);
+    remote_invoke::open_remote_target_bidi_session_with_signer(request, signer)
+        .await
+        .with_context(|| format!("attach terminal session on remote device target={target_ura}"))
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) async fn open_remote_file_transfer(
+    target_ura: &str,
+    caller_ura: &str,
+    subject_ura: &str,
+    args: Value,
+    signer: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationCallerSigner,
+    timeout: std::time::Duration,
+) -> anyhow::Result<crate::support::platform::bidi_session::DaemonBidiSession> {
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
+    let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector_for_mode(
+        &target_ura,
+        crate::daemon::ability::names::device_control::FS_TRANSFER,
+        crate::daemon::ability::CallMode::Bidi,
+    )?;
+    let request = RemoteUserActionInvocationIssuer::caller_declared_root_plan(
+        &target_call,
+        caller_ura,
+        subject_ura,
+        args,
+        timeout,
+    )?
+    .into_request()?;
+    remote_invoke::open_remote_target_bidi_session_with_signer(request, signer)
+        .await
+        .with_context(|| format!("open fs.transfer on remote device target={target_ura}"))
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) async fn open_remote_net_tunnel(
+    target_ura: &str,
+    caller_ura: &str,
+    subject_ura: &str,
+    args: Value,
+    signer: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationCallerSigner,
+    timeout: std::time::Duration,
+) -> anyhow::Result<crate::support::platform::bidi_session::DaemonBidiSession> {
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
+    let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector_for_mode(
+        &target_ura,
+        crate::daemon::ability::names::device_control::NET_TUNNEL,
+        crate::daemon::ability::CallMode::Bidi,
+    )?;
+    let request = RemoteUserActionInvocationIssuer::caller_declared_root_plan(
+        &target_call,
+        caller_ura,
+        subject_ura,
+        args,
+        timeout,
+    )?
+    .into_request()?;
+    remote_invoke::open_remote_target_bidi_session_with_signer(request, signer)
+        .await
+        .with_context(|| format!("open net.tunnel on remote device target={target_ura}"))
 }
 
 #[cfg(feature = "axon-pb")]

@@ -69,6 +69,28 @@ func (t *RuntimeSigningTransport) OpenStream(ctx context.Context, draftJSON []by
 	return next.OpenStream(ctx, raw)
 }
 
+func (t *RuntimeSigningTransport) OpenLeasedStream(ctx context.Context, draftJSON []byte) (leasedStreamTransport, []byte, error) {
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, nil, err
+	}
+	opener, ok := next.(leasedStreamOpener)
+	if !ok {
+		return nil, nil, &SDKError{
+			Code:      ErrNotImplemented,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   "runtime transport does not expose ABI v9 leased streams",
+		}
+	}
+	raw, err := t.signDraftJSON(draftJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	return opener.OpenLeasedStream(ctx, raw)
+}
+
 func (t *RuntimeSigningTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
 	next, err := t.nextTransport()
 	if err != nil {

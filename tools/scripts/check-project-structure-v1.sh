@@ -183,6 +183,8 @@ require_file VERSION
 require_file build.rs
 require_file include/easynet_cli.h
 require_file include/easynet_cli.exports.v7
+require_file include/easynet_cli.exports.v8
+require_file include/easynet_cli.exports.v9
 check_root_contract
 
 require_only_files src/bin \

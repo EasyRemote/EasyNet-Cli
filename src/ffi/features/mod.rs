@@ -20,6 +20,8 @@ pub const AXON_PB_SYMBOLS: &[&str] = &[
     "invocation_builder_handles",
     "invocation_handle_observation",
     "stream_bidi_lifecycle",
+    "stream_binary_frame_v8",
+    "stream_buffer_lease_v9",
     "runtime_health",
     "runtime_diagnostics",
     "prepare_sign_submit",
@@ -40,6 +42,18 @@ pub fn feature_discovery_value() -> Value {
 
     json!({
         "abi_version": RUNTIME_ABI_VERSION,
+        "abi_extensions": {
+            "v8": {
+                "stream_binary_frame": cfg!(feature = "axon-pb"),
+                "symbol": "runtime_invocation_stream_open_v8"
+            },
+            "v9": {
+                "stream_buffer_lease": cfg!(feature = "axon-pb"),
+                "open_symbol": "runtime_invocation_stream_open_v9",
+                "retain_symbol": "runtime_buffer_lease_retain_v9",
+                "release_symbol": "runtime_buffer_lease_release_v9"
+            }
+        },
         "sdk_version": env!("CARGO_PKG_VERSION"),
         "profiles": profiles,
         "symbols": symbols,

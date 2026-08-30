@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Callable, NoReturn, Protocol, TypeVar, cast
 
 from axon_sdk.invocation.axiom import AbilityDescriptorRef
@@ -15,6 +16,26 @@ from .errors import ErrorCode, RetryHint, SDKError
 
 _PROFILE = "axon-strict-v2"
 _T = TypeVar("_T")
+
+
+class AddressingErrorReason(StrEnum):
+    """Stable reasons for Addressing failures that require caller action."""
+
+    ABILITY_OWNER_NOT_PUBLISHER = "ability_owner_not_publisher"
+
+
+def addressing_error_reason(error: SDKError) -> AddressingErrorReason | None:
+    """Project a typed Addressing reason without parsing error messages or URAs."""
+
+    if not isinstance(error, SDKError) or error.stage != "addressing":
+        return None
+    reason = error.details.get("reason")
+    if not isinstance(reason, str):
+        return None
+    try:
+        return AddressingErrorReason(reason)
+    except ValueError:
+        return None
 
 
 class AddressingTransport(Protocol):
@@ -193,24 +214,17 @@ class AddressingClient:
         return self.resource_ura(owner_ura, path)
 
     def owner_ability_ura(self, owner_ura: str, ability_name: str) -> str:
+        owner_projection = self.parse_ura(owner_ura)
+        if owner_projection.kind == "device":
+            _invalid_addressing(
+                "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
+                reason=AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
+            )
         return self._build(
             "ability",
             owner_ura=_clean(owner_ura, "owner_ura"),
             ability_name=_clean(ability_name, "ability_name"),
         )
-
-    def device_ability_ura(
-        self, realm: str, device_id: str, namespace: str, local_name: str
-    ) -> str:
-        name = ".".join(
-            part
-            for part in (
-                _clean(namespace, "namespace"),
-                _clean(local_name, "local_name"),
-            )
-            if part
-        )
-        return self.owner_ability_ura(self.device_ura(realm, device_id), name)
 
     def service_ability_ura(
         self, realm: str, user_id: str, service_id: str, ability_name: str
@@ -355,16 +369,6 @@ def owner_ability_ura(owner_ura: str, ability_name: str) -> str:
     )
 
 
-def device_ability_ura(
-    realm: str, device_id: str, namespace: str, local_name: str
-) -> str:
-    return _with_client(
-        lambda client: client.device_ability_ura(
-            realm, device_id, namespace, local_name
-        )
-    )
-
-
 def service_ability_ura(
     realm: str, user_id: str, service_id: str, ability_name: str
 ) -> str:
@@ -413,6 +417,8 @@ class AxonAddressingTransport:
         try:
             ref = self._addressing.parse_descriptor_ref(raw)
             return _descriptor_projection(self._addressing, ref)
+        except SDKError:
+            raise
         except Exception as exc:
             _invalid_addressing(f"project descriptor_ref: {exc}", exc)
 
@@ -427,6 +433,8 @@ class AxonAddressingTransport:
                 f"{ability_ura}@{descriptor_version}#{descriptor_hash}!{action}"
             )
             return _descriptor_projection(self._addressing, ref)
+        except SDKError:
+            raise
         except Exception as exc:
             _invalid_addressing(f"build descriptor_ref: {exc}", exc)
 
@@ -511,6 +519,12 @@ class AxonAddressingTransport:
                 str, self._addressing.authority_ura(_required_string(request, "realm"))
             )
         if kind == "ability":
+            owner = self._addressing.parse_ura(_required_string(request, "owner_ura"))
+            if owner.kind == "device":
+                _invalid_addressing(
+                    "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
+                    reason=AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
+                )
             return cast(
                 str,
                 self._addressing.owner_ability_ura(
@@ -537,6 +551,7 @@ def _descriptor_projection(
 ) -> bytes:
     parsed = addressing.parse_ura(ref.ability_ura)
     ability = _required_ability(parsed)
+    _reject_device_owned_ability(ability)
     public_name = _public_ability_name(parsed)
     owner_ura = addressing.owner_ura_for_ability(ref.ability_ura)
     return _json_bytes(
@@ -579,6 +594,7 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
     }
     if parsed.kind == "ability":
         ability = _required_ability(parsed)
+        _reject_device_owned_ability(ability)
         public_name = _public_ability_name(parsed)
         components.update(
             {
@@ -610,7 +626,8 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
     elif parsed.kind == "service":
         components.update(
             {
-                "user_id": parsed.user_id or "",
+                "owner_kind": "service",
+                "principal_id": parsed.user_id or "",
                 "service_id": parsed.service_id or "",
             }
         )
@@ -636,6 +653,14 @@ def _required_ability(parsed: ParsedURA) -> Any:
     if parsed.kind != "ability" or parsed.ability is None:
         raise ParseError("value is not a typed ability URA")
     return parsed.ability
+
+
+def _reject_device_owned_ability(ability: Any) -> None:
+    if ability.owner.kind == "device":
+        _invalid_addressing(
+            "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
+            reason=AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
+        )
 
 
 def _public_ability_name(parsed: ParsedURA) -> str:
@@ -696,12 +721,18 @@ def _metadata() -> dict[str, object]:
     return {"grammar_owner": "axon", "source": "axon_sdk"}
 
 
-def _invalid_addressing(message: str, cause: BaseException | None = None) -> NoReturn:
+def _invalid_addressing(
+    message: str,
+    cause: BaseException | None = None,
+    *,
+    reason: AddressingErrorReason | None = None,
+) -> NoReturn:
     raise SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="addressing",
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details={"reason": reason.value} if reason is not None else {},
         cause=cause,
     )

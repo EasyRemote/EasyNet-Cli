@@ -13,11 +13,12 @@
 //   submit TargetObservation values. The session aggregate remains the single
 //   writer for state transitions and ordered event-log rows.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::target::{
-    AppWindowSetProof, FrontendAction, RemoteAppTargetBinding, ResolvedCaptureTargetProof,
-    TargetGeometry, TargetResolutionError,
+    AppWindowSetProof, FrontendAction, RemoteAppTargetBinding, RemoteDesktopTargetKind,
+    ResolvedCaptureTargetProof, TargetGeometry, TargetResolutionError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,7 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetBindingPhase {
     Unresolved,
     Resolved,
     Stale,
+    PermissionVerificationPending,
     Lost,
     Rebinding,
     Invalidated,
@@ -37,6 +39,7 @@ impl TargetBindingPhase {
             Self::Unresolved => "unresolved",
             Self::Resolved => "resolved",
             Self::Stale => "stale",
+            Self::PermissionVerificationPending => "permission_verification_pending",
             Self::Lost => "lost",
             Self::Rebinding => "rebinding",
             Self::Invalidated => "invalidated",
@@ -48,6 +51,7 @@ impl TargetBindingPhase {
             Self::Unresolved => "resolve_required",
             Self::Resolved => "continue",
             Self::Stale => "refresh_required",
+            Self::PermissionVerificationPending => "automatic_verification",
             Self::Lost => "terminate",
             Self::Rebinding => "retry_session",
             Self::Invalidated => "terminate",
@@ -59,12 +63,14 @@ const ALL_TARGET_BINDING_PHASES: &[TargetBindingPhase] = &[
     TargetBindingPhase::Unresolved,
     TargetBindingPhase::Resolved,
     TargetBindingPhase::Stale,
+    TargetBindingPhase::PermissionVerificationPending,
     TargetBindingPhase::Lost,
     TargetBindingPhase::Rebinding,
     TargetBindingPhase::Invalidated,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(in crate::daemon::plugins::remote_desktop) enum TargetVisibilityState {
     Visible,
     Hidden,
@@ -100,12 +106,13 @@ const LOST_DEBOUNCE_MS: u64 = 1_000;
 const AUTOMATIC_REBIND_WINDOW_MS: u64 = 30_000;
 const TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerSnapshot {
     binding_id: String,
     binding_epoch: u64,
     target_identity_epoch: u64,
     target_geometry_revision: u64,
+    target_focus_epoch: u64,
     media_source_epoch: u64,
     status: TargetBindingPhase,
     visibility_state: TargetVisibilityState,
@@ -126,6 +133,7 @@ impl TargetTrackerSnapshot {
             binding_epoch: binding.binding_epoch(),
             target_identity_epoch: binding.target_identity_epoch(),
             target_geometry_revision: binding.target_geometry_revision(),
+            target_focus_epoch: 1,
             media_source_epoch: binding.media_source_epoch(),
             status: TargetBindingPhase::Resolved,
             visibility_state: TargetVisibilityState::Visible,
@@ -144,6 +152,7 @@ impl TargetTrackerSnapshot {
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
             "target_geometry_revision": self.target_geometry_revision,
+            "target_focus_epoch": self.target_focus_epoch,
             "media_source_epoch": self.media_source_epoch,
             "status": self.status.as_str(),
             "visibility_state": self.visibility_state.as_str(),
@@ -154,6 +163,140 @@ impl TargetTrackerSnapshot {
             "geometry": self.geometry.to_value(),
             "input_enabled": self.input_enabled(),
         })
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn to_recovery_value(&self) -> Value {
+        let mut value = self.to_value();
+        value["input_blocked_reason_override"] = json!(self.input_blocked_reason_override);
+        value["diagnostic"] = self.diagnostic.clone();
+        value
+    }
+
+    fn from_recovery_value(
+        binding: &RemoteAppTargetBinding,
+        value: &Value,
+    ) -> anyhow::Result<Self> {
+        let required_u64 = |name: &str| {
+            value
+                .get(name)
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("target tracking recovery field {name} must be u64"))
+        };
+        let required_str = |name: &str| {
+            value.get(name).and_then(Value::as_str).ok_or_else(|| {
+                anyhow::anyhow!("target tracking recovery field {name} must be string")
+            })
+        };
+        let binding_id = required_str("binding_id")?.to_string();
+        let binding_epoch = required_u64("binding_epoch")?;
+        if binding_id != binding.binding_id() || binding_epoch != binding.binding_epoch() {
+            anyhow::bail!("target tracking recovery identity does not match target binding");
+        }
+        let status = match required_str("status")? {
+            "unresolved" => TargetBindingPhase::Unresolved,
+            "resolved" => TargetBindingPhase::Resolved,
+            "stale" => TargetBindingPhase::Stale,
+            "permission_verification_pending" => TargetBindingPhase::PermissionVerificationPending,
+            "lost" => TargetBindingPhase::Lost,
+            "rebinding" => TargetBindingPhase::Rebinding,
+            "invalidated" => TargetBindingPhase::Invalidated,
+            other => anyhow::bail!("unsupported target tracking recovery status {other}"),
+        };
+        let visibility_state = match required_str("visibility_state")? {
+            "visible" => TargetVisibilityState::Visible,
+            "hidden" => TargetVisibilityState::Hidden,
+            "minimized" => TargetVisibilityState::Minimized,
+            "lost" => TargetVisibilityState::Lost,
+            other => anyhow::bail!("unsupported target tracking recovery visibility {other}"),
+        };
+        let persisted_input_blocked_reason = match value.get("input_blocked_reason") {
+            Some(Value::Null) => None,
+            Some(Value::String(reason)) => Some(reason.as_str()),
+            Some(_) => {
+                anyhow::bail!("target tracking recovery input blocker must be string or null")
+            }
+            None => anyhow::bail!("target tracking recovery input blocker is required"),
+        };
+        let input_blocked_reason_override = match value.get("input_blocked_reason_override") {
+            Some(Value::Null) => None,
+            Some(Value::String(reason)) => match reason.as_str() {
+                "target_loss_pending" => Some("target_loss_pending"),
+                "target_display_unavailable" => Some("target_display_unavailable"),
+                other => anyhow::bail!(
+                    "unsupported target tracking recovery input blocker override {other}"
+                ),
+            },
+            Some(_) => anyhow::bail!(
+                "target tracking recovery input blocker override must be string or null"
+            ),
+            None => match persisted_input_blocked_reason {
+                Some("target_loss_pending") => Some("target_loss_pending"),
+                Some("target_display_unavailable") => Some("target_display_unavailable"),
+                _ => None,
+            },
+        };
+        let available_display_ids = value
+            .get("available_display_ids")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("target tracking recovery display ids must be array"))?
+            .iter()
+            .map(|id| {
+                id.as_u64().ok_or_else(|| {
+                    anyhow::anyhow!("target tracking recovery display id must be u64")
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let focused = match value.get("focused") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(value.as_bool().ok_or_else(|| {
+                anyhow::anyhow!("target tracking recovery focused must be bool or null")
+            })?),
+        };
+        let title = match value.get("title") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("target tracking recovery title must be string or null")
+                    })?
+                    .to_string(),
+            ),
+        };
+        let snapshot = Self {
+            binding_id,
+            binding_epoch,
+            target_identity_epoch: required_u64("target_identity_epoch")?,
+            target_geometry_revision: required_u64("target_geometry_revision")?,
+            target_focus_epoch: required_u64("target_focus_epoch")?,
+            media_source_epoch: required_u64("media_source_epoch")?,
+            status,
+            visibility_state,
+            title,
+            focused,
+            input_blocked_reason_override,
+            available_display_ids,
+            geometry: TargetGeometry::from_recovery_value(value.get("geometry").ok_or_else(
+                || anyhow::anyhow!("target tracking recovery geometry is required"),
+            )?)?,
+            diagnostic: value
+                .get("diagnostic")
+                .cloned()
+                .unwrap_or_else(|| binding.latest_target_diagnostic_value()),
+        };
+        if snapshot.input_blocked_reason() != persisted_input_blocked_reason {
+            anyhow::bail!("target tracking recovery input blocker contradicts target state");
+        }
+        let persisted_input_enabled = value
+            .get("input_enabled")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                anyhow::anyhow!("target tracking recovery input_enabled must be bool")
+            })?;
+        if snapshot.input_enabled() != persisted_input_enabled {
+            anyhow::bail!("target tracking recovery input_enabled contradicts target state");
+        }
+        Ok(snapshot)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn latest_diagnostic(&self) -> Value {
@@ -171,6 +314,7 @@ impl TargetTrackerSnapshot {
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
             "target_geometry_revision": self.target_geometry_revision,
+            "target_focus_epoch": self.target_focus_epoch,
             "origin_x": origin_x,
             "origin_y": origin_y,
             "width": self.geometry.width,
@@ -194,12 +338,16 @@ impl TargetTrackerSnapshot {
                 | TargetBindingPhase::Lost
                 | TargetBindingPhase::Rebinding
                 | TargetBindingPhase::Invalidated
+                | TargetBindingPhase::PermissionVerificationPending
         ) {
             return match self.status {
                 TargetBindingPhase::Unresolved => Some("target_unresolved"),
                 TargetBindingPhase::Lost => Some("target_lost"),
                 TargetBindingPhase::Rebinding => Some("target_rebinding"),
                 TargetBindingPhase::Invalidated => Some("target_invalidated"),
+                TargetBindingPhase::PermissionVerificationPending => {
+                    Some("target_permission_verification_pending")
+                }
                 TargetBindingPhase::Resolved | TargetBindingPhase::Stale => None,
             };
         }
@@ -224,6 +372,14 @@ impl TargetTrackerSnapshot {
         self.target_geometry_revision
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn binding_epoch(&self) -> u64 {
+        self.binding_epoch
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_identity_epoch(&self) -> u64 {
+        self.target_identity_epoch
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn geometry(&self) -> &TargetGeometry {
         &self.geometry
     }
@@ -234,6 +390,16 @@ impl TargetTrackerSnapshot {
 
     pub(in crate::daemon::plugins::remote_desktop) fn focused(&self) -> Option<bool> {
         self.focused
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_focus_epoch(&self) -> u64 {
+        self.target_focus_epoch
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn permission_verification_pending(
+        &self,
+    ) -> bool {
+        self.status == TargetBindingPhase::PermissionVerificationPending
     }
 }
 
@@ -261,11 +427,20 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetObservation {
         focused: bool,
         observed_at_ms: u64,
     },
-    ApplicationWindowSetChanged {
+    ApplicationSurfaceChanged {
         app_window_set: AppWindowSetProof,
+        app_surface_layout:
+            Option<crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof>,
         geometry: TargetGeometry,
         target_identity_epoch: u64,
         target_geometry_revision: u64,
+        observed_at_ms: u64,
+    },
+    PermissionVerificationRequired {
+        detail: String,
+        observed_at_ms: u64,
+    },
+    PermissionRestored {
         observed_at_ms: u64,
     },
     PermissionRevoked {
@@ -282,6 +457,13 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetObservation {
     #[allow(dead_code)]
     Lost {
         reason: TargetResolutionError,
+        detail: String,
+        observed_at_ms: u64,
+    },
+    /// The plugin-owned monitor exhausted its restart budget. Unlike an
+    /// ordinary host observation miss, this is already a confirmed loss of
+    /// observation authority and therefore must not enter target debounce.
+    MonitorUnavailable {
         detail: String,
         observed_at_ms: u64,
     },
@@ -361,6 +543,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteAppTargetBindingStat
     pending_lost: Option<PendingLostObservation>,
     latest_loss_observed_at_ms: Option<u64>,
     rebind_started_at_ms: Option<u64>,
+    rebind_attempt_nonce: Option<String>,
     rebind_failure_emitted: bool,
     lifecycle_event_coalescer: TargetLifecycleEventCoalescer,
 }
@@ -397,6 +580,14 @@ struct TargetLifecycleEventEmission {
     suppressed_since_last: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct TargetRebindAttemptToken {
+    nonce: String,
+    binding_epoch: u64,
+    media_source_epoch: u64,
+    deadline_ms: u64,
+}
+
 impl TargetLifecycleEventCoalescer {
     fn observe(&mut self, observed_at_ms: u64) -> Option<TargetLifecycleEventEmission> {
         if self.last_emitted_at_ms.is_none_or(|last_emitted_at_ms| {
@@ -426,9 +617,49 @@ impl RemoteAppTargetBindingStateMachine {
             pending_lost: None,
             latest_loss_observed_at_ms: None,
             rebind_started_at_ms: None,
+            rebind_attempt_nonce: None,
             rebind_failure_emitted: false,
             lifecycle_event_coalescer: TargetLifecycleEventCoalescer::default(),
         }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        binding: RemoteAppTargetBinding,
+        snapshot: Option<&Value>,
+    ) -> anyhow::Result<Self> {
+        let Some(snapshot) = snapshot else {
+            return Ok(Self::from_binding(binding));
+        };
+        let snapshot = TargetTrackerSnapshot::from_recovery_value(&binding, snapshot)?;
+        let recovered_rebind_started_at_ms = (snapshot.status == TargetBindingPhase::Rebinding)
+            .then(|| {
+                snapshot
+                    .diagnostic
+                    .get("rebind_deadline_ms")
+                    .and_then(Value::as_u64)
+                    .map(|deadline| deadline.saturating_sub(AUTOMATIC_REBIND_WINDOW_MS))
+                    .unwrap_or(0)
+            });
+        let pending_lost = (snapshot.input_blocked_reason_override == Some("target_loss_pending"))
+            .then(|| PendingLostObservation {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "rehydrated pending target loss".to_string(),
+                first_observed_at_ms: 0,
+                latest_observed_at_ms: 0,
+                consecutive_misses: 1,
+            });
+        Ok(Self {
+            binding,
+            snapshot,
+            pending_media_rebind: None,
+            pending_lost,
+            latest_loss_observed_at_ms: None,
+            rebind_started_at_ms: recovered_rebind_started_at_ms,
+            rebind_attempt_nonce: recovered_rebind_started_at_ms
+                .map(|_| uuid::Uuid::new_v4().simple().to_string()),
+            rebind_failure_emitted: false,
+            lifecycle_event_coalescer: TargetLifecycleEventCoalescer::default(),
+        })
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn binding(&self) -> &RemoteAppTargetBinding {
@@ -446,6 +677,41 @@ impl RemoteAppTargetBindingStateMachine {
         self.pending_media_rebind
             .as_ref()
             .map(|pending| &pending.binding)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn rebind_attempt_token(
+        &self,
+    ) -> Option<TargetRebindAttemptToken> {
+        let nonce = self.rebind_attempt_nonce.clone()?;
+        let started_at_ms = self.rebind_started_at_ms?;
+        let binding = self
+            .pending_media_rebind
+            .as_ref()
+            .map(|pending| &pending.binding)
+            .unwrap_or(&self.binding);
+        Some(TargetRebindAttemptToken {
+            nonce,
+            binding_epoch: binding.binding_epoch(),
+            media_source_epoch: binding.media_source_epoch(),
+            deadline_ms: started_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS),
+        })
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn matches_rebind_attempt(
+        &self,
+        expected: &TargetRebindAttemptToken,
+    ) -> bool {
+        self.rebind_attempt_token().as_ref() == Some(expected)
+    }
+
+    fn start_rebind_attempt(&mut self, observed_at_ms: u64) {
+        self.rebind_started_at_ms = Some(observed_at_ms);
+        self.rebind_attempt_nonce = Some(uuid::Uuid::new_v4().simple().to_string());
+    }
+
+    fn finish_rebind_attempt(&mut self) -> Option<u64> {
+        self.rebind_attempt_nonce = None;
+        self.rebind_started_at_ms.take()
     }
 
     #[cfg(test)]
@@ -466,7 +732,12 @@ impl RemoteAppTargetBindingStateMachine {
                 geometry,
                 target_geometry_revision,
                 observed_at_ms,
-            } => self.commit_geometry(geometry, target_geometry_revision, observed_at_ms),
+            } => self.commit_geometry(
+                geometry,
+                target_geometry_revision,
+                observed_at_ms,
+                media_source_active,
+            ),
             TargetObservation::VisibilityChanged {
                 visibility_state,
                 target_geometry_revision,
@@ -480,30 +751,40 @@ impl RemoteAppTargetBindingStateMachine {
                 focused,
                 observed_at_ms,
             } => self.commit_focus(focused, observed_at_ms),
-            TargetObservation::ApplicationWindowSetChanged {
+            TargetObservation::ApplicationSurfaceChanged {
                 app_window_set,
+                app_surface_layout,
                 geometry,
                 target_identity_epoch,
                 target_geometry_revision,
                 observed_at_ms,
             } => {
                 if media_source_active {
-                    self.stage_application_window_set_media_rebind(
+                    self.stage_application_surface_media_rebind(
                         app_window_set,
+                        app_surface_layout,
                         geometry,
                         target_identity_epoch,
                         target_geometry_revision,
                         observed_at_ms,
                     )
                 } else {
-                    self.commit_application_window_set(
+                    self.commit_application_surface(
                         app_window_set,
+                        app_surface_layout,
                         geometry,
                         target_identity_epoch,
                         target_geometry_revision,
                         observed_at_ms,
                     )
                 }
+            }
+            TargetObservation::PermissionVerificationRequired {
+                detail,
+                observed_at_ms,
+            } => self.commit_permission_verification_required(detail, observed_at_ms),
+            TargetObservation::PermissionRestored { observed_at_ms } => {
+                self.commit_permission_restored(observed_at_ms)
             }
             TargetObservation::PermissionRevoked {
                 detail,
@@ -523,6 +804,10 @@ impl RemoteAppTargetBindingStateMachine {
                 detail,
                 observed_at_ms,
             } => self.commit_lost(reason, detail, observed_at_ms),
+            TargetObservation::MonitorUnavailable {
+                detail,
+                observed_at_ms,
+            } => self.commit_monitor_unavailable(detail, observed_at_ms),
         }
     }
 
@@ -531,6 +816,7 @@ impl RemoteAppTargetBindingStateMachine {
         geometry: TargetGeometry,
         target_geometry_revision: u64,
         observed_at_ms: u64,
+        media_source_active: bool,
     ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             return self.begin_rebinding("target_geometry_after_loss", observed_at_ms);
@@ -544,8 +830,28 @@ impl RemoteAppTargetBindingStateMachine {
             return None;
         }
         let event_types = geometry_event_types(&self.snapshot.geometry, &geometry);
+        let resized = self.snapshot.geometry.width != geometry.width
+            || self.snapshot.geometry.height != geometry.height;
+        if media_source_active
+            && resized
+            && self.binding.target_kind() != RemoteDesktopTargetKind::Application
+        {
+            return self.stage_geometry_media_rebind(
+                geometry,
+                target_geometry_revision.max(previous.saturating_add(1)),
+                observed_at_ms,
+            );
+        }
+        if let Some(candidate) = self.binding.geometry_rebind_candidate(
+            geometry.clone(),
+            target_geometry_revision.max(previous.saturating_add(1)),
+            false,
+        ) {
+            self.binding = candidate;
+        }
         self.snapshot.status = TargetBindingPhase::Resolved;
         self.snapshot.visibility_state = TargetVisibilityState::Visible;
+        self.snapshot.binding_epoch = self.binding.binding_epoch();
         self.snapshot.geometry = geometry;
         self.snapshot.target_geometry_revision = target_geometry_revision.max(previous + 1);
         self.snapshot.diagnostic = self.diagnostic_projection(
@@ -557,6 +863,42 @@ impl RemoteAppTargetBindingStateMachine {
         self.coalesced_lifecycle_events(
             &event_types,
             self.event_payload("target_geometry_changed", observed_at_ms, Some(previous)),
+            observed_at_ms,
+        )
+    }
+
+    fn stage_geometry_media_rebind(
+        &mut self,
+        geometry: TargetGeometry,
+        target_geometry_revision: u64,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        if self.snapshot.status == TargetBindingPhase::Lost {
+            return self.begin_rebinding("target_geometry_after_loss", observed_at_ms);
+        }
+        if self.snapshot.status == TargetBindingPhase::Rebinding
+            && self.pending_media_rebind.as_ref().is_some_and(|pending| {
+                pending.binding.geometry() == &geometry
+                    && pending.binding.target_geometry_revision() == target_geometry_revision
+            })
+        {
+            return None;
+        }
+        self.clear_pending_lost();
+        let Some(candidate) =
+            self.binding
+                .geometry_rebind_candidate(geometry, target_geometry_revision, true)
+        else {
+            return self.commit_lost(
+                TargetResolutionError::TargetMetadataIncomplete,
+                "target geometry observation cannot stage a media rebind for this target kind"
+                    .to_string(),
+                observed_at_ms,
+            );
+        };
+        self.stage_pending_media_rebind(
+            candidate,
+            "target_geometry_change_requires_media_source_rebuild",
             observed_at_ms,
         )
     }
@@ -690,13 +1032,13 @@ impl RemoteAppTargetBindingStateMachine {
         {
             return None;
         }
-        self.snapshot.focused = Some(focused);
+        self.set_focused(focused);
         let reason = if focused {
             "target_focused"
         } else {
             "target_blurred"
         };
-        let target_action = (!focused).then_some(FrontendAction::RetrySession);
+        let target_action = (!focused).then_some(FrontendAction::FocusTargetLocally);
         let diagnostic = self.diagnostic_projection(
             self.snapshot.status.as_str(),
             Value::Null,
@@ -725,9 +1067,12 @@ impl RemoteAppTargetBindingStateMachine {
         ))
     }
 
-    fn commit_application_window_set(
+    fn commit_application_surface(
         &mut self,
         app_window_set: AppWindowSetProof,
+        app_surface_layout: Option<
+            crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof,
+        >,
         geometry: TargetGeometry,
         target_identity_epoch: u64,
         target_geometry_revision: u64,
@@ -742,12 +1087,16 @@ impl RemoteAppTargetBindingStateMachine {
         self.clear_pending_lost();
         let previous_identity_epoch = self.snapshot.target_identity_epoch;
         let previous_geometry_revision = self.snapshot.target_geometry_revision;
-        if previous_identity_epoch == target_identity_epoch && self.snapshot.geometry == geometry {
+        if previous_identity_epoch == target_identity_epoch
+            && self.snapshot.geometry == geometry
+            && self.binding.committed_app_surface_layout() == app_surface_layout.as_ref()
+        {
             return None;
         }
         let next_geometry_revision = target_geometry_revision.max(previous_geometry_revision + 1);
-        let Some(next_binding) = self.binding.application_window_set_rebind_candidate(
+        let Some(next_binding) = self.binding.application_surface_rebind_candidate(
             app_window_set.clone(),
+            app_surface_layout.clone(),
             geometry.clone(),
             next_geometry_revision,
             false,
@@ -780,12 +1129,22 @@ impl RemoteAppTargetBindingStateMachine {
         payload["previous_target_identity_epoch"] = json!(previous_identity_epoch);
         payload["target_identity_epoch"] = json!(target_identity_epoch);
         payload["app_window_set"] = app_window_set.to_value();
+        payload["app_surface_layout"] = app_surface_layout.as_ref().map_or(
+            Value::Null,
+            crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof::to_value,
+        );
+        payload["surface_layout_epoch"] = app_surface_layout
+            .as_ref()
+            .map_or(Value::Null, |layout| json!(layout.layout_epoch()));
         self.coalesced_lifecycle_event("TARGET_REBOUND", payload, observed_at_ms)
     }
 
-    fn stage_application_window_set_media_rebind(
+    fn stage_application_surface_media_rebind(
         &mut self,
         app_window_set: AppWindowSetProof,
+        app_surface_layout: Option<
+            crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof,
+        >,
         geometry: TargetGeometry,
         target_identity_epoch: u64,
         target_geometry_revision: u64,
@@ -798,24 +1157,25 @@ impl RemoteAppTargetBindingStateMachine {
             && self.pending_media_rebind.as_ref().is_some_and(|pending| {
                 pending.binding.target_identity_epoch() == target_identity_epoch
                     && pending.binding.geometry() == &geometry
+                    && pending.binding.committed_app_surface_layout() == app_surface_layout.as_ref()
             })
         {
             return None;
         }
         self.clear_pending_lost();
-        let previous_binding_epoch = self.snapshot.binding_epoch;
         let previous_target_identity_epoch = self.snapshot.target_identity_epoch;
         let previous_target_geometry_revision = self.snapshot.target_geometry_revision;
-        let previous_media_source_epoch = self.snapshot.media_source_epoch;
         if previous_target_identity_epoch == target_identity_epoch
             && self.snapshot.geometry == geometry
+            && self.binding.committed_app_surface_layout() == app_surface_layout.as_ref()
         {
             return None;
         }
         let next_geometry_revision =
             target_geometry_revision.max(previous_target_geometry_revision + 1);
-        let Some(candidate) = self.binding.application_window_set_rebind_candidate(
+        let Some(candidate) = self.binding.application_surface_rebind_candidate(
             app_window_set.clone(),
+            app_surface_layout.clone(),
             geometry.clone(),
             next_geometry_revision,
             true,
@@ -827,7 +1187,35 @@ impl RemoteAppTargetBindingStateMachine {
                 observed_at_ms,
             );
         };
-        let detail = "application_window_set_requires_media_source_rebuild";
+        self.stage_pending_media_rebind(
+            candidate,
+            "application_surface_change_requires_media_source_rebuild",
+            observed_at_ms,
+        )
+    }
+
+    fn stage_pending_media_rebind(
+        &mut self,
+        candidate: RemoteAppTargetBinding,
+        detail: &'static str,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        let previous_binding_epoch = self.snapshot.binding_epoch;
+        let previous_target_identity_epoch = self.snapshot.target_identity_epoch;
+        let previous_target_geometry_revision = self.snapshot.target_geometry_revision;
+        let previous_media_source_epoch = self.snapshot.media_source_epoch;
+        let pending_app_window_set = candidate
+            .committed_app_window_set()
+            .map(AppWindowSetProof::to_value)
+            .unwrap_or(Value::Null);
+        let pending_app_surface_layout = candidate
+            .committed_app_surface_layout()
+            .map(crate::daemon::plugins::remote_desktop::target::AppSurfaceLayoutProof::to_value)
+            .unwrap_or(Value::Null);
+        let pending_surface_layout_epoch = candidate
+            .committed_app_surface_layout()
+            .map(|layout| json!(layout.layout_epoch()))
+            .unwrap_or(Value::Null);
         self.pending_media_rebind = Some(PendingMediaRebind {
             binding: candidate.clone(),
             previous_binding_epoch,
@@ -838,7 +1226,7 @@ impl RemoteAppTargetBindingStateMachine {
             observed_at_ms,
         });
         self.snapshot.status = TargetBindingPhase::Rebinding;
-        self.rebind_started_at_ms = Some(observed_at_ms);
+        self.start_rebind_attempt(observed_at_ms);
         self.snapshot.diagnostic = target_failure_payload(
             json!({
                 "status": TargetBindingPhase::Rebinding.as_str(),
@@ -854,7 +1242,9 @@ impl RemoteAppTargetBindingStateMachine {
                 "pending_target_identity_epoch": candidate.target_identity_epoch(),
                 "pending_target_geometry_revision": candidate.target_geometry_revision(),
                 "pending_media_source_epoch": candidate.media_source_epoch(),
-                "pending_app_window_set": app_window_set.to_value(),
+                "pending_app_window_set": pending_app_window_set,
+                "pending_app_surface_layout": pending_app_surface_layout,
+                "pending_surface_layout_epoch": pending_surface_layout_epoch,
                 "visibility_state": self.snapshot.visibility_state.as_str(),
                 "recoverability": TargetBindingPhase::Rebinding.recoverability(),
                 "rebind_deadline_ms": observed_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS),
@@ -862,7 +1252,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             FrontendAction::RetrySession.as_str(),
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -886,11 +1276,13 @@ impl RemoteAppTargetBindingStateMachine {
                 "rebind_deadline_ms": observed_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS),
                 "observed_at_ms": observed_at_ms,
                 "geometry": self.snapshot.geometry.to_value(),
-                "pending_geometry": geometry.to_value(),
-                "app_window_set": app_window_set.to_value(),
+                "pending_geometry": candidate.geometry().to_value(),
+                "app_window_set": pending_app_window_set,
+                "app_surface_layout": pending_app_surface_layout,
+                "pending_surface_layout_epoch": pending_surface_layout_epoch,
             }),
             FrontendAction::RetrySession.as_str(),
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_ATTEMPTED",
             payload,
@@ -931,6 +1323,7 @@ impl RemoteAppTargetBindingStateMachine {
             });
             return None;
         }
+        let previous_geometry = self.snapshot.geometry.clone();
         self.binding = rebound_binding;
         self.snapshot.status = TargetBindingPhase::Resolved;
         self.snapshot.visibility_state = TargetVisibilityState::Visible;
@@ -939,16 +1332,17 @@ impl RemoteAppTargetBindingStateMachine {
         self.snapshot.target_geometry_revision = self.binding.target_geometry_revision();
         self.snapshot.media_source_epoch = self.binding.media_source_epoch();
         self.snapshot.geometry = self.binding.geometry().clone();
-        self.snapshot.diagnostic = self.diagnostic_projection(
-            "resolved",
-            Value::Null,
-            "application_window_set_media_source_rebound",
-            observed_at_ms,
-        );
-        self.rebind_started_at_ms = None;
+        let commit_reason = if self.binding.target_kind() == RemoteDesktopTargetKind::Application {
+            "application_window_set_media_source_rebound"
+        } else {
+            "target_geometry_media_source_rebound"
+        };
+        self.snapshot.diagnostic =
+            self.diagnostic_projection("resolved", Value::Null, commit_reason, observed_at_ms);
+        self.finish_rebind_attempt();
         self.rebind_failure_emitted = false;
         let mut payload = self.event_payload(
-            "application_window_set_media_source_rebound",
+            commit_reason,
             observed_at_ms,
             Some(pending.previous_target_geometry_revision),
         );
@@ -960,7 +1354,72 @@ impl RemoteAppTargetBindingStateMachine {
         payload["media_source_epoch"] = json!(self.snapshot.media_source_epoch);
         payload["rebind_started_at_ms"] = json!(pending.observed_at_ms);
         payload["detail"] = json!(pending.detail);
-        Some(TargetTrackingEmission::single("TARGET_REBOUND", payload))
+        let mut event_types = vec!["TARGET_REBOUND"];
+        if previous_geometry != self.snapshot.geometry {
+            event_types.extend(geometry_event_types(
+                &previous_geometry,
+                &self.snapshot.geometry,
+            ));
+        }
+        TargetTrackingEmission::ordered(&event_types, payload)
+    }
+
+    /// Reject a stale replacement candidate without invalidating the capture
+    /// generation that is still committed and sending media. Target
+    /// observations and capture-provider preparation are non-atomic; a failed
+    /// candidate is not evidence that the active target disappeared.
+    pub(in crate::daemon::plugins::remote_desktop) fn supersede_pending_media_rebind(
+        &mut self,
+        candidate_rejection_reason: TargetResolutionError,
+        detail: String,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        if self.snapshot.status != TargetBindingPhase::Rebinding {
+            return None;
+        }
+        let pending = self.pending_media_rebind.take()?;
+        let rebind_started_at_ms = self
+            .finish_rebind_attempt()
+            .or(Some(pending.observed_at_ms));
+        self.snapshot.status = TargetBindingPhase::Resolved;
+        self.rebind_failure_emitted = false;
+        self.snapshot.diagnostic = self.diagnostic_projection(
+            "resolved",
+            Value::Null,
+            "target_rebind_candidate_superseded",
+            observed_at_ms,
+        );
+        let payload = self.with_event_target_context(json!({
+            "subject_ura": self.binding.subject_ura(),
+            "binding_id": self.snapshot.binding_id,
+            "binding_epoch": self.snapshot.binding_epoch,
+            "previous_binding_epoch": pending.previous_binding_epoch,
+            "pending_binding_epoch": pending.binding.binding_epoch(),
+            "target_identity_epoch": self.snapshot.target_identity_epoch,
+            "previous_target_identity_epoch": pending.previous_target_identity_epoch,
+            "pending_target_identity_epoch": pending.binding.target_identity_epoch(),
+            "target_geometry_revision": self.snapshot.target_geometry_revision,
+            "previous_target_geometry_revision": pending.previous_target_geometry_revision,
+            "pending_target_geometry_revision": pending.binding.target_geometry_revision(),
+            "media_source_epoch": self.snapshot.media_source_epoch,
+            "previous_media_source_epoch": pending.previous_media_source_epoch,
+            "pending_media_source_epoch": pending.binding.media_source_epoch(),
+            "visibility_state": self.snapshot.visibility_state.as_str(),
+            "target_status": TargetBindingPhase::Resolved.as_str(),
+            "reason_code": "target_rebind_candidate_superseded",
+            "candidate_rejection_reason": candidate_rejection_reason.as_str(),
+            "detail": detail,
+            "recoverability": "continue",
+            "frontend_action": Value::Null,
+            "observed_at_ms": observed_at_ms,
+            "rebind_started_at_ms": rebind_started_at_ms,
+            "geometry": self.snapshot.geometry.to_value(),
+            "pending_geometry": pending.binding.geometry().to_value(),
+        }));
+        Some(TargetTrackingEmission::single(
+            "TARGET_REBIND_SUPERSEDED",
+            payload,
+        ))
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind_failed(
@@ -975,14 +1434,13 @@ impl RemoteAppTargetBindingStateMachine {
         let pending = self.pending_media_rebind.take()?;
         self.rebind_failure_emitted = true;
         let rebind_started_at_ms = self
-            .rebind_started_at_ms
-            .take()
+            .finish_rebind_attempt()
             .or(Some(pending.observed_at_ms));
         let rebind_deadline_ms =
             rebind_started_at_ms.map(|started| started.saturating_add(AUTOMATIC_REBIND_WINDOW_MS));
         self.snapshot.status = TargetBindingPhase::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
-        self.snapshot.focused = Some(false);
+        self.set_focused(false);
         let frontend_action = reason.frontend_action().as_str();
         let reason_code = reason.as_str();
         self.snapshot.diagnostic = target_failure_payload(
@@ -1013,7 +1471,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -1041,7 +1499,7 @@ impl RemoteAppTargetBindingStateMachine {
                 "pending_geometry": pending.binding.geometry().to_value(),
             }),
             frontend_action,
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_FAILED",
             payload,
@@ -1070,6 +1528,75 @@ impl RemoteAppTargetBindingStateMachine {
         self.commit_rebind_failed("rebind_window_expired", observed_at_ms)
     }
 
+    fn commit_permission_verification_required(
+        &mut self,
+        detail: String,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        if matches!(
+            self.snapshot.status,
+            TargetBindingPhase::PermissionVerificationPending | TargetBindingPhase::Invalidated
+        ) {
+            return None;
+        }
+        self.clear_pending_lost();
+        self.snapshot.status = TargetBindingPhase::PermissionVerificationPending;
+        self.snapshot.diagnostic = json!({
+            "status": self.snapshot.status.as_str(),
+            "reason": "target_permission_verification_pending",
+            "detail": detail,
+            "subject_ura": self.binding.subject_ura(),
+            "binding_id": self.snapshot.binding_id,
+            "binding_epoch": self.snapshot.binding_epoch,
+            "target_identity_epoch": self.snapshot.target_identity_epoch,
+            "target_geometry_revision": self.snapshot.target_geometry_revision,
+            "media_source_epoch": self.snapshot.media_source_epoch,
+            "visibility_state": self.snapshot.visibility_state.as_str(),
+            "input_enabled": false,
+            "recoverability": self.snapshot.status.recoverability(),
+            "frontend_action": Value::Null,
+            "observed_at_ms": observed_at_ms,
+        });
+        let mut payload = self.event_payload(
+            "target_permission_verification_pending",
+            observed_at_ms,
+            None,
+        );
+        payload["detail"] = json!(detail);
+        Some(TargetTrackingEmission::single(
+            "TARGET_PERMISSION_VERIFICATION_PENDING",
+            payload,
+        ))
+    }
+
+    fn commit_permission_restored(
+        &mut self,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        if self.snapshot.status != TargetBindingPhase::PermissionVerificationPending {
+            return None;
+        }
+        self.snapshot.status = if self.snapshot.visibility_state == TargetVisibilityState::Visible {
+            TargetBindingPhase::Resolved
+        } else {
+            TargetBindingPhase::Stale
+        };
+        self.snapshot.diagnostic = self.diagnostic_projection(
+            self.snapshot.status.as_str(),
+            Value::Null,
+            "target_permission_verification_cleared",
+            observed_at_ms,
+        );
+        Some(TargetTrackingEmission::single(
+            "TARGET_PERMISSION_VERIFICATION_CLEARED",
+            self.event_payload(
+                "target_permission_verification_cleared",
+                observed_at_ms,
+                None,
+            ),
+        ))
+    }
+
     fn commit_permission_revoked(
         &mut self,
         detail: String,
@@ -1081,7 +1608,7 @@ impl RemoteAppTargetBindingStateMachine {
         self.clear_pending_lost();
         self.snapshot.status = TargetBindingPhase::Invalidated;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
-        self.snapshot.focused = Some(false);
+        self.set_focused(false);
         self.snapshot.diagnostic = json!({
             "status": self.snapshot.status.as_str(),
             "reason": TargetResolutionError::TargetPermissionMissing.as_str(),
@@ -1233,6 +1760,39 @@ impl RemoteAppTargetBindingStateMachine {
             .pending_lost
             .take()
             .expect("pending lost exists after debounce gate");
+        self.commit_confirmed_lost(pending, observed_at_ms)
+    }
+
+    fn commit_monitor_unavailable(
+        &mut self,
+        detail: String,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        if self.snapshot.status == TargetBindingPhase::Lost {
+            self.latest_loss_observed_at_ms = Some(
+                self.latest_loss_observed_at_ms
+                    .map_or(observed_at_ms, |latest| latest.max(observed_at_ms)),
+            );
+            return None;
+        }
+        self.pending_lost = None;
+        self.commit_confirmed_lost(
+            PendingLostObservation {
+                reason: TargetResolutionError::CaptureBackendUnavailable,
+                detail,
+                first_observed_at_ms: observed_at_ms,
+                latest_observed_at_ms: observed_at_ms,
+                consecutive_misses: 0,
+            },
+            observed_at_ms,
+        )
+    }
+
+    fn commit_confirmed_lost(
+        &mut self,
+        pending: PendingLostObservation,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
         let previous = self.snapshot.target_geometry_revision;
         self.snapshot.status = TargetBindingPhase::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
@@ -1279,7 +1839,7 @@ impl RemoteAppTargetBindingStateMachine {
             return None;
         }
         self.snapshot.status = TargetBindingPhase::Rebinding;
-        self.rebind_started_at_ms = Some(observed_at_ms);
+        self.start_rebind_attempt(observed_at_ms);
         let frontend_action = FrontendAction::RetrySession.as_str();
         self.snapshot.diagnostic = target_failure_payload(
             json!({
@@ -1299,7 +1859,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -1318,7 +1878,7 @@ impl RemoteAppTargetBindingStateMachine {
                 "geometry": self.snapshot.geometry.to_value(),
             }),
             frontend_action,
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_ATTEMPTED",
             payload,
@@ -1337,7 +1897,7 @@ impl RemoteAppTargetBindingStateMachine {
             return None;
         }
         self.rebind_failure_emitted = true;
-        let rebind_started_at_ms = self.rebind_started_at_ms.take();
+        let rebind_started_at_ms = self.finish_rebind_attempt();
         let rebind_deadline_ms =
             rebind_started_at_ms.map(|started| started.saturating_add(AUTOMATIC_REBIND_WINDOW_MS));
         self.snapshot.status = TargetBindingPhase::Lost;
@@ -1362,7 +1922,7 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        let payload = target_failure_payload(
+        let payload = self.with_event_target_context(target_failure_payload(
             json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
@@ -1383,7 +1943,7 @@ impl RemoteAppTargetBindingStateMachine {
                 "geometry": self.snapshot.geometry.to_value(),
             }),
             frontend_action,
-        );
+        ));
         Some(TargetTrackingEmission::single(
             "TARGET_REBIND_FAILED",
             payload,
@@ -1479,14 +2039,16 @@ impl RemoteAppTargetBindingStateMachine {
         observed_at_ms: u64,
         previous_target_geometry_revision: Option<u64>,
     ) -> Value {
-        json!({
+        self.with_event_target_context(json!({
             "subject_ura": self.binding.subject_ura(),
             "binding_id": self.snapshot.binding_id,
             "binding_epoch": self.snapshot.binding_epoch,
+            "consent_epoch": self.binding.consent_epoch(),
             "previous_target_identity_epoch": self.snapshot.target_identity_epoch,
             "target_identity_epoch": self.snapshot.target_identity_epoch,
             "previous_target_geometry_revision": previous_target_geometry_revision,
             "target_geometry_revision": self.snapshot.target_geometry_revision,
+            "target_focus_epoch": self.snapshot.target_focus_epoch,
             "media_source_epoch": self.snapshot.media_source_epoch,
             "visibility_state": self.snapshot.visibility_state.as_str(),
             "target_status": self.snapshot.status.as_str(),
@@ -1497,7 +2059,61 @@ impl RemoteAppTargetBindingStateMachine {
             "frontend_action": Value::Null,
             "observed_at_ms": observed_at_ms,
             "geometry": self.snapshot.geometry.to_value(),
-        })
+        }))
+    }
+
+    fn with_event_target_context(&self, mut payload: Value) -> Value {
+        let Value::Object(fields) = &mut payload else {
+            return payload;
+        };
+        fields.insert("subject_ura".to_string(), json!(self.binding.subject_ura()));
+        fields.insert("binding_id".to_string(), json!(self.snapshot.binding_id));
+        fields.insert(
+            "binding_epoch".to_string(),
+            json!(self.snapshot.binding_epoch),
+        );
+        fields.insert(
+            "target_identity_epoch".to_string(),
+            json!(self.snapshot.target_identity_epoch),
+        );
+        fields.insert(
+            "target_geometry_revision".to_string(),
+            json!(self.snapshot.target_geometry_revision),
+        );
+        fields.insert(
+            "target_focus_epoch".to_string(),
+            json!(self.snapshot.target_focus_epoch),
+        );
+        fields.insert(
+            "media_source_epoch".to_string(),
+            json!(self.snapshot.media_source_epoch),
+        );
+        fields.insert(
+            "consent_epoch".to_string(),
+            json!(self.binding.consent_epoch()),
+        );
+        fields.insert(
+            "target_binding".to_string(),
+            self.binding.to_tracking_value(
+                self.snapshot.target_identity_epoch,
+                self.snapshot.target_geometry_revision,
+                self.snapshot.media_source_epoch,
+                &self.snapshot.geometry,
+            ),
+        );
+        fields.insert("scope_audit".to_string(), self.binding.scope_audit_value());
+        fields.insert(
+            "latest_target_diagnostic".to_string(),
+            self.snapshot.diagnostic.clone(),
+        );
+        payload
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        if self.snapshot.focused != Some(focused) {
+            self.snapshot.target_focus_epoch = self.snapshot.target_focus_epoch.saturating_add(1);
+        }
+        self.snapshot.focused = Some(focused);
     }
 }
 
@@ -1530,46 +2146,19 @@ mod tests {
 
     use super::{AUTOMATIC_REBIND_WINDOW_MS, TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS};
 
-    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
-        AppWindowSetProof, RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetGeometry,
-        TargetResolutionError,
+        AppSurfaceLayoutProof, AppWindowSetProof, TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
-        RemoteAppTargetBindingStateMachine, TargetObservation, TargetVisibilityState,
+        RemoteAppTargetBindingStateMachine, TargetObservation, TargetTrackerSnapshot,
+        TargetVisibilityState,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
-        live_remote_target_metadata, test_application_target_binding,
+        test_application_target_binding, test_window_target_binding,
     };
 
     fn window_binding() -> crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding {
-        ResourceEntryTargetResolver
-            .resolve_for_session(
-                "test.ability",
-                &ResourceEntry {
-                    resource_ura: "easynet:///r/acme/resource/window.test".into(),
-                    owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
-                    kind: ResourceType::Window,
-                    binding: ResourceBinding::LocalDevice,
-                    hardware_id: "window:macos:cgwindow:10:42".into(),
-                    display_name: "Cursor".into(),
-                    metadata: live_remote_target_metadata(json!({
-                        "window_id": 42,
-                        "pid": 10,
-                        "app_name": "Cursor",
-                        "x": 100,
-                        "y": 200,
-                        "width": 800,
-                        "height": 600,
-                        "target_identity_epoch": 7,
-                        "geometry_revision": 3,
-                    })),
-                    first_seen_at: "2026-06-01T00:00:00Z".into(),
-                },
-                "view_only",
-                1,
-            )
-            .expect("window target binding resolves")
+        test_window_target_binding()
     }
 
     fn application_binding(
@@ -1608,8 +2197,258 @@ mod tests {
         assert_eq!(snapshot["binding_id"], json!(binding_id));
         assert_eq!(snapshot["target_identity_epoch"], json!(7));
         assert_eq!(snapshot["target_geometry_revision"], json!(3));
+        assert_eq!(snapshot["target_focus_epoch"], json!(1));
         assert_eq!(snapshot["status"], json!("resolved"));
         assert_eq!(snapshot["visibility_state"], json!("visible"));
+    }
+
+    #[test]
+    fn active_window_move_commits_binding_without_replacing_media_generation() {
+        let binding = window_binding();
+        let original_binding_epoch = binding.binding_epoch();
+        let original_media_source_epoch = binding.media_source_epoch();
+        let original_geometry_revision = binding.target_geometry_revision();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+        let moved_geometry = TargetGeometry {
+            x: Some(140.0),
+            y: Some(240.0),
+            width: Some(800.0),
+            height: Some(600.0),
+        };
+
+        let moved = tracker
+            .commit_observation_with_media_source_activity(
+                TargetObservation::GeometryChanged {
+                    geometry: moved_geometry.clone(),
+                    target_geometry_revision: original_geometry_revision + 1,
+                    observed_at_ms: 1_000,
+                },
+                true,
+            )
+            .expect("position-only move commits immediately");
+
+        assert_eq!(moved.ordered_event_types(), vec!["TARGET_MOVED"]);
+        assert_eq!(
+            tracker.binding().binding_epoch(),
+            original_binding_epoch + 1
+        );
+        assert_eq!(
+            tracker.binding().media_source_epoch(),
+            original_media_source_epoch,
+            "moving the same native window must not rebuild its media source"
+        );
+        assert_eq!(tracker.binding().geometry(), &moved_geometry);
+        assert_eq!(
+            tracker.binding().target_geometry_revision(),
+            original_geometry_revision + 1
+        );
+        assert!(tracker.pending_media_rebind_binding().is_none());
+    }
+
+    #[test]
+    fn active_window_resize_commits_only_after_capture_generation_proof() {
+        let binding = window_binding();
+        let original_binding_epoch = binding.binding_epoch();
+        let original_media_source_epoch = binding.media_source_epoch();
+        let original_geometry_revision = binding.target_geometry_revision();
+        let original_geometry = binding.geometry().clone();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+        let resized_geometry = TargetGeometry {
+            x: original_geometry.x,
+            y: original_geometry.y,
+            width: Some(1024.0),
+            height: Some(720.0),
+        };
+
+        let attempted = tracker
+            .commit_observation_with_media_source_activity(
+                TargetObservation::GeometryChanged {
+                    geometry: resized_geometry.clone(),
+                    target_geometry_revision: original_geometry_revision + 1,
+                    observed_at_ms: 2_000,
+                },
+                true,
+            )
+            .expect("active resize stages a media generation");
+
+        assert_eq!(attempted.event_type(), "TARGET_REBIND_ATTEMPTED");
+        assert_eq!(tracker.binding().binding_epoch(), original_binding_epoch);
+        assert_eq!(tracker.binding().geometry(), &original_geometry);
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("rebinding"));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_rebinding")
+        );
+        let pending = tracker
+            .pending_media_rebind_binding()
+            .expect("resize exposes one pending capture generation")
+            .clone();
+        assert_eq!(pending.binding_epoch(), original_binding_epoch + 1);
+        assert_eq!(
+            pending.media_source_epoch(),
+            original_media_source_epoch + 1
+        );
+        assert_eq!(pending.geometry(), &resized_geometry);
+
+        let capture_proof = pending
+            .require_capture_proof("test.ability")
+            .expect("pending window retains the committed native identity")
+            .clone()
+            .reverified_with_native_dimensions(Some((1024, 720)));
+        let committed = tracker
+            .commit_pending_media_rebind(
+                pending.binding_epoch(),
+                pending.media_source_epoch(),
+                capture_proof,
+                2_100,
+            )
+            .expect("provider proof commits the replacement generation");
+
+        assert_eq!(
+            committed.ordered_event_types(),
+            vec!["TARGET_REBOUND", "TARGET_RESIZED"]
+        );
+        assert_eq!(tracker.binding().binding_epoch(), pending.binding_epoch());
+        assert_eq!(
+            tracker.binding().media_source_epoch(),
+            pending.media_source_epoch()
+        );
+        assert_eq!(tracker.binding().geometry(), &resized_geometry);
+        assert_eq!(
+            tracker
+                .binding()
+                .require_capture_proof("test.ability")
+                .unwrap()
+                .to_value()["native_width"],
+            json!(1024)
+        );
+        assert_eq!(
+            tracker
+                .binding()
+                .require_capture_proof("test.ability")
+                .unwrap()
+                .to_value()["native_height"],
+            json!(720)
+        );
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("resolved"));
+    }
+
+    #[test]
+    fn permission_verification_is_fail_closed_recoverable_and_durable() {
+        let binding = window_binding();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding.clone());
+
+        let pending = tracker
+            .commit_observation(TargetObservation::PermissionVerificationRequired {
+                detail: "screen-capture preflight returned false".to_string(),
+                observed_at_ms: 10,
+            })
+            .expect("first negative permission sample enters verification");
+        assert_eq!(
+            pending.event_type(),
+            "TARGET_PERMISSION_VERIFICATION_PENDING"
+        );
+        assert_eq!(
+            tracker.snapshot().to_value()["status"],
+            json!("permission_verification_pending")
+        );
+        assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_permission_verification_pending")
+        );
+
+        let recovery = tracker.snapshot().to_recovery_value();
+        let mut recovered = RemoteAppTargetBindingStateMachine::rehydrate(binding, Some(&recovery))
+            .expect("pending permission verification rehydrates");
+        assert!(recovered.snapshot().permission_verification_pending());
+
+        let cleared = recovered
+            .commit_observation(TargetObservation::PermissionRestored { observed_at_ms: 20 })
+            .expect("positive host snapshot clears verification");
+        assert_eq!(
+            cleared.event_type(),
+            "TARGET_PERMISSION_VERIFICATION_CLEARED"
+        );
+        assert_eq!(recovered.snapshot().to_value()["status"], json!("resolved"));
+        assert_eq!(
+            recovered.snapshot().to_value()["input_enabled"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn confirmed_permission_revocation_requires_pending_verification() {
+        let binding = window_binding();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+        tracker
+            .commit_observation(TargetObservation::PermissionVerificationRequired {
+                detail: "first independent negative sample".to_string(),
+                observed_at_ms: 10,
+            })
+            .expect("first sample enters verification");
+
+        let revoked = tracker
+            .commit_observation(TargetObservation::PermissionRevoked {
+                detail: "second independent negative sample".to_string(),
+                observed_at_ms: 260,
+            })
+            .expect("second sample confirms revocation");
+        assert_eq!(revoked.event_type(), "TARGET_PERMISSION_REVOKED");
+        assert_eq!(
+            tracker.snapshot().to_value()["status"],
+            json!("invalidated")
+        );
+        assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
+    }
+
+    #[test]
+    fn target_tracking_recovery_rejects_fail_open_input_blocker_conflicts() {
+        let binding = window_binding();
+        let tracker = RemoteAppTargetBindingStateMachine::from_binding(binding.clone());
+        let mut contradictory = tracker.snapshot().to_recovery_value();
+        contradictory["input_blocked_reason"] = json!("target_lost");
+        contradictory["input_enabled"] = json!(false);
+
+        let error = TargetTrackerSnapshot::from_recovery_value(&binding, &contradictory)
+            .expect_err("contradictory blocker must fail closed");
+        assert!(
+            error.to_string().contains("input blocker contradicts"),
+            "{error}"
+        );
+
+        let mut unknown_override = tracker.snapshot().to_recovery_value();
+        unknown_override["input_blocked_reason_override"] = json!("unknown_blocker");
+        let error = TargetTrackerSnapshot::from_recovery_value(&binding, &unknown_override)
+            .expect_err("unknown blocker override must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported target tracking recovery input blocker override"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn recovered_rebind_mints_a_fresh_deadline_token_and_cannot_stall() {
+        let mut tracker = lost_window_tracker();
+        tracker
+            .commit_observation(TargetObservation::TitleChanged {
+                title: Some("Cursor restored".to_string()),
+                observed_at_ms: 100,
+            })
+            .expect("post-loss observation starts rebind");
+        let binding = tracker.binding().clone();
+        let recovery = tracker.snapshot().to_recovery_value();
+        let recovered = RemoteAppTargetBindingStateMachine::rehydrate(binding, Some(&recovery))
+            .expect("rebind tracker rehydrates");
+
+        assert!(recovered.rebind_attempt_token().is_some());
+        let mut recovered = recovered;
+        assert!(recovered
+            .expire_rebind_deadline(100 + AUTOMATIC_REBIND_WINDOW_MS)
+            .is_some());
+        assert_eq!(recovered.snapshot().to_value()["status"], json!("lost"));
     }
 
     #[test]
@@ -1627,16 +2466,47 @@ mod tests {
             vec![10, 11, 12],
         );
         let next_geometry = TargetGeometry {
-            x: Some(10.0),
-            y: Some(20.0),
+            x: Some(30.0),
+            y: Some(40.0),
             width: Some(320.0),
             height: Some(120.0),
         };
+        let next_layout = AppSurfaceLayoutProof::from_front_to_back_geometries([
+            (
+                10,
+                &TargetGeometry {
+                    x: Some(30.0),
+                    y: Some(40.0),
+                    width: Some(100.0),
+                    height: Some(120.0),
+                },
+            ),
+            (
+                11,
+                &TargetGeometry {
+                    x: Some(130.0),
+                    y: Some(40.0),
+                    width: Some(100.0),
+                    height: Some(120.0),
+                },
+            ),
+            (
+                12,
+                &TargetGeometry {
+                    x: Some(230.0),
+                    y: Some(40.0),
+                    width: Some(120.0),
+                    height: Some(120.0),
+                },
+            ),
+        ])
+        .expect("next application surface layout");
 
         let attempted = tracker
             .commit_observation_with_media_source_activity(
-                TargetObservation::ApplicationWindowSetChanged {
+                TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: next_window_set,
+                    app_surface_layout: Some(next_layout),
                     geometry: next_geometry,
                     target_identity_epoch: 100,
                     target_geometry_revision: original_geometry_revision + 1,
@@ -1680,6 +2550,11 @@ mod tests {
             original_media_source_epoch + 1
         );
         assert_ne!(pending.target_identity_epoch(), original_identity_epoch);
+        assert_ne!(
+            tracker.snapshot().geometry(),
+            pending.geometry(),
+            "the staged media rebind must retain old and pending geometry separately"
+        );
         let proof = pending
             .require_capture_proof("test.ability")
             .expect("pending proof")
@@ -1694,6 +2569,11 @@ mod tests {
             )
             .expect("media source rebuild commits the target rebound");
         assert_eq!(rebound.event_type(), "TARGET_REBOUND");
+        assert_eq!(
+            rebound.ordered_event_types(),
+            vec!["TARGET_REBOUND", "TARGET_MOVED", "TARGET_RESIZED"],
+            "a committed media rebind must preserve public geometry taxonomy"
+        );
         assert_eq!(tracker.binding().binding_epoch(), pending.binding_epoch());
         assert_eq!(
             tracker.binding().media_source_epoch(),
@@ -1704,6 +2584,73 @@ mod tests {
             json!("resolved"),
             "successful media source rebind restores target input eligibility"
         );
+    }
+
+    #[test]
+    fn active_application_z_order_change_rebuilds_media_without_changing_identity() {
+        let binding = application_binding();
+        let original_identity_epoch = binding.target_identity_epoch();
+        let original_media_source_epoch = binding.media_source_epoch();
+        let original_layout_epoch = binding
+            .committed_app_surface_layout()
+            .expect("test application layout")
+            .layout_epoch();
+        let app_window_set = binding
+            .committed_app_window_set()
+            .cloned()
+            .expect("test application window set");
+        let geometry = binding.geometry().clone();
+        let reordered_layout = AppSurfaceLayoutProof::from_front_to_back_geometries([
+            (
+                11,
+                &TargetGeometry {
+                    x: Some(110.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+            (
+                10,
+                &TargetGeometry {
+                    x: Some(10.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+        ])
+        .expect("reordered application layout");
+        assert_ne!(reordered_layout.layout_epoch(), original_layout_epoch);
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+
+        tracker
+            .commit_observation_with_media_source_activity(
+                TargetObservation::ApplicationSurfaceChanged {
+                    target_identity_epoch: app_window_set.window_set_epoch(),
+                    app_window_set,
+                    app_surface_layout: Some(reordered_layout.clone()),
+                    geometry,
+                    target_geometry_revision: 2,
+                    observed_at_ms: 10,
+                },
+                true,
+            )
+            .expect("z-order drift stages media rebind");
+
+        let pending = tracker
+            .pending_media_rebind_binding()
+            .expect("pending z-order media rebind");
+        assert_eq!(pending.target_identity_epoch(), original_identity_epoch);
+        assert_eq!(
+            pending.media_source_epoch(),
+            original_media_source_epoch + 1
+        );
+        assert_eq!(
+            pending.committed_app_surface_layout(),
+            Some(&reordered_layout)
+        );
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("rebinding"));
     }
 
     #[test]
@@ -1722,8 +2669,9 @@ mod tests {
 
         tracker
             .commit_observation_with_media_source_activity(
-                TargetObservation::ApplicationWindowSetChanged {
+                TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: next_window_set,
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),
@@ -1807,8 +2755,9 @@ mod tests {
 
         let attempted = tracker
             .commit_observation_with_media_source_activity(
-                TargetObservation::ApplicationWindowSetChanged {
+                TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: next_window_set,
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),
@@ -2107,6 +3056,10 @@ mod tests {
             .expect("recovered geometry commits");
 
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(true));
+        assert_eq!(
+            tracker.snapshot().to_value()["target_focus_epoch"],
+            json!(1)
+        );
         assert_eq!(
             tracker.snapshot().to_value()["input_blocked_reason"],
             Value::Null
@@ -2514,13 +3467,20 @@ mod tests {
         assert_eq!(blurred.event_type(), "TARGET_BLURRED");
         assert_eq!(blurred.payload()["reason_code"], json!("target_blurred"));
         assert_eq!(blurred.payload()["failure_domain"], json!("target"));
-        assert_eq!(blurred.payload()["frontend_action"], json!("retry_session"));
+        assert_eq!(
+            blurred.payload()["frontend_action"],
+            json!("focus_target_locally")
+        );
         assert_eq!(blurred.payload()["input_enabled"], json!(false));
         assert_eq!(
             blurred.payload()["input_blocked_reason"],
             json!("target_blurred")
         );
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(false));
+        assert_eq!(
+            tracker.snapshot().to_value()["target_focus_epoch"],
+            json!(2)
+        );
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
         assert_eq!(
             tracker.snapshot().to_value()["input_blocked_reason"],
@@ -2532,7 +3492,7 @@ mod tests {
         );
         assert_eq!(
             tracker.snapshot().latest_diagnostic()["frontend_action"],
-            json!("retry_session")
+            json!("focus_target_locally")
         );
         assert!(tracker.snapshot().pointer_target_value().is_none());
 
@@ -2544,9 +3504,14 @@ mod tests {
             .expect("focus recovery commits");
 
         assert_eq!(focused.event_type(), "TARGET_FOCUSED");
+        assert_eq!(focused.payload()["target_focus_epoch"], json!(3));
         assert_eq!(focused.payload()["frontend_action"], Value::Null);
         assert_eq!(focused.payload()["input_blocked_reason"], Value::Null);
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(true));
+        assert_eq!(
+            tracker.snapshot().to_value()["target_focus_epoch"],
+            json!(3)
+        );
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(true));
         assert_eq!(
             tracker.snapshot().to_value()["input_blocked_reason"],

@@ -1,7 +1,7 @@
 schema_version = "3"
 name = "remote_desktop.add_ice_candidate"
 descriptor_version = "1.0.0"
-description = "Append one ICE candidate to a remote desktop session's signaling log."
+description = "Append one ICE candidate to the active epoch of a remote desktop session's signaling log."
 exposure = "operator"
 dedicated_surface = "remote_desktop"
 subject_contract_kind = "dedicated-surface"
@@ -20,7 +20,7 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
-required = ["session_id", "session_token", "candidate"]
+required = ["session_id", "session_token", "transport_epoch", "candidate"]
 additionalProperties = false
 
 [input_schema.properties.candidate]
@@ -31,3 +31,7 @@ type = "string"
 
 [input_schema.properties.session_token]
 type = "string"
+
+[input_schema.properties.transport_epoch]
+type = "integer"
+minimum = 1

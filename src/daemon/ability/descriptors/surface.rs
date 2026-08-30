@@ -951,6 +951,17 @@ impl AbilityDescriptor {
             .with_metadata_entry("exposure", exposure.as_str())
             .with_metadata_entry("dedicated_surface", dedicated_surface.as_str())
             .with_metadata_entry("subject_contract_kind", subject_contract_kind.as_str());
+        if let Some(bidi_wire_kind) = manifest.bidi_wire_kind() {
+            if call_mode != CallMode::Bidi {
+                return Err(DescriptorError::InvalidDescriptorIdentity {
+                    detail: format!(
+                        "bidi_wire_kind {:?} requires call_mode = bidi",
+                        bidi_wire_kind.as_str()
+                    ),
+                });
+            }
+            descriptor = descriptor.with_metadata_entry("bidi_wire_kind", bidi_wire_kind.as_str());
+        }
         if let Some(subject_contract_ura) = manifest.subject_contract_ura() {
             crate::core::ura::parse_ura(subject_contract_ura).map_err(|error| {
                 DescriptorError::InvalidDescriptorIdentity {

@@ -9,6 +9,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -623,6 +624,39 @@ pub(crate) fn require_published_for_host(
     Ok(())
 }
 
+/// Wait for the exact local publication proof to reach `Published`.
+///
+/// This does not relax the readiness gate: callers still fail unless the exact
+/// Device-owned lifecycle record commits the Hub-acknowledged projection before
+/// the bounded deadline. The wait exists only to close the normal race between
+/// a freshly committed dynamic catalog row and an immediate user invocation.
+pub(crate) fn wait_until_published_for_host(
+    agent_ura: &str,
+    expected_host_device_ura: &str,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match require_published_for_host(agent_ura, expected_host_device_ura) {
+            Ok(()) => return Ok(()),
+            Err(error) if hosted_agent_publication_pending(&error) && Instant::now() < deadline => {
+                std::thread::sleep(
+                    poll_interval.min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn hosted_agent_publication_pending(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("publication_state=pending")
+        || message.contains("publication_state=assigned")
+        || message.contains("publication_state=publishing")
+}
+
 /// Live hosted-owner intents for one Device. Publication reconciliation unions
 /// this set with the current non-empty catalog owners so deleting an Agent's
 /// final ability still emits an empty complete-set projection instead of
@@ -764,6 +798,37 @@ mod tests {
         wrong.host_device_ura = "easynet:///r/test/device/dev-2".into();
         assert!(bind_assignment(&wrong, 3).is_err());
         assert_eq!(record_for(AGENT).unwrap(), Some(published));
+    }
+
+    #[test]
+    fn wait_until_published_accepts_only_committed_publication() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let pending = begin_registration(AGENT, HOST, 1).unwrap();
+        let assignment = HostedAgentGenerationAssignment {
+            agent_ura: AGENT.into(),
+            host_device_ura: HOST.into(),
+            incarnation_id: pending.incarnation_id().clone(),
+            generation: 7,
+        };
+        bind_assignment(&assignment, 2).unwrap();
+        let error = wait_until_published_for_host(
+            AGENT,
+            HOST,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        )
+        .expect_err("Assigned is not executable without the Hub-acknowledged projection");
+        assert!(hosted_agent_publication_pending(&error));
+
+        stage_projection(&assignment, 1, 3, "sha256:projection", 3).unwrap();
+        mark_published(&assignment, 1, 3, "sha256:projection", 4).unwrap();
+        wait_until_published_for_host(
+            AGENT,
+            HOST,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        )
+        .expect("Published proof is executable");
     }
 
     #[test]

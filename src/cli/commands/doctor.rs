@@ -571,6 +571,7 @@ mod tests {
             node_id: "device-a".to_string(),
             device_ura: "easynet:///r/localhost/device/device-a".to_string(),
             hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
+            hub_api_endpoint: Some("http://127.0.0.1:8080".to_string()),
             source: "test".to_string(),
             observed_at_unix_ms: 0,
         }

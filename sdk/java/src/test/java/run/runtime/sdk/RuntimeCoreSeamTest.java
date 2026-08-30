@@ -625,11 +625,11 @@ public final class RuntimeCoreSeamTest {
     Map<String, Object> sessionBinding =
         nullableMapOf(
             "kind",
-            "session",
+            "session_of+session",
+            "authority_ura",
+            "easynet:///r/example/agent/alice",
             "issuer_ura",
             "easynet:///r/example/agent/backend",
-            "subject_ura",
-            "easynet:///r/example/agent/alice",
             "session_id",
             "session-1",
             "scopes",
@@ -645,11 +645,11 @@ public final class RuntimeCoreSeamTest {
     Map<String, Object> sessionReceipt =
         new LinkedHashMap<>(
             canonicalRuntimeReceiptFixture("inv-session-authority", "completed", "Completed", 1));
-    sessionReceipt.put("authority_binding_kind", "session");
+    sessionReceipt.put("authority_binding_kind", "session_of+session");
     sessionReceipt.put("authority_binding", sessionBinding);
     Map<String, Object> sessionProof = mutableAuthorityProof(sessionReceipt);
     sessionProof.put("proof_type", "session");
-    sessionProof.put("binding_kind", "session");
+    sessionProof.put("binding_kind", "session_of+session");
     sessionProof.put("binding", sessionBinding);
     sessionProof.put("proof_payload_base64", "");
     sessionProof.put("proof_hash_hex", authorityBindingProofHashSession(sessionBinding));
@@ -658,7 +658,7 @@ public final class RuntimeCoreSeamTest {
     Map<String, Object> retiredSessionBinding =
         nullableMapOf(
             "kind",
-            "session",
+            "session_of+session",
             "backend_ura",
             "easynet:///r/example/agent/backend",
             "user_ura",
@@ -679,11 +679,11 @@ public final class RuntimeCoreSeamTest {
         new LinkedHashMap<>(
             canonicalRuntimeReceiptFixture(
                 "inv-retired-session-authority", "completed", "Completed", 1));
-    retiredSessionReceipt.put("authority_binding_kind", "session");
+    retiredSessionReceipt.put("authority_binding_kind", "session_of+session");
     retiredSessionReceipt.put("authority_binding", retiredSessionBinding);
     Map<String, Object> retiredSessionProof = mutableAuthorityProof(retiredSessionReceipt);
     retiredSessionProof.put("proof_type", "session");
-    retiredSessionProof.put("binding_kind", "session");
+    retiredSessionProof.put("binding_kind", "session_of+session");
     retiredSessionProof.put("binding", retiredSessionBinding);
     retiredSessionProof.put("proof_payload_base64", "");
     expectSDKError(
@@ -2222,10 +2222,10 @@ public final class RuntimeCoreSeamTest {
             "signature_base64",
             Base64.getEncoder().encodeToString(repeatedByte(0x71, 64))));
     receipt.put("signer_binding", agentBinding(CALLEE));
-    receipt.put("authority_binding_kind", "self");
+    receipt.put("authority_binding_kind", "self+identity");
     receipt.put(
         "authority_binding",
-        Map.of("kind", "self", "principal_ura", CALLEE));
+        Map.of("kind", "self+identity", "authority_ura", CALLEE));
     receipt.put("ability_binding", DESCRIPTOR);
     receipt.put("host_attestation_base64", "");
     receipt.put(
@@ -2242,9 +2242,9 @@ public final class RuntimeCoreSeamTest {
             "proof_type",
             "self",
             "binding_kind",
-            "self",
+            "self+identity",
             "binding",
-            Map.of("kind", "self", "principal_ura", CALLEE),
+            Map.of("kind", "self+identity", "authority_ura", CALLEE),
             "proof_payload_base64",
             Base64.getEncoder().encodeToString(proofPayload),
             "proof_hash_hex",
@@ -2313,19 +2313,22 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static String authorityBindingProofHashSelf(String principalURA) {
-    byte[] principal = bytes(principalURA);
-    ByteBuffer canonical = ByteBuffer.allocate(1 + 4 + principal.length);
-    canonical.put((byte) 0x01);
-    canonical.putInt(principal.length);
-    canonical.put(principal);
-    return sha256Hex(canonical.array());
+    ByteArrayOutputStream canonical = new ByteArrayOutputStream();
+    writeLengthPrefixed(canonical, principalURA);
+    writeLengthPrefixed(canonical, "axon-strict-v2");
+    canonical.write(0x01);
+    canonical.write(0x01);
+    return sha256Hex(canonical.toByteArray());
   }
 
   private static String authorityBindingProofHashSession(Map<String, Object> binding) {
     ByteArrayOutputStream canonical = new ByteArrayOutputStream();
-    canonical.write(0x05);
+    writeLengthPrefixed(canonical, (String) binding.get("authority_ura"));
+    writeLengthPrefixed(canonical, "axon-strict-v2");
+    canonical.write(0x03);
+    canonical.write(0x03);
     writeLengthPrefixed(canonical, (String) binding.get("issuer_ura"));
-    writeLengthPrefixed(canonical, (String) binding.get("subject_ura"));
+    writeLengthPrefixed(canonical, "axon-strict-v2");
     writeLengthPrefixed(canonical, (String) binding.get("session_id"));
     @SuppressWarnings("unchecked")
     List<String> scopes = (List<String>) binding.get("scopes");

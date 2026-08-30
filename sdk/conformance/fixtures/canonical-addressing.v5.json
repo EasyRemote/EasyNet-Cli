@@ -15,6 +15,12 @@
       "components": {"realm": "example", "device_id": "dev-a"}
     },
     {
+      "name": "service",
+      "request": {"kind": "service", "realm": "example", "user_id": "alice", "service_id": "pages"},
+      "ura": "easynet:///r/example/service/alice.pages",
+      "components": {"realm": "example", "owner_kind": "service", "principal_id": "alice", "service_id": "pages"}
+    },
+    {
       "name": "user_agent",
       "request": {"kind": "agent", "owner_kind": "user", "realm": "example", "user_id": "alice", "agent_id": "assistant"},
       "ura": "easynet:///r/example/agent/alice.assistant",
@@ -31,21 +37,6 @@
       "request": {"kind": "authority", "realm": "example"},
       "ura": "easynet:///r/example/authority",
       "components": {"realm": "example"}
-    },
-    {
-      "name": "device_ability_grammar_migration_only",
-      "request": {"kind": "ability", "owner_ura": "easynet:///r/example/device/dev-a", "ability_name": "observe.health"},
-      "ura": "easynet:///r/example/ability/device.dev-a.observe.health",
-      "components": {
-        "realm": "example",
-        "owner_ura": "easynet:///r/example/device/dev-a",
-        "owner_kind": "device",
-        "ability_name": "observe.health",
-        "public_name": "observe.health",
-        "local_registry_ability": "observe.health",
-        "namespace": "observe",
-        "local_name": "health"
-      }
     },
     {
       "name": "system_agent_ability",
@@ -78,6 +69,21 @@
       }
     },
     {
+      "name": "service_ability",
+      "request": {"kind": "ability", "owner_ura": "easynet:///r/example/service/alice.pages", "ability_name": "project.list"},
+      "ura": "easynet:///r/example/ability/service.alice.pages.project.list",
+      "components": {
+        "realm": "example",
+        "owner_ura": "easynet:///r/example/service/alice.pages",
+        "owner_kind": "service",
+        "ability_name": "project.list",
+        "public_name": "project.list",
+        "local_registry_ability": "project.list",
+        "namespace": "project",
+        "local_name": "list"
+      }
+    },
+    {
       "name": "user_resource",
       "request": {"kind": "resource", "owner_ura": "easynet:///r/example/user/alice", "path": "invoke/observe.health"},
       "ura": "easynet:///r/example/resource/user.alice/invoke/observe.health",
@@ -103,6 +109,7 @@
     "easynet:///r/example/agent/alice.extra.agent",
     "easynet:///r/example/agent/device.justone",
     "easynet:///r/example/agent/device.dev-a.terminal.extra",
-    "easynet:///r/example/agent/authority.assistant"
+    "easynet:///r/example/agent/authority.assistant",
+    "easynet:///r/example/ability/device.dev-a.observe.health"
   ]
 }

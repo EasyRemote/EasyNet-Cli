@@ -10,6 +10,7 @@ use axon_sdk::invocation::{
     AgentIdentity, AxonError, CanonicalReceiptProvider, ErrorCode, ErrorStage, KeyResolver,
     SecurityClass, UraProfile, MAX_KEYS_PER_AGENT_URA,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey};
 use std::sync::{Arc, OnceLock};
 
@@ -293,25 +294,47 @@ impl CanonicalAdmissionKeyResolver {
             keys.push(candidate);
         }
     }
-}
 
-impl KeyResolver for CanonicalAdmissionKeyResolver {
-    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-        self.resolve_all(agent_ura)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| Self::unknown_agent_key(agent_ura))
+    fn signature_key_projection(
+        agent_ura: &str,
+        key_id_hint: &str,
+    ) -> Result<Option<VerifyingKey>, AxonError> {
+        let hint = key_id_hint.trim();
+        let Ok(bytes) = BASE64_STANDARD.decode(hint) else {
+            return Ok(None);
+        };
+        let Ok(bytes) = <[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]>::try_from(bytes) else {
+            return Ok(None);
+        };
+        VerifyingKey::from_bytes(&bytes)
+            .map(Some)
+            .map_err(|_| Self::unknown_agent_key(agent_ura))
     }
 
-    fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+    fn resolve_candidates(
+        &self,
+        agent_ura: &str,
+        signature_hint: Option<&str>,
+    ) -> Result<Vec<VerifyingKey>, AxonError> {
+        let signature_key = signature_hint
+            .map(|hint| Self::signature_key_projection(agent_ura, hint))
+            .transpose()?
+            .flatten();
+
         if agent_ura == LOCAL_SYSTEM_AGENT_URA {
-            return system_verifying_key()
+            let mut keys = system_verifying_key()
                 .map(|key| vec![key])
                 .map_err(|error| {
                     AxonError::internal(format!(
                         "daemon-local system identity unavailable from key service: {error}"
                     ))
-                });
+                })?;
+            if let Some(signature_key) = signature_key {
+                keys.retain(|candidate| candidate == &signature_key);
+            }
+            return (!keys.is_empty())
+                .then_some(keys)
+                .ok_or_else(|| Self::unknown_agent_key(agent_ura));
         }
 
         let mut keys = Vec::new();
@@ -331,7 +354,14 @@ impl KeyResolver for CanonicalAdmissionKeyResolver {
         if let Some(key) = self.bootstrap_candidate.key_for(agent_ura)? {
             Self::append_unique(&mut keys, key);
         }
-        match self.trusted_identities.resolve_all(agent_ura) {
+
+        let trusted_result = match signature_hint {
+            Some(hint) if signature_key.is_some() => self
+                .trusted_identities
+                .resolve_signature_keys(agent_ura, hint),
+            _ => self.trusted_identities.resolve_all(agent_ura),
+        };
+        match trusted_result {
             Ok(trusted_keys) => {
                 for key in trusted_keys {
                     Self::append_unique(&mut keys, key);
@@ -340,11 +370,36 @@ impl KeyResolver for CanonicalAdmissionKeyResolver {
             Err(error) if error.code == ErrorCode::CallerKeyNotFound && !keys.is_empty() => {}
             Err(error) => return Err(error),
         }
+
+        if let Some(signature_key) = signature_key {
+            keys.retain(|candidate| candidate == &signature_key);
+        }
         if keys.is_empty() {
             return Err(Self::unknown_agent_key(agent_ura));
         }
         keys.truncate(MAX_KEYS_PER_AGENT_URA);
         Ok(keys)
+    }
+}
+
+impl KeyResolver for CanonicalAdmissionKeyResolver {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        self.resolve_all(agent_ura)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Self::unknown_agent_key(agent_ura))
+    }
+
+    fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+        self.resolve_candidates(agent_ura, None)
+    }
+
+    fn resolve_signature_keys(
+        &self,
+        agent_ura: &str,
+        key_id_hint: &str,
+    ) -> Result<Vec<VerifyingKey>, AxonError> {
+        self.resolve_candidates(agent_ura, Some(key_id_hint))
     }
 }
 
@@ -356,11 +411,12 @@ mod tests {
         AgentIdentity, AxonError, CanonicalReceiptProvider, DescriptorBoundEnvelope, ErrorCode,
         KeyResolver, ReceiptSigningAuthority, VerifiedAdmissionPolicy,
     };
-    use ed25519_dalek::{Verifier as _, VerifyingKey};
+    use base64::Engine as _;
+    use ed25519_dalek::{SigningKey, Verifier as _, VerifyingKey};
 
     use super::{
         local_daemon_ura, local_device_ura, sign_system_canonical, system_verifying_key,
-        CanonicalAdmissionKeyResolver,
+        CanonicalAdmissionKeyResolver, BASE64_STANDARD,
     };
     use crate::daemon::axon_bridge::runtime_admin::{
         BootstrapCandidateKeyProvider, RuntimeBootstrapIdentityProvider,
@@ -422,6 +478,41 @@ mod tests {
         }
     }
 
+    struct RequestAwareTrustedIdentityResolver {
+        caller_ura: &'static str,
+        durable_key: VerifyingKey,
+        request_key: VerifyingKey,
+    }
+
+    impl KeyResolver for RequestAwareTrustedIdentityResolver {
+        fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+            self.resolve_all(agent_ura).map(|keys| keys[0])
+        }
+
+        fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+            (agent_ura == self.caller_ura)
+                .then_some(vec![self.durable_key])
+                .ok_or_else(|| {
+                    AxonError::invalid_argument(ErrorCode::CallerKeyNotFound.as_str())
+                        .with_code(ErrorCode::CallerKeyNotFound)
+                })
+        }
+
+        fn resolve_signature_keys(
+            &self,
+            agent_ura: &str,
+            key_id_hint: &str,
+        ) -> Result<Vec<VerifyingKey>, AxonError> {
+            let request_hint = BASE64_STANDARD.encode(self.request_key.as_bytes());
+            (agent_ura == self.caller_ura && key_id_hint == request_hint)
+                .then_some(vec![self.request_key])
+                .ok_or_else(|| {
+                    AxonError::invalid_argument(ErrorCode::CallerKeyNotFound.as_str())
+                        .with_code(ErrorCode::CallerKeyNotFound)
+                })
+        }
+    }
+
     fn admission_resolver_with_trusted_error(
         signer_ura: &'static str,
         trusted_error: AxonError,
@@ -454,6 +545,45 @@ mod tests {
         let (resolver, receipt_key) = admission_resolver_with_trusted_error(SIGNER_URA, missing);
 
         assert_eq!(resolver.resolve_all(SIGNER_URA).unwrap(), vec![receipt_key]);
+    }
+
+    #[test]
+    fn admission_resolver_preserves_request_key_selection_through_canonical_graph() {
+        const USER_URA: &str = "easynet:///r/acme/user/alice";
+        let durable_key = SigningKey::from_bytes(&[0x31; 32]).verifying_key();
+        let request_key = SigningKey::from_bytes(&[0x32; 32]).verifying_key();
+        let unattested_key = SigningKey::from_bytes(&[0x33; 32]).verifying_key();
+        let trusted_identities: Arc<dyn KeyResolver> =
+            Arc::new(RequestAwareTrustedIdentityResolver {
+                caller_ura: USER_URA,
+                durable_key,
+                request_key,
+            });
+        let receipt_signers: Arc<dyn CanonicalReceiptProvider> =
+            Arc::new(FixedReceiptKeyProjection {
+                signer_ura: "easynet:///r/acme/device/receipt-signer",
+                key: durable_key,
+            });
+        let resolver = CanonicalAdmissionKeyResolver::new(
+            trusted_identities,
+            Arc::new(RuntimeBootstrapIdentityProvider::default()),
+            Arc::new(BootstrapCandidateKeyProvider::default()),
+            receipt_signers,
+        );
+
+        let request_hint = BASE64_STANDARD.encode(request_key.as_bytes());
+        assert_eq!(
+            resolver
+                .resolve_signature_keys(USER_URA, &request_hint)
+                .expect("request-attested browser key"),
+            vec![request_key]
+        );
+
+        let unattested_hint = BASE64_STANDARD.encode(unattested_key.as_bytes());
+        let error = resolver
+            .resolve_signature_keys(USER_URA, &unattested_hint)
+            .expect_err("unattested selector must not fall back to a durable key");
+        assert_eq!(error.code, ErrorCode::CallerKeyNotFound);
     }
 
     fn verifying_key(bytes: [u8; 32]) -> VerifyingKey {

@@ -375,7 +375,10 @@ for path in sorted((root / "src").rglob("*.rs")):
 
     for match in re.finditer(r"LocalSystemInvocationContext::new\s*\(", production):
         function = enclosing_function_name(production, match.start())
-        if (rel, function) != ("src/support/platform/local_invoke.rs", "root_context"):
+        if (rel, function) not in {
+            ("src/support/platform/local_invoke.rs", "root_context"),
+            ("src/support/platform/local_invoke.rs", "root_context_with_nonce"),
+        }:
             violations.append(
                 f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: local system invocation context must be issued by LocalSystemInvocationIssuer"
             )

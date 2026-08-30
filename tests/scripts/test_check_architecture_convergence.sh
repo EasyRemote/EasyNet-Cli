@@ -227,7 +227,7 @@ A Profile is a local Realm + Account selection state.
 
 An Account is not an Agent. It authenticates and carries accountability for the
 selected Realm/Profile; callable product surfaces must use an explicit hosted
-Agent, SystemAgent, or Authority instead of an account-as-agent fallback.
+Agent, Service, SystemAgent, or Authority instead of an account-as-agent fallback.
 EOF
   cat >"$CLI/docs/easynet_ontology.tex" <<'EOF'
 \section{Ontology}
@@ -239,11 +239,12 @@ does not advertise abilities as a synthetic account Agent.
 \begin{itemize}
   \item \textbf{Agent} --- routable behavior subject that may advertise governed
   \texttt{AbilityDescriptor}s.
+  \item \textbf{Service} --- principal-scoped callable product surface.
   \item \textbf{Authority} --- routable realm governance actor.
 \end{itemize}
 
-Ordinary public Invocation callees are \textbf{Agent, System Agent, or
-Authority} identities advertising governed AbilityDescriptors.
+Ordinary public Invocation callees are \textbf{Agent, System Agent,
+Service, or Authority} identities advertising governed AbilityDescriptors.
 Bounded Device caller exceptions are enumerated by the shared
 \texttt{DeviceCallerPurpose} classifier.
 
@@ -251,6 +252,7 @@ Bounded Device caller exceptions are enumerated by the shared
 \textbf{Canonical actor contract.}
 User/Account = Principal/accountability;
 Agent = routable AbilityDescriptor owner/callee;
+Service = principal-scoped callable product surface;
 System Agent = Device-sponsored restricted Agent;
 Authority = realm governance actor;
 Device = execution host/custody/sponsor, not an ordinary public actor;
@@ -1798,6 +1800,30 @@ fn route_owner_kind_from_selector(selector: &Selector) -> Result<RouteOwnerKind,
         "system-agent" => Ok(Self::SystemAgent),
         _ => Err(ResolveRouteFailure),
     }
+}
+
+enum RouteOwnerKind {
+    Agent,
+    SystemAgent,
+    DevicePlacement,
+}
+
+fn device_placement_route_selector_from_query(
+    query_name: &str,
+    ability_name: &str,
+) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
+    if query_name.starts_with("easynet:///r/localhost/device/")
+        && !ability_name.starts_with("easynet:///r/localhost/ability/")
+    {
+        return Ok(Some(RouteSelector));
+    }
+    Ok(None)
+}
+
+fn reject_explicit_device_owned_ability_selector() -> anyhow::Result<()> {
+    anyhow::bail!(
+        "invalid Ability URA: Device is execution substrate, not an Ability owner; use a device-sponsored SystemAgent owner"
+    )
 }
 
 fn local_runtime_route_kind(owner_kind: RouteOwnerKind) {

@@ -146,6 +146,15 @@ impl KeyResolver for DaemonRuntimeAdmissionGraph {
     fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
         self.key_resolver.resolve_all(agent_ura)
     }
+
+    fn resolve_signature_keys(
+        &self,
+        agent_ura: &str,
+        key_id_hint: &str,
+    ) -> Result<Vec<VerifyingKey>, AxonError> {
+        self.key_resolver
+            .resolve_signature_keys(agent_ura, key_id_hint)
+    }
 }
 
 #[cfg(feature = "axon-pb")]

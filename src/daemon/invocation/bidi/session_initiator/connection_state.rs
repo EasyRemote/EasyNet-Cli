@@ -48,12 +48,10 @@ pub(crate) struct PersistentSessionConnectionStateSink;
 impl SessionConnectionStateSink for PersistentSessionConnectionStateSink {
     fn record(&self, change: SessionConnectionStateChange) -> anyhow::Result<()> {
         let prior = crate::daemon::boot::join_connection_state::latest_snapshot();
-        let snapshot = JoinConnectionSnapshot::from_parts(
+        let snapshot = JoinConnectionSnapshot::from_prior_context(
             change.state,
             Some(change.transition),
-            prior.realm,
-            prior.node_id,
-            prior.hub_endpoint,
+            &prior,
             change.source,
         );
         crate::daemon::boot::join_connection_state::save_snapshot(&snapshot)

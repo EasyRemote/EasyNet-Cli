@@ -26,6 +26,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#![cfg(unix)]
+
 #[path = "key_service_fixture.rs"]
 mod key_service_fixture;
 #[path = "support/runtime_fixture.rs"]
@@ -624,8 +626,8 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
 
     // Backend routes the local `project_list` handler through the
     // principal-scoped Pages Service. The local dispatch key remains the
-    // handler key; the public descriptor name is canonicalized as
-    // `pages.project_list` under the Pages Service owner.
+    // handler key; the public descriptor stays owner-local `project_list`
+    // under the Pages Service owner.
     let ability = "project_list";
     assert!(reg.has_rpc(ability));
     let facts = reg

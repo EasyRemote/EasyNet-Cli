@@ -22,8 +22,12 @@ from .health import HealthClient
 from .axon_addressing import AddressingClient
 from .runtime import RuntimeClient
 from .runtime_ability import RuntimeAbilityClient
+from .runtime_authority import LocalRuntimeAuthorityProvider
+from .runtime_signer import LocalRuntimeSignerProvider
+from .signing import Signer
 from .runtime_environment import (
     RuntimeIdentityProjection,
+    read_paired_runtime_identity_projection,
     read_runtime_control_discovery,
     read_runtime_identity_projection,
     runtime_credentials_path,
@@ -57,6 +61,7 @@ class NativeRuntimeHandle:
     _runtime: RuntimeClient
     _health: HealthClient
     _addressing: AddressingClient
+    _authority: LocalRuntimeAuthorityProvider | None = None
     _closed: bool = field(default=False, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
@@ -97,7 +102,7 @@ class NativeRuntimeHandle:
         """Return a borrowed generic runtime ability facade."""
 
         self._require_open()
-        return RuntimeAbilityClient(self._runtime, self._addressing)
+        return RuntimeAbilityClient(self._runtime, self._addressing, self._authority)
 
     def close(self) -> None:
         """Close all provider-owned facades exactly once."""
@@ -264,7 +269,14 @@ class SdkEnvironment:
         runtime = RuntimeClient(runtime_transport)
         health = HealthClient(runtime_transport, owns_transport=False)
         addressing = _canonical_addressing_client()
-        return self._track(NativeRuntimeHandle(runtime, health, addressing))
+        return self._track(
+            NativeRuntimeHandle(
+                runtime,
+                health,
+                addressing,
+                self.local_runtime_authority_provider(addressing),
+            )
+        )
 
     def runtime_client_direct(
         self, options: ConnectOptions | None = None
@@ -287,23 +299,72 @@ class SdkEnvironment:
     def invocation_transport_direct(
         self, options: ConnectOptions | None = None
     ) -> RuntimeInvocationTransport:
-        """Open the JSON-friendly Runtime Invocation facade over direct UDS."""
+        """Open direct UDS dispatch with local C ABI prepare/signing support."""
 
         self._require_open()
+        from . import _cabi
+        from .providers.runtime.direct import DirectRuntimeConnector
+
+        resolved = self._connect_options(_connect_options_or_default(options))
+        addressing = _canonical_addressing_client()
+        handle_transport = _cabi.open_cabi_runtime_transport(
+            control_path=resolved.control_path,
+            library_path=self.library_path,
+        )
+        connector = DirectRuntimeConnector(
+            control_path=resolved.control_path,
+            handle_transport=handle_transport,
+            identity=addressing,
+            close_identity=True,
+            close_handle_transport=True,
+        )
+        connection = RuntimeConnection(connector)
+        try:
+            connection.connect(resolved)
+        except BaseException:
+            connector.close()
+            raise
         return self._track(
-            RuntimeInvocationTransport.connect_direct(
-                control_path=self.resolved_control_path(),
-                library_path=self.library_path,
-                options=self._connect_options(_connect_options_or_default(options)),
-            )
+            RuntimeInvocationTransport(connection.runtime_client(), connection)
         )
 
     def ability_invocation_client(self) -> AbilityInvocationClient:
         """Open the generic complete-Invocation facade."""
 
         self._require_open()
+        runtime = self.runtime_client()
+        addressing = _canonical_addressing_client()
         return self._track(
-            AbilityInvocationClient(self.runtime_client(), _canonical_addressing_client())
+            AbilityInvocationClient(
+                runtime,
+                addressing,
+                self.local_runtime_authority_provider(addressing),
+            )
+        )
+
+    def local_runtime_authority_provider(
+        self,
+        addressing: AddressingClient,
+    ) -> LocalRuntimeAuthorityProvider:
+        """Create authority policy bound to this runtime's key service."""
+
+        self._require_open()
+        return LocalRuntimeAuthorityProvider(
+            addressing,
+            key_service_path=str(self.runtime_state_root() / "keyring.sock"),
+        )
+
+    def local_runtime_invocation_signer(self, caller_ura: str) -> Signer:
+        """Resolve the daemon-custodied active signer for a local caller."""
+
+        return self.local_runtime_signer_provider().resolve(caller_ura)
+
+    def local_runtime_signer_provider(self) -> LocalRuntimeSignerProvider:
+        """Create managed signer selection bound to this runtime's key service."""
+
+        self._require_open()
+        return LocalRuntimeSignerProvider(
+            key_service_path=str(self.runtime_state_root() / "keyring.sock"),
         )
 
     def health_client(self) -> HealthClient:
@@ -405,6 +466,22 @@ class SdkEnvironment:
         return RuntimeIdentityProjection(
             realm=identity.realm,
             runtime_instance_id=identity.runtime_instance_id,
+        )
+
+    def paired_runtime_identity_projection(
+        self,
+        credentials_path: str | Path = "",
+    ) -> RuntimeIdentityProjection:
+        """Return the paired principal bound to this attached runtime.
+
+        Secret-bearing credential persistence remains SDK-owned. The returned
+        value contains only public identity, display, and control-plane facts.
+        """
+
+        self._require_open()
+        return read_paired_runtime_identity_projection(
+            credentials_path or self.runtime_credentials_path(),
+            control_path=self.resolved_control_path(),
         )
 
     def _connect_options(self, options: ConnectOptions) -> ConnectOptions:

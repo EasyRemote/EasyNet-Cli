@@ -4,12 +4,17 @@ set -euo pipefail
 ROOT="${CHECK_REMOTEAPP_TARGET_BINDING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REMOTE_ROOT="$ROOT/plugins/remote-desktop/src"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
-SCK_CAPTURE="$REMOTE_ROOT/screencapturekit_capture.rs"
+MEDIA_HOST_PROBE="$REMOTE_ROOT/media_host_probe.rs"
+MEDIA_HOST_MAC_SCK="$ROOT/plugins/remote-desktop/media-host/src/macos_sck.rs"
+MEDIA_HOST_MAC_MULTIAPP="$ROOT/plugins/remote-desktop/media-host/src/macos_multiapp.rs"
+MEDIA_SESSION_PROTOCOL="$ROOT/plugins/remote-desktop/native-protocol/src/media_session.rs"
 MEDIA="$REMOTE_ROOT/media/mod.rs"
 TARGET_DOMAIN="$REMOTE_ROOT/target.rs"
+TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
 SESSION="$REMOTE_ROOT/session.rs"
 SESSION_IDENTITY="$REMOTE_ROOT/session_identity.rs"
 MEDIA_SOURCE_FACTORY="$REMOTE_ROOT/transport/media_source.rs"
+WEBRTC_HOSTED="$REMOTE_ROOT/transport/webrtc_hosted_media.rs"
 
 fail() {
   printf 'check-remoteapp-target-binding-boundary: %s\n' "$1" >&2
@@ -53,6 +58,15 @@ reject() {
 
 [[ -d "$REMOTE_ROOT" ]] || fail "missing remote desktop source root"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
+for source in "$MEDIA_HOST_PROBE" "$MEDIA_HOST_MAC_SCK" "$MEDIA_HOST_MAC_MULTIAPP" "$MEDIA_SESSION_PROTOCOL" "$WEBRTC_HOSTED" "$TARGET_OBSERVER"; do
+  [[ -f "$source" ]] || fail "missing canonical hosted-media source ${source#"$ROOT/"}"
+done
+for obsolete in \
+  "$REMOTE_ROOT/screencapturekit_capture.rs" \
+  "$REMOTE_ROOT/screencapturekit_multiapp.rs" \
+  "$REMOTE_ROOT/transport/webrtc_native_media.rs"; do
+  [[ ! -e "$obsolete" ]] || fail "obsolete daemon-local media implementation remains: ${obsolete#"$ROOT/"}"
+done
 
 require 'E2E-05 stale window fail-closed' "$SPEC" \
   'SPEC must retain stale window fail-closed acceptance'
@@ -86,9 +100,15 @@ reject 'input_policy_for_entry\s*\(' "$REMOTE_ROOT" \
 reject 'pointer_target_for_entry\s*\(' "$REMOTE_ROOT" \
   'production pointer targeting must consume RemoteAppTargetBinding plus tracker snapshot'
 
-require 'ResourceEntryTargetResolver\.resolve_for_session\(' \
+require 'ResourceEntryTargetResolver' \
   "$REMOTE_ROOT/session_creation.rs" \
-  'session creation workflow must be the ResourceEntry-to-target_binding boundary'
+  'session creation workflow must own the ResourceEntry-to-target_binding boundary'
+require 'resolve_for_session_with_input_consent\(' \
+  "$REMOTE_ROOT/session_creation.rs" \
+  'session creation workflow must be the ResourceEntry-to-target_binding boundary with explicit input-control consent'
+require 'input_control_granted' \
+  "$REMOTE_ROOT/session_creation.rs" \
+  'session creation workflow must make input-control consent explicit before target binding resolution'
 require 'verify_target_binding_for_session\(' \
   "$REMOTE_ROOT/session_creation.rs" \
   'session creation workflow must verify the resolved target binding before session insertion'
@@ -114,6 +134,18 @@ require 'frontend_action=refresh_targets' \
 require '!sessions\.contains_key\("rd-stale-window"\)' \
   "$REMOTE_ROOT/handlers/create_session.rs" \
   'E2E-05 stale target failure must prove no active session row is inserted'
+require 'create_session_live_revalidates_an_expired_picker_row_before_insert' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'expired picker cache must have device-side live-verification session-admission coverage'
+require 'inventory_cache_expired_before_live_verification' \
+  "$TARGET_DOMAIN" \
+  'target diagnostics must distinguish picker cache expiry from live identity verification'
+require 'live_identity_reverified' \
+  "$TARGET_DOMAIN" \
+  'target diagnostics must expose committed live identity revalidation'
+reject 'live inventory row expired at' \
+  "$TARGET_DOMAIN" \
+  'picker TTL must not replace device-side live target verification during session admission'
 require 'create_session_rejects_weak_window_identity_before_session_insert' \
   "$REMOTE_ROOT/handlers/create_session.rs" \
   'E2E-10 must have a weak window identity create_session fail-closed test'
@@ -150,18 +182,48 @@ require '!backend\.supports_subject\(binding\.target_kind\(\)\.resource_type\(\)
 require 'direct_factory_rejects_uncommitted_target_binding_before_media_selection' \
   "$MEDIA_SOURCE_FACTORY" \
   'media source factory must test that uncommitted target bindings cannot start media'
-require 'target_for_binding\(' \
-  "$REMOTE_ROOT/transport/webrtc_native_media.rs" \
-  'native media must start from RemoteAppTargetBinding'
-require 'fn target_for_binding\(' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit media startup must expose target_for_binding as the native binding boundary'
-require 'binding\.validate_reverified_capture_proof\(ability, target\.capture_proof\(\)\)' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit target_for_binding must validate the live capture proof against the committed session binding'
-require 'fn capture_proof\(&self\) -> &ResolvedCaptureTargetProof' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit resolved target must expose a typed capture proof for binding revalidation'
+require 'let target = target_plan\(binding\)\?;' "$WEBRTC_HOSTED" \
+  'hosted WebRTC media must derive its private host contract from RemoteAppTargetBinding'
+require 'pub\(super\) fn target_plan\(binding: &RemoteAppTargetBinding\)' "$MEDIA_HOST_PROBE" \
+  'the daemon/media-host boundary must have one binding-to-contract projection'
+require 'binding\.committed_app_window_set\(\)' "$MEDIA_HOST_PROBE" \
+  'application host contracts must consume the committed AppWindowSetProof'
+require 'binding\.committed_app_surface_layout\(\)' "$MEDIA_HOST_PROBE" \
+  'application host contracts must consume the committed surface-layout proof'
+require 'plan\.validate\(\)' "$MEDIA_HOST_PROBE" \
+  'binding-derived media-host contracts must pass protocol validation before process start'
+require 'proof\.validate_for\(plan\)\?;' "$MEDIA_HOST_PROBE" \
+  'media-host capture proofs must validate against the exact binding-derived contract'
+require 'validate_reverified_capture_proof\(ABILITY_SET_DESCRIPTION, &initial_proof\)' "$WEBRTC_HOSTED" \
+  'initial hosted capture proof must be revalidated against the committed session binding before activation'
+require 'fn resolve_application\(' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit media-host must own exact application target resolution'
+require 'observed_ids != expected_front_to_back' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit application capture must reject window order or membership drift'
+require 'sorted_observed != contract\.window_ids' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit application capture must reject committed window-set drift'
+require 'CapturePlan::MultiApplication' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit application capture must build a multi-surface plan without display fallback'
+reject 'exceptingWindows' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit application capture must not retain a display-filter exclusion fallback'
+require 'fn contains_window_id\(' \
+  "$TARGET_DOMAIN" \
+  'AppWindowSetProof must expose a read-only committed-window membership helper'
+require_multiline '/&current_window_set != committed_window_set[\s\S]*TargetObservation::ApplicationSurfaceChanged/s' \
+  "$TARGET_OBSERVER" \
+  'application observation must turn any committed window-set drift into a rebind event'
+require 'application_observer_reports_committed_window_set_drift_as_rebind' \
+  "$TARGET_OBSERVER" \
+  'application observer tests must cover both committed-window expansion and disappearance'
+require 'struct AppSurfaceLayoutProof\b' \
+  "$TARGET_DOMAIN" \
+  'application composition must commit an ordered surface-layout proof distinct from window identity'
+require 'fn committed_app_surface_layout\(' \
+  "$TARGET_DOMAIN" \
+  'target binding must expose the committed application surface layout to capture and observation paths'
+require 'fn application_surface_rebind_candidate\(' \
+  "$TARGET_DOMAIN" \
+  'target binding must construct geometry and z-order media rebind candidates through the target domain'
 require 'trait RemoteAppMediaSourceFactory' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC media source selection must use the RemoteAppMediaSourceFactory boundary'
@@ -183,30 +245,39 @@ require 'Some\(expected_binding_id\)' \
 require 'start_remote_app_media_source\(' \
   "$REMOTE_ROOT/transport/webrtc_media.rs" \
   'direct WebRTC media loop must call through the injectable media-source boundary'
-require 'if binding\.target_kind\(\) == RemoteDesktopTargetKind::Display' \
+require 'binding\.supports_xcap_adapter\(\)' \
   "$REMOTE_ROOT/transport/media_source.rs" \
-  'direct WebRTC display baseline plan must be guarded as display-only'
-require 'RemoteAppMediaSource::DisplayBaseline' \
+  'direct WebRTC xcap baseline must require an exact target adapter'
+require 'RemoteAppMediaSource::XcapBaseline' \
   "$REMOTE_ROOT/transport/media_source.rs" \
-  'direct WebRTC display baseline must be an explicit media-source selection'
-require 'TargetResolutionError::DisplayFallbackForbidden' \
+  'direct WebRTC xcap baseline must be an explicit media-source selection'
+require 'without widening its scope' \
   "$REMOTE_ROOT/transport/media_source.rs" \
-  'direct WebRTC baseline guard must fail app/window sessions with typed display_fallback_forbidden reason'
-require_count_at_least 'supported_subjects: &\["display"\]' "$MEDIA" 2 \
-  'both xcap baseline media backends must advertise display-only support'
-require 'entry\.kind == ResourceType::Display && backend == Some\("xcap"\)' "$MEDIA" \
-  'xcap baseline selector must be display-only'
-require 'xcap_baseline_catalog_is_display_only_for_remoteapp_targets' "$MEDIA" \
-  'media catalog must test xcap baseline does not advertise app/window support'
-require 'diagnostic xcap baseline must not advertise app/window capture' "$MEDIA" \
-  'xcap display-only test must document that app/window need native target binding'
-require_count_at_least '"target_model": self\.target_kind\.target_model\(\)' \
+  'direct WebRTC xcap baseline failure must state that target scope may not widen'
+require_count_at_least 'supported_subjects: &\["display", "window", "application"\]' "$MEDIA" 2 \
+  'both xcap media backends must advertise their exact target subject matrix'
+require 'screen_target_metadata_resolvable\(entry\)' "$MEDIA" \
+  'xcap app/window selection must require resolvable target metadata'
+require 'xcap_baseline_catalog_supports_exact_window_and_application_targets' "$MEDIA" \
+  'media catalog must test exact xcap app/window support'
+require 'direct_webrtc_binding_uses_xcap_without_widening_window_or_application_scope' "$MEDIA" \
+  'xcap binding test must prove app/window scope is preserved'
+require 'capture_application_rgb_with_xcap' \
+  "$ROOT/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" \
+  'xcap application media must capture the committed application window set'
+require 'MAX_APPLICATION_COMPOSITE_PIXELS' \
+  "$ROOT/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" \
+  'xcap application compositor must have an explicit memory bound'
+require 'application_compositor_cross_display_gap_is_black_not_host_display_content' \
+  "$ROOT/src/daemon/ability/builtins/resources/media/screen_snapshot.rs" \
+  'xcap application compositor must prove cross-display gaps cannot leak host display pixels'
+require_count_at_least '"target_model": self\.target_kind\.target_model_for_platform\(&self\.platform\)' \
   "$REMOTE_ROOT/target.rs" \
   2 \
   'target binding projection and target-bound event must expose the concrete capture target model'
 require 'validate_resource_inventory_state\(' \
   "$REMOTE_ROOT/target.rs" \
-  'target resolver must fail closed on unavailable or stale live inventory rows'
+  'target resolver must fail closed on unavailable or unproven live inventory rows'
 require 'fn validate_owner_agent_ura\(' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver must centralize resource owner_agent Agent/SystemAgent URA validation'
@@ -222,21 +293,21 @@ require 'target_binding_rejects_non_agent_owner_projection' \
 require 'metadata_freshness_u64\(' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver must consume inventory freshness when present'
-require '"target_model": self\.effective_target_kind\.target_model\(\)' \
+require '"target_model": self\.effective_target_kind\.target_model_for_platform\(platform\)' \
   "$REMOTE_ROOT/target.rs" \
   'scope audit projection must expose the effective capture target model'
-require '"target_model": target_kind\.target_model\(\)' \
+require '"target_model": target_kind\.target_model_for_platform\(&platform\)' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver diagnostic must expose the resolved capture target model'
-require 'display_scoped_application_window_set' \
+require 'multi_surface_application_window_set' \
   "$REMOTE_ROOT/target.rs" \
-  'application projection must identify the display-scoped application window-set model'
+  'macOS application projection must identify the multi-surface application window-set model'
 require 'window_requires_stable_owner_identity_not_app_name_only' \
   "$REMOTE_ROOT/target.rs" \
   'E2E-10 must prove window app_name/title hints are not accepted as stable routing identity'
-require 'application_requires_display_scoped_stable_identity' \
+require 'application_requires_stable_identity_and_exact_window_set' \
   "$REMOTE_ROOT/target.rs" \
-  'E2E-10 must prove application app_name-only identity is ambiguous'
+  'E2E-10 must prove application identity and committed window-set requirements'
 require 'TargetResolutionError::TargetIdentityAmbiguous' \
   "$REMOTE_ROOT/target.rs" \
   'E2E-10 target resolver must use the canonical target_identity_ambiguous reason'
@@ -288,16 +359,19 @@ require 'Self::TargetPermissionMissing => Some\("SCREEN_CAPTURE_PERMISSION_DENIE
 require 'downcast_ref::<RemoteAppTargetError>' \
   "$REMOTE_ROOT/registration.rs" \
   'remote desktop registration must preserve typed target failures instead of string parsing'
-require 'downcast_ref::<RemoteAppTargetError>' \
+require 'downcast_ref::<HostedMediaHostFailure>' \
   "$REMOTE_ROOT/transport/webrtc_media.rs" \
-  'WebRTC media failure projection must preserve typed target failures instead of string parsing'
+  'WebRTC media failure projection must preserve typed media-host target failures instead of string parsing'
+require 'hosted_target_failure_preserves_frontend_recovery_context' \
+  "$REMOTE_ROOT/transport/webrtc_media.rs" \
+  'hosted target failure projection must regress typed frontend recovery without string parsing'
 require 'reason\.frontend_action\(\)\.as_str\(\)' \
   "$REMOTE_ROOT/session_events.rs" \
   'session events must project target failure frontend_action from typed reason'
 require 'media_source_loss_projects_typed_frontend_action' \
   "$REMOTE_ROOT/session_events.rs" \
   'session events must test typed target failure frontend_action projection'
-require_multiline 'm/EffectiveRemoteDesktopInputPolicy::for_binding\(\s*&input_policy,\s*&target_binding,?\s*\)/s' \
+require_multiline 'm/EffectiveRemoteDesktopInputPolicy::for_binding\(\s*&input_policy,\s*&target_binding,\s*request\.plugin\.target_snapshot_executor\(\),?\s*\)/s' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC input policy must derive its typed execution policy from the session-owned RemoteAppTargetBinding'
 require 'target_binding\(\)' \
@@ -344,33 +418,40 @@ require_multiline 'm/fn validate_for_binding\(.+?app_identity_expectation\(\)\s*
 require_multiline 'm/fn matches_committed_identity\(.+?native_app_identity_expectation\(\)\s*\.evaluate\(self\.native_app_identity_candidate\(\)\)\s*\.matched\(\)/s' \
   "$TARGET_DOMAIN" \
   'committed proof revalidation must consume the centralized native app identity matcher'
-require 'fn capture_jpeg_for_binding\(' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit must expose a binding-backed one-shot diagnostic capture adapter'
-require 'sck_app_identity_match' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit selectors must consume the centralized native app identity matcher'
-require 'app_identity_expectation\(\)' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit selectors must derive identity expectations from the committed target binding'
-reject 'expected_pid' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit selectors must not redeclare pid matching outside the target-domain identity matcher'
-reject 'expected_bundle_id' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit selectors must not redeclare bundle matching outside the target-domain identity matcher'
-reject 'expected_app_identity' \
-  "$SCK_CAPTURE" \
-  'ScreenCaptureKit selectors must not redeclare app identity matching outside the target-domain identity matcher'
-require 'off_display_window_ids' \
-  "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application binding must detect app windows outside the selected display'
-require 'TargetResolutionError::TargetMultiDisplayUnsupported' \
-  "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application binding must use the typed multi-display unsupported reason when single-stream AppSurface would hide other app windows'
-require 'MultiAppSurface support' \
-  "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application binding must explain that multi-display applications require MultiAppSurface support'
+require 'pub\(super\) fn capture_diagnostic_jpeg\(' "$MEDIA_HOST_PROBE" \
+  'diagnostic capture must use the canonical binding-derived media-host contract'
+require 'pub\(super\) fn capture_diagnostic_jpeg\(' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit media-host must expose bounded one-shot diagnostic capture'
+require 'fn application_identity_matches\(' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit media-host must validate the application identity carried by the committed contract'
+require 'fn resolve_application\(' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit application binding must resolve the exact committed window set'
+require 'CapturePlan::MultiApplication' "$MEDIA_HOST_MAC_SCK" \
+  'ScreenCaptureKit application binding must construct a multi-surface capture plan'
+require_multiline 'm/HostedGeneration::prepare\([\s\S]+?validate_pending_media_rebind_capture_proof[\s\S]+?commit_pending_media_rebind_for_session[\s\S]+?next\.activate\(\)\?/s' "$WEBRTC_HOSTED" \
+  'hosted WebRTC rebind must prepare and validate a replacement generation, commit Runtime binding, then activate media'
+require 'supersede_pending_media_rebind_for_session' "$WEBRTC_HOSTED" \
+  'hosted WebRTC must reject failed replacement generations through the session aggregate'
+require 'restart_generation\(' "$WEBRTC_HOSTED" \
+  'a rejected hosted replacement must restore the previously committed active binding'
+require 'application_contract_preserves_membership_and_front_to_back_order' "$WEBRTC_HOSTED" \
+  'the binding-to-media-host projection must regress exact application membership and ordering'
+require 'application surface membership differs from committed window set' "$MEDIA_SESSION_PROTOCOL" \
+  'the private media protocol must reject application layout membership that differs from the committed window set'
+require 'initWithDesktopIndependentWindow' "$MEDIA_HOST_MAC_SCK" \
+  'each committed macOS application window must use a desktop-independent ScreenCaptureKit filter'
+require 'MAX_MULTI_APP_WINDOWS' "$MEDIA_HOST_MAC_MULTIAPP" \
+  'macOS multi-surface capture must bound native window fan-out'
+require 'MAX_MULTI_APP_PIXELS' "$MEDIA_HOST_MAC_MULTIAPP" \
+  'macOS multi-surface capture must bound output pixel memory'
+require 'bgra_compositor_preserves_black_gaps_and_front_window_order' "$MEDIA_HOST_MAC_MULTIAPP" \
+  'macOS multi-surface compositor must prove black gaps and deterministic z-order'
+require 'compositor_uses_greatest_surface_pts_for_monotonic_output' "$MEDIA_HOST_MAC_MULTIAPP" \
+  'macOS multi-surface compositor must emit monotonic output without freezing on static surfaces'
+require 'native_canvas_dimension_applies_retina_point_pixel_scale' "$MEDIA_HOST_MAC_MULTIAPP" \
+  'macOS multi-surface native resolution must account for ScreenCaptureKit point-to-pixel scale'
+reject 'initWithDisplay_includingApplications_exceptingWindows' "$MEDIA_HOST_MAC_SCK" \
+  'macOS AppSurface must not retain the obsolete display-scoped application filter'
 
 while IFS=: read -r file line _match; do
   case "${file#"$ROOT/"}" in

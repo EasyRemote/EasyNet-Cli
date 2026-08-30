@@ -7,14 +7,18 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, EffectiveRemoteDesktopInputPolicy, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, input_injection_unavailable_reason,
+    EffectiveRemoteDesktopInputPolicy, INPUT_DATA_CHANNEL_LABEL,
 };
+use crate::daemon::plugins::remote_desktop::media::host_audio_capability::HostAudioRuntimeSnapshot;
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
 };
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::view_device::{
-    device_capabilities_view, empty_pipeline_metrics, quality_targets,
+    audio_support_view_for_binding, device_capabilities_view, empty_pipeline_metrics,
+    quality_targets,
 };
 use crate::daemon::plugins::remote_desktop::view_transport::RemoteDesktopTransportView;
 
@@ -23,22 +27,26 @@ use crate::daemon::plugins::remote_desktop::view_transport::RemoteDesktopTranspo
 /// This is a projection of the current device-side session row using the
 /// product-owned wire vocabulary. Axon carries the surrounding canonical
 /// invocation and receipt without owning remote desktop lifecycle semantics.
-pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
+pub(in crate::daemon::plugins::remote_desktop) fn serialize_session_with_audio_runtime(
     session: &RemoteDesktopSession,
+    audio_runtime: &HostAudioRuntimeSnapshot,
 ) -> Value {
     let transport_view = RemoteDesktopTransportView::from_session(session);
     let video = session.video().to_value();
-    let input_policy = EffectiveRemoteDesktopInputPolicy::for_target_state(
+    let effective_input_policy = EffectiveRemoteDesktopInputPolicy::for_target_state(
         session.input_policy(),
         session.target_snapshot(),
         session.target_binding().input_scope(),
-    )
-    .to_value();
+    );
+    let input_policy = effective_input_policy.to_value();
+    let input_readiness = input_readiness_view(session, &effective_input_policy);
+    let input_injection_ready = input_injection_available();
     let media_stats = session.media_stats();
     let production_media_ready = session.production_media_ready();
     let transport_route_state = transport_view.route_state();
     let signaling = session.signaling_view(transport_route_state.clone());
-    let production_readiness = production_readiness_view(session, &transport_view);
+    let production_readiness = production_readiness_view(session, &transport_view, audio_runtime);
+    let audio = audio_support_view_for_binding(session.target_binding(), audio_runtime);
     let mut view = json!({
         "session_id": session.session_id(),
         "state": session.state().json_name(),
@@ -56,8 +64,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "updated_at_ms": session.updated_at_ms(),
         "lease_expires_at_ms": session.lease_expires_at_ms(),
         "end_reason": session.end_reason(),
+        "terminal_receipt": session.terminal_receipt(),
         "video": video.clone(),
         "input_policy": input_policy.clone(),
+        "input_readiness": input_readiness.clone(),
         "consent": session.consent_state().to_value(),
         "media_transport_ready": session.media_transport_ready(),
         "client_media_ready": session.client_media_ready(),
@@ -67,13 +77,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
             "kind": "webrtc_data_channel",
             "label": INPUT_DATA_CHANNEL_LABEL,
             "policy": input_policy,
-            "input_injection_available": input_injection_available(),
+            "readiness": input_readiness,
+            "input_injection_available": input_injection_ready,
         },
         "quality": quality_targets(&video),
         "media_sdk": sdk_contract_view(),
         "media_backends": backend_catalog_view(),
         "production_gate": production_gate_view(),
-        "device_capabilities": device_capabilities_view(),
+        "audio": audio.clone(),
+        "device_capabilities": device_capabilities_view(audio_runtime),
         "latest_metrics": media_stats.clone().unwrap_or_else(empty_pipeline_metrics),
         "media_stats": media_stats,
         "negotiated_codec": session.negotiated_codec(),
@@ -96,35 +108,147 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     view
 }
 
+fn input_readiness_view(
+    session: &RemoteDesktopSession,
+    input_policy: &EffectiveRemoteDesktopInputPolicy,
+) -> Value {
+    let requested_interactive = session.mode() == "interactive";
+    let pointer_enabled = input_policy.pointer_enabled();
+    let keyboard_enabled = input_policy.keyboard_enabled();
+    let any_input_enabled = pointer_enabled || keyboard_enabled;
+    let blocked_reason = if !requested_interactive {
+        Value::Null
+    } else if let Some(reason) = session.target_snapshot().input_blocked_reason() {
+        json!(reason)
+    } else if input_policy.input_scope().as_str() == "view_only" {
+        json!(session.target_binding().input_scope_reason())
+    } else if let Some(reason) = session.input_runtime_block_reason() {
+        json!(reason)
+    } else if let Some(reason) = input_injection_unavailable_reason() {
+        json!(reason)
+    } else if !any_input_enabled {
+        json!("input_policy_denied")
+    } else {
+        Value::Null
+    };
+    let interactive_ready = requested_interactive && any_input_enabled && blocked_reason.is_null();
+    json!({
+        "requested_mode": session.mode(),
+        "effective_mode": if interactive_ready { "interactive" } else { "view_only" },
+        "interactive_ready": interactive_ready,
+        "blocked_reason": blocked_reason,
+        "input_scope": input_policy.input_scope().as_str(),
+        "pointer_enabled": pointer_enabled,
+        "keyboard_enabled": keyboard_enabled,
+    })
+}
+
 fn production_readiness_view(
     session: &RemoteDesktopSession,
     transport_view: &RemoteDesktopTransportView,
+    audio_runtime: &HostAudioRuntimeSnapshot,
 ) -> Value {
+    let video_ready = transport_view.production_ready(session);
+    let media_stats = session.media_stats();
+    let audio_support = audio_support_view_for_binding(session.target_binding(), audio_runtime);
+    let negotiated_media_scope = session.negotiated_media_scope();
+    let audio_required = negotiated_media_scope.is_some_and(|scope| scope.requires_audio());
+    let audio_ready = session.audio_operational_ready();
+    let client_media_presenting = session.client_media_ready();
+    let client_render_evidence = session
+        .transport_epoch()
+        .and_then(|epoch| session.client_render_evidence(TransportEpoch::new(epoch)));
+    let client_decode_ready = session.client_decode_ready();
+    let audio_blocked_reason = if !audio_required || audio_ready {
+        Value::Null
+    } else {
+        media_stats
+            .as_ref()
+            .and_then(|stats| stats.get("audio_blocker"))
+            .filter(|reason| !reason.is_null())
+            .cloned()
+            .or_else(|| audio_support.get("blocked_reason").cloned())
+            .filter(|reason| !reason.is_null())
+            .unwrap_or_else(|| json!("host_audio_not_yet_ready"))
+    };
+    let negotiated_media_scope_ready = negotiated_media_scope.is_some();
+    let ready = video_ready
+        && negotiated_media_scope_ready
+        && client_decode_ready
+        && (!audio_required || audio_ready);
     json!({
-        "ready": session.production_media_ready(),
-        "blocked_reason": production_readiness_blocked_reason(session),
+        "ready": ready,
+        "blocked_reason": production_readiness_blocked_reason(
+            session,
+            transport_view,
+            negotiated_media_scope_ready,
+            client_media_presenting,
+            client_decode_ready,
+            audio_required,
+            audio_ready,
+            &audio_blocked_reason,
+        ),
         "target_scope_ready": session.target_scope_ready(),
+        "media_scope": negotiated_media_scope
+            .map(|scope| scope.as_str())
+            .unwrap_or("not_negotiated"),
+        "audio_required": audio_required,
+        "audio_ready": audio_ready,
+        "audio_operational_ready": audio_ready,
+        "audio_media_observed": media_stats
+            .as_ref()
+            .and_then(|stats| stats.get("audio_media_observed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "audio_blocked_reason": audio_blocked_reason,
         "requires_production_codec": true,
         "production_codec_negotiated": session.production_codec_negotiated(),
+        "production_backend_ready": session.production_backend_ready(),
         "media_transport_ready": session.media_transport_ready(),
-        "client_media_ready": session.client_media_ready(),
+        "client_media_presenting": client_media_presenting,
+        "client_media_ready": client_decode_ready,
+        "client_render_evidence_sequence": client_render_evidence
+            .as_ref()
+            .map(|evidence| evidence.admission_sequence),
+        "client_render_evidence_received_at_ms": client_render_evidence
+            .as_ref()
+            .map(|evidence| evidence.received_at_ms),
         "production_route_ready": transport_view.production_route_ready(),
         "route_state": transport_view.route_state(),
         "route_readiness_blocker": transport_view.readiness_blocker(),
     })
 }
 
-fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
-    if session.production_media_ready() {
-        Value::Null
-    } else if !session.target_scope_ready() {
+fn production_readiness_blocked_reason(
+    session: &RemoteDesktopSession,
+    transport_view: &RemoteDesktopTransportView,
+    negotiated_media_scope_ready: bool,
+    client_media_presenting: bool,
+    client_decode_ready: bool,
+    audio_required: bool,
+    audio_ready: bool,
+    audio_blocked_reason: &Value,
+) -> Value {
+    if !session.target_scope_ready() {
         json!("target_scope_not_ready")
     } else if !session.production_codec_negotiated() {
         json!("production_codec_not_negotiated")
+    } else if !session.production_backend_ready() {
+        json!("production_backend_not_ready")
+    } else if !negotiated_media_scope_ready {
+        json!("media_scope_not_negotiated")
     } else if !session.media_transport_ready() {
         json!("media_transport_not_ready")
-    } else if !session.client_media_ready() {
+    } else if !client_media_presenting {
         json!("client_media_not_presenting")
+    } else if !client_decode_ready {
+        json!("client_decode_evidence_not_ready")
+    } else if !transport_view.production_route_ready() {
+        json!("production_route_not_ready")
+    } else if audio_required && !audio_ready {
+        audio_blocked_reason.clone()
+    } else if transport_view.production_ready(session) {
+        Value::Null
     } else {
         json!("production_readiness_incomplete")
     }
@@ -132,10 +256,11 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value 
 
 /// Build the create-session response, where the opaque session token is
 /// intentionally returned exactly once.
-pub(in crate::daemon::plugins::remote_desktop) fn serialize_session_with_token(
+pub(in crate::daemon::plugins::remote_desktop) fn serialize_session_with_token_and_audio_runtime(
     session: &RemoteDesktopSession,
+    audio_runtime: &HostAudioRuntimeSnapshot,
 ) -> Value {
-    let mut view = serialize_session(session);
+    let mut view = serialize_session_with_audio_runtime(session, audio_runtime);
     if let Some(map) = view.as_object_mut() {
         map.insert(
             "session_token".to_string(),
@@ -146,13 +271,26 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session_with_token(
 }
 
 #[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
+    session: &RemoteDesktopSession,
+) -> Value {
+    serialize_session_with_audio_runtime(
+        session,
+        &HostAudioRuntimeSnapshot::for_test(true, true, true, true, None),
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
+    use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetGeometry,
+        ResourceEntryTargetResolver, TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::{
@@ -198,7 +336,7 @@ mod tests {
         assert_eq!(view["scope_audit"]["input_mode"], json!("view_only"));
         assert_eq!(
             view["scope_audit"]["input_scope_reason"],
-            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+            json!("input_consent_required")
         );
         assert_eq!(view["input_policy"]["input_scope"], json!("view_only"));
         assert_eq!(view["input_policy"]["keyboard_enabled"], json!(false));
@@ -208,6 +346,21 @@ mod tests {
             json!("view_only")
         );
         assert_eq!(view["input_plane"]["policy"], view["input_policy"]);
+        assert_eq!(
+            view["input_readiness"]["requested_mode"],
+            json!("interactive")
+        );
+        assert_eq!(
+            view["input_readiness"]["effective_mode"],
+            json!("view_only")
+        );
+        assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
+        assert_eq!(
+            view["input_readiness"]["blocked_reason"],
+            json!("input_consent_required")
+        );
+        assert_eq!(view["input_readiness"]["input_scope"], json!("view_only"));
+        assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);
     }
 
     #[test]
@@ -282,5 +435,376 @@ mod tests {
             json!(768.0)
         );
         assert_eq!(view["input_plane"]["policy"], view["input_policy"]);
+    }
+
+    #[test]
+    fn session_view_blocks_input_readiness_when_target_tracking_disables_input() {
+        let subject = "easynet:///r/acme/resource/display.lost-input";
+        let entry = ResourceEntry {
+            resource_ura: subject.into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Display,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "display:macos:1".into(),
+            display_name: "Built-in Display".into(),
+            metadata: live_remote_target_metadata(json!({
+                "display_id": 1,
+                "primary_display": true,
+                "platform": "macos",
+                "backend": "macos_core_graphics",
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-view-target-input-not-ready",
+            subject,
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.input_policy = RemoteDesktopInputPolicy::new(true, true);
+        init.target_binding = ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                "remote_desktop.create_session",
+                &entry,
+                "interactive",
+                1,
+                true,
+            )
+            .expect("display binding resolves with input-control consent");
+        let mut session = RemoteDesktopSession::new(init);
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "display disappeared".into(),
+            observed_at_ms: 100,
+        });
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "display still missing".into(),
+            observed_at_ms: 200,
+        });
+
+        let view = serialize_session(&session);
+
+        assert_eq!(view["target_tracking"]["input_enabled"], json!(false));
+        assert_eq!(
+            view["input_readiness"]["blocked_reason"],
+            json!("target_lost")
+        );
+        assert_eq!(
+            view["input_readiness"]["effective_mode"],
+            json!("view_only")
+        );
+        assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
+        assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);
+    }
+
+    #[test]
+    fn session_view_projects_session_local_runtime_input_blocker() {
+        let subject = "easynet:///r/acme/resource/display.runtime-input-block";
+        let entry = ResourceEntry {
+            resource_ura: subject.into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Display,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "display:macos:2".into(),
+            display_name: "Studio Display".into(),
+            metadata: live_remote_target_metadata(json!({
+                "display_id": 2,
+                "primary_display": false,
+                "platform": "macos",
+                "backend": "macos_core_graphics",
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-view-runtime-input-block",
+            subject,
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.input_policy = RemoteDesktopInputPolicy::new(true, true);
+        init.target_binding = ResourceEntryTargetResolver
+            .resolve_for_session_with_input_consent(
+                "remote_desktop.create_session",
+                &entry,
+                "interactive",
+                1,
+                true,
+            )
+            .expect("display binding resolves with input-control consent");
+        let mut session = RemoteDesktopSession::new(init);
+        let epoch = TransportEpoch::new(31);
+
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-view-runtime-input-block"),
+        );
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert!(
+            session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied")
+        );
+
+        let view = serialize_session(&session);
+
+        assert_eq!(view["target_tracking"]["input_enabled"], json!(true));
+        assert_eq!(view["media_transport_ready"], json!(true));
+        assert_eq!(view["client_media_ready"], json!(true));
+        assert_eq!(view["lifecycle_phase"], json!("media_active"));
+        assert_eq!(
+            view["input_readiness"]["blocked_reason"],
+            json!("accessibility_permission_denied")
+        );
+        assert_eq!(
+            view["input_readiness"]["effective_mode"],
+            json!("view_only")
+        );
+        assert_eq!(view["input_readiness"]["interactive_ready"], json!(false));
+        assert_eq!(view["input_readiness"], view["input_plane"]["readiness"]);
+    }
+
+    #[test]
+    fn session_view_separates_platform_audio_capability_from_unnegotiated_scope() {
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-view-audio-product-state",
+            "easynet:///r/acme/resource/display.audio",
+            vec!["webrtc".into()],
+        ));
+
+        let view = serialize_session(&session);
+
+        assert_eq!(
+            view["device_capabilities"]["audio"]["target_admissible"],
+            json!(null),
+            "device capability is target-agnostic"
+        );
+        assert_eq!(
+            view["audio"]["target_admissible"],
+            json!(true),
+            "session capability is resolved for the committed target binding"
+        );
+        assert_eq!(
+            view["device_capabilities"]["audio"]["supported"],
+            view["audio"]["supported"]
+        );
+        assert_eq!(
+            view["production_readiness"]["media_scope"],
+            json!("not_negotiated")
+        );
+        assert_eq!(view["production_readiness"]["audio_required"], json!(false));
+        assert_eq!(view["production_readiness"]["audio_ready"], json!(false));
+        assert_eq!(
+            view["production_readiness"]["audio_blocked_reason"],
+            json!(null)
+        );
+        if view["audio"]["supported"] == json!(true) {
+            assert_eq!(view["audio"]["supported"], json!(true));
+        } else {
+            assert_eq!(view["audio"]["supported"], json!(false));
+            assert_eq!(
+                view["audio"]["blocked_reason"],
+                json!("native_media_disabled")
+            );
+        }
+    }
+
+    fn production_ready_session_with_scope(
+        media_scope: &str,
+        include_render_evidence: bool,
+    ) -> RemoteDesktopSession {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            &format!("rd-view-{media_scope}"),
+            "easynet:///r/acme/resource/display.negotiated-media",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(41);
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0", "media_scope": media_scope}),
+                "native",
+                true,
+                direct_webrtc_endpoint_ura(session.session_id()),
+            )
+            .expect("typed local answer records");
+        session
+            .record_local_ice_candidate(json!({
+                "candidate": "candidate:1 1 UDP 1677734910 127.0.0.1 50000 typ relay raddr 0.0.0.0 rport 0",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("relay candidate records");
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura(session.session_id()));
+        let binding = session.target_binding();
+        let session_id = session.session_id().to_string();
+        let selected_resource_ura = binding.subject_ura().to_string();
+        let binding_id = binding.binding_id().to_string();
+        let binding_epoch = binding.binding_epoch();
+        let media_source_epoch = binding.media_source_epoch();
+        let audio_required = media_scope == "audio_video";
+        session.record_media_stats(
+            epoch,
+            json!({
+                "media_pipeline_id": "native",
+                "backend_id": "native",
+                "video_codec": "h264",
+                "video_transport": "webrtc",
+                "audio_codec": audio_required.then_some("opus"),
+                "audio_operational_ready": false,
+                "audio_media_observed": false,
+            }),
+        );
+        let client_evidence = include_render_evidence.then(|| {
+            json!({
+                "browser_stats": {
+                    "sampled_at_ms": 1,
+                    "frames_decoded": 12,
+                    "frame_width": 1280,
+                    "frame_height": 720,
+                },
+                "render_probe": {
+                    "evidence_authority": "client_reported",
+                    "probe_source": "browser_webrtc_receiver",
+                    "selected_resource_ura": selected_resource_ura,
+                    "session_id": session_id,
+                    "transport_epoch": epoch.value(),
+                    "binding_id": binding_id,
+                    "binding_epoch": binding_epoch,
+                    "media_source_epoch": media_source_epoch,
+                    "media_pipeline_id": "native",
+                    "video_codec": "h264",
+                    "video_transport": "webrtc",
+                    "audio_codec": audio_required.then_some("opus"),
+                    "observed_at_ms": 1,
+                    "decoded_video_frames": 12,
+                    "decoded_audio_packets": if audio_required { 4 } else { 0 },
+                    "decoded_audio_samples": if audio_required { 3_840 } else { 0 },
+                    "frame_width": 1280,
+                    "frame_height": 720,
+                }
+            })
+        });
+        assert!(session.report_client_media_state(epoch, "presenting", client_evidence));
+        session
+    }
+
+    #[test]
+    fn video_only_negotiation_requires_bound_decode_but_not_audio_runtime_stats() {
+        let session = production_ready_session_with_scope("video_only", true);
+
+        let view = serialize_session(&session);
+
+        assert_eq!(
+            view["production_readiness"]["media_scope"],
+            json!("video_only")
+        );
+        assert_eq!(view["production_readiness"]["audio_required"], json!(false));
+        assert_eq!(view["production_readiness"]["audio_ready"], json!(false));
+        assert_eq!(
+            view["production_readiness"]["audio_blocked_reason"],
+            json!(null)
+        );
+        assert_eq!(view["production_readiness"]["blocked_reason"], json!(null));
+        assert_eq!(view["production_readiness"]["ready"], json!(true));
+    }
+
+    #[test]
+    fn presenting_without_bound_decode_evidence_is_not_product_ready() {
+        let session = production_ready_session_with_scope("video_only", false);
+
+        let view = serialize_session(&session);
+
+        assert_eq!(
+            view["production_readiness"]["client_media_presenting"],
+            json!(true)
+        );
+        assert_eq!(
+            view["production_readiness"]["client_media_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            view["production_readiness"]["blocked_reason"],
+            json!("client_decode_evidence_not_ready")
+        );
+        assert_eq!(view["production_readiness"]["ready"], json!(false));
+    }
+
+    #[test]
+    fn audio_video_negotiation_requires_live_audio_runtime_stats() {
+        let mut session = production_ready_session_with_scope("audio_video", true);
+        let blocked_view = serialize_session(&session);
+
+        assert_eq!(
+            blocked_view["production_readiness"]["audio_required"],
+            json!(true)
+        );
+        assert_eq!(
+            blocked_view["production_readiness"]["audio_ready"],
+            json!(false)
+        );
+        assert_ne!(
+            blocked_view["production_readiness"]["audio_blocked_reason"],
+            json!(null)
+        );
+        assert_eq!(blocked_view["production_readiness"]["ready"], json!(false));
+
+        assert!(session.merge_client_media_stats(
+            TransportEpoch::new(41),
+            json!({
+                "audio_ready": true,
+                "audio_operational_ready": true,
+                "audio_media_observed": false,
+                "audio_packets_written": 0
+            }),
+        ));
+        let ready_view = serialize_session(&session);
+        assert_eq!(
+            ready_view["production_readiness"]["audio_ready"],
+            json!(true)
+        );
+        assert_eq!(
+            ready_view["production_readiness"]["audio_media_observed"],
+            json!(false),
+            "a quiet but operational source must not fabricate packet evidence"
+        );
+        assert_eq!(
+            ready_view["production_readiness"]["audio_blocked_reason"],
+            json!(null)
+        );
+        assert_eq!(ready_view["production_readiness"]["ready"], json!(true));
+    }
+
+    #[test]
+    fn session_view_projects_terminal_receipt_only_after_close() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-view-terminal-receipt",
+            "easynet:///r/acme/resource/display.terminal-receipt",
+            vec!["webrtc".into()],
+        ));
+
+        let active_view = serialize_session(&session);
+        assert_eq!(active_view["terminal_receipt"], json!(null));
+
+        assert!(session.begin_close("caller_ended"));
+        session.finish_close("caller_ended");
+        let terminal_view = serialize_session(&session);
+
+        assert_eq!(
+            terminal_view["terminal_receipt"]["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        assert_eq!(
+            terminal_view["terminal_receipt"]["session_id"],
+            json!("rd-view-terminal-receipt")
+        );
+        assert_eq!(
+            terminal_view["terminal_receipt"]["reason_code"],
+            json!("caller_ended")
+        );
+        assert_eq!(terminal_view["terminal_receipt"]["terminal"], json!(true));
     }
 }

@@ -423,6 +423,16 @@ func (c *RuntimeAbilityClient) OpenStream(ctx context.Context, call RuntimeCallC
 	return c.runtime.InvokeStream(ctx, draft)
 }
 
+// OpenLeasedStream opens an ABI v9 payload-lease stream through the same
+// canonical draft lowering path used by other ability calls.
+func (c *RuntimeAbilityClient) OpenLeasedStream(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (*LeasedStreamHandle, error) {
+	draft, err := c.buildWithCallMode(ctx, call, abilityName, args, "stream")
+	if err != nil {
+		return nil, err
+	}
+	return c.runtime.InvokeLeasedStream(ctx, draft)
+}
+
 // OpenBidi opens one typed provider bidirectional session through the same
 // canonical draft lowering path used by unary and stream calls.
 func (c *RuntimeAbilityClient) OpenBidi(ctx context.Context, call RuntimeCallContext, abilityName string, args any, streams []BidiStreamDescriptor) (*BidiSession, error) {

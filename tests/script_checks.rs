@@ -242,16 +242,21 @@ fn remoteapp_target_binding_boundary_script_holds() {
 fn remoteapp_lifecycle_input_boundary_script_holds() {
     // Pins app/window lifecycle and input safety to target-owned move/resize
     // revisions, target-loss media-source degradation, weak native identity
-    // ambiguity, and view-only input until focus-safe dispatch exists.
-    run_bash_script("tests/scripts/test_check_remoteapp_lifecycle_input_boundary.sh");
+    // ambiguity, and view-only input until focus-safe dispatch exists. The
+    // exhaustive mutation self-test lives under tests/scripts; this normal
+    // aggregate gate runs the production checker so `script_checks remoteapp`
+    // stays bounded.
+    run_bash_script("tools/scripts/check-remoteapp-lifecycle-input-boundary.sh");
 }
 
 #[test]
 fn remoteapp_e2e_acceptance_boundary_script_holds() {
     // Pins host decoded-frame acceptance to live inventory, exact target
     // binding, WebRTC/H.264 evidence, and independently scanned artifact
-    // pixels for window/application sessions.
-    run_bash_script("tests/scripts/test_check_remoteapp_e2e_acceptance_boundary.sh");
+    // pixels for window/application sessions. The exhaustive harness mutation
+    // self-test lives under tests/scripts; this normal aggregate gate runs the
+    // production checker so `script_checks remoteapp` stays bounded.
+    run_bash_script("tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh");
 }
 
 #[test]
@@ -259,6 +264,28 @@ fn remoteapp_performance_boundary_script_holds() {
     // Pins the SPEC PERF-01..PERF-07 evidence map so performance/resource
     // requirements cannot remain documentation-only claims.
     run_bash_script("tests/scripts/test_check_remoteapp_performance_boundary.sh");
+}
+
+#[test]
+fn remoteapp_product_closure_audit_script_holds() {
+    // Pins the product-completion audit so targeted-session boundary gates are
+    // not mistaken for full interactive RemoteApp readiness.
+    run_bash_script("tests/scripts/test_check_remoteapp_product_closure_audit.sh");
+}
+
+#[test]
+fn remoteapp_frontend_product_flow_e2e_script_holds() {
+    // Pins the runnable frontend/host product-flow harness entrypoint while
+    // preserving the distinction between harness existence and product proof.
+    run_bash_script("tests/scripts/test_check_remoteapp_frontend_product_flow_e2e.sh");
+}
+
+#[test]
+fn remoteapp_cross_device_product_smoke_script_holds() {
+    // Pins the cross-device smoke entrypoint to Hub-routed Docker evidence
+    // while preserving explicit non-claims for real OS capture, input, audio,
+    // relay deployment, and frontend rendering.
+    run_bash_script("tests/scripts/test_remoteapp_cross_device_product_smoke.sh");
 }
 
 #[test]

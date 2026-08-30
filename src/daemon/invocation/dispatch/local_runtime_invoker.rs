@@ -28,6 +28,24 @@ use crate::daemon::invocation::routing::target::{
     InvocationCausalContext, InvocationTarget, TargetScope,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalRpcResult {
+    pub payload: Vec<u8>,
+    pub content_type: String,
+}
+
+impl LocalRpcResult {
+    pub fn into_json(self) -> Result<Value, String> {
+        if !self.content_type.to_ascii_lowercase().contains("json") {
+            return Err(format!(
+                "local Axon invocation returned non-JSON content type {:?}",
+                self.content_type
+            ));
+        }
+        decode_json_payload(&self.payload)
+    }
+}
+
 /// Bidirectional LocalRuntime stream halves exposed to daemon dispatchers.
 ///
 /// The source owns the split after Axon's `StreamingInvocationHandle`
@@ -222,10 +240,27 @@ pub fn invoke_local_rpc_sync(
     )
 }
 
+pub fn invoke_local_rpc_sync_result(
+    runtime: Arc<LocalRuntime>,
+    target: InvocationTarget,
+) -> Result<LocalRpcResult, String> {
+    crate::support::async_bridge::run_blocking(
+        invoke_local_rpc_result(runtime, target),
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+    )
+}
+
 pub async fn invoke_local_rpc(
     runtime: Arc<LocalRuntime>,
     target: InvocationTarget,
 ) -> Result<Value, String> {
+    invoke_local_rpc_result(runtime, target).await?.into_json()
+}
+
+pub async fn invoke_local_rpc_result(
+    runtime: Arc<LocalRuntime>,
+    target: InvocationTarget,
+) -> Result<LocalRpcResult, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
     let request =
@@ -234,16 +269,23 @@ pub async fn invoke_local_rpc(
         .invoke_descriptor_bound_request_async(request)
         .await
         .map_err(|err| format!("{err}"))?;
-    rpc_value_from_handle(handle).await
+    rpc_result_from_handle(handle).await
 }
 
 pub async fn rpc_value_from_handle(handle: InvocationHandle) -> Result<Value, String> {
+    rpc_result_from_handle(handle).await?.into_json()
+}
+
+pub async fn rpc_result_from_handle(handle: InvocationHandle) -> Result<LocalRpcResult, String> {
     let finalized = handle
         .finalized()
         .await
         .map_err(|error| format!("finalize local Axon invocation: {error}"))?;
     match finalized.terminal_state {
-        InvocationState::Completed => decode_json_payload(finalized.output()),
+        InvocationState::Completed => Ok(LocalRpcResult {
+            payload: finalized.output().to_vec(),
+            content_type: finalized.output_content_type().to_string(),
+        }),
         InvocationState::Failed | InvocationState::TimedOut | InvocationState::Cancelled => {
             Err(finalized
                 .failure

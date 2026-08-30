@@ -164,6 +164,9 @@ PY
   grep -q "kind = \"sidecar\"" "$0"
   grep -q "media.synthetic_stream" "$0"
   grep -q "media.synthetic_bidi" "$0"
+  grep -q 'schema_version = "3"' "$0"
+  grep -q 'exposure = "task"' "$0"
+  grep -q 'dedicated_surface = "media"' "$0"
   grep -q "transport = \"webrtc\"" "$0"
   ! grep -q "fallback_""transport" "$0"
   grep -q "ability stream" "$0"
@@ -179,6 +182,7 @@ PY
   grep -q "media_stream_unique_invocation_records" "$0"
   grep -q "media_bidi_unique_invocation_records" "$0"
   grep -q "media_product_operations_have_verified_single_terminal_receipt_chains" "$0"
+  grep -q "catalog_owner_ura" "$0"
   grep -q -- "--proof-ref 'bootstrap-admin-" "$0"
   grep -q "completed_chain_facts" "$0"
   grep -q "caller_cli_must_fail" "$0"
@@ -851,10 +855,13 @@ resources = ["display"]
 quick_add = true
 EOF
 cat >"$SHARED_DIR/synthetic-media-bidi-plugin/abilities/media.synthetic_stream.ability.toml" <<'EOF'
-schema_version = "2"
+schema_version = "3"
 name = "media.synthetic_stream"
 descriptor_version = "1.0.0"
 description = "Emit bounded synthetic audio/video/screen BinaryChunk-shaped JSON frames for Docker media E2E."
+exposure = "task"
+dedicated_surface = "media"
+subject_contract_kind = "dedicated-surface"
 admission_action = "stream"
 
 [input_schema]
@@ -866,10 +873,14 @@ type = "object"
 additionalProperties = true
 EOF
 cat >"$SHARED_DIR/synthetic-media-bidi-plugin/abilities/media.synthetic_bidi.ability.toml" <<'EOF'
-schema_version = "2"
+schema_version = "3"
 name = "media.synthetic_bidi"
 descriptor_version = "1.0.0"
 description = "Echo synthetic audio/video/control JSON frames over InvokeBidi for Docker media E2E."
+exposure = "task"
+dedicated_surface = "media"
+subject_contract_kind = "dedicated-surface"
+bidi_wire_kind = "json_frames"
 admission_action = "stream"
 
 [input_schema]
@@ -1175,6 +1186,16 @@ def unique_non_empty(values):
     compact = [value for value in values if value]
     return bool(compact) and len(compact) == len(set(compact))
 
+def catalog_owner_ura(path, expected_ability_ura):
+    owners = {
+        str(row.get("owner_ura") or "")
+        for row in rows(path)
+        if isinstance(row, dict)
+        and row.get("ability_ura") == expected_ability_ura
+        and str(row.get("owner_ura") or "").startswith("easynet:///")
+    }
+    return next(iter(owners)) if len(owners) == 1 else ""
+
 def completed_chain_facts(records, expected_ability_ura, expected_callee_ura):
     facts = {
         "record_count": len(records),
@@ -1247,8 +1268,16 @@ all_stream_records = [
     if isinstance(record, dict)
 ]
 cancelled_stream_records = [record for record in all_stream_records if record.get("state") == "cancelled"]
-stream_chain_facts = completed_chain_facts(stream_records, stream_ura, provider_ura)
-bidi_chain_facts = completed_chain_facts(bidi_records, bidi_ura, provider_ura)
+stream_owner_ura = catalog_owner_ura(
+    out / "provider-ability-list-media-stream-descriptor.json",
+    stream_ura,
+)
+bidi_owner_ura = catalog_owner_ura(
+    out / "provider-ability-list-media-bidi-descriptor.json",
+    bidi_ura,
+)
+stream_chain_facts = completed_chain_facts(stream_records, stream_ura, stream_owner_ura)
+bidi_chain_facts = completed_chain_facts(bidi_records, bidi_ura, bidi_owner_ura)
 
 def payload_kinds(payloads):
     return {p.get("kind") for p in payloads if isinstance(p, dict)}
@@ -1448,6 +1477,8 @@ report = {
     "abilities": {
         "stream_ura": stream_ura,
         "bidi_ura": bidi_ura,
+        "stream_owner_ura": stream_owner_ura,
+        "bidi_owner_ura": bidi_owner_ura,
         "stream_descriptor_ref": stream_descriptor_ref,
         "bidi_descriptor_ref": bidi_descriptor_ref,
         "caller_stream_ura": caller_stream_ura,

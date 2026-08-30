@@ -274,6 +274,63 @@ func (EntityRefKind) EnumDescriptor() ([]byte, []int) {
 	return file_axon_v1_types_proto_rawDescGZIP(), []int{3}
 }
 
+// WHAT relationship binds `authority` to this invocation. Orthogonal to
+// the evidence oneof (HOW the daemon believes the relation holds).
+type AuthorityRelation int32
+
+const (
+	AuthorityRelation_AUTHORITY_RELATION_UNSPECIFIED   AuthorityRelation = 0 // invalid; a producer MUST set one of the below
+	AuthorityRelation_AUTHORITY_RELATION_SELF          AuthorityRelation = 1 // envelope.caller == authority; no delegation, no session
+	AuthorityRelation_AUTHORITY_RELATION_DELEGATED_BY  AuthorityRelation = 2 // envelope.caller acts under a signed grant from authority
+	AuthorityRelation_AUTHORITY_RELATION_SESSION_OF    AuthorityRelation = 3 // envelope.subject == authority, admitted under a session
+	AuthorityRelation_AUTHORITY_RELATION_CREDENTIAL_OF AuthorityRelation = 4 // RESERVED, inadmissible in v1 — see RFC doc "Three states"
+)
+
+// Enum value maps for AuthorityRelation.
+var (
+	AuthorityRelation_name = map[int32]string{
+		0: "AUTHORITY_RELATION_UNSPECIFIED",
+		1: "AUTHORITY_RELATION_SELF",
+		2: "AUTHORITY_RELATION_DELEGATED_BY",
+		3: "AUTHORITY_RELATION_SESSION_OF",
+		4: "AUTHORITY_RELATION_CREDENTIAL_OF",
+	}
+	AuthorityRelation_value = map[string]int32{
+		"AUTHORITY_RELATION_UNSPECIFIED":   0,
+		"AUTHORITY_RELATION_SELF":          1,
+		"AUTHORITY_RELATION_DELEGATED_BY":  2,
+		"AUTHORITY_RELATION_SESSION_OF":    3,
+		"AUTHORITY_RELATION_CREDENTIAL_OF": 4,
+	}
+)
+
+func (x AuthorityRelation) Enum() *AuthorityRelation {
+	p := new(AuthorityRelation)
+	*p = x
+	return p
+}
+
+func (x AuthorityRelation) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AuthorityRelation) Descriptor() protoreflect.EnumDescriptor {
+	return file_axon_v1_types_proto_enumTypes[4].Descriptor()
+}
+
+func (AuthorityRelation) Type() protoreflect.EnumType {
+	return &file_axon_v1_types_proto_enumTypes[4]
+}
+
+func (x AuthorityRelation) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AuthorityRelation.Descriptor instead.
+func (AuthorityRelation) EnumDescriptor() ([]byte, []int) {
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{4}
+}
+
 type ErrorStage int32
 
 const (
@@ -331,11 +388,11 @@ func (x ErrorStage) String() string {
 }
 
 func (ErrorStage) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[4].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[5].Descriptor()
 }
 
 func (ErrorStage) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[4]
+	return &file_axon_v1_types_proto_enumTypes[5]
 }
 
 func (x ErrorStage) Number() protoreflect.EnumNumber {
@@ -344,7 +401,7 @@ func (x ErrorStage) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ErrorStage.Descriptor instead.
 func (ErrorStage) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{4}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{5}
 }
 
 type SecurityClass int32
@@ -398,11 +455,11 @@ func (x SecurityClass) String() string {
 }
 
 func (SecurityClass) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[5].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[6].Descriptor()
 }
 
 func (SecurityClass) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[5]
+	return &file_axon_v1_types_proto_enumTypes[6]
 }
 
 func (x SecurityClass) Number() protoreflect.EnumNumber {
@@ -411,7 +468,7 @@ func (x SecurityClass) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SecurityClass.Descriptor instead.
 func (SecurityClass) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{5}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{6}
 }
 
 type LedgerEventPayloadKind int32
@@ -450,11 +507,11 @@ func (x LedgerEventPayloadKind) String() string {
 }
 
 func (LedgerEventPayloadKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[6].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[7].Descriptor()
 }
 
 func (LedgerEventPayloadKind) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[6]
+	return &file_axon_v1_types_proto_enumTypes[7]
 }
 
 func (x LedgerEventPayloadKind) Number() protoreflect.EnumNumber {
@@ -463,7 +520,7 @@ func (x LedgerEventPayloadKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use LedgerEventPayloadKind.Descriptor instead.
 func (LedgerEventPayloadKind) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{6}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{7}
 }
 
 type InvocationState int32
@@ -517,11 +574,11 @@ func (x InvocationState) String() string {
 }
 
 func (InvocationState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[7].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[8].Descriptor()
 }
 
 func (InvocationState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[7]
+	return &file_axon_v1_types_proto_enumTypes[8]
 }
 
 func (x InvocationState) Number() protoreflect.EnumNumber {
@@ -530,7 +587,7 @@ func (x InvocationState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InvocationState.Descriptor instead.
 func (InvocationState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{7}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{8}
 }
 
 // Distinguishes the semantic kind of invocation target at the protocol level,
@@ -566,11 +623,11 @@ func (x InvocationTargetKind) String() string {
 }
 
 func (InvocationTargetKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[8].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[9].Descriptor()
 }
 
 func (InvocationTargetKind) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[8]
+	return &file_axon_v1_types_proto_enumTypes[9]
 }
 
 func (x InvocationTargetKind) Number() protoreflect.EnumNumber {
@@ -579,7 +636,7 @@ func (x InvocationTargetKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InvocationTargetKind.Descriptor instead.
 func (InvocationTargetKind) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{8}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{9}
 }
 
 // Content negotiation envelope for any payload crossing
@@ -1463,15 +1520,11 @@ func (x *CalleeSignature) GetKeyIdHint() string {
 
 type AuthorityBinding struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Authority:
+	// Types that are valid to be assigned to Form:
 	//
-	//	*AuthorityBinding_SelfAuthority
-	//	*AuthorityBinding_DelegatedAuthority
-	//	*AuthorityBinding_CapabilityGrant
-	//	*AuthorityBinding_PolicyGrant
-	//	*AuthorityBinding_SessionAuthority
-	//	*AuthorityBinding_BootstrapAuthority
-	Authority     isAuthorityBinding_Authority `protobuf_oneof:"authority"`
+	//	*AuthorityBinding_Binding
+	//	*AuthorityBinding_Bootstrap
+	Form          isAuthorityBinding_Form `protobuf_oneof:"form"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1506,188 +1559,204 @@ func (*AuthorityBinding) Descriptor() ([]byte, []int) {
 	return file_axon_v1_types_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *AuthorityBinding) GetAuthority() isAuthorityBinding_Authority {
+func (x *AuthorityBinding) GetForm() isAuthorityBinding_Form {
+	if x != nil {
+		return x.Form
+	}
+	return nil
+}
+
+func (x *AuthorityBinding) GetBinding() *AuthorityRelationBinding {
+	if x != nil {
+		if x, ok := x.Form.(*AuthorityBinding_Binding); ok {
+			return x.Binding
+		}
+	}
+	return nil
+}
+
+func (x *AuthorityBinding) GetBootstrap() *BootstrapAuthority {
+	if x != nil {
+		if x, ok := x.Form.(*AuthorityBinding_Bootstrap); ok {
+			return x.Bootstrap
+		}
+	}
+	return nil
+}
+
+type isAuthorityBinding_Form interface {
+	isAuthorityBinding_Form()
+}
+
+type AuthorityBinding_Binding struct {
+	Binding *AuthorityRelationBinding `protobuf:"bytes,1,opt,name=binding,proto3,oneof"` // an invocation-time authority relationship
+}
+
+type AuthorityBinding_Bootstrap struct {
+	Bootstrap *BootstrapAuthority `protobuf:"bytes,2,opt,name=bootstrap,proto3,oneof"` // admission-plane fact — NOT an authority relation,
+}
+
+func (*AuthorityBinding_Binding) isAuthorityBinding_Form() {}
+
+func (*AuthorityBinding_Bootstrap) isAuthorityBinding_Form() {}
+
+// `authority` is NOT structurally pinned to a fixed envelope slot (not
+// always caller, not always subject). Its meaning is: the principal whose
+// authority this invocation is permitted to exercise. WHICH envelope
+// identity participates in that claim is defined by `relation` — see the
+// compatibility matrix in the RFC doc.
+type AuthorityRelationBinding struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Authority *AgentIdentity         `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
+	Relation  AuthorityRelation      `protobuf:"varint,2,opt,name=relation,proto3,enum=axon.v1.AuthorityRelation" json:"relation,omitempty"`
+	// Types that are valid to be assigned to Evidence:
+	//
+	//	*AuthorityRelationBinding_Identity
+	//	*AuthorityRelationBinding_Delegation
+	//	*AuthorityRelationBinding_Session
+	//	*AuthorityRelationBinding_Attestation
+	Evidence      isAuthorityRelationBinding_Evidence `protobuf_oneof:"evidence"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthorityRelationBinding) Reset() {
+	*x = AuthorityRelationBinding{}
+	mi := &file_axon_v1_types_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorityRelationBinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorityRelationBinding) ProtoMessage() {}
+
+func (x *AuthorityRelationBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_axon_v1_types_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorityRelationBinding.ProtoReflect.Descriptor instead.
+func (*AuthorityRelationBinding) Descriptor() ([]byte, []int) {
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AuthorityRelationBinding) GetAuthority() *AgentIdentity {
 	if x != nil {
 		return x.Authority
 	}
 	return nil
 }
 
-func (x *AuthorityBinding) GetSelfAuthority() *SelfAuthority {
+func (x *AuthorityRelationBinding) GetRelation() AuthorityRelation {
 	if x != nil {
-		if x, ok := x.Authority.(*AuthorityBinding_SelfAuthority); ok {
-			return x.SelfAuthority
+		return x.Relation
+	}
+	return AuthorityRelation_AUTHORITY_RELATION_UNSPECIFIED
+}
+
+func (x *AuthorityRelationBinding) GetEvidence() isAuthorityRelationBinding_Evidence {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
+func (x *AuthorityRelationBinding) GetIdentity() *Identity {
+	if x != nil {
+		if x, ok := x.Evidence.(*AuthorityRelationBinding_Identity); ok {
+			return x.Identity
 		}
 	}
 	return nil
 }
 
-func (x *AuthorityBinding) GetDelegatedAuthority() *DelegationProof {
+func (x *AuthorityRelationBinding) GetDelegation() *DelegationEvidence {
 	if x != nil {
-		if x, ok := x.Authority.(*AuthorityBinding_DelegatedAuthority); ok {
-			return x.DelegatedAuthority
+		if x, ok := x.Evidence.(*AuthorityRelationBinding_Delegation); ok {
+			return x.Delegation
 		}
 	}
 	return nil
 }
 
-func (x *AuthorityBinding) GetCapabilityGrant() *CapabilityGrant {
+func (x *AuthorityRelationBinding) GetSession() *SessionEvidence {
 	if x != nil {
-		if x, ok := x.Authority.(*AuthorityBinding_CapabilityGrant); ok {
-			return x.CapabilityGrant
+		if x, ok := x.Evidence.(*AuthorityRelationBinding_Session); ok {
+			return x.Session
 		}
 	}
 	return nil
 }
 
-func (x *AuthorityBinding) GetPolicyGrant() *PolicyGrant {
+func (x *AuthorityRelationBinding) GetAttestation() *Attestation {
 	if x != nil {
-		if x, ok := x.Authority.(*AuthorityBinding_PolicyGrant); ok {
-			return x.PolicyGrant
+		if x, ok := x.Evidence.(*AuthorityRelationBinding_Attestation); ok {
+			return x.Attestation
 		}
 	}
 	return nil
 }
 
-func (x *AuthorityBinding) GetSessionAuthority() *SessionAuthority {
-	if x != nil {
-		if x, ok := x.Authority.(*AuthorityBinding_SessionAuthority); ok {
-			return x.SessionAuthority
-		}
-	}
-	return nil
+type isAuthorityRelationBinding_Evidence interface {
+	isAuthorityRelationBinding_Evidence()
 }
 
-func (x *AuthorityBinding) GetBootstrapAuthority() *BootstrapAuthority {
-	if x != nil {
-		if x, ok := x.Authority.(*AuthorityBinding_BootstrapAuthority); ok {
-			return x.BootstrapAuthority
-		}
-	}
-	return nil
+type AuthorityRelationBinding_Identity struct {
+	Identity *Identity `protobuf:"bytes,3,opt,name=identity,proto3,oneof"` // relation = SELF — zero-payload marker
 }
 
-type isAuthorityBinding_Authority interface {
-	isAuthorityBinding_Authority()
+type AuthorityRelationBinding_Delegation struct {
+	Delegation *DelegationEvidence `protobuf:"bytes,4,opt,name=delegation,proto3,oneof"` // relation = DELEGATED_BY
 }
 
-type AuthorityBinding_SelfAuthority struct {
-	SelfAuthority *SelfAuthority `protobuf:"bytes,1,opt,name=self_authority,json=selfAuthority,proto3,oneof"` // caller == authority principal; no delegation
+type AuthorityRelationBinding_Session struct {
+	Session *SessionEvidence `protobuf:"bytes,5,opt,name=session,proto3,oneof"` // relation = SESSION_OF
 }
 
-type AuthorityBinding_DelegatedAuthority struct {
-	DelegatedAuthority *DelegationProof `protobuf:"bytes,2,opt,name=delegated_authority,json=delegatedAuthority,proto3,oneof"` // caller acts for subject under issuer delegation
+type AuthorityRelationBinding_Attestation struct {
+	Attestation *Attestation `protobuf:"bytes,6,opt,name=attestation,proto3,oneof"` // relation = CREDENTIAL_OF — RESERVED, inadmissible in v1
 }
 
-type AuthorityBinding_CapabilityGrant struct {
-	CapabilityGrant *CapabilityGrant `protobuf:"bytes,3,opt,name=capability_grant,json=capabilityGrant,proto3,oneof"` // reserved (RFC 002)
-}
+func (*AuthorityRelationBinding_Identity) isAuthorityRelationBinding_Evidence() {}
 
-type AuthorityBinding_PolicyGrant struct {
-	PolicyGrant *PolicyGrant `protobuf:"bytes,4,opt,name=policy_grant,json=policyGrant,proto3,oneof"` // reserved (RFC 002)
-}
+func (*AuthorityRelationBinding_Delegation) isAuthorityRelationBinding_Evidence() {}
 
-type AuthorityBinding_SessionAuthority struct {
-	SessionAuthority *SessionAuthority `protobuf:"bytes,5,opt,name=session_authority,json=sessionAuthority,proto3,oneof"` // backend-signed interactive login session authority
-}
+func (*AuthorityRelationBinding_Session) isAuthorityRelationBinding_Evidence() {}
 
-type AuthorityBinding_BootstrapAuthority struct {
-	BootstrapAuthority *BootstrapAuthority `protobuf:"bytes,6,opt,name=bootstrap_authority,json=bootstrapAuthority,proto3,oneof"` // trust-anchor / self-identity bootstrap authority
-}
+func (*AuthorityRelationBinding_Attestation) isAuthorityRelationBinding_Evidence() {}
 
-func (*AuthorityBinding_SelfAuthority) isAuthorityBinding_Authority() {}
-
-func (*AuthorityBinding_DelegatedAuthority) isAuthorityBinding_Authority() {}
-
-func (*AuthorityBinding_CapabilityGrant) isAuthorityBinding_Authority() {}
-
-func (*AuthorityBinding_PolicyGrant) isAuthorityBinding_Authority() {}
-
-func (*AuthorityBinding_SessionAuthority) isAuthorityBinding_Authority() {}
-
-func (*AuthorityBinding_BootstrapAuthority) isAuthorityBinding_Authority() {}
-
-// caller is itself the authority principal (caller == subject principal).
-// The structural complement of DelegationProof: present precisely when
-// no delegation is required. NOT callee authority.
-type SelfAuthority struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// The principal URA the caller asserts authority as. MUST equal
-	// caller_binding.ura; verifiers reject otherwise.
-	PrincipalUra  string `protobuf:"bytes,1,opt,name=principal_ura,json=principalUra,proto3" json:"principal_ura,omitempty"`
+// Zero-payload marker: the relation itself (SELF) IS the proof, verified
+// by equality against envelope fields — nothing more to carry.
+type Identity struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SelfAuthority) Reset() {
-	*x = SelfAuthority{}
-	mi := &file_axon_v1_types_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SelfAuthority) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SelfAuthority) ProtoMessage() {}
-
-func (x *SelfAuthority) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SelfAuthority.ProtoReflect.Descriptor instead.
-func (*SelfAuthority) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *SelfAuthority) GetPrincipalUra() string {
-	if x != nil {
-		return x.PrincipalUra
-	}
-	return ""
-}
-
-// Canonical delegated-authority evidence. Verification semantics are owned by
-// the authority provider that admits the invocation; core transports do not
-// infer this evidence from product metadata.
-type DelegationProof struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	IssuerUra   string                 `protobuf:"bytes,1,opt,name=issuer_ura,json=issuerUra,proto3" json:"issuer_ura,omitempty"`
-	SubjectUra  string                 `protobuf:"bytes,2,opt,name=subject_ura,json=subjectUra,proto3" json:"subject_ura,omitempty"`
-	CallerUra   string                 `protobuf:"bytes,3,opt,name=caller_ura,json=callerUra,proto3" json:"caller_ura,omitempty"`
-	Audience    string                 `protobuf:"bytes,4,opt,name=audience,proto3" json:"audience,omitempty"`
-	Scopes      []string               `protobuf:"bytes,5,rep,name=scopes,proto3" json:"scopes,omitempty"`
-	IssuedAtMs  int64                  `protobuf:"varint,6,opt,name=issued_at_ms,json=issuedAtMs,proto3" json:"issued_at_ms,omitempty"`
-	ExpiresAtMs int64                  `protobuf:"varint,7,opt,name=expires_at_ms,json=expiresAtMs,proto3" json:"expires_at_ms,omitempty"`
-	// ed25519 signature by issuer over canonical_delegation_payload_json.
-	Signature     []byte `protobuf:"bytes,8,opt,name=signature,proto3" json:"signature,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DelegationProof) Reset() {
-	*x = DelegationProof{}
+func (x *Identity) Reset() {
+	*x = Identity{}
 	mi := &file_axon_v1_types_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DelegationProof) String() string {
+func (x *Identity) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DelegationProof) ProtoMessage() {}
+func (*Identity) ProtoMessage() {}
 
-func (x *DelegationProof) ProtoReflect() protoreflect.Message {
+func (x *Identity) ProtoReflect() protoreflect.Message {
 	mi := &file_axon_v1_types_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1699,134 +1768,142 @@ func (x *DelegationProof) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DelegationProof.ProtoReflect.Descriptor instead.
-func (*DelegationProof) Descriptor() ([]byte, []int) {
+// Deprecated: Use Identity.ProtoReflect.Descriptor instead.
+func (*Identity) Descriptor() ([]byte, []int) {
 	return file_axon_v1_types_proto_rawDescGZIP(), []int{15}
 }
 
-func (x *DelegationProof) GetIssuerUra() string {
-	if x != nil {
-		return x.IssuerUra
-	}
-	return ""
+// Signed delegation grant. `issuer` is who signed this grant — a DISTINCT
+// role from AuthorityRelationBinding.authority (the accountable
+// principal). `issuer` MAY differ from `authority`: the SDK proves the
+// grant is authentically signed by `issuer`, not that `issuer` was
+// entitled to vouch for `authority` — that is realm-specific policy left
+// to the caller/daemon (see RFC doc "Issuer authenticity vs. issuer
+// authority"). Verification semantics are owned by the authority provider
+// that admits the invocation; core transports do not infer this evidence
+// from product metadata.
+type DelegationEvidence struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Issuer      *AgentIdentity         `protobuf:"bytes,1,opt,name=issuer,proto3" json:"issuer,omitempty"`
+	Scopes      []string               `protobuf:"bytes,2,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	Audience    string                 `protobuf:"bytes,3,opt,name=audience,proto3" json:"audience,omitempty"`
+	IssuedAtMs  int64                  `protobuf:"varint,4,opt,name=issued_at_ms,json=issuedAtMs,proto3" json:"issued_at_ms,omitempty"`
+	ExpiresAtMs int64                  `protobuf:"varint,5,opt,name=expires_at_ms,json=expiresAtMs,proto3" json:"expires_at_ms,omitempty"`
+	// ed25519 signature by issuer over the canonical unsigned claim bytes
+	// (which additionally bind envelope.caller as delegatee — see the RFC
+	// doc "Canonical bytes").
+	Signature     []byte `protobuf:"bytes,6,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DelegationProof) GetSubjectUra() string {
-	if x != nil {
-		return x.SubjectUra
-	}
-	return ""
+func (x *DelegationEvidence) Reset() {
+	*x = DelegationEvidence{}
+	mi := &file_axon_v1_types_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
 }
 
-func (x *DelegationProof) GetCallerUra() string {
-	if x != nil {
-		return x.CallerUra
-	}
-	return ""
+func (x *DelegationEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
 }
 
-func (x *DelegationProof) GetAudience() string {
+func (*DelegationEvidence) ProtoMessage() {}
+
+func (x *DelegationEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_axon_v1_types_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DelegationEvidence.ProtoReflect.Descriptor instead.
+func (*DelegationEvidence) Descriptor() ([]byte, []int) {
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *DelegationEvidence) GetIssuer() *AgentIdentity {
+	if x != nil {
+		return x.Issuer
+	}
+	return nil
+}
+
+func (x *DelegationEvidence) GetScopes() []string {
+	if x != nil {
+		return x.Scopes
+	}
+	return nil
+}
+
+func (x *DelegationEvidence) GetAudience() string {
 	if x != nil {
 		return x.Audience
 	}
 	return ""
 }
 
-func (x *DelegationProof) GetScopes() []string {
-	if x != nil {
-		return x.Scopes
-	}
-	return nil
-}
-
-func (x *DelegationProof) GetIssuedAtMs() int64 {
+func (x *DelegationEvidence) GetIssuedAtMs() int64 {
 	if x != nil {
 		return x.IssuedAtMs
 	}
 	return 0
 }
 
-func (x *DelegationProof) GetExpiresAtMs() int64 {
+func (x *DelegationEvidence) GetExpiresAtMs() int64 {
 	if x != nil {
 		return x.ExpiresAtMs
 	}
 	return 0
 }
 
-func (x *DelegationProof) GetSignature() []byte {
+func (x *DelegationEvidence) GetSignature() []byte {
 	if x != nil {
 		return x.Signature
 	}
 	return nil
 }
 
-// Reserved for RFC 002 capability tokens. Minimal today.
-type CapabilityGrant struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CapabilityUra string                 `protobuf:"bytes,1,opt,name=capability_ura,json=capabilityUra,proto3" json:"capability_ura,omitempty"`
+// Issuer-signed interactive session authority. Deliberately separate from
+// DelegationEvidence: the issuer signs it with the issuer key, so it
+// proves runtime session authority rather than user-private-key
+// delegation. `issuer` here is checked against envelope.caller (who is
+// presenting this session), NOT against `authority` (the session's
+// owner) — those are expected to differ in the normal case (a backend
+// presents a session on behalf of its owning user).
+type SessionEvidence struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Issuer      *AgentIdentity         `protobuf:"bytes,1,opt,name=issuer,proto3" json:"issuer,omitempty"`
+	SessionId   string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Scopes      []string               `protobuf:"bytes,3,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	Audiences   []string               `protobuf:"bytes,4,rep,name=audiences,proto3" json:"audiences,omitempty"`
+	IssuedAtMs  int64                  `protobuf:"varint,5,opt,name=issued_at_ms,json=issuedAtMs,proto3" json:"issued_at_ms,omitempty"`
+	ExpiresAtMs int64                  `protobuf:"varint,6,opt,name=expires_at_ms,json=expiresAtMs,proto3" json:"expires_at_ms,omitempty"`
+	// ed25519 signature by issuer over the canonical unsigned claim bytes.
+	Signature     []byte `protobuf:"bytes,7,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapabilityGrant) Reset() {
-	*x = CapabilityGrant{}
-	mi := &file_axon_v1_types_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CapabilityGrant) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CapabilityGrant) ProtoMessage() {}
-
-func (x *CapabilityGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CapabilityGrant.ProtoReflect.Descriptor instead.
-func (*CapabilityGrant) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *CapabilityGrant) GetCapabilityUra() string {
-	if x != nil {
-		return x.CapabilityUra
-	}
-	return ""
-}
-
-// Reserved for RFC 002 policy grants. Minimal today.
-type PolicyGrant struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PolicyUra     string                 `protobuf:"bytes,1,opt,name=policy_ura,json=policyUra,proto3" json:"policy_ura,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PolicyGrant) Reset() {
-	*x = PolicyGrant{}
+func (x *SessionEvidence) Reset() {
+	*x = SessionEvidence{}
 	mi := &file_axon_v1_types_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PolicyGrant) String() string {
+func (x *SessionEvidence) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PolicyGrant) ProtoMessage() {}
+func (*SessionEvidence) ProtoMessage() {}
 
-func (x *PolicyGrant) ProtoReflect() protoreflect.Message {
+func (x *SessionEvidence) ProtoReflect() protoreflect.Message {
 	mi := &file_axon_v1_types_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1838,128 +1915,110 @@ func (x *PolicyGrant) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PolicyGrant.ProtoReflect.Descriptor instead.
-func (*PolicyGrant) Descriptor() ([]byte, []int) {
+// Deprecated: Use SessionEvidence.ProtoReflect.Descriptor instead.
+func (*SessionEvidence) Descriptor() ([]byte, []int) {
 	return file_axon_v1_types_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *PolicyGrant) GetPolicyUra() string {
+func (x *SessionEvidence) GetIssuer() *AgentIdentity {
 	if x != nil {
-		return x.PolicyUra
+		return x.Issuer
 	}
-	return ""
+	return nil
 }
 
-// Session authority is not user delegation. It proves that a trusted
-// issuer is acting under an authenticated interactive subject session,
-// and is signed by the issuer identity. It does not claim that the
-// subject private key signed the invocation authority.
-type SessionAuthority struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	IssuerUra   string                 `protobuf:"bytes,1,opt,name=issuer_ura,json=issuerUra,proto3" json:"issuer_ura,omitempty"`
-	SubjectUra  string                 `protobuf:"bytes,2,opt,name=subject_ura,json=subjectUra,proto3" json:"subject_ura,omitempty"`
-	SessionId   string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Scopes      []string               `protobuf:"bytes,4,rep,name=scopes,proto3" json:"scopes,omitempty"`
-	Audiences   []string               `protobuf:"bytes,5,rep,name=audiences,proto3" json:"audiences,omitempty"`
-	IssuedAtMs  int64                  `protobuf:"varint,6,opt,name=issued_at_ms,json=issuedAtMs,proto3" json:"issued_at_ms,omitempty"`
-	ExpiresAtMs int64                  `protobuf:"varint,7,opt,name=expires_at_ms,json=expiresAtMs,proto3" json:"expires_at_ms,omitempty"`
-	// ed25519 signature by issuer over canonical_session_authority_payload_json.
-	Signature     []byte `protobuf:"bytes,8,opt,name=signature,proto3" json:"signature,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SessionAuthority) Reset() {
-	*x = SessionAuthority{}
-	mi := &file_axon_v1_types_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SessionAuthority) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SessionAuthority) ProtoMessage() {}
-
-func (x *SessionAuthority) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SessionAuthority.ProtoReflect.Descriptor instead.
-func (*SessionAuthority) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *SessionAuthority) GetIssuerUra() string {
-	if x != nil {
-		return x.IssuerUra
-	}
-	return ""
-}
-
-func (x *SessionAuthority) GetSubjectUra() string {
-	if x != nil {
-		return x.SubjectUra
-	}
-	return ""
-}
-
-func (x *SessionAuthority) GetSessionId() string {
+func (x *SessionEvidence) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
 	}
 	return ""
 }
 
-func (x *SessionAuthority) GetScopes() []string {
+func (x *SessionEvidence) GetScopes() []string {
 	if x != nil {
 		return x.Scopes
 	}
 	return nil
 }
 
-func (x *SessionAuthority) GetAudiences() []string {
+func (x *SessionEvidence) GetAudiences() []string {
 	if x != nil {
 		return x.Audiences
 	}
 	return nil
 }
 
-func (x *SessionAuthority) GetIssuedAtMs() int64 {
+func (x *SessionEvidence) GetIssuedAtMs() int64 {
 	if x != nil {
 		return x.IssuedAtMs
 	}
 	return 0
 }
 
-func (x *SessionAuthority) GetExpiresAtMs() int64 {
+func (x *SessionEvidence) GetExpiresAtMs() int64 {
 	if x != nil {
 		return x.ExpiresAtMs
 	}
 	return 0
 }
 
-func (x *SessionAuthority) GetSignature() []byte {
+func (x *SessionEvidence) GetSignature() []byte {
 	if x != nil {
 		return x.Signature
 	}
 	return nil
 }
 
-// Bootstrap authority is the signed-receipt authority binding for
+// RESERVED for the CREDENTIAL_OF relation (e.g. API-key credentials
+// attested by a trusted backend rather than signed). Recognized on the
+// wire (this message exists so a decoder does not choke on the tag) but
+// NOT Serializable via any public constructor and NOT Admissible by any
+// v1 verifier — see RFC doc "Three states". Blocked on a not-yet-designed
+// attestation-scope addendum; do not populate this message.
+type Attestation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Attestation) Reset() {
+	*x = Attestation{}
+	mi := &file_axon_v1_types_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Attestation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Attestation) ProtoMessage() {}
+
+func (x *Attestation) ProtoReflect() protoreflect.Message {
+	mi := &file_axon_v1_types_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Attestation.ProtoReflect.Descriptor instead.
+func (*Attestation) Descriptor() ([]byte, []int) {
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{18}
+}
+
+// Bootstrap authority is the signed-receipt admission-plane fact for
 // identity/presence bootstrap abilities whose caller already passed
 // strict caller admission but must not depend on normal delegation:
 // `identity.register_pubkey`, `runtime.bootstrap_self_identity`,
-// and `federation.advertise_agent`.
+// and `federation.advertise_agent`. Deliberately OUTSIDE
+// AuthorityRelationBinding — see the RFC doc: Bootstrap answers "how did
+// this identity get admitted at all", a different plane than "on whose
+// authority does an already-admitted caller act".
 type BootstrapAuthority struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PrincipalUra  string                 `protobuf:"bytes,1,opt,name=principal_ura,json=principalUra,proto3" json:"principal_ura,omitempty"` // admitted caller that exercised bootstrap authority
@@ -3792,48 +3851,43 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x0fCalleeSignature\x12\x1c\n" +
 	"\talgorithm\x18\x01 \x01(\tR\talgorithm\x12\x1c\n" +
 	"\tsignature\x18\x02 \x01(\fR\tsignature\x12\x1e\n" +
-	"\vkey_id_hint\x18\x03 \x01(\tR\tkeyIdHint\"\xc9\x03\n" +
-	"\x10AuthorityBinding\x12?\n" +
-	"\x0eself_authority\x18\x01 \x01(\v2\x16.axon.v1.SelfAuthorityH\x00R\rselfAuthority\x12K\n" +
-	"\x13delegated_authority\x18\x02 \x01(\v2\x18.axon.v1.DelegationProofH\x00R\x12delegatedAuthority\x12E\n" +
-	"\x10capability_grant\x18\x03 \x01(\v2\x18.axon.v1.CapabilityGrantH\x00R\x0fcapabilityGrant\x129\n" +
-	"\fpolicy_grant\x18\x04 \x01(\v2\x14.axon.v1.PolicyGrantH\x00R\vpolicyGrant\x12H\n" +
-	"\x11session_authority\x18\x05 \x01(\v2\x19.axon.v1.SessionAuthorityH\x00R\x10sessionAuthority\x12N\n" +
-	"\x13bootstrap_authority\x18\x06 \x01(\v2\x1b.axon.v1.BootstrapAuthorityH\x00R\x12bootstrapAuthorityB\v\n" +
-	"\tauthority\"4\n" +
-	"\rSelfAuthority\x12#\n" +
-	"\rprincipal_ura\x18\x01 \x01(\tR\fprincipalUra\"\x88\x02\n" +
-	"\x0fDelegationProof\x12\x1d\n" +
+	"\vkey_id_hint\x18\x03 \x01(\tR\tkeyIdHint\"\x96\x01\n" +
+	"\x10AuthorityBinding\x12=\n" +
+	"\abinding\x18\x01 \x01(\v2!.axon.v1.AuthorityRelationBindingH\x00R\abinding\x12;\n" +
+	"\tbootstrap\x18\x02 \x01(\v2\x1b.axon.v1.BootstrapAuthorityH\x00R\tbootstrapB\x06\n" +
+	"\x04form\"\xf4\x02\n" +
+	"\x18AuthorityRelationBinding\x124\n" +
+	"\tauthority\x18\x01 \x01(\v2\x16.axon.v1.AgentIdentityR\tauthority\x126\n" +
+	"\brelation\x18\x02 \x01(\x0e2\x1a.axon.v1.AuthorityRelationR\brelation\x12/\n" +
+	"\bidentity\x18\x03 \x01(\v2\x11.axon.v1.IdentityH\x00R\bidentity\x12=\n" +
 	"\n" +
-	"issuer_ura\x18\x01 \x01(\tR\tissuerUra\x12\x1f\n" +
-	"\vsubject_ura\x18\x02 \x01(\tR\n" +
-	"subjectUra\x12\x1d\n" +
+	"delegation\x18\x04 \x01(\v2\x1b.axon.v1.DelegationEvidenceH\x00R\n" +
+	"delegation\x124\n" +
+	"\asession\x18\x05 \x01(\v2\x18.axon.v1.SessionEvidenceH\x00R\asession\x128\n" +
+	"\vattestation\x18\x06 \x01(\v2\x14.axon.v1.AttestationH\x00R\vattestationB\n" +
 	"\n" +
-	"caller_ura\x18\x03 \x01(\tR\tcallerUra\x12\x1a\n" +
-	"\baudience\x18\x04 \x01(\tR\baudience\x12\x16\n" +
-	"\x06scopes\x18\x05 \x03(\tR\x06scopes\x12 \n" +
-	"\fissued_at_ms\x18\x06 \x01(\x03R\n" +
+	"\bevidence\"\n" +
+	"\n" +
+	"\bIdentity\"\xdc\x01\n" +
+	"\x12DelegationEvidence\x12.\n" +
+	"\x06issuer\x18\x01 \x01(\v2\x16.axon.v1.AgentIdentityR\x06issuer\x12\x16\n" +
+	"\x06scopes\x18\x02 \x03(\tR\x06scopes\x12\x1a\n" +
+	"\baudience\x18\x03 \x01(\tR\baudience\x12 \n" +
+	"\fissued_at_ms\x18\x04 \x01(\x03R\n" +
 	"issuedAtMs\x12\"\n" +
-	"\rexpires_at_ms\x18\a \x01(\x03R\vexpiresAtMs\x12\x1c\n" +
-	"\tsignature\x18\b \x01(\fR\tsignature\"8\n" +
-	"\x0fCapabilityGrant\x12%\n" +
-	"\x0ecapability_ura\x18\x01 \x01(\tR\rcapabilityUra\",\n" +
-	"\vPolicyGrant\x12\x1d\n" +
+	"\rexpires_at_ms\x18\x05 \x01(\x03R\vexpiresAtMs\x12\x1c\n" +
+	"\tsignature\x18\x06 \x01(\fR\tsignature\"\xfa\x01\n" +
+	"\x0fSessionEvidence\x12.\n" +
+	"\x06issuer\x18\x01 \x01(\v2\x16.axon.v1.AgentIdentityR\x06issuer\x12\x1d\n" +
 	"\n" +
-	"policy_ura\x18\x01 \x01(\tR\tpolicyUra\"\x8b\x02\n" +
-	"\x10SessionAuthority\x12\x1d\n" +
-	"\n" +
-	"issuer_ura\x18\x01 \x01(\tR\tissuerUra\x12\x1f\n" +
-	"\vsubject_ura\x18\x02 \x01(\tR\n" +
-	"subjectUra\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x03 \x01(\tR\tsessionId\x12\x16\n" +
-	"\x06scopes\x18\x04 \x03(\tR\x06scopes\x12\x1c\n" +
-	"\taudiences\x18\x05 \x03(\tR\taudiences\x12 \n" +
-	"\fissued_at_ms\x18\x06 \x01(\x03R\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x16\n" +
+	"\x06scopes\x18\x03 \x03(\tR\x06scopes\x12\x1c\n" +
+	"\taudiences\x18\x04 \x03(\tR\taudiences\x12 \n" +
+	"\fissued_at_ms\x18\x05 \x01(\x03R\n" +
 	"issuedAtMs\x12\"\n" +
-	"\rexpires_at_ms\x18\a \x01(\x03R\vexpiresAtMs\x12\x1c\n" +
-	"\tsignature\x18\b \x01(\fR\tsignature\"i\n" +
+	"\rexpires_at_ms\x18\x06 \x01(\x03R\vexpiresAtMs\x12\x1c\n" +
+	"\tsignature\x18\a \x01(\fR\tsignature\"\r\n" +
+	"\vAttestation\"i\n" +
 	"\x12BootstrapAuthority\x12#\n" +
 	"\rprincipal_ura\x18\x01 \x01(\tR\fprincipalUra\x12\x14\n" +
 	"\x05realm\x18\x02 \x01(\tR\x05realm\x12\x18\n" +
@@ -4034,7 +4088,13 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x17ENTITY_REF_KIND_SESSION\x10\x04\x12 \n" +
 	"\x1cENTITY_REF_KIND_CONTINUATION\x10\x05\x12 \n" +
 	"\x1cENTITY_REF_KIND_STATE_OBJECT\x10\x06\x12\x1a\n" +
-	"\x16ENTITY_REF_KIND_DEVICE\x10\a*\xf6\x02\n" +
+	"\x16ENTITY_REF_KIND_DEVICE\x10\a*\xc2\x01\n" +
+	"\x11AuthorityRelation\x12\"\n" +
+	"\x1eAUTHORITY_RELATION_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17AUTHORITY_RELATION_SELF\x10\x01\x12#\n" +
+	"\x1fAUTHORITY_RELATION_DELEGATED_BY\x10\x02\x12!\n" +
+	"\x1dAUTHORITY_RELATION_SESSION_OF\x10\x03\x12$\n" +
+	" AUTHORITY_RELATION_CREDENTIAL_OF\x10\x04*\xf6\x02\n" +
 	"\n" +
 	"ErrorStage\x12\x1b\n" +
 	"\x17ERROR_STAGE_UNSPECIFIED\x10\x00\x12\x19\n" +
@@ -4090,117 +4150,122 @@ func file_axon_v1_types_proto_rawDescGZIP() []byte {
 	return file_axon_v1_types_proto_rawDescData
 }
 
-var file_axon_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_axon_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
 var file_axon_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_axon_v1_types_proto_goTypes = []any{
 	(ExecutionMode)(0),                        // 0: axon.v1.ExecutionMode
 	(Priority)(0),                             // 1: axon.v1.Priority
 	(EncryptionAlgorithm)(0),                  // 2: axon.v1.EncryptionAlgorithm
 	(EntityRefKind)(0),                        // 3: axon.v1.EntityRefKind
-	(ErrorStage)(0),                           // 4: axon.v1.ErrorStage
-	(SecurityClass)(0),                        // 5: axon.v1.SecurityClass
-	(LedgerEventPayloadKind)(0),               // 6: axon.v1.LedgerEventPayloadKind
-	(InvocationState)(0),                      // 7: axon.v1.InvocationState
-	(InvocationTargetKind)(0),                 // 8: axon.v1.InvocationTargetKind
-	(*ContentEnvelope)(nil),                   // 9: axon.v1.ContentEnvelope
-	(*EncryptedPayload)(nil),                  // 10: axon.v1.EncryptedPayload
-	(*AgentIdentity)(nil),                     // 11: axon.v1.AgentIdentity
-	(*SubjectIdentity)(nil),                   // 12: axon.v1.SubjectIdentity
-	(*EntityRef)(nil),                         // 13: axon.v1.EntityRef
-	(*InvocationAuthorityProof)(nil),          // 14: axon.v1.InvocationAuthorityProof
-	(*CausalContext)(nil),                     // 15: axon.v1.CausalContext
-	(*Empty)(nil),                             // 16: axon.v1.Empty
-	(*ReceiptRef)(nil),                        // 17: axon.v1.ReceiptRef
-	(*ReceiptList)(nil),                       // 18: axon.v1.ReceiptList
-	(*MerkleRoot)(nil),                        // 19: axon.v1.MerkleRoot
-	(*CallerSignature)(nil),                   // 20: axon.v1.CallerSignature
-	(*CalleeSignature)(nil),                   // 21: axon.v1.CalleeSignature
-	(*AuthorityBinding)(nil),                  // 22: axon.v1.AuthorityBinding
-	(*SelfAuthority)(nil),                     // 23: axon.v1.SelfAuthority
-	(*DelegationProof)(nil),                   // 24: axon.v1.DelegationProof
-	(*CapabilityGrant)(nil),                   // 25: axon.v1.CapabilityGrant
-	(*PolicyGrant)(nil),                       // 26: axon.v1.PolicyGrant
-	(*SessionAuthority)(nil),                  // 27: axon.v1.SessionAuthority
-	(*BootstrapAuthority)(nil),                // 28: axon.v1.BootstrapAuthority
-	(*Envelope)(nil),                          // 29: axon.v1.Envelope
-	(*ResponseHeader)(nil),                    // 30: axon.v1.ResponseHeader
-	(*Error)(nil),                             // 31: axon.v1.Error
-	(*SealedLedgerEventPayload)(nil),          // 32: axon.v1.SealedLedgerEventPayload
-	(*LedgerEventPayload)(nil),                // 33: axon.v1.LedgerEventPayload
-	(*RecipientSealedLedgerEventPayload)(nil), // 34: axon.v1.RecipientSealedLedgerEventPayload
-	(*LedgerPayloadVisibility)(nil),           // 35: axon.v1.LedgerPayloadVisibility
-	(*LedgerVisibilitySummary)(nil),           // 36: axon.v1.LedgerVisibilitySummary
-	(*LedgerErrorRecord)(nil),                 // 37: axon.v1.LedgerErrorRecord
-	(*LedgerDiagnosticRecord)(nil),            // 38: axon.v1.LedgerDiagnosticRecord
-	(*InvocationReceiptAnchor)(nil),           // 39: axon.v1.InvocationReceiptAnchor
-	(*InvocationReceiptChainSummary)(nil),     // 40: axon.v1.InvocationReceiptChainSummary
-	(*InvocationCausalLink)(nil),              // 41: axon.v1.InvocationCausalLink
-	(*InvocationTraceEdge)(nil),               // 42: axon.v1.InvocationTraceEdge
-	(*InvocationTraceGraph)(nil),              // 43: axon.v1.InvocationTraceGraph
-	(*InvocationLedgerRecord)(nil),            // 44: axon.v1.InvocationLedgerRecord
-	(*AbilityTarget)(nil),                     // 45: axon.v1.AbilityTarget
-	(*InvocationTarget)(nil),                  // 46: axon.v1.InvocationTarget
-	(*ContentMeta)(nil),                       // 47: axon.v1.ContentMeta
-	(*PayloadRef)(nil),                        // 48: axon.v1.PayloadRef
-	nil,                                       // 49: axon.v1.Error.ContextEntry
-	nil,                                       // 50: axon.v1.LedgerErrorRecord.ContextEntry
-	nil,                                       // 51: axon.v1.PayloadRef.LabelsEntry
+	(AuthorityRelation)(0),                    // 4: axon.v1.AuthorityRelation
+	(ErrorStage)(0),                           // 5: axon.v1.ErrorStage
+	(SecurityClass)(0),                        // 6: axon.v1.SecurityClass
+	(LedgerEventPayloadKind)(0),               // 7: axon.v1.LedgerEventPayloadKind
+	(InvocationState)(0),                      // 8: axon.v1.InvocationState
+	(InvocationTargetKind)(0),                 // 9: axon.v1.InvocationTargetKind
+	(*ContentEnvelope)(nil),                   // 10: axon.v1.ContentEnvelope
+	(*EncryptedPayload)(nil),                  // 11: axon.v1.EncryptedPayload
+	(*AgentIdentity)(nil),                     // 12: axon.v1.AgentIdentity
+	(*SubjectIdentity)(nil),                   // 13: axon.v1.SubjectIdentity
+	(*EntityRef)(nil),                         // 14: axon.v1.EntityRef
+	(*InvocationAuthorityProof)(nil),          // 15: axon.v1.InvocationAuthorityProof
+	(*CausalContext)(nil),                     // 16: axon.v1.CausalContext
+	(*Empty)(nil),                             // 17: axon.v1.Empty
+	(*ReceiptRef)(nil),                        // 18: axon.v1.ReceiptRef
+	(*ReceiptList)(nil),                       // 19: axon.v1.ReceiptList
+	(*MerkleRoot)(nil),                        // 20: axon.v1.MerkleRoot
+	(*CallerSignature)(nil),                   // 21: axon.v1.CallerSignature
+	(*CalleeSignature)(nil),                   // 22: axon.v1.CalleeSignature
+	(*AuthorityBinding)(nil),                  // 23: axon.v1.AuthorityBinding
+	(*AuthorityRelationBinding)(nil),          // 24: axon.v1.AuthorityRelationBinding
+	(*Identity)(nil),                          // 25: axon.v1.Identity
+	(*DelegationEvidence)(nil),                // 26: axon.v1.DelegationEvidence
+	(*SessionEvidence)(nil),                   // 27: axon.v1.SessionEvidence
+	(*Attestation)(nil),                       // 28: axon.v1.Attestation
+	(*BootstrapAuthority)(nil),                // 29: axon.v1.BootstrapAuthority
+	(*Envelope)(nil),                          // 30: axon.v1.Envelope
+	(*ResponseHeader)(nil),                    // 31: axon.v1.ResponseHeader
+	(*Error)(nil),                             // 32: axon.v1.Error
+	(*SealedLedgerEventPayload)(nil),          // 33: axon.v1.SealedLedgerEventPayload
+	(*LedgerEventPayload)(nil),                // 34: axon.v1.LedgerEventPayload
+	(*RecipientSealedLedgerEventPayload)(nil), // 35: axon.v1.RecipientSealedLedgerEventPayload
+	(*LedgerPayloadVisibility)(nil),           // 36: axon.v1.LedgerPayloadVisibility
+	(*LedgerVisibilitySummary)(nil),           // 37: axon.v1.LedgerVisibilitySummary
+	(*LedgerErrorRecord)(nil),                 // 38: axon.v1.LedgerErrorRecord
+	(*LedgerDiagnosticRecord)(nil),            // 39: axon.v1.LedgerDiagnosticRecord
+	(*InvocationReceiptAnchor)(nil),           // 40: axon.v1.InvocationReceiptAnchor
+	(*InvocationReceiptChainSummary)(nil),     // 41: axon.v1.InvocationReceiptChainSummary
+	(*InvocationCausalLink)(nil),              // 42: axon.v1.InvocationCausalLink
+	(*InvocationTraceEdge)(nil),               // 43: axon.v1.InvocationTraceEdge
+	(*InvocationTraceGraph)(nil),              // 44: axon.v1.InvocationTraceGraph
+	(*InvocationLedgerRecord)(nil),            // 45: axon.v1.InvocationLedgerRecord
+	(*AbilityTarget)(nil),                     // 46: axon.v1.AbilityTarget
+	(*InvocationTarget)(nil),                  // 47: axon.v1.InvocationTarget
+	(*ContentMeta)(nil),                       // 48: axon.v1.ContentMeta
+	(*PayloadRef)(nil),                        // 49: axon.v1.PayloadRef
+	nil,                                       // 50: axon.v1.Error.ContextEntry
+	nil,                                       // 51: axon.v1.LedgerErrorRecord.ContextEntry
+	nil,                                       // 52: axon.v1.PayloadRef.LabelsEntry
 }
 var file_axon_v1_types_proto_depIdxs = []int32{
-	47, // 0: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
+	48, // 0: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
 	2,  // 1: axon.v1.ContentEnvelope.encryption:type_name -> axon.v1.EncryptionAlgorithm
 	2,  // 2: axon.v1.EncryptedPayload.algorithm:type_name -> axon.v1.EncryptionAlgorithm
 	3,  // 3: axon.v1.EntityRef.kind:type_name -> axon.v1.EntityRefKind
-	22, // 4: axon.v1.InvocationAuthorityProof.binding:type_name -> axon.v1.AuthorityBinding
-	11, // 5: axon.v1.InvocationAuthorityProof.issuer:type_name -> axon.v1.AgentIdentity
-	21, // 6: axon.v1.InvocationAuthorityProof.signature:type_name -> axon.v1.CalleeSignature
-	16, // 7: axon.v1.CausalContext.none:type_name -> axon.v1.Empty
-	17, // 8: axon.v1.CausalContext.scalar:type_name -> axon.v1.ReceiptRef
-	18, // 9: axon.v1.CausalContext.list:type_name -> axon.v1.ReceiptList
-	19, // 10: axon.v1.CausalContext.merkle:type_name -> axon.v1.MerkleRoot
-	17, // 11: axon.v1.ReceiptList.prior:type_name -> axon.v1.ReceiptRef
-	23, // 12: axon.v1.AuthorityBinding.self_authority:type_name -> axon.v1.SelfAuthority
-	24, // 13: axon.v1.AuthorityBinding.delegated_authority:type_name -> axon.v1.DelegationProof
-	25, // 14: axon.v1.AuthorityBinding.capability_grant:type_name -> axon.v1.CapabilityGrant
-	26, // 15: axon.v1.AuthorityBinding.policy_grant:type_name -> axon.v1.PolicyGrant
-	27, // 16: axon.v1.AuthorityBinding.session_authority:type_name -> axon.v1.SessionAuthority
-	28, // 17: axon.v1.AuthorityBinding.bootstrap_authority:type_name -> axon.v1.BootstrapAuthority
-	1,  // 18: axon.v1.Envelope.priority:type_name -> axon.v1.Priority
-	11, // 19: axon.v1.Envelope.caller:type_name -> axon.v1.AgentIdentity
-	11, // 20: axon.v1.Envelope.callee:type_name -> axon.v1.AgentIdentity
-	12, // 21: axon.v1.Envelope.subject:type_name -> axon.v1.SubjectIdentity
-	15, // 22: axon.v1.Envelope.causal_context:type_name -> axon.v1.CausalContext
-	20, // 23: axon.v1.Envelope.caller_signature:type_name -> axon.v1.CallerSignature
-	49, // 24: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
-	4,  // 25: axon.v1.Error.stage:type_name -> axon.v1.ErrorStage
-	5,  // 26: axon.v1.Error.security_class:type_name -> axon.v1.SecurityClass
-	6,  // 27: axon.v1.LedgerEventPayload.kind:type_name -> axon.v1.LedgerEventPayloadKind
-	32, // 28: axon.v1.LedgerEventPayload.sealed:type_name -> axon.v1.SealedLedgerEventPayload
-	34, // 29: axon.v1.LedgerEventPayload.recipients:type_name -> axon.v1.RecipientSealedLedgerEventPayload
-	32, // 30: axon.v1.RecipientSealedLedgerEventPayload.payload:type_name -> axon.v1.SealedLedgerEventPayload
-	35, // 31: axon.v1.LedgerVisibilitySummary.args:type_name -> axon.v1.LedgerPayloadVisibility
-	35, // 32: axon.v1.LedgerVisibilitySummary.result:type_name -> axon.v1.LedgerPayloadVisibility
-	35, // 33: axon.v1.LedgerVisibilitySummary.diagnostics:type_name -> axon.v1.LedgerPayloadVisibility
-	50, // 34: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
-	33, // 35: axon.v1.LedgerDiagnosticRecord.payload:type_name -> axon.v1.LedgerEventPayload
-	39, // 36: axon.v1.InvocationReceiptChainSummary.anchors:type_name -> axon.v1.InvocationReceiptAnchor
-	44, // 37: axon.v1.InvocationTraceGraph.records:type_name -> axon.v1.InvocationLedgerRecord
-	42, // 38: axon.v1.InvocationTraceGraph.edges:type_name -> axon.v1.InvocationTraceEdge
-	33, // 39: axon.v1.InvocationLedgerRecord.args:type_name -> axon.v1.LedgerEventPayload
-	33, // 40: axon.v1.InvocationLedgerRecord.result:type_name -> axon.v1.LedgerEventPayload
-	37, // 41: axon.v1.InvocationLedgerRecord.error:type_name -> axon.v1.LedgerErrorRecord
-	38, // 42: axon.v1.InvocationLedgerRecord.diagnostics:type_name -> axon.v1.LedgerDiagnosticRecord
-	41, // 43: axon.v1.InvocationLedgerRecord.causal_links:type_name -> axon.v1.InvocationCausalLink
-	40, // 44: axon.v1.InvocationLedgerRecord.receipt_chain:type_name -> axon.v1.InvocationReceiptChainSummary
-	36, // 45: axon.v1.InvocationLedgerRecord.visibility:type_name -> axon.v1.LedgerVisibilitySummary
-	45, // 46: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
-	9,  // 47: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
-	51, // 48: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
-	49, // [49:49] is the sub-list for method output_type
-	49, // [49:49] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	23, // 4: axon.v1.InvocationAuthorityProof.binding:type_name -> axon.v1.AuthorityBinding
+	12, // 5: axon.v1.InvocationAuthorityProof.issuer:type_name -> axon.v1.AgentIdentity
+	22, // 6: axon.v1.InvocationAuthorityProof.signature:type_name -> axon.v1.CalleeSignature
+	17, // 7: axon.v1.CausalContext.none:type_name -> axon.v1.Empty
+	18, // 8: axon.v1.CausalContext.scalar:type_name -> axon.v1.ReceiptRef
+	19, // 9: axon.v1.CausalContext.list:type_name -> axon.v1.ReceiptList
+	20, // 10: axon.v1.CausalContext.merkle:type_name -> axon.v1.MerkleRoot
+	18, // 11: axon.v1.ReceiptList.prior:type_name -> axon.v1.ReceiptRef
+	24, // 12: axon.v1.AuthorityBinding.binding:type_name -> axon.v1.AuthorityRelationBinding
+	29, // 13: axon.v1.AuthorityBinding.bootstrap:type_name -> axon.v1.BootstrapAuthority
+	12, // 14: axon.v1.AuthorityRelationBinding.authority:type_name -> axon.v1.AgentIdentity
+	4,  // 15: axon.v1.AuthorityRelationBinding.relation:type_name -> axon.v1.AuthorityRelation
+	25, // 16: axon.v1.AuthorityRelationBinding.identity:type_name -> axon.v1.Identity
+	26, // 17: axon.v1.AuthorityRelationBinding.delegation:type_name -> axon.v1.DelegationEvidence
+	27, // 18: axon.v1.AuthorityRelationBinding.session:type_name -> axon.v1.SessionEvidence
+	28, // 19: axon.v1.AuthorityRelationBinding.attestation:type_name -> axon.v1.Attestation
+	12, // 20: axon.v1.DelegationEvidence.issuer:type_name -> axon.v1.AgentIdentity
+	12, // 21: axon.v1.SessionEvidence.issuer:type_name -> axon.v1.AgentIdentity
+	1,  // 22: axon.v1.Envelope.priority:type_name -> axon.v1.Priority
+	12, // 23: axon.v1.Envelope.caller:type_name -> axon.v1.AgentIdentity
+	12, // 24: axon.v1.Envelope.callee:type_name -> axon.v1.AgentIdentity
+	13, // 25: axon.v1.Envelope.subject:type_name -> axon.v1.SubjectIdentity
+	16, // 26: axon.v1.Envelope.causal_context:type_name -> axon.v1.CausalContext
+	21, // 27: axon.v1.Envelope.caller_signature:type_name -> axon.v1.CallerSignature
+	50, // 28: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
+	5,  // 29: axon.v1.Error.stage:type_name -> axon.v1.ErrorStage
+	6,  // 30: axon.v1.Error.security_class:type_name -> axon.v1.SecurityClass
+	7,  // 31: axon.v1.LedgerEventPayload.kind:type_name -> axon.v1.LedgerEventPayloadKind
+	33, // 32: axon.v1.LedgerEventPayload.sealed:type_name -> axon.v1.SealedLedgerEventPayload
+	35, // 33: axon.v1.LedgerEventPayload.recipients:type_name -> axon.v1.RecipientSealedLedgerEventPayload
+	33, // 34: axon.v1.RecipientSealedLedgerEventPayload.payload:type_name -> axon.v1.SealedLedgerEventPayload
+	36, // 35: axon.v1.LedgerVisibilitySummary.args:type_name -> axon.v1.LedgerPayloadVisibility
+	36, // 36: axon.v1.LedgerVisibilitySummary.result:type_name -> axon.v1.LedgerPayloadVisibility
+	36, // 37: axon.v1.LedgerVisibilitySummary.diagnostics:type_name -> axon.v1.LedgerPayloadVisibility
+	51, // 38: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
+	34, // 39: axon.v1.LedgerDiagnosticRecord.payload:type_name -> axon.v1.LedgerEventPayload
+	40, // 40: axon.v1.InvocationReceiptChainSummary.anchors:type_name -> axon.v1.InvocationReceiptAnchor
+	45, // 41: axon.v1.InvocationTraceGraph.records:type_name -> axon.v1.InvocationLedgerRecord
+	43, // 42: axon.v1.InvocationTraceGraph.edges:type_name -> axon.v1.InvocationTraceEdge
+	34, // 43: axon.v1.InvocationLedgerRecord.args:type_name -> axon.v1.LedgerEventPayload
+	34, // 44: axon.v1.InvocationLedgerRecord.result:type_name -> axon.v1.LedgerEventPayload
+	38, // 45: axon.v1.InvocationLedgerRecord.error:type_name -> axon.v1.LedgerErrorRecord
+	39, // 46: axon.v1.InvocationLedgerRecord.diagnostics:type_name -> axon.v1.LedgerDiagnosticRecord
+	42, // 47: axon.v1.InvocationLedgerRecord.causal_links:type_name -> axon.v1.InvocationCausalLink
+	41, // 48: axon.v1.InvocationLedgerRecord.receipt_chain:type_name -> axon.v1.InvocationReceiptChainSummary
+	37, // 49: axon.v1.InvocationLedgerRecord.visibility:type_name -> axon.v1.LedgerVisibilitySummary
+	46, // 50: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
+	10, // 51: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
+	52, // 52: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
+	53, // [53:53] is the sub-list for method output_type
+	53, // [53:53] is the sub-list for method input_type
+	53, // [53:53] is the sub-list for extension type_name
+	53, // [53:53] is the sub-list for extension extendee
+	0,  // [0:53] is the sub-list for field type_name
 }
 
 func init() { file_axon_v1_types_proto_init() }
@@ -4215,12 +4280,14 @@ func file_axon_v1_types_proto_init() {
 		(*CausalContext_Merkle)(nil),
 	}
 	file_axon_v1_types_proto_msgTypes[13].OneofWrappers = []any{
-		(*AuthorityBinding_SelfAuthority)(nil),
-		(*AuthorityBinding_DelegatedAuthority)(nil),
-		(*AuthorityBinding_CapabilityGrant)(nil),
-		(*AuthorityBinding_PolicyGrant)(nil),
-		(*AuthorityBinding_SessionAuthority)(nil),
-		(*AuthorityBinding_BootstrapAuthority)(nil),
+		(*AuthorityBinding_Binding)(nil),
+		(*AuthorityBinding_Bootstrap)(nil),
+	}
+	file_axon_v1_types_proto_msgTypes[14].OneofWrappers = []any{
+		(*AuthorityRelationBinding_Identity)(nil),
+		(*AuthorityRelationBinding_Delegation)(nil),
+		(*AuthorityRelationBinding_Session)(nil),
+		(*AuthorityRelationBinding_Attestation)(nil),
 	}
 	file_axon_v1_types_proto_msgTypes[37].OneofWrappers = []any{
 		(*InvocationTarget_Ability)(nil),
@@ -4230,7 +4297,7 @@ func file_axon_v1_types_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_axon_v1_types_proto_rawDesc), len(file_axon_v1_types_proto_rawDesc)),
-			NumEnums:      9,
+			NumEnums:      10,
 			NumMessages:   43,
 			NumExtensions: 0,
 			NumServices:   0,

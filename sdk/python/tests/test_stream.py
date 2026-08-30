@@ -13,6 +13,7 @@ from easynet_sdk import (
     StreamTerminalEvent,
     is_code,
 )
+from easynet_sdk.stream import RawStreamPacket
 
 
 class MemoryStreamTransport:
@@ -186,6 +187,78 @@ class StreamTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_binary_stream_packet_requires_positive_sequence(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            StreamEvent.from_raw_packet(
+                RawStreamPacket(
+                    sequence=0,
+                    kind="data",
+                    state="Running",
+                    terminal=False,
+                    transport_terminal=False,
+                    elapsed_ms=0,
+                    payload_content_type="video/h264",
+                    payload=b"\x00\x01",
+                )
+            )
+
+        self.assertIn("sequence must be positive", str(caught.exception))
+
+    def test_raw_stream_packet_projects_raw_payload_without_payload_aliases(self) -> None:
+        event = StreamEvent.from_raw_packet(
+            RawStreamPacket(
+                sequence=1,
+                kind="data",
+                state="Running",
+                terminal=False,
+                transport_terminal=False,
+                elapsed_ms=0,
+                payload_content_type="video/h264",
+                payload=b"\x00\x01\x02",
+            )
+        )
+
+        self.assertEqual(event.payload_bytes, b"\x00\x01\x02")
+        self.assertEqual(event.payload_base64, "")
+        self.assertIsNone(event.payload_json)
+        self.assertFalse(event.terminal)
+        self.assertFalse(event.transport_terminal)
+
+    def test_binary_stream_packet_rejects_non_object_sidecar(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            StreamEvent.from_raw_packet(
+                RawStreamPacket(
+                    sequence=1,
+                    kind="data",
+                    state="Running",
+                    terminal=False,
+                    transport_terminal=False,
+                    elapsed_ms=0,
+                    payload_content_type="video/h264",
+                    payload=b"\x00\x01",
+                    error_json=b"[]",
+                )
+            )
+
+        self.assertIn("error sidecar must be an object", str(caught.exception))
+
+    def test_raw_stream_packet_rejects_noncanonical_state_and_object_fields(self) -> None:
+        for field_name, value in (("state", "not-a-runtime-state"), ("kind", "chunk")):
+            with self.subTest(field=field_name):
+                fields = {
+                    "sequence": 1,
+                    "kind": "data",
+                    "state": "Running",
+                    "terminal": False,
+                    "transport_terminal": False,
+                    "elapsed_ms": 0,
+                    "payload_content_type": "video/h264",
+                    "payload": b"\x00",
+                }
+                fields[field_name] = value
+                with self.assertRaises(SDKError):
+                    StreamEvent.from_raw_packet(RawStreamPacket(**fields))
+
     def test_stream_terminal_event_projects_terminal_receipt(self) -> None:
         transport = MemoryStreamTransport(
             [
@@ -249,6 +322,26 @@ class StreamTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(stream.state, StreamState.TERMINAL_FRAME_SEEN)
+
+    def test_stream_rejects_duplicate_runtime_sequence(self) -> None:
+        transport = MemoryStreamTransport(
+            [
+                b'{"sequence":2,"kind":"data","state":"Running","terminal":false}',
+                b'{"sequence":2,"kind":"data","state":"Running","terminal":false}',
+            ]
+        )
+        stream = StreamHandle.from_json(
+            transport,
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+
+        stream.next()
+        with self.assertRaises(SDKError) as caught:
+            stream.next()
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("strictly ordered", str(caught.exception))
+        self.assertEqual(stream.state, StreamState.FAILED)
 
     def test_transport_terminal_fails_stream_without_runtime_terminal(self) -> None:
         transport = MemoryStreamTransport(

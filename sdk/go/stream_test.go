@@ -174,6 +174,63 @@ func TestStreamEventRejectsLegacyChunkKind(t *testing.T) {
 	}
 }
 
+func TestBinaryStreamPacketRequiresCanonicalHeader(t *testing.T) {
+	for name, mutation := range map[string]func(*rawStreamPacket){
+		"sequence": func(packet *rawStreamPacket) { packet.sequence = 0 },
+		"kind":     func(packet *rawStreamPacket) { packet.kind = "chunk" },
+		"state":    func(packet *rawStreamPacket) { packet.state = "Open" },
+	} {
+		packet := canonicalRawStreamPacket()
+		mutation(&packet)
+		if _, err := NewStreamEventFromRawPacket(packet); err == nil {
+			t.Fatalf("binary stream packet accepted invalid %s", name)
+		}
+	}
+}
+
+func TestBinaryStreamPacketRejectsInvalidSidecars(t *testing.T) {
+	for name, mutation := range map[string]func(*rawStreamPacket){
+		"admission_receipt": func(packet *rawStreamPacket) { packet.admissionReceiptJSON = []byte(`[]`) },
+		"terminal_receipt":  func(packet *rawStreamPacket) { packet.terminalReceiptJSON = []byte(`7`) },
+		"error":             func(packet *rawStreamPacket) { packet.errorJSON = []byte(`"bad"`) },
+	} {
+		packet := canonicalRawStreamPacket()
+		mutation(&packet)
+		if _, err := NewStreamEventFromRawPacket(packet); err == nil {
+			t.Fatalf("binary stream packet accepted invalid %s sidecar", name)
+		}
+	}
+}
+
+func TestRawStreamPacketPreservesPayloadBytesAndProjectsJSON(t *testing.T) {
+	packet := canonicalRawStreamPacket()
+	event, err := NewStreamEventFromRawPacket(packet)
+	if err != nil {
+		t.Fatalf("NewStreamEventFromRawPacket: %v", err)
+	}
+	if string(event.PayloadBytes()) != `{"ok":true}` || string(event.PayloadJSON()) != `{"ok":true}` {
+		t.Fatalf("raw payload not preserved: bytes=%q json=%s", event.PayloadBytes(), event.PayloadJSON())
+	}
+}
+
+func canonicalRawStreamPacket() rawStreamPacket {
+	return rawStreamPacket{
+		sequence:           1,
+		kind:               "data",
+		state:              "Running",
+		payloadContentType: "application/json",
+		payload:            []byte(`{"ok":true}`),
+	}
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	clone := make(map[string]any, len(value))
+	for key, item := range value {
+		clone[key] = item
+	}
+	return clone
+}
+
 func TestStreamTerminalEventProjectsTerminalReceipt(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
 		`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true},"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,
@@ -450,6 +507,34 @@ func TestStreamHandleEnforcesBufferBound(t *testing.T) {
 	}
 	if stream.State() != StreamFailed {
 		t.Fatalf("state = %s, want Failed", stream.State())
+	}
+}
+
+func TestStreamHandleAcknowledgementReleasesBufferCapacity(t *testing.T) {
+	transport := &memoryStreamTransport{events: []string{
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false,"payload_base64":"Y2FtZXJhLTE="}`,
+		`{"sequence":2,"kind":"data","state":"Open","terminal":false,"payload_base64":"Y2FtZXJhLTI="}`,
+	}}
+	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"camera","state":"Opening","max_buffered_events":1}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+	first, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next first: %v", err)
+	}
+	if err := stream.AcknowledgeThrough(first.Sequence()); err != nil {
+		t.Fatalf("AcknowledgeThrough: %v", err)
+	}
+	if events := stream.Events(); len(events) != 0 {
+		t.Fatalf("acknowledged history retained %d events", len(events))
+	}
+	second, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next second after acknowledgement: %v", err)
+	}
+	if string(second.PayloadBytes()) != "camera-2" {
+		t.Fatalf("second payload = %q", second.PayloadBytes())
 	}
 }
 

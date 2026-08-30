@@ -110,8 +110,11 @@ pub(crate) use connection_state::{
 };
 pub use envelope::build_session_envelope_open;
 use frame_loop::{run_live_session, LiveSessionRun};
+pub(crate) use prelude::owner_projection_delegation_metadata;
 #[cfg(test)]
-use prelude::{committed_device_native_owner_descriptors, committed_owner_ability_descriptors};
+use prelude::{
+    committed_device_native_owner_descriptors, committed_user_service_owner_descriptors,
+};
 use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};
 pub use prelude::{
     PairedUserTrustSigner, SessionPreludeInputs, UserTrustBootstrapError, UserTrustSync,
@@ -1074,7 +1077,11 @@ mod tests {
             )
             .expect("SystemAgent descriptor"),
         ];
-        let descriptors = committed_owner_ability_descriptors(&committed, owner, Some("dev-1"));
+        let mut by_owner =
+            committed_user_service_owner_descriptors(&committed, "easynet:///r/acme/user/alice");
+        let descriptors = by_owner
+            .remove(owner)
+            .expect("paired user projection contains its owned Service descriptor");
         let by_public: std::collections::BTreeMap<_, _> = descriptors
             .iter()
             .map(|d| (d.public_name(), d.canonical_ability_ura()))
@@ -1089,13 +1096,9 @@ mod tests {
             schema["required"][0], "project_id",
             "committed schema must survive publication, got: {schema}"
         );
-        assert_eq!(
-            descriptors[0]
-                .metadata
-                .get("host_node_id")
-                .map(String::as_str),
-            Some("dev-1"),
-            "committed descriptor must remain bound to the execution host"
+        assert!(
+            !descriptors[0].metadata.contains_key("host_node_id"),
+            "public Service descriptor identity must not be rewritten with one execution host"
         );
     }
 
@@ -2472,7 +2475,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paired_user_trust_resolve_pins_presented_pubkey() {
+    async fn paired_user_trust_resolve_pins_only_the_managed_signer_pubkey() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, invokes, _server) = spawn_recording_prelude_hub().await;
@@ -2589,8 +2592,8 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
             user_resolves,
-            std::collections::BTreeSet::from([signer_pubkey_b64, user_pubkey_b64.to_string(),]),
-            "paired User trust bootstrap must pin the current signer and each locally known key"
+            std::collections::BTreeSet::from([signer_pubkey_b64]),
+            "paired User trust bootstrap must resolve only the managed signer; locally cached browser keys belong to the ephemeral Hub-attested caller projection"
         );
     }
 

@@ -32,6 +32,11 @@ case "$PRE_MEDIA_RESOURCE_REFRESH" in
   0|1) ;;
   *) echo "[FAIL] invalid EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH: $PRE_MEDIA_RESOURCE_REFRESH" >&2; exit 64 ;;
 esac
+INPUT_PROOF="${EASYNET_REMOTEAPP_INPUT_PROOF:-0}"
+case "$INPUT_PROOF" in
+  0|1) ;;
+  *) echo "[FAIL] invalid EASYNET_REMOTEAPP_INPUT_PROOF: $INPUT_PROOF" >&2; exit 64 ;;
+esac
 
 EVIDENCE_JSON="${EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON:-}"
 [[ -n "$EVIDENCE_JSON" ]] || {
@@ -46,6 +51,7 @@ LIVE_INVENTORY_JSON="$OUT_DIR/live-inventory.json"
 SELECTED_RESOURCE_JSON="$OUT_DIR/selected-resource.json"
 SESSION_JSON="$OUT_DIR/session.json"
 FRAME_ANALYSIS_JSON="$OUT_DIR/frame-analysis.json"
+INPUT_TRANSMISSION_JSON="$OUT_DIR/input-transmission.json"
 LIFECYCLE_EVENTS_JSON="$OUT_DIR/lifecycle-events.json"
 LIFECYCLE_SESSION_JSON="$OUT_DIR/lifecycle-session.json"
 PRE_MEDIA_REFRESH_JSON="$OUT_DIR/pre-media-refresh.json"
@@ -55,6 +61,10 @@ TARGET_RESOURCE_URA="${EASYNET_REMOTEAPP_TARGET_RESOURCE_URA:-}"
 TARGET_PID="${EASYNET_REMOTEAPP_TARGET_PID:-}"
 BUNDLED_FRAME_RECEIVER_BIN="$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver"
 FRAME_RECEIVER_CMD="${EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD:-$BUNDLED_FRAME_RECEIVER_BIN}"
+CAMPAIGN_BINDING_JSON="${EASYNET_REMOTEAPP_CAMPAIGN_BINDING_JSON:-}"
+CAMPAIGN_PROOF_BINDING_JSON="${EASYNET_REMOTEAPP_CAMPAIGN_PROOF_BINDING_JSON:-}"
+CAMPAIGN_RECEIPT_PROOF_SET_JSON="${EASYNET_REMOTEAPP_CAMPAIGN_RECEIPT_PROOF_SET_JSON:-}"
+CAMPAIGN_CREATE_NONCE_HEX="${EASYNET_REMOTEAPP_CAMPAIGN_CREATE_NONCE_HEX:-}"
 
 die() {
   echo "[FAIL] $*" >&2
@@ -80,10 +90,6 @@ prepare_bundled_frame_receiver() {
   if [[ -n "${EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD:-}" ]]; then
     return 0
   fi
-  if [[ -x "$BUNDLED_FRAME_RECEIVER_BIN" ]]; then
-    FRAME_RECEIVER_CMD="$BUNDLED_FRAME_RECEIVER_BIN"
-    return 0
-  fi
   need_cmd cargo
   cargo build --quiet --example easynet-remoteapp-frame-receiver --features remote-desktop
   [[ -x "$BUNDLED_FRAME_RECEIVER_BIN" ]] || die \
@@ -92,6 +98,20 @@ prepare_bundled_frame_receiver() {
 }
 
 need_cmd python3
+
+campaign_values=(
+  "$CAMPAIGN_BINDING_JSON"
+  "$CAMPAIGN_PROOF_BINDING_JSON"
+  "$CAMPAIGN_RECEIPT_PROOF_SET_JSON"
+  "$CAMPAIGN_CREATE_NONCE_HEX"
+)
+campaign_value_count=0
+for campaign_value in "${campaign_values[@]}"; do
+  [[ -n "$campaign_value" ]] && campaign_value_count=$((campaign_value_count + 1))
+done
+if [[ "$campaign_value_count" != "0" && "$campaign_value_count" != "4" ]]; then
+  die "campaign mode requires binding, proof binding, proof-set, and create nonce together"
+fi
 
 [[ -n "${EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB:-}" ]] || die \
   "EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB is required; bundled receiver needs selected target RGB sentinel as r,g,b"
@@ -112,94 +132,33 @@ fi
 # decode, and report evidence.
 prepare_bundled_frame_receiver
 
-run_easynet ability refresh-remote-targets \
-  --type "$TARGET_KIND" \
-  --format json >"$LIVE_INVENTORY_JSON"
-
-python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$TARGET_KIND" "$TARGET_HINT" "$TARGET_RESOURCE_URA" "$TARGET_PID" <<'PY'
-import json
-import sys
-
-inventory_path, selected_path, target_kind, hint, target_resource_ura, target_pid = sys.argv[1:7]
-with open(inventory_path, encoding="utf-8") as f:
-    inventory = json.load(f)
-
-resources = inventory.get("resources")
-if not isinstance(resources, list):
-    raise SystemExit("resource.refresh_remote_targets response missing resources array")
-
-def availability(resource):
-    metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
-    return metadata.get("availability", "available")
-
-def search_blob(resource):
-    metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
-    fields = [
-        resource.get("resource_ura"),
-        resource.get("display_name"),
-        metadata.get("app_name"),
-        metadata.get("title"),
-        metadata.get("bundle_id"),
-        metadata.get("app_identity"),
-        metadata.get("pid"),
-        metadata.get("primary_pid"),
-    ]
-    return "\n".join(str(value).lower() for value in fields if value)
-
-def pid_matches(resource, expected_pid):
-    metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
-    observed = [metadata.get("pid"), metadata.get("primary_pid")]
-    return any(str(value) == str(expected_pid) for value in observed if value is not None)
-
-candidates = [
-    resource for resource in resources
-    if resource.get("type") == target_kind and availability(resource) == "available"
-]
-
-if target_resource_ura:
-    candidates = [
-        resource for resource in candidates
-        if resource.get("resource_ura") == target_resource_ura
-    ]
-    if not candidates:
-        raise SystemExit(f"selected target Resource URA is not in live {target_kind} inventory: {target_resource_ura}")
-elif target_pid:
-    if not target_pid.isdigit() or int(target_pid) <= 0:
-        raise SystemExit(f"EASYNET_REMOTEAPP_TARGET_PID must be a positive integer, got {target_pid!r}")
-    candidates = [resource for resource in candidates if pid_matches(resource, target_pid)]
-    if not candidates:
-        raise SystemExit(
-            f"selected target pid is not in live {target_kind} inventory metadata: {target_pid}"
-        )
-elif hint:
-    needle = hint.lower()
-    candidates = [resource for resource in candidates if needle in search_blob(resource)]
-elif len(candidates) != 1:
-    sample = [
-        {
-            "resource_ura": resource.get("resource_ura"),
-            "display_name": resource.get("display_name"),
-            "type": resource.get("type"),
-        }
-        for resource in candidates[:10]
-    ]
-    raise SystemExit(
-        "remoteapp host probe refuses ambiguous target selection; set "
-        "EASYNET_REMOTEAPP_TARGET_HINT or EASYNET_REMOTEAPP_TARGET_RESOURCE_URA. "
-        f"candidate_count={len(candidates)} sample={json.dumps(sample, sort_keys=True)}"
-    )
-
-if len(candidates) != 1:
-    raise SystemExit(f"remoteapp target selection must resolve exactly one {target_kind}; got {len(candidates)}")
-
-resource_ura = candidates[0].get("resource_ura")
-if not isinstance(resource_ura, str) or not resource_ura.startswith("easynet:///"):
-    raise SystemExit("selected target must expose a canonical EasyNet Resource URA")
-
-with open(selected_path, "w", encoding="utf-8") as f:
-    json.dump(candidates[0], f, indent=2, sort_keys=True)
-    f.write("\n")
-PY
+TARGET_SELECTOR_ARGS=(
+  --inventory "$LIVE_INVENTORY_JSON"
+  --output "$SELECTED_RESOURCE_JSON"
+  --kind "$TARGET_KIND"
+)
+[[ -n "$TARGET_RESOURCE_URA" ]] && TARGET_SELECTOR_ARGS+=(--resource-ura "$TARGET_RESOURCE_URA")
+[[ -n "$TARGET_PID" ]] && TARGET_SELECTOR_ARGS+=(--pid "$TARGET_PID")
+[[ -n "$TARGET_HINT" ]] && TARGET_SELECTOR_ARGS+=(--hint "$TARGET_HINT")
+TARGET_SELECTION_ERROR="$OUT_DIR/target-selection.stderr.txt"
+TARGET_SELECTED=0
+for _ in {1..12}; do
+  if [[ -x "${EASYNET_REMOTEAPP_SELECTED_CONTROL_SH:-}" ]]; then
+    "$EASYNET_REMOTEAPP_SELECTED_CONTROL_SH" focus >/dev/null 2>&1 || true
+  fi
+  run_easynet ability refresh-remote-targets \
+    --type "$TARGET_KIND" \
+    --format json >"$LIVE_INVENTORY_JSON"
+  if python3 "$SELF_DIR/remoteapp-select-live-target.py" \
+      "${TARGET_SELECTOR_ARGS[@]}" 2>"$TARGET_SELECTION_ERROR"; then
+    TARGET_SELECTED=1
+    break
+  fi
+  sleep 0.15
+done
+if [[ "$TARGET_SELECTED" != "1" ]]; then
+  die "live target selection did not converge: $(<"$TARGET_SELECTION_ERROR")"
+fi
 
 SELECTED_RESOURCE_URA="$(python3 - "$SELECTED_RESOURCE_JSON" <<'PY'
 import json
@@ -209,11 +168,62 @@ with open(sys.argv[1], encoding="utf-8") as f:
 PY
 )"
 
-run_easynet ability create-remote-desktop-session \
-  --subject "$SELECTED_RESOURCE_URA" \
-  --mode view_only \
-  --transport webrtc \
-  --format json >"$SESSION_JSON"
+CREATE_SESSION_ARGS=(
+  ability create-remote-desktop-session
+  --subject "$SELECTED_RESOURCE_URA"
+)
+if [[ "$INPUT_PROOF" == "1" ]]; then
+  CREATE_SESSION_ARGS+=(--mode interactive --input-control)
+else
+  CREATE_SESSION_ARGS+=(--mode view_only)
+fi
+CREATE_SESSION_ARGS+=(--transport webrtc)
+
+if [[ "$campaign_value_count" == "4" ]]; then
+  CAMPAIGN_SESSION_ID="$(python3 - "$CAMPAIGN_PROOF_BINDING_JSON" "$SELECTED_RESOURCE_URA" <<'PY'
+import json
+import sys
+
+binding = json.load(open(sys.argv[1], encoding="utf-8"))
+if binding.get("subject_ura") != sys.argv[2]:
+    raise SystemExit("campaign proof subject does not match selected Resource")
+session_id = binding.get("session_id")
+if not isinstance(session_id, str) or not session_id:
+    raise SystemExit("campaign proof binding omits session_id")
+print(session_id)
+PY
+)"
+  CREATE_SESSION_ARGS+=(--session-id "$CAMPAIGN_SESSION_ID" --nonce-hex "$CAMPAIGN_CREATE_NONCE_HEX")
+fi
+
+CREATE_SESSION_ARGS+=(--format json)
+run_easynet "${CREATE_SESSION_ARGS[@]}" >"$SESSION_JSON"
+
+if [[ "$campaign_value_count" == "4" ]]; then
+  CAMPAIGN_CREATE_META_JSON="$OUT_DIR/campaign-create-invocation-meta.json"
+  CAMPAIGN_CREATE_ARGS_JSON="$OUT_DIR/campaign-create-invocation-args.json"
+  python3 - "$SESSION_JSON" "$CAMPAIGN_CREATE_META_JSON" "$CAMPAIGN_CREATE_ARGS_JSON" <<'PY'
+import json
+import pathlib
+import sys
+
+response = json.load(open(sys.argv[1], encoding="utf-8"))
+meta = response.get("invocation")
+if not isinstance(meta, dict):
+    raise SystemExit("campaign create_session response omits verified invocation metadata")
+args = meta.get("args")
+if not isinstance(args, dict):
+    raise SystemExit("campaign create_session metadata omits arguments")
+pathlib.Path(sys.argv[2]).write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+pathlib.Path(sys.argv[3]).write_text(json.dumps(args, indent=2, sort_keys=True) + "\n")
+PY
+  python3 "$REPO_ROOT/tools/scripts/remoteapp-evidence-provenance.py" append-receipt-proof \
+    --proof-set "$CAMPAIGN_RECEIPT_PROOF_SET_JSON" \
+    --campaign-binding "$CAMPAIGN_BINDING_JSON" \
+    --proof-binding "$CAMPAIGN_PROOF_BINDING_JSON" \
+    --arguments-json "$CAMPAIGN_CREATE_ARGS_JSON" \
+    --invocation-meta "$CAMPAIGN_CREATE_META_JSON"
+fi
 
 if [[ "$PRE_MEDIA_RESOURCE_REFRESH" == "1" ]]; then
   run_easynet ability refresh-remote-targets \
@@ -228,9 +238,17 @@ export EASYNET_REMOTEAPP_SELECTED_RESOURCE_URA="$SELECTED_RESOURCE_URA"
 export EASYNET_REMOTEAPP_SESSION_JSON="$SESSION_JSON"
 export EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON="$FRAME_ANALYSIS_JSON"
 export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
+if [[ "$INPUT_PROOF" == "1" ]]; then
+  rm -f "$INPUT_TRANSMISSION_JSON"
+  export EASYNET_REMOTEAPP_INPUT_TRANSMISSION_JSON="$INPUT_TRANSMISSION_JSON"
+fi
 
 bash -lc "$FRAME_RECEIVER_CMD"
 [[ -s "$FRAME_ANALYSIS_JSON" ]] || die "frame receiver did not write frame analysis JSON: $FRAME_ANALYSIS_JSON"
+if [[ "$INPUT_PROOF" == "1" ]]; then
+  [[ -s "$INPUT_TRANSMISSION_JSON" ]] || die \
+    "frame receiver did not write input transmission JSON: $INPUT_TRANSMISSION_JSON"
+fi
 
 run_lifecycle_scenario() {
   [[ "$LIFECYCLE_SCENARIO" == "none" ]] && return 0
@@ -373,9 +391,17 @@ if not isinstance(session, dict):
 if not isinstance(invocation, dict):
     raise SystemExit("create-remote-desktop-session response missing verified invocation metadata")
 
-target_binding = session.get("target_binding")
-if not isinstance(target_binding, dict):
+initial_target_binding = session.get("target_binding")
+if not isinstance(initial_target_binding, dict):
     raise SystemExit("session response missing target_binding")
+latest_session = frame.get("session_view")
+target_binding = (
+    latest_session.get("target_binding")
+    if isinstance(latest_session, dict)
+    else None
+)
+if not isinstance(target_binding, dict):
+    target_binding = initial_target_binding
 
 scope_audit = session.get("scope_audit")
 if not isinstance(scope_audit, dict):
@@ -395,6 +421,12 @@ if not isinstance(invocation_args, dict):
 decoded_frames = frame.get("decoded_frames")
 if not isinstance(decoded_frames, dict):
     raise SystemExit("frame analysis missing decoded_frames object")
+decoded_audio = frame.get("decoded_audio")
+expected_audio_frequency = os.environ.get(
+    "EASYNET_REMOTEAPP_EXPECTED_AUDIO_FREQUENCY_HZ", ""
+).strip()
+if expected_audio_frequency and not isinstance(decoded_audio, dict):
+    raise SystemExit("frame analysis missing decoded_audio object for audio-required proof")
 artifacts = frame.get("artifacts")
 if not isinstance(artifacts, dict):
     raise SystemExit("frame analysis missing artifacts object")
@@ -424,6 +456,11 @@ def parse_rgb_env(name):
         raise SystemExit(f"{name} must contain exactly three RGB bytes")
     return values
 
+def optional_rgb_env(name):
+    if not os.environ.get(name, "").strip():
+        return None
+    return parse_rgb_env(name)
+
 selected_label = os.environ.get("EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL", "").strip()
 unrelated_label = os.environ.get("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL", "").strip()
 selected_pid = os.environ.get("EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID", "").strip()
@@ -447,14 +484,42 @@ unrelated_fixture = {
     ),
     "rgb": parse_rgb_env("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB"),
 }
+if expected_audio_frequency:
+    unrelated_fixture["audio_tone_frequency_hz"] = float(
+        os.environ["EASYNET_REMOTEAPP_UNRELATED_AUDIO_FREQUENCY_HZ"]
+    )
 if unrelated_pid:
     unrelated_fixture["pid"] = int(unrelated_pid)
 unrelated_resource_ura = os.environ.get("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RESOURCE_URA", "").strip()
 if unrelated_resource_ura:
     unrelated_fixture["resource_ura"] = unrelated_resource_ura
 
+selected_rgb = parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
+selected_surfaces = [{
+    "role": "primary",
+    "label": selected_label,
+    "rgb": selected_rgb,
+}]
+selected_secondary_rgb = optional_rgb_env(
+    "EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_RGB"
+)
+selected_secondary_label = os.environ.get(
+    "EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_LABEL", ""
+).strip()
+if selected_secondary_rgb is not None:
+    if not selected_secondary_label:
+        raise SystemExit(
+            "EASYNET_REMOTEAPP_SELECTED_SECONDARY_SENTINEL_LABEL is required when secondary RGB is set"
+        )
+    selected_surfaces.append({
+        "role": "secondary",
+        "label": selected_secondary_label,
+        "rgb": selected_secondary_rgb,
+    })
+
 evidence = {
     "status": "passed" if frame.get("status") == "passed" else "failed",
+    "evidence_origin": "live_runner",
     "live_inventory": {
         "ability": "resource.refresh_remote_targets",
         "observed_at_ms": inventory.get("observed_at_ms"),
@@ -487,12 +552,20 @@ evidence = {
             "display_fallback_used": scope_audit.get("display_fallback_used"),
         },
     },
+    "initial_target_binding": {
+        "binding_id": initial_target_binding.get("binding_id"),
+        "binding_epoch": initial_target_binding.get("binding_epoch"),
+        "target_identity_epoch": initial_target_binding.get("target_identity_epoch"),
+        "target_geometry_revision": initial_target_binding.get("target_geometry_revision"),
+        "media_source_epoch": initial_target_binding.get("media_source_epoch"),
+    },
     "sentinel_fixture": {
         "proof": "dual_target_non_leak",
         "selected": {
             "label": selected_label,
             "resource_ura": selected_resource_ura,
-            "rgb": parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB"),
+            "rgb": selected_rgb,
+            "surfaces": selected_surfaces,
             "target_kind": expected_kind,
             "pid": int(selected_pid) if selected_pid else None,
         },
@@ -502,8 +575,14 @@ evidence = {
     "production_media_ready": frame.get("production_media_ready"),
     "production_readiness": production_readiness,
     "decoded_frames": decoded_frames,
+    "decoded_audio": decoded_audio,
     "artifacts": artifacts,
 }
+
+if expected_audio_frequency:
+    evidence["sentinel_fixture"]["selected"]["audio_tone_frequency_hz"] = float(
+        expected_audio_frequency
+    )
 
 if expected_kind == "application":
     evidence["target_binding"]["app_window_set"] = target_binding.get("app_window_set")

@@ -14,8 +14,8 @@
 // What this command does
 // ----------------------
 // Dials the local daemon's gRPC UDS, sends a unary
-// `federation.discover` request with optional `agent_ura` /
-// `local_user_id` filters, and renders the returned
+// `federation.discover` request in the current paired User scope by default,
+// with optional `agent_ura` / `local_user_id` filters, and renders the returned
 // `DirectoryEntry` list as a table (default) or JSON (--json).
 //
 // What this command does NOT do
@@ -61,13 +61,17 @@ pub struct DiscoverArgs {
     #[arg(long)]
     pub agent_ura: Option<String>,
 
-    /// Filter cross-realm entries by a user's federated bindings
-    /// (PR-N4 INV-5 privacy default). Only entries whose URA is on the
-    /// calling daemon's own realm or has a recorded binding for 'user-id'
-    /// are returned. If absent, this command performs an explicit
-    /// operator/audit read of the unfiltered directory.
+    /// Read through the named user's federated bindings instead of the
+    /// currently paired user. Only entries whose URA is on the calling
+    /// daemon's own realm or has a recorded binding for 'user-id' are returned.
     #[arg(long = "user-id")]
     pub local_user_id: Option<String>,
+
+    /// Perform an unfiltered operator/audit read. This is accepted only when
+    /// the local runtime identity is the realm Authority; a paired Device is
+    /// not an operator principal.
+    #[arg(long, conflicts_with = "local_user_id")]
+    pub operator_audit: bool,
 
     /// Emit JSON for scripts instead of a plain-text table.
     #[arg(long)]
@@ -78,15 +82,23 @@ pub struct DiscoverArgs {
 /// service boundary. The facade owns argument mapping and rendering;
 /// transport signing and gRPC details live below it.
 pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
-    let entries = if let Some(local_user_id) = args.local_user_id.as_deref() {
-        crate::daemon::federation::directory_reader::read_federated_directory_for_user(
-            args.agent_ura.as_deref(),
-            local_user_id,
-        )?
-    } else {
-        crate::daemon::federation::directory_reader::read_federated_directory_for_operator_audit(
-            args.agent_ura.as_deref(),
-        )?
+    let entries = match discover_read_scope(&args) {
+        DiscoverReadScope::CurrentUser => {
+            crate::daemon::federation::directory_reader::read_federated_directory_for_current_user(
+                args.agent_ura.as_deref(),
+            )?
+        }
+        DiscoverReadScope::ExplicitUser(local_user_id) => {
+            crate::daemon::federation::directory_reader::read_federated_directory_for_user(
+                args.agent_ura.as_deref(),
+                local_user_id,
+            )?
+        }
+        DiscoverReadScope::OperatorAudit => {
+            crate::daemon::federation::directory_reader::read_federated_directory_for_operator_audit(
+                args.agent_ura.as_deref(),
+            )?
+        }
     };
 
     if args.json {
@@ -132,4 +144,56 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoverReadScope<'a> {
+    CurrentUser,
+    ExplicitUser(&'a str),
+    OperatorAudit,
+}
+
+fn discover_read_scope(args: &DiscoverArgs) -> DiscoverReadScope<'_> {
+    if args.operator_audit {
+        return DiscoverReadScope::OperatorAudit;
+    }
+    match args.local_user_id.as_deref() {
+        Some(local_user_id) => DiscoverReadScope::ExplicitUser(local_user_id),
+        None => DiscoverReadScope::CurrentUser,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(local_user_id: Option<&str>, operator_audit: bool) -> DiscoverArgs {
+        DiscoverArgs {
+            agent_ura: None,
+            local_user_id: local_user_id.map(str::to_string),
+            operator_audit,
+            json: true,
+        }
+    }
+
+    #[test]
+    fn paired_user_scope_is_the_default() {
+        assert_eq!(
+            discover_read_scope(&args(None, false)),
+            DiscoverReadScope::CurrentUser
+        );
+    }
+
+    #[test]
+    fn explicit_user_and_operator_scopes_are_distinct() {
+        let user_args = args(Some("user-a"), false);
+        assert_eq!(
+            discover_read_scope(&user_args),
+            DiscoverReadScope::ExplicitUser("user-a")
+        );
+        assert_eq!(
+            discover_read_scope(&args(None, true)),
+            DiscoverReadScope::OperatorAudit
+        );
+    }
 }

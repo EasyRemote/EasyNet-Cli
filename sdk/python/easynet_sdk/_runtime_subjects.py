@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .axon_addressing import parse_ura, resource_ura, user_ura
+from .axon_addressing import device_ura, parse_ura, resource_ura, user_ura
 from .errors import SDKError
 from ._identity_guards import contains_all_zero_principal
 
@@ -66,6 +66,13 @@ def is_runtime_governance_read_subject_ura(subject_ura: str, callee_ura: str) ->
         and subject.kind == callee.kind
         and subject.realm == callee.realm
         and clean_subject == clean_callee
+    ) or (
+        subject.kind == "device"
+        and callee.kind == "agent"
+        and subject.realm == callee.realm
+        and isinstance(callee.components.get("device_id"), str)
+        and callee.components.get("device_id", "").strip() != ""
+        and subject.components.get("device_id") == callee.components.get("device_id")
     )
 
 
@@ -84,6 +91,10 @@ def runtime_governance_read_subject_ura(subject_ura: str, callee_ura: str) -> st
         _invalid_runtime_state_subject(
             "runtime governance read subject_ura must be canonical", error
         )
+    if subject.kind == "agent" and isinstance(subject.components.get("device_id"), str):
+        clean_device_id = subject.components.get("device_id", "").strip()
+        if clean_device_id:
+            return device_ura(subject.realm, clean_device_id)
     if subject.kind in {"user", "agent", "ability"}:
         user_id = _subject_user_id(subject)
         if user_id:

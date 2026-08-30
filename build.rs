@@ -48,6 +48,7 @@ fn main() {
     println!("cargo:rerun-if-changed=schemas/common.proto");
     println!("cargo:rerun-if-changed=schemas/control_plane.proto");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=include/easynet_cli.exports.v9");
     println!("cargo:rerun-if-changed=plugins/desktop-menubar/plugin.toml");
     println!("cargo:rerun-if-changed=plugins/desktop-menubar/scripts/build-macos.sh");
     println!(
@@ -60,10 +61,50 @@ fn main() {
         "cargo:rerun-if-changed=plugins/desktop-menubar/companion/macos/EasyNetMenuBar/Resources"
     );
 
+    configure_c_abi_exports();
     materialize_desktop_menubar_package();
 
     #[cfg(feature = "proto-gen")]
     compile_proto();
+}
+
+fn configure_c_abi_exports() {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let manifest_dir =
+        std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    let allowlist_path = manifest_dir.join("include/easynet_cli.exports.v9");
+    let allowlist = std::fs::read_to_string(&allowlist_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", allowlist_path.display()));
+    let symbols = allowlist
+        .lines()
+        .map(str::trim)
+        .filter(|symbol| !symbol.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(symbols.len(), 60, "v9 export control requires 60 symbols");
+    assert!(
+        symbols.iter().all(|symbol| symbol.starts_with("runtime_")
+            && symbol
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')),
+        "v9 export control contains an invalid C symbol"
+    );
+
+    if target_os == "windows" {
+        let path = out_dir.join("easynet_cli.exports.def");
+        let mut contents = String::from("EXPORTS\n");
+        for symbol in &symbols {
+            contents.push_str(&format!("  {symbol}\n"));
+        }
+        std::fs::write(&path, contents)
+            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+        if target_env == "msvc" {
+            println!("cargo:rustc-cdylib-link-arg=/DEF:{}", path.display());
+        } else {
+            println!("cargo:rustc-cdylib-link-arg={}", path.display());
+        }
+    }
 }
 
 fn materialize_desktop_menubar_package() {

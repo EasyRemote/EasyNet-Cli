@@ -823,7 +823,9 @@ def _cancel_stream_iterator(iterator: Any) -> None:
 
 def _stream_chunk_terminal(chunk: Any) -> bool:
     return (
-        bool(chunk.terminal) or _state_name(chunk.state, "direct_runtime.stream") in _TERMINAL_INVOCATION_STATES
+        bool(chunk.terminal)
+        or _state_name(chunk.state, "direct_runtime.stream")
+        in _TERMINAL_INVOCATION_STATES
     )
 
 
@@ -1260,7 +1262,11 @@ class _UnaryOutcomeCheckpoints:
         terminal_state: str,
         has_proof_error: bool,
     ) -> bool:
-        if terminal_state != "Failed" or not response.HasField("error") or has_proof_error:
+        if (
+            terminal_state != "Failed"
+            or not response.HasField("error")
+            or has_proof_error
+        ):
             return False
         _error_stage(response.error.stage)
         return int(response.error.stage) in _PRE_ADMISSION_ERROR_STAGES
@@ -1500,7 +1506,8 @@ def _bidi_down_is_internal_admission(frame: Any) -> bool:
 def _bidi_receipt_terminal(receipt: Any) -> bool:
     return (
         bool(receipt.cleanup_complete)
-        or _state_name(receipt.state, "direct_runtime.bidi") in _TERMINAL_INVOCATION_STATES
+        or _state_name(receipt.state, "direct_runtime.bidi")
+        in _TERMINAL_INVOCATION_STATES
     )
 
 
@@ -1810,7 +1817,9 @@ def _receipt_ref_projection(receipt: Any) -> dict[str, object]:
 def _receipt_id(receipt: Any) -> str:
     invocation_id = receipt.invocation_id.strip()
     if not invocation_id or "/" in invocation_id:
-        raise _receipt_protocol_error("invocation_id must be owner-local for receipt id")
+        raise _receipt_protocol_error(
+            "invocation_id must be owner-local for receipt id"
+        )
     return f"{invocation_id}:{int(receipt.index)}"
 
 
@@ -1818,7 +1827,9 @@ def _receipt_ura(receipt: Any) -> str:
     realm = _realm_from_principal_ura(receipt.callee_binding.ura, "callee_binding.ura")
     invocation_id = receipt.invocation_id.strip()
     if "/" in invocation_id:
-        raise _receipt_protocol_error("invocation_id must be owner-local for receipt URA")
+        raise _receipt_protocol_error(
+            "invocation_id must be owner-local for receipt URA"
+        )
     return (
         f"{CANONICAL_URA_REALM_PREFIX}{realm}/resource/runtime/invocation/"
         f"{invocation_id}/receipt/{int(receipt.index)}"
@@ -1888,103 +1899,93 @@ def _facade_causal_binding_projection(
 
 
 def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
-    authority = binding.WhichOneof("authority")
-    if authority == "self_authority":
-        _require_receipt_text(
-            binding.self_authority.principal_ura,
-            "authority_binding.self_authority.principal_ura",
+    form = binding.WhichOneof("form")
+    if form == "binding":
+        relation = binding.binding
+        authority_ura = _authority_binding_agent_ura(
+            relation.authority,
+            "authority_binding.binding.authority",
         )
-        return {
-            "kind": "self",
-            "principal_ura": binding.self_authority.principal_ura,
-        }
-    if authority == "delegated_authority":
-        value = binding.delegated_authority
-        for field_name in (
-            "issuer_ura",
-            "subject_ura",
-            "caller_ura",
-            "audience",
-        ):
-            _require_receipt_text(
-                getattr(value, field_name),
-                f"authority_binding.delegated_authority.{field_name}",
+        evidence = relation.WhichOneof("evidence")
+        if evidence == "identity":
+            return {
+                "kind": _authority_relation_binding_kind(relation),
+                "authority_ura": authority_ura,
+            }
+        if evidence == "delegation":
+            value = relation.delegation
+            issuer_ura = _authority_binding_agent_ura(
+                value.issuer,
+                "authority_binding.binding.delegation.issuer",
             )
-        _require_receipt_text_list(
-            value.scopes,
-            "authority_binding.delegated_authority.scopes",
-        )
-        _require_receipt_bytes(
-            value.signature,
-            "authority_binding.delegated_authority.signature",
-            64,
-        )
-        return {
-            "kind": "delegation",
-            "issuer_ura": value.issuer_ura,
-            "subject_ura": value.subject_ura,
-            "caller_ura": value.caller_ura,
-            "audience": value.audience,
-            "scopes": list(value.scopes),
-            "issued_at_ms": value.issued_at_ms,
-            "expires_at_ms": value.expires_at_ms,
-            "signature_base64": base64.b64encode(value.signature).decode("ascii"),
-        }
-    if authority == "capability_grant":
-        _require_receipt_text(
-            binding.capability_grant.capability_ura,
-            "authority_binding.capability_grant.capability_ura",
-        )
-        return {
-            "kind": "capability",
-            "capability_ura": binding.capability_grant.capability_ura,
-        }
-    if authority == "policy_grant":
-        _require_receipt_text(
-            binding.policy_grant.policy_ura,
-            "authority_binding.policy_grant.policy_ura",
-        )
-        return {
-            "kind": "policy",
-            "policy_ura": binding.policy_grant.policy_ura,
-        }
-    if authority == "session_authority":
-        value = binding.session_authority
-        for field_name in ("issuer_ura", "subject_ura", _AXON_AUTHORITY_LINK_FIELD):
             _require_receipt_text(
-                getattr(value, field_name),
-                f"authority_binding.session_authority.{field_name}",
+                value.audience,
+                "authority_binding.binding.delegation.audience",
             )
-        _require_receipt_text_list(
-            value.scopes,
-            "authority_binding.session_authority.scopes",
-        )
-        _require_receipt_text_list(
-            value.audiences,
-            "authority_binding.session_authority.audiences",
-        )
-        _require_receipt_bytes(
-            value.signature,
-            "authority_binding.session_authority.signature",
-            64,
-        )
-        return {
-            "kind": "session",
-            "issuer_ura": value.issuer_ura,
-            "subject_ura": value.subject_ura,
-            _AXON_AUTHORITY_LINK_FIELD: getattr(value, _AXON_AUTHORITY_LINK_FIELD),
-            "scopes": list(value.scopes),
-            "audiences": list(value.audiences),
-            "issued_at_ms": value.issued_at_ms,
-            "expires_at_ms": value.expires_at_ms,
-            "signature_base64": base64.b64encode(value.signature).decode("ascii"),
-        }
-    if authority == "bootstrap_authority":
-        value = binding.bootstrap_authority
+            _require_receipt_text_list(
+                value.scopes,
+                "authority_binding.binding.delegation.scopes",
+            )
+            _require_receipt_bytes(
+                value.signature,
+                "authority_binding.binding.delegation.signature",
+                64,
+            )
+            return {
+                "kind": _authority_relation_binding_kind(relation),
+                "authority_ura": authority_ura,
+                "issuer_ura": issuer_ura,
+                "audience": value.audience,
+                "scopes": list(value.scopes),
+                "issued_at_ms": value.issued_at_ms,
+                "expires_at_ms": value.expires_at_ms,
+                "signature_base64": base64.b64encode(value.signature).decode("ascii"),
+            }
+        if evidence == "session":
+            value = relation.session
+            issuer_ura = _authority_binding_agent_ura(
+                value.issuer,
+                "authority_binding.binding.session.issuer",
+            )
+            _require_receipt_text(
+                value.session_id,
+                "authority_binding.binding.session.session_id",
+            )
+            _require_receipt_text_list(
+                value.scopes,
+                "authority_binding.binding.session.scopes",
+            )
+            _require_receipt_text_list(
+                value.audiences,
+                "authority_binding.binding.session.audiences",
+            )
+            _require_receipt_bytes(
+                value.signature,
+                "authority_binding.binding.session.signature",
+                64,
+            )
+            return {
+                "kind": _authority_relation_binding_kind(relation),
+                "authority_ura": authority_ura,
+                "issuer_ura": issuer_ura,
+                "session_id": value.session_id,
+                "scopes": list(value.scopes),
+                "audiences": list(value.audiences),
+                "issued_at_ms": value.issued_at_ms,
+                "expires_at_ms": value.expires_at_ms,
+                "signature_base64": base64.b64encode(value.signature).decode("ascii"),
+            }
+        if evidence == "attestation":
+            return {
+                "kind": _authority_relation_binding_kind(relation),
+                "authority_ura": authority_ura,
+            }
+    if form == "bootstrap":
+        value = binding.bootstrap
         for field_name in ("principal_ura", "realm", "ability"):
             _require_receipt_text(
                 getattr(value, field_name),
-                f"authority_binding.bootstrap_authority.{field_name}",
+                f"authority_binding.bootstrap.{field_name}",
             )
         return {
             "kind": "bootstrap",
@@ -2000,10 +2001,8 @@ def _canonical_authority_binding_projection(binding: Any) -> dict[str, object]:
     kind = str(facade["kind"])
     projection = dict(facade)
     projection.pop("kind")
-    projection["form"] = {
-        "self": "self_",
-        "delegation": "delegated",
-    }.get(kind, kind)
+    if kind != "bootstrap":
+        projection["form"] = kind
     if "issued_at_ms" in projection:
         projection["issued_at_ms"] = str(projection["issued_at_ms"])
     if "expires_at_ms" in projection:
@@ -2017,20 +2016,33 @@ def _canonical_authority_binding_projection(binding: Any) -> dict[str, object]:
 
 
 def _authority_binding_kind(binding: Any) -> str:
-    authority = binding.WhichOneof("authority")
-    if authority == "self_authority":
-        return "self"
-    if authority == "delegated_authority":
-        return "delegation"
-    if authority == "capability_grant":
-        return "capability"
-    if authority == "policy_grant":
-        return "policy"
-    if authority == "session_authority":
-        return "session"
-    if authority == "bootstrap_authority":
+    form = binding.WhichOneof("form")
+    if form == "binding":
+        return _authority_relation_binding_kind(binding.binding)
+    if form == "bootstrap":
         return "bootstrap"
     raise _receipt_protocol_error("authority_binding has no canonical authority")
+
+
+def _authority_binding_agent_ura(identity: Any, field_name: str) -> str:
+    _require_receipt_text(identity.ura, f"{field_name}.ura")
+    return identity.ura
+
+
+def _authority_relation_binding_kind(binding: Any) -> str:
+    relation = {
+        _types_pb2.AUTHORITY_RELATION_SELF: "self",
+        _types_pb2.AUTHORITY_RELATION_DELEGATED_BY: "delegated_by",
+        _types_pb2.AUTHORITY_RELATION_SESSION_OF: "session_of",
+        _types_pb2.AUTHORITY_RELATION_CREDENTIAL_OF: "credential_of",
+    }.get(binding.relation, "unspecified")
+    evidence = {
+        "identity": "identity",
+        "delegation": "delegation",
+        "session": "session",
+        "attestation": "attestation",
+    }.get(binding.WhichOneof("evidence"), "none")
+    return f"{relation}+{evidence}"
 
 
 def _canonical_authority_proof_projection(proof: Any) -> dict[str, object]:
@@ -2336,7 +2348,10 @@ def _close_identity_projector(
 def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
     code = error.code()
     message = error.details() or str(error)
-    if _canonical_error_code_from_message_prefix(message) == ErrorCode.DESCRIPTOR_OWNER_OFFLINE:
+    if (
+        _canonical_error_code_from_message_prefix(message)
+        == ErrorCode.DESCRIPTOR_OWNER_OFFLINE
+    ):
         return _direct_error(
             "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
             code=ErrorCode.DESCRIPTOR_OWNER_OFFLINE,

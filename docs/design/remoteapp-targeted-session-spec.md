@@ -1,6 +1,6 @@
 # EasyNet RemoteApp Targeted Session SPEC
 
-Status: implemented; full acceptance verified 2026-08-16
+Status: targeted-session and macOS multi-surface implementation present; full RemoteApp product closure incomplete as of 2026-08-24
 Scope: EasyNet-Cli daemon, builtin remote desktop plugin, frontend execution surface
 Primary goal: make `application`, `window`, and `display` remote sessions functionally distinct and verifiable.
 
@@ -37,14 +37,23 @@ The current tree already contains these implementation foundations:
 - `remote_desktop.create_session` already resolves the acted-on target from the invocation envelope subject in `plugins/remote-desktop/src/handlers/create_session.rs`.
 - `plugins/remote-desktop/src/resource.rs` already allows display/window/application resource subjects for remote desktop sessions.
 - macOS resource bootstrap already enumerates window/application targets through `CGWindowListCopyWindowInfo` in `src/daemon/ability/builtins/resources/media/resource_bootstrap.rs`.
-- macOS ScreenCaptureKit native capture already branches by `ResourceType::Display`, `ResourceType::Window`, and `ResourceType::Application` in `plugins/remote-desktop/src/screencapturekit_capture.rs`.
-- WebRTC native media now starts ScreenCaptureKit from the session-owned `RemoteAppTargetBinding` in `plugins/remote-desktop/src/transport/webrtc_native_media.rs`.
+- The canonical macOS media-host resolves exact display, window, and application
+  `NativeTargetPlan` contracts in
+  `plugins/remote-desktop/media-host/src/macos_sck.rs`; application capture
+  validates committed membership, front-to-back order, geometry, and native
+  application identity before creating independent-window ScreenCaptureKit
+  streams.
+- Hosted WebRTC projects the session-owned `RemoteAppTargetBinding` into that
+  private contract and supervises the generation in
+  `plugins/remote-desktop/src/transport/webrtc_hosted_media.rs`. The removed
+  daemon-local `webrtc_native_media` and ScreenCaptureKit implementations are
+  forbidden compatibility paths, not alternate backends.
 - `remote_desktop.watch_events` already exposes a session event stream in `plugins/remote-desktop/src/handlers/watch_events.rs`.
 - `remote_desktop.*` is projected through `AbilityDedicatedSurface::RemoteDesktop` and `BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP`, not the generic media surface.
 - `resource.refresh_remote_targets` and `resource.watch_remote_targets` exist as daemon resource-inventory abilities. They are backend/frontend-contract foundations for live target pickers, not remote desktop session abilities.
 - Session target tracking has a plugin-owned monitor and platform observation seam; it samples host target state independently of WebRTC media transport.
 
-Implemented product state and explicit unsupported boundaries:
+Implemented targeted-session state and explicit unsupported product boundaries:
 
 - `meta.list_resources` remains a pure persisted-table read. The dedicated
   picker obtains current windows/applications through
@@ -59,12 +68,42 @@ Implemented product state and explicit unsupported boundaries:
 - Authoritative native host E2E runs decoded exact window and application
   WebRTC frames. Selected sentinel content was present, unrelated sentinel
   content was absent, and neither path widened scope or used display fallback.
-- Same-display application window-set rebind is implemented through the
+  The 2026-08-26 TURN-backed proofs are
+  `/tmp/remoteapp-window-move-resize-turn-live-20260826-v3/report.md` and
+  `/tmp/remoteapp-application-multiwindow-turn-live-20260826-v9/report.md`.
+  The application proof captures two independently colored windows owned by
+  one real `.app`, excludes a second unrelated `.app`, and preserves
+  process-scoped `display_id=null` plus canonical `display_ids=[1]`. It closes
+  the same-display multi-window case. Its receiver groups RTP by
+  timestamp/marker, uses streaming decoder semantics, and records zero decode
+  errors/dropped access units; cross-display rebind remains open.
+- Cross-display application window-set rebind is implemented through the
   explicit pending-media-rebind state machine and emits `TARGET_REBOUND` only
-  after a renewed capture proof commits. Rebind attempts that cannot be proven
-  emit `TARGET_REBIND_FAILED`. Multi-display application capture remains
-  unsupported until `MultiAppSurface`/multi-stream support exists.
-- Interactive app/window input must remain view-only until focus validation, coordinate mapping, and target epoch checks are proven on the execution path.
+  after a renewed capture proof and complete native capture-plan replacement
+  commit. Each committed macOS application window uses a desktop-independent
+  ScreenCaptureKit stream; the plugin composites those streams into one bounded
+  black-gap `MultiAppSurface`. Native canvas dimensions apply the maximum
+  ScreenCaptureKit point-to-pixel scale across the selected surfaces, while
+  layout remains in canonical host coordinates. Window identity and surface layout are separate
+  proofs: geometry or front-to-back order changes rebuild the complete media
+  plan even when `window_set_epoch` is unchanged. A replacement plan is
+  prestarted behind an inactive output generation; old and prepared output are
+  paused around the Runtime-owned binding commit, then exactly the committed
+  generation is selected. A stale/failed commit resumes the old generation and
+  destroys the prepared plan. Rebind attempts that cannot be proven emit
+  `TARGET_REBIND_FAILED`. Live decoded cross-display host certification remains
+  required before a product-complete claim.
+- macOS interactive app/window input uses `target_local` only after explicit
+  input-control consent. The daemon revalidates exact identity, visibility,
+  focus, geometry, and application window-set state immediately before every
+  OS input event. Pointer dispatch additionally requires the mapped host point
+  to hit the current topmost committed target window; compositor gaps and
+  foreign-window occlusion fail closed before OS injection. macOS posts guarded
+  `CGEvent` effects; Windows has a guarded
+  User32 `SendInput` baseline; Linux has a guarded X11/XTest baseline and fails
+  closed on Wayland until a portal `RemoteDesktop` session is bound to the
+  selected Resource. Windows/Linux remain `baseline_ready`, not product-ready,
+  until independent live OS-effect E2E certifies the same guarantee.
 - Direct WebRTC route discovery is provider-backed. Host candidates,
   configured STUN server-reflexive routes, standard TURN relay routes, and
   EasyNet relay routes are represented as typed route evidence. Provider and
@@ -151,6 +190,11 @@ set_description/add_ice_candidate/watch_events/attach/refresh_lease/end_session:
   subject = the original selected target resource URA captured by create_session
   session_id/session_token are access facts in args, not Invocation.subject
   the surface adapter must not put subject or resource_ura in args
+
+set_description/add_ice_candidate/report_client_state:
+  set_description allocates and returns a strictly increasing transport_epoch
+  add_ice_candidate/report_client_state must carry that exact epoch
+  stale generations are rejected before signaling, endpoint, or session mutation
 ```
 
 The frontend must never pass `subject` in JSON args.
@@ -656,7 +700,7 @@ Production candidates are built from stable native identity, not labels:
 
 ```text
 window:      window_id plus owner pid/app_identity/bundle_id consistency
-application: display_id plus app_identity/bundle_id/primary_pid plus resolved_window_ids/window_set_epoch
+application: app_identity/bundle_id/primary_pid plus resolved_window_ids/window_set_epoch; display_ids are topology evidence, not routing identity
 display:     monitor_id/display_id or an explicit primary_display subject
 ```
 
@@ -676,8 +720,12 @@ window:
 
 application:
   app_name alone is not stable identity.
-  production capture requires primary_pid, bundle identity, or another stable
-  native identity plus the display-scoped app window set.
+  capture requires primary_pid, bundle identity, or another stable native
+  identity plus an exact committed app window set.
+  macOS ScreenCaptureKit uses a multi-surface app window set with one
+  desktop-independent stream per committed window.
+  Windows/Linux xcap baseline uses a process-scoped app window set. No platform
+  may invent a display identity for application routing.
 
 display:
   require monitor_id/display_id match unless the subject explicitly means
@@ -689,8 +737,8 @@ Current macOS fallback that must be removed from production behavior:
 ```text
 select_display(ResourceEntry) must not return firstObject() when monitor_id or
 display_id is absent/mismatched.
-ResourceType::Application must not call display-scoped SCK filters without an
-explicit display identity or multi-stream app-surface plan.
+ResourceType::Application must not call display-scoped SCK filters. It resolves
+the exact committed windows into a multi-stream app-surface plan.
 ```
 
 Backend compatibility is part of identity resolution. A target discovered by
@@ -827,19 +875,31 @@ unsupported_capture_scope
 
 not a degraded display capture.
 
-Application capture requires extra precision. On macOS, ScreenCaptureKit's
-application filter is display-relative: it captures windows of selected
-applications on a selected display. Therefore an `application` target must bind
-one of these explicit forms:
+Application capture requires extra precision. ScreenCaptureKit's application
+filter is display-relative, so it is not the implementation of a complete
+application Resource. A macOS `application` target binds this form:
 
 ```text
-AppSurface(display_id, app_identity, window_set_epoch)
-MultiAppSurface([AppSurface...])
-Unsupported("application spans multiple displays without multi-stream support")
+MultiAppSurface(app_identity, window_set_epoch, [DesktopIndependentWindowSurface...])
 ```
 
-The implementation must not advertise single-stream application capture as
-"the whole app" if it only captures one display's subset without saying so.
+Every native window surface must be in the committed `AppWindowSetProof` and
+owner-match the application identity. Uncommitted windows are excluded before
+native stream creation. The binding also commits an ordered
+`AppSurfaceLayoutProof(surface_layout_epoch, front_to_back_surfaces)` containing
+each window's native geometry. Geometry/Z-order drift is a media change, not an
+identity change, and must atomically replace the complete capture plan before
+the new layout becomes input-addressable. Gaps are black and may never contain
+display pixels.
+
+Capability projection must make that distinction machine-readable. The
+application platform row carries `application_surface.scope`, `multi_window`,
+`multi_display`, and `blocked_reason`. macOS reports `multi_surface`,
+`multi_display=true`, and no topology blocker because the bounded multi-stream
+compositor works in application-union coordinates. Windows/Linux xcap reports
+`process_scoped` and `multi_display=true`. Every platform remains subject to
+live decoded frame/leakage/rebind certification; capability metadata alone is
+not product evidence.
 
 ## 9. Target lifecycle events
 
@@ -869,6 +929,8 @@ TARGET_REBIND_ATTEMPTED
 TARGET_REBOUND
 TARGET_REBIND_FAILED
 TARGET_BINDING_CHANGED
+TARGET_PERMISSION_VERIFICATION_PENDING
+TARGET_PERMISSION_VERIFICATION_CLEARED
 TARGET_PERMISSION_REVOKED
 DISPLAY_TOPOLOGY_CHANGED
 SESSION_DEGRADED
@@ -905,12 +967,26 @@ The event stream must distinguish target failure from transport failure:
 
 ```text
 TARGET_LOST: selected OS target is no longer resolvable
-TARGET_PERMISSION_REVOKED: OS or EasyNet permission changed
+TARGET_PERMISSION_VERIFICATION_PENDING: one negative host permission sample has paused media/input while confirmation is pending
+TARGET_PERMISSION_VERIFICATION_CLEARED: later positive host evidence restored the same session and consent authority
+TARGET_PERMISSION_REVOKED: repeated negative host evidence confirmed that OS or EasyNet permission was revoked
 MEDIA_SOURCE_LOST: media backend lost the bound source
 TRANSPORT_FAILED: WebRTC/relay failed while target remains valid
 ```
 
 Without this distinction, the frontend cannot tell "window disappeared" from "network failed".
+
+Host permission observation is an explicit fail-closed state machine. The first
+negative sample transitions the durable target binding to
+`permission_verification_pending`, disables input, stops the active media
+source, and suspends the session without revoking consent or producing a
+terminal receipt. A positive host snapshot clears the pending state and the
+frontend re-establishes media on a newer transport epoch while preserving the
+same session id, token, consent, and `watch_events` stream. A second negative
+sample while verification is pending confirms revocation and enters the
+ordinary persistence-first `Closing -> Closed` path with
+`target_permission_revoked`. An inconclusive snapshot error can neither restore
+authority nor promote a single negative sample to confirmed revocation.
 
 Bounded lifecycle behavior:
 
@@ -918,6 +994,7 @@ Bounded lifecycle behavior:
 target tracker interval: 250-500 ms on active sessions
 move/resize/title event coalescing: max 10 Hz per session
 lost debounce: two failed observations or 1 second, whichever comes first
+permission revoke confirmation: two consecutive negative host samples; any positive host snapshot clears the pending state
 automatic rebind window: <= 30 seconds unless the user extends the lease
 event log: bounded ring buffer; old target events may be compacted but not reordered
 ```
@@ -1040,10 +1117,51 @@ Rules:
 - App/window target loss must not transition to display fallback.
 - `binding_epoch` changes only when the selected OS identity changes under an explicit rebind policy.
 - `target_identity_epoch` changes only when the selected OS identity changes.
+- Every epoch serialized as a public JSON integer MUST be positive and at most
+  `2^53 - 1`, so Browser clients can round-trip it exactly into guarded
+  Runtime abilities. Resource-derived epochs are constrained at their one
+  canonical derivation source; clients MUST NOT truncate or round them.
 - `target_geometry_revision` changes on move/resize/scale changes without changing target identity.
 - `media_source_epoch` changes when the native capture source/filter is rebuilt.
 - `consent_epoch` changes when the applicable EasyNet consent is granted, renewed, revoked, or replaced.
 - Media frames and input coordinate transforms must refer to the same `binding_epoch` and compatible `target_geometry_revision`.
+- A WebRTC PeerConnection failure terminates only that transport generation. It
+  moves the reusable session to `Suspended`; it does not close the event log or
+  mint a terminal receipt.
+- A newer authenticated offer resumes the same session with a strictly larger
+  `transport_epoch`. SDP, ICE, codec, diagnostics, media feedback, and input
+  readiness are generation-scoped and reset before the new endpoint starts.
+- Recovery snapshots retain the transport epoch high-watermark. Daemon restart
+  must allocate beyond it before accepting a resumed offer.
+- Recovery snapshots containing application window-set topology use schema v2
+  and persist canonical non-empty `display_ids` in every embedded binding,
+  tracking, capture-proof, and event projection. Schema-v1 rows may migrate
+  only when a positive committed `display_id` proves the legacy single-display
+  topology; ambiguous process-scoped rows fail closed instead of inventing a
+  display or widening capture authority.
+- A terminal cause first commits a durable `Closing(reason)` intent. Only then
+  may the plugin publish stop to production WebRTC and diagnostic preview
+  generations. Restart recovery must finish that same cause; it must never
+  revive a persisted Closing row as a degraded active session.
+- Diagnostic preview is a session-owned task group, not a detached convenience
+  stream. Its control reader, frame forwarder, capture/encoder worker, and any
+  blocking H.264 thread share one generation and produce one explicit
+  completion receipt after every member exits.
+- Channel disconnect, dropped join ownership, and stop-signal delivery are not
+  completion receipts. They leave the session in `Closing` and cannot mint
+  `SESSION_CLOSED` or a terminal receipt.
+- Client receive backpressure does not own server resource settlement. A
+  terminal preview frame is delivered within a bounded deadline or dropped;
+  either outcome must allow the preview task group to finish and publish its
+  process-local completion receipt. Runtime Core receipts remain the canonical
+  invocation lifecycle proof.
+- `Closed` means every process-local transport generation owned by the session,
+  including diagnostic preview, has settled. Replacement and late callbacks
+  are fenced by monotonically increasing transport epochs.
+- Transport settlement has one bounded deadline across diagnostic preview and
+  direct WebRTC. A platform capture/encoder call that does not return cannot
+  hang an end RPC, permission monitor, lease worker, or daemon shutdown; the
+  session remains durably `Closing` and recovery must finish the same cause.
 
 ## 11. Input routing
 
@@ -1067,13 +1185,18 @@ For app/window sessions:
 
 If a platform cannot guarantee target-scoped input for app/window sessions, interactive mode must fail closed or downgrade to `view_only` with an explicit reason.
 
-macOS v1 must treat app/window keyboard injection as unsafe unless it implements
-all of:
+macOS v1 permits app/window keyboard and pointer injection only because it
+implements all of:
 
 ```text
 foreground app/window validation before dispatch
 explicit target activation policy
-post-dispatch target still matches validation for bounded time
+fresh host validation occurs after the frame epoch gates and before dispatch
+periodic observation and per-frame validation share one plugin-owned native
+snapshot executor; input waits have a 50 ms monotonic deadline and reject as
+target_input_guard_deadline_exceeded instead of blocking the data channel
+pointer coordinates hit the topmost selected native window; black gaps and
+foreign-window occlusion reject before CGEvent posting
 input disabled on TARGET_LOST/HIDDEN/MINIMIZED/FOCUS_CHANGED away
 ```
 
@@ -1141,6 +1264,12 @@ failed
 
 No UI may report production online unless a production media path is actually ready.
 
+WebRTC transport generations are replaceable resources, not product sessions.
+`Disconnected`, `Failed`, endpoint setup failure, and browser replacement must
+leave a non-terminal session resumable until its lease or another explicit
+terminal policy ends it. ICE trickle without the active `transport_epoch` is
+invalid.
+
 ## 14. Clipboard and file transfer
 
 Clipboard and file transfer must not be extended through the pointer/key input data channel.
@@ -1206,16 +1335,21 @@ macOS minimum viable implementation order:
 6. add poll/diff tracker for move/resize/lost after first successful capture
 ```
 
-The first implementation may mark application sessions as `capture_surface=AppSurface` and `input_mode=view_only` if target-scoped input cannot be guaranteed. It must not claim `WindowSurface` for application sessions.
+An implementation must mark application sessions as
+`capture_surface=AppSurface` and `input_mode=view_only` whenever target-scoped
+input cannot be guaranteed. It must not claim `WindowSurface` for application
+sessions.
 
 macOS v1 minimum product claim:
 
 ```text
 display: production when WebRTC path is ready
 window: production capture only after target_binding proves exact SCWindow
-application: production only when response states the exact display-scoped app
-  window set; if the app spans displays and multi-stream is absent, unsupported
-interactive window/application: view_only unless focus validation is implemented
+application: production only when response states the exact committed app
+  window set and decoded multi-surface evidence proves cross-display capture,
+  black gaps, z-order, and absence of unrelated content
+interactive window/application: macOS target_local with explicit input consent
+  and per-event target guard; otherwise view_only
 ```
 
 ### Linux v1
@@ -1235,6 +1369,13 @@ X11:
 X11 window enumeration/capture/input
 explicit weaker-security labeling
 ```
+
+The executable X11 input baseline dynamically loads X11/XTest, proves the
+extension is present, serializes one display connection, maps pointer frames
+through the committed target geometry, bounds wheel expansion, and rejects
+partial/failed effects with a stable typed reason. If `WAYLAND_DISPLAY` is
+present it does not guess that XWayland owns the selected Resource: the session
+fails closed with `linux_wayland_portal_remote_desktop_not_implemented`.
 
 ### Windows v1
 
@@ -1258,10 +1399,44 @@ Input:
 SendInput with focus/target validation
 ```
 
+The executable input baseline maps target-local coordinates into the Windows
+virtual desktop, emits pointer/button/wheel/key effects through one auditable
+`SendInput` path, bounds wheel deltas, and rejects partial application. UIPI or
+other host rejection is surfaced as `windows_send_input_denied`; source
+availability alone does not promote the backend beyond `baseline_ready`.
+
 RemoteApp launch reference:
 
 ```text
 FreeRDP RAIL model
+```
+
+### Windows/Linux executable baseline
+
+Before the native product backends above are certified, the xcap/OpenH264
+baseline may execute display, exact window, and exact application capture under
+these constraints:
+
+```text
+window:
+  resolve by committed window_id and owner pid/app identity
+  reject missing, minimized, or owner-drifted targets
+  never substitute a similarly named window and never fall back to display
+
+application:
+  bind a process-stable identity and exact resolved_window_ids
+  capture and alpha-composite only that committed set into a bounded union
+  preserve negative/cross-display virtual-desktop coordinates and fill gaps
+  with deterministic black pixels rather than host display content
+  reject missing/minimized members and oversized unions
+  observe live process window-set drift and require an explicit rebind
+
+capability claim:
+  baseline_ready, not production_ready
+  promotion requires live Windows and Linux decoded-frame/leakage/rebind E2E
+  input promotion additionally requires independent pointer/key OS-effect,
+  focus/resource binding, coordinate tolerance, permission/UIPI denial, and
+  latency evidence on real Windows and Linux hosts
 ```
 
 ## 16. External reference boundaries
@@ -1316,7 +1491,9 @@ Before implementing broader lifecycle tracking, the first debugging pass should 
 1. resource.refresh_remote_targets(types=["window","application"]) returns a fresh row for the target.
 2. The row has metadata keys accepted by ScreenCaptureKit resolution:
    window: window_id plus pid, bundle_id, or app_identity
-   application: display_id plus bundle_id/app_identity/primary_pid plus resolved_window_ids and window_set_epoch
+   application: bundle_id/app_identity/primary_pid plus resolved_window_ids,
+   window_set_epoch, and display_ids topology evidence; display_id is optional
+   routing identity and must not be invented for process-scoped applications
 3. permission_status/request_permission were invoked with user-self or descriptor-bound subject, not the target resource subject, and their descriptors publish the host-local permission subject contract URA.
 4. create_session receives the selected resource URA as envelope subject.
 5. create_session performs live target resolution and returns target_binding.
@@ -1414,6 +1591,10 @@ create_session requires consent causal context
 create_session returns target_binding
 create_session returns scope_audit
 watch_events emits target lifecycle events
+transport failure suspends rather than terminalizes the session
+new signaling generation clears prior SDP/ICE/codec state
+add_ice_candidate rejects a stale transport_epoch
+daemon restart allocates beyond the persisted transport epoch high-watermark
 ```
 
 Anti-regression tests:
@@ -1437,8 +1618,8 @@ resource refresh lists applications
 meta.list_resources does not silently mutate resources.json
 closed window is pruned or marked unavailable
 create_session(window) binds exact window_id
-create_session(application) binds explicit display-scoped app window set
-application spanning multiple displays is multi-stream or unsupported
+create_session(application) binds an exact committed app window set
+application spanning multiple displays uses desktop-independent multi-stream capture
 window move emits TARGET_MOVED
 window resize emits TARGET_RESIZED
 window close emits TARGET_LOST
@@ -1484,19 +1665,20 @@ E2E checkpoints with authoritative evidence:
 
 | Checkpoint | Scenario | Required evidence |
 |---|---|---|
-| E2E-01 target picker freshness | Open a known window after daemon boot, refresh picker, select it | `resource.refresh_remote_targets` or equivalent live inventory ran after the window existed; returned row has `availability=available`, freshness metadata, and selected `resource_ura` |
+| E2E-01 target picker freshness | After daemon boot, separately open and select a known window and a known multi-window application | Each `resource.refresh_remote_targets` call ran after its native fixture existed. The window row binds native `window_id + owner_pid`; the application row binds `app_identity + owner_pid + resolved_window_ids + window_set_epoch`, preserves front-to-back surface membership, remains process-scoped, and both rows have `availability=available`, live-refresh freshness metadata, and a selected `resource_ura` |
 | E2E-02 permission subject correctness | Probe screen permission before selecting a target | invocation subject is user-self or descriptor-bound subject; probing with display/window/application resource subject fails with `invalid_argument` |
 | E2E-03 exact window session | Select one window while unrelated bright sentinel content is visible elsewhere on the display | `create_session` returns `target_binding.resolved_identity.window_id`, `scope_audit.display_fallback_used=false`; decoded stream never includes the off-window sentinel region |
-| E2E-04 exact application session | Select an app with one display-scoped window set while another app has visible sentinel content | `target_binding.capture_scope=AppSurface`; response states `display_id`, `app_identity`, `window_set_epoch`; decoded stream includes selected app windows and excludes other apps |
+| E2E-04 exact application session | Select an app whose committed windows span displays while another app has visible sentinel content | `target_binding.capture_scope=AppSurface`; response states `app_identity`, exact `resolved_window_ids`, `display_ids`, `window_set_epoch`, ordered `front_to_back_surfaces`, and `surface_layout_epoch`; decoded composed stream includes every selected app window, preserves black gaps/z-order, and excludes other apps and display pixels |
 | E2E-05 stale window fail-closed | Select a window, close it before `create_session` | no active session row is inserted; failure reason is `target_not_found` or `target_stale`; frontend action is `refresh_targets` |
 | E2E-06 no media re-resolution | Start WebRTC after successful `create_session`, then mutate/refresh resource cache before media starts | test fake `RemoteAppMediaSourceFactory` receives the stored `binding_id`; native WebRTC path has no `ResourceEntry -> target_for_entry` call outside explicit Rebinding; captured target does not drift |
 | E2E-07 display fallback forbidden | Use a resource with missing/mismatched display identity or force SCK window/app filter failure | session fails with `display_identity_missing`, `display_identity_mismatch`, or `display_fallback_forbidden`; no first-display capture starts; decoded frames never show full display |
 | E2E-08 move/resize tracking | Move and resize selected window during streaming | ordered `TARGET_MOVED`/`TARGET_RESIZED` events advance `target_geometry_revision`; input transform observes the same revision |
 | E2E-09 target loss vs transport failure | Close selected window while WebRTC remains connected | event is `TARGET_LOST`/`MEDIA_SOURCE_LOST`, not `TRANSPORT_FAILED`; session/event lifecycle state is `suspended`; input is disabled |
 | E2E-10 weak identity ambiguity | Create two windows with same app/title, select a row without stable native identity | resolver returns `target_identity_ambiguous`; no stream starts |
-| E2E-11 view-only input safety | Start app/window session without proven focus-safe input routing | response reports `input_mode=view_only`; keyboard frames are rejected or ignored with `input_scope_unsupported` |
+| E2E-11 view-only input safety | Start app/window session without explicit input-control consent | response reports `input_mode=view_only` with `input_consent_required`; keyboard/pointer frames are rejected or ignored with `input_scope_unsupported` |
 | E2E-12 frontend invocation subject | Create session from frontend selected target | Axon Invocation has selected resource URA in envelope subject and no `subject` inside args |
 | E2E-13 production online predicate | Complete WebRTC offer/answer and receive decoded frames for a selected window/application | post-negotiation session evidence reports `production_media_ready=true`, `production_readiness.production_codec_negotiated=true`, and `production_readiness.media_transport_ready=true`; UI online state must not be derived from `target_binding`, `production_gate`, or decoded-frame presence alone |
+| E2E-14 guarded target-local input | Start a consented interactive macOS window/application session and send pointer plus key frames, including an application-union gap and a selected window occluded by another app | response reports `input_scope=target_local`; every applied input has a fresh pre-dispatch host proof bound to the selected Resource/session/geometry revision/focus epoch, exact target identity, visibility, focus, and exact application window set/layout when applicable; gap input rejects as `pointer_outside_target_surface`, occluded input rejects as `pointer_occluded`, neither produces an OS effect, and an independent OS observer proves accepted target input reached only the selected target within the latency bound |
 
 Passing only unit tests for resolver matching, descriptor registration, or JSON
 schema does not prove the feature. M1 requires at least E2E-01 through E2E-07
@@ -1513,6 +1695,7 @@ Performance/resource integration checkpoints:
 | PERF-05 ICE/SDP flood bounded | Submit >10k trickle candidates and large SDP payloads | candidates rejected after cap; serialized session view remains bounded |
 | PERF-06 no lock-held OS work | Instrument session-store lock while resolving/starting media | no OS enumeration, disk IO, encoder construction, SCK startup, or WebRTC negotiation occurs under the store lock |
 | PERF-07 input storm coalesced | Send high-rate pointer frames and invalid frames for 10s | input path stays responsive; reject diagnostics are rate-limited/coalesced |
+| PERF-08 transport-budgeted media | Start a high-quality stream and constrain the device-to-browser path while capture/encode continues | the device consumes direction-correct local RTCP receiver reports without a Hub round trip, bounds encoder and frame pacing from loss/RTT plus measured RTP-writer service time, keeps the media-host lane binary and bounded, detaches transport-owned bytes before RTP/NACK lifetime can pin a shared slot, and never treats browser upload estimates as downlink capacity |
 
 ## 19. Acceptance definition
 
@@ -1537,7 +1720,7 @@ Full acceptance adds independent long-running tracking and interaction:
 Move/resize produces TARGET_MOVED/TARGET_RESIZED and keeps input mapping correct.
 Close/loss produces TARGET_LOST and disables input.
 Reopen/rebind either emits TARGET_REBOUND or an explicit typed failure.
-Application sessions state the exact display-scoped app window set.
+Application sessions state the exact committed multi-surface app window set.
 Window/application interactive mode is enabled only when target-scoped dispatch is proven.
 Transport readiness distinguishes host, STUN, TURN, EasyNet relay, and failed states.
 ```

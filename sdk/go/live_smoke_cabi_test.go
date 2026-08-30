@@ -13,9 +13,10 @@ import (
 	"time"
 )
 
-// TestGoSDKLiveDaemonSmoke proves the generic C ABI v7 boundary through the
-// public Go facade. Product/profile helpers are deliberately absent: complete
-// Invocation descriptors are supplied to Runtime Core directly.
+// TestGoSDKLiveDaemonSmoke proves the base C ABI v7 boundary and the additive
+// ABI v9 leased-stream extension through the public Go facade. Product/profile
+// helpers are deliberately absent: complete Invocation descriptors are
+// supplied to Runtime Core directly.
 func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -32,7 +33,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	} else if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("create smoke home: %v", err)
 	}
-	realm, deviceID, deviceURA, trustPath := writeGoLiveSmokeIdentity(t, home)
+	realm, deviceID, deviceURA, userURA, trustPath := writeGoLiveSmokeIdentity(t, home)
 	t.Setenv("HOME", home)
 	t.Setenv("EASYNET_REALM_TRUST_PATH", trustPath)
 	t.Setenv("EASYNET_PAGES_PORT", strconv.Itoa(19000+os.Getpid()%1000))
@@ -113,7 +114,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("runtime health is not ready: %#v", health)
 	}
 
-	duplicateDraft := goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "duplicate-prepare"}, 2)
+	duplicateDraft := goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "observe.health", map[string]any{"smoke": "duplicate-prepare"}, 2)
 	firstPrepared, _, err := runtime.Prepare(ctx, duplicateDraft, PrepareOptions{})
 	if err != nil {
 		t.Fatalf("first duplicate-draft prepare: %v", err)
@@ -136,7 +137,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("duplicate draft allocated independent prepared and request ids")
 
-	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
+	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
 	if err != nil {
 		t.Fatalf("RuntimeClient.Invoke: %v", err)
 	}
@@ -152,7 +153,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("unary RuntimeClient.Invoke OK")
 
-	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
+	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
 	if err != nil {
 		t.Fatalf("typed terminal failure prepare: %v", err)
 	}
@@ -211,7 +212,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("RuntimeEventClient read live daemon handle events")
 
-	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "session.attach", map[string]any{"session_id": "go-sdk-live-smoke-no-such-session"}, 33, "stream"))
+	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "session.attach", map[string]any{"session_id": "go-sdk-live-smoke-no-such-session"}, 33, "stream"))
 	if err != nil {
 		t.Fatalf("session.attach stream: %v", err)
 	}
@@ -231,6 +232,125 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("stream close: %v", err)
 	}
 	t.Log("StreamHandle received receipt-backed daemon terminal frame")
+
+	leasedSubjectURA, err := descriptorBoundSubjectURA(
+		ctx,
+		NewCanonicalAddressing(),
+		userURA,
+		"resource.watch_remote_targets",
+	)
+	if err != nil {
+		t.Fatalf("project resource.watch_remote_targets subject: %v", err)
+	}
+	mediaCalleeURA := goLiveSmokeSystemAgentCallee(t, realm, deviceID, "resource.watch_remote_targets")
+	managedSigning, err := NewManagedSigningClient(ManagedSigningClientOptions{
+		SocketPath: filepath.Join(home, ".easynet", "keyring.sock"),
+		Timeout:    2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewManagedSigningClient: %v", err)
+	}
+	signingIdentity, err := managedSigning.ActiveSignerForSubject(userURA, "user_signing.cli")
+	if err != nil {
+		t.Fatalf("resolve paired-user runtime signing identity: %v", err)
+	}
+	authorityClient, err := NewCanonicalAuthorityClient(signingIdentity)
+	if err != nil {
+		t.Fatalf("NewCanonicalAuthorityClient: %v", err)
+	}
+	defer func() {
+		if err := authorityClient.Close(context.Background()); err != nil {
+			t.Fatalf("close authority client: %v", err)
+		}
+	}()
+	nowMS := time.Now().UnixMilli()
+	delegation, err := authorityClient.MintDelegationProof(ctx, DelegationRequest{
+		IssuerURA:   userURA,
+		SubjectURA:  leasedSubjectURA,
+		CallerURA:   userURA,
+		Audience:    mediaCalleeURA,
+		Scopes:      []string{"resource.watch_remote_targets"},
+		IssuedAtMS:  nowMS,
+		ExpiresAtMS: nowMS + int64((5*time.Minute)/time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("mint resource.watch_remote_targets delegation: %v", err)
+	}
+	abilityClient, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	leasedStream, err := abilityClient.OpenLeasedStream(ctx, RuntimeCallContext{
+		CallerURA:     userURA,
+		CalleeURA:     mediaCalleeURA,
+		SubjectURA:    userURA,
+		NonceBase64:   goLiveSmokeNonce(49),
+		CausalContext: map[string]any{"form": "none"},
+		Authority:     delegation,
+	}, "resource.watch_remote_targets", map[string]any{"max_events": 1, "types": []string{"display"}})
+	if err != nil {
+		t.Fatalf("resource.watch_remote_targets leased stream: %v", err)
+	}
+	leasedCtx, leasedCancel := context.WithTimeout(ctx, 5*time.Second)
+	leasedEvent, err := leasedStream.Next(leasedCtx)
+	leasedCancel()
+	if err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("leased stream data next: %v", err)
+	}
+	if leasedEvent.Kind() != "data" || leasedEvent.Terminal() {
+		_ = leasedEvent.Release()
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf(
+			"leased stream data event = kind:%q terminal:%v state:%q",
+			leasedEvent.Kind(), leasedEvent.Terminal(), leasedEvent.State(),
+		)
+	}
+	if leasedEvent.PayloadContentType() != "application/json" || leasedEvent.Payload() == nil {
+		_ = leasedEvent.Release()
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf(
+			"leased stream payload = content-type:%q payload:%#v",
+			leasedEvent.PayloadContentType(), leasedEvent.Payload(),
+		)
+	}
+	leasedPayload, err := leasedEvent.Payload().ToBytes()
+	if err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("copy and release leased payload: %v", err)
+	}
+	if !leasedEvent.Payload().Released() {
+		_ = leasedStream.Close(context.Background())
+		t.Fatal("leased payload owner remained live after ToBytes")
+	}
+	var inventoryEvent map[string]any
+	if err := json.Unmarshal(leasedPayload, &inventoryEvent); err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("decode leased inventory payload: %v", err)
+	}
+	if inventoryEvent["event_type"] == "" || inventoryEvent["resources"] == nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("leased inventory payload is incomplete: %#v", inventoryEvent)
+	}
+	leasedTerminalCtx, leasedTerminalCancel := context.WithTimeout(ctx, 5*time.Second)
+	leasedTerminal, err := leasedStream.Next(leasedTerminalCtx)
+	leasedTerminalCancel()
+	if err != nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf("leased stream terminal next: %v", err)
+	}
+	defer func() { _ = leasedTerminal.Release() }()
+	if leasedTerminal.Kind() != "terminal" || !leasedTerminal.Terminal() || leasedTerminal.TerminalReceiptJSON() == nil {
+		_ = leasedStream.Close(context.Background())
+		t.Fatalf(
+			"leased stream terminal event = kind:%q terminal:%v receipt:%s",
+			leasedTerminal.Kind(), leasedTerminal.Terminal(), leasedTerminal.TerminalReceiptJSON(),
+		)
+	}
+	if err := leasedStream.Close(ctx); err != nil {
+		t.Fatalf("leased stream close: %v", err)
+	}
+	t.Log("ABI v9 LeasedStreamHandle received raw daemon payload and receipt-backed terminal frame")
 }
 
 func requireLiveSmokeEnv(t *testing.T, name string) string {
@@ -242,7 +362,7 @@ func requireLiveSmokeEnv(t *testing.T, name string) string {
 	return value
 }
 
-func writeGoLiveSmokeIdentity(t *testing.T, home string) (string, string, string, string) {
+func writeGoLiveSmokeIdentity(t *testing.T, home string) (string, string, string, string, string) {
 	t.Helper()
 	stateDir := filepath.Join(home, ".easynet")
 	if err := os.RemoveAll(stateDir); err != nil {
@@ -253,11 +373,13 @@ func writeGoLiveSmokeIdentity(t *testing.T, home string) (string, string, string
 	}
 	realm := "cli"
 	deviceID := "local"
+	userID := "go-sdk-smoke-user-id"
 	deviceURA := "easynet:///r/cli/device/local"
+	userURA := "easynet:///r/cli/user/" + userID
 	writeGoLiveSmokeJSON(t, filepath.Join(stateDir, "credentials.json"), map[string]any{
 		"node_id": deviceID, "credential_token": "go-sdk-smoke-token",
 		"hub_endpoint": "https://127.0.0.1:50443", "realm": realm,
-		"username": "go-sdk-smoke-user", "user_id": "go-sdk-smoke-user-id",
+		"username": "go-sdk-smoke-user", "user_id": userID,
 	})
 	daemonConfig := `[daemon]
 mode = "device"
@@ -279,7 +401,7 @@ added_at_unix_ms = 0
 	if err := os.WriteFile(trustPath, []byte(trust), 0o600); err != nil {
 		t.Fatalf("write realm trust: %v", err)
 	}
-	return realm, deviceID, deviceURA, trustPath
+	return realm, deviceID, deviceURA, userURA, trustPath
 }
 
 func writeGoLiveSmokeJSON(t *testing.T, path string, value any) {
@@ -293,16 +415,17 @@ func writeGoLiveSmokeJSON(t *testing.T, path string, value any) {
 	}
 }
 
-func goLiveSmokeDraft(t *testing.T, runtime *RuntimeClient, deviceURA, ability string, args map[string]any, nonceStart byte, callMode ...string) InvocationDraft {
+func goLiveSmokeDraft(t *testing.T, runtime *RuntimeClient, realm, deviceID, userURA, deviceURA, ability string, args map[string]any, nonceStart byte, callMode ...string) InvocationDraft {
 	t.Helper()
 	mode := "rpc"
 	if len(callMode) > 0 {
 		mode = callMode[0]
 	}
-	descriptorRef := goLiveSmokeDescriptorRef(t, runtime, deviceURA, ability, mode)
+	calleeURA := goLiveSmokeSystemAgentCallee(t, realm, deviceID, ability)
+	descriptorRef := goLiveSmokeDescriptorRef(t, runtime, userURA, calleeURA, deviceURA, ability, mode)
 	draft, err := NewInvocationBuilder().
-		WithCallerURA(deviceURA).
-		WithCalleeURA(deviceURA).
+		WithCallerURA(userURA).
+		WithCalleeURA(calleeURA).
 		WithDescriptorRef(descriptorRef).
 		WithSubjectURA(deviceURA).
 		WithNonceBase64(goLiveSmokeNonce(nonceStart)).
@@ -316,15 +439,31 @@ func goLiveSmokeDraft(t *testing.T, runtime *RuntimeClient, deviceURA, ability s
 	return draft
 }
 
-func goLiveSmokeDescriptorRef(t *testing.T, runtime *RuntimeClient, deviceURA, ability, callMode string) string {
+func goLiveSmokeSystemAgentCallee(t *testing.T, realm, deviceID, ability string) string {
+	t.Helper()
+	systemAgentID := ""
+	switch ability {
+	case "observe.health":
+		systemAgentID = "runtime-health"
+	case "session.attach":
+		systemAgentID = "session"
+	case "resource.watch_remote_targets":
+		systemAgentID = "media"
+	default:
+		t.Fatalf("Go SDK smoke does not know SystemAgent owner for %s", ability)
+	}
+	return "easynet:///r/" + realm + "/agent/device." + deviceID + "." + systemAgentID
+}
+
+func goLiveSmokeDescriptorRef(t *testing.T, runtime *RuntimeClient, callerURA, calleeURA, subjectURA, ability, callMode string) string {
 	t.Helper()
 	if runtime == nil {
 		t.Fatalf("live-smoke RuntimeClient missing from test context")
 	}
 	descriptorRef, err := runtime.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA:  deviceURA,
-		CallerURA:  deviceURA,
-		SubjectURA: deviceURA,
+		CalleeURA:  calleeURA,
+		CallerURA:  callerURA,
+		SubjectURA: subjectURA,
 		Ability:    ability,
 		CallMode:   callMode,
 	})

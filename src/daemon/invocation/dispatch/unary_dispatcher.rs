@@ -28,7 +28,7 @@
 
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -43,7 +43,7 @@ use crate::daemon::federation::client::FederationClientError;
 use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::federation::resolver_contract::{RecordType, ResolveAnswerKind, ResolveType};
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
-use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
+use crate::daemon::invocation::admission::decision::{AccessAction, SignatureDecisionReason};
 use crate::daemon::invocation::admission::hosted_agent_delegation::{
     HostedAgentDelegationIngress, HostedAgentDelegationIssuer,
 };
@@ -93,7 +93,6 @@ use crate::daemon::invocation::dispatch::governance_read_route::require_selected
 use crate::daemon::invocation::dispatch::invocation_wire::{
     callee_ura_from_envelope, descriptor_ref_from_invocation_target, encode_json_payload,
     function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
-    FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
 use crate::daemon::invocation::routing::route_resolver::{
@@ -208,6 +207,7 @@ pub(crate) fn rpc_dispatch_outcome_response(
         invocation_id,
         state,
         payload_bytes,
+        payload_content_type,
         error,
         admission_receipt,
         terminal_receipt,
@@ -244,7 +244,7 @@ pub(crate) fn rpc_dispatch_outcome_response(
             )
         }
     };
-    let result_content_type = rpc_result_content_type(&payload_bytes).to_string();
+    let result_content_type = payload_content_type;
     (
         Ok(Response::new(InvokeResponse {
             header: invocation_id.map(|request_id| ResponseHeader {
@@ -266,14 +266,6 @@ pub(crate) fn rpc_dispatch_outcome_response(
     )
 }
 
-fn rpc_result_content_type(payload: &[u8]) -> &'static str {
-    if payload.is_empty() {
-        "application/octet-stream"
-    } else {
-        FEDERATION_RESULT_CONTENT_TYPE
-    }
-}
-
 #[cfg(test)]
 mod rpc_dispatch_outcome_response_tests {
     use super::*;
@@ -291,6 +283,7 @@ mod rpc_dispatch_outcome_response_tests {
                 invocation_id: None,
                 state: InvocationState::Failed,
                 payload_bytes: Vec::new(),
+                payload_content_type: "application/octet-stream".to_string(),
                 error: Some(error),
                 admission_receipt: None,
                 terminal_receipt: None,
@@ -766,6 +759,7 @@ impl UnaryDispatcher {
         &self,
         arguments: &[u8],
         caller_device_ura: &str,
+        metadata: &HashMap<String, String>,
     ) -> Result<Vec<u8>, Status> {
         let _transition = self
             .directory
@@ -779,12 +773,20 @@ impl UnaryDispatcher {
             )
         })?;
         let trust_anchor = self.admission.trust_anchor_snapshot();
-        OwnerProjectionPublicationAuthority::verify_admitted_session(
+        let authority_binding = self.admission.verify_session_control_authority_metadata(
+            caller_device_ura,
+            &request.owner_ura,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            AccessAction::Manage,
+            metadata,
+        )?;
+        OwnerProjectionPublicationAuthority::verify_admitted_session_with_authority(
             caller_device_ura,
             hub_ura,
             &request,
             self.directory.advertised_agents.as_ref(),
             trust_anchor.as_ref(),
+            authority_binding.as_ref(),
         )
         .map_err(|err| {
             Status::permission_denied(format!(
@@ -2015,7 +2017,7 @@ impl UnaryDispatcher {
         route: &DelegatedInvokeRoute,
     ) -> Result<Response<InvokeResponse>, Status> {
         require_complete_signed_remote_request(request)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let forwarded_binding = ForwardedInvocationBinding::for_delegated_request(request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         let client = self.federation.client.as_ref().ok_or_else(|| {
             Status::failed_precondition("remote Invoke: federation dialer is not configured")
@@ -2072,8 +2074,10 @@ impl UnaryDispatcher {
             execution_host_ura = route.execution_host_ura.as_str(),
             route_ura = route.route_ura.as_str(),
         );
+        let forwarded_binding = ForwardedInvocationBinding::for_selected_route(request, route)?;
         self.forward_canonical_invoke_through_upstream_hub(
             request,
+            forwarded_binding,
             "remote Invoke HubSession dispatch",
         )
         .await
@@ -2094,8 +2098,10 @@ impl UnaryDispatcher {
             peer_realm = route.realm.as_str(),
             peer_hub_ura = route.hub_ura.as_str(),
         );
+        let forwarded_binding = ForwardedInvocationBinding::for_delegated_request(request)?;
         self.forward_canonical_invoke_through_upstream_hub(
             request,
+            forwarded_binding,
             "remote Invoke upstream-Hub peer delegation",
         )
         .await
@@ -2104,6 +2110,7 @@ impl UnaryDispatcher {
     async fn forward_canonical_invoke_through_upstream_hub(
         &self,
         request: &InvokeRequest,
+        forwarded_binding: ForwardedInvocationBinding,
         context: &'static str,
     ) -> Result<Response<InvokeResponse>, Status> {
         require_complete_signed_remote_request(request)?;
@@ -2112,17 +2119,27 @@ impl UnaryDispatcher {
                 "{context}: authenticated upstream session is not configured"
             )));
         };
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        if let Some(execution_host_ura) = forwarded_binding.selected_execution_host_ura() {
+            ensure_forwarded_receipt_signer_key(
+                receipt_resolver.as_ref(),
+                self.sessions.device_trust_sync.as_ref(),
+                execution_host_ura,
+                context,
+            )
+            .await?;
+        }
         match handle.escalate_invoke(request.clone()).await {
             Ok(response) => {
-                ensure_forwarded_response_receipt_signer_keys(
-                    receipt_resolver.as_ref(),
-                    self.sessions.device_trust_sync.as_ref(),
-                    &response,
-                    context,
-                )
-                .await?;
+                if forwarded_binding.selected_execution_host_ura().is_none() {
+                    ensure_forwarded_response_receipt_signer_keys(
+                        receipt_resolver.as_ref(),
+                        self.sessions.device_trust_sync.as_ref(),
+                        &response,
+                        context,
+                    )
+                    .await?;
+                }
                 let finalized = ForwardedFinalizedInvocation::verify_response(
                     &forwarded_binding,
                     response,
@@ -2176,7 +2193,8 @@ impl UnaryDispatcher {
             request.target.as_ref(),
             &request.arguments,
         )?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(request, selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         self.reject_self_presence_host(selected_route, "Invoke")
             .await?;

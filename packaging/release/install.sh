@@ -33,6 +33,7 @@ set -eu
 
 BASE_URL="https://easynet.run/download"
 INSTALL_DIR="/usr/local/bin"
+LIB_DIR="/usr/local/lib"
 INCLUDE_DIR="/usr/local/include/easynet"
 DOC_DIR="/usr/local/share/doc/easynet"
 
@@ -66,10 +67,21 @@ main() {
     echo "    easynet                      → $INSTALL_DIR/"
     echo "    easynet-daemon               → $INSTALL_DIR/"
     echo "    easynet-keyring              → $INSTALL_DIR/"
+    echo "    easynet-remoteapp-native-host → $INSTALL_DIR/"
+    if [ "$OS" = "Darwin" ]; then
+        echo "    easynet-remoteapp-media-host.app → $INSTALL_DIR/"
+    else
+        echo "    easynet-remoteapp-media-host → $INSTALL_DIR/"
+    fi
+    echo "    libeasynet_cli.$LIB_EXT      → $LIB_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo "    easynet_cli.h                → $INCLUDE_DIR/"
     echo "    easynet_cli.exports.v7       → $INCLUDE_DIR/"
+    echo "    easynet_cli.exports.v8       → $INCLUDE_DIR/"
+    echo "    easynet_cli.exports.v9       → $INCLUDE_DIR/"
     echo "    ffi-abi-v7.md                → $DOC_DIR/"
+    echo "    ffi-abi-v8.md                → $DOC_DIR/"
+    echo "    ffi-abi-v9.md                → $DOC_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
         echo "  To activate in this terminal, run:"
@@ -184,24 +196,45 @@ download_and_install() {
     # that). Plain mv into INSTALL_DIR — no per-step sudo, no tty
     # juggling.
     #
-    # The transport-plane rollout ships three binaries:
+    # The Runtime process set ships five binaries:
     # `easynet` (user-facing CLI), `easynet-daemon` (long-running
     # control + InvocationServer sidecar), and `easynet-keyring`
-    # (device-signing vault sidecar). Treat them as required
+    # (device-signing vault sidecar), and
+    # `easynet-remoteapp-native-host` (plugin-private target observer), and
+    # `easynet-remoteapp-media-host` on Linux or its signed `.app` bundle on
+    # macOS (killable native media generation host).
+    # Treat them as required
     # artefacts: if the tarball is missing one, the release is
     # malformed and the installer should fail loudly.
     mv "${TMPDIR}/easynet"        "${INSTALL_DIR}/easynet"
     mv "${TMPDIR}/easynet-daemon" "${INSTALL_DIR}/easynet-daemon"
     mv "${TMPDIR}/easynet-keyring" "${INSTALL_DIR}/easynet-keyring"
-    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring"
+    mv "${TMPDIR}/easynet-remoteapp-native-host" "${INSTALL_DIR}/easynet-remoteapp-native-host"
+    if [ "$OS" = "Darwin" ]; then
+        rm -f "${INSTALL_DIR}/easynet-remoteapp-media-host"
+        rm -rf "${INSTALL_DIR}/easynet-remoteapp-media-host.app"
+        mv "${TMPDIR}/easynet-remoteapp-media-host.app" "${INSTALL_DIR}/easynet-remoteapp-media-host.app"
+        chmod +x "${INSTALL_DIR}/easynet-remoteapp-media-host.app/Contents/MacOS/easynet-remoteapp-media-host"
+    else
+        mv "${TMPDIR}/easynet-remoteapp-media-host" "${INSTALL_DIR}/easynet-remoteapp-media-host"
+        chmod +x "${INSTALL_DIR}/easynet-remoteapp-media-host"
+    fi
+    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring" "${INSTALL_DIR}/easynet-remoteapp-native-host"
 
-    # Install the generic C ABI v7 contract alongside the runtime artefacts.
+    # Install the generic C ABI contract alongside the runtime artefacts.
     # Language bindings compile against the header; release/CI tooling uses
-    # the exact export allowlist; the spec carries ownership rules.
-    mkdir -p "$INCLUDE_DIR" "$DOC_DIR"
+    # the exact export allowlists; the spec carries ownership rules. The v8
+    # allowlist is an additive raw-stream extension; runtime_abi_version()
+    # remains 7.
+    mkdir -p "$LIB_DIR" "$INCLUDE_DIR" "$DOC_DIR"
+    mv "${TMPDIR}/libeasynet_cli.${LIB_EXT}" "${LIB_DIR}/libeasynet_cli.${LIB_EXT}"
     mv "${TMPDIR}/include/easynet_cli.h" "${INCLUDE_DIR}/easynet_cli.h"
     mv "${TMPDIR}/include/easynet_cli.exports.v7" "${INCLUDE_DIR}/easynet_cli.exports.v7"
+    mv "${TMPDIR}/include/easynet_cli.exports.v8" "${INCLUDE_DIR}/easynet_cli.exports.v8"
+    mv "${TMPDIR}/include/easynet_cli.exports.v9" "${INCLUDE_DIR}/easynet_cli.exports.v9"
     mv "${TMPDIR}/docs/spec/ffi-abi-v7.md" "${DOC_DIR}/ffi-abi-v7.md"
+    mv "${TMPDIR}/docs/spec/ffi-abi-v8.md" "${DOC_DIR}/ffi-abi-v8.md"
+    mv "${TMPDIR}/docs/spec/ffi-abi-v9.md" "${DOC_DIR}/ffi-abi-v9.md"
 
     # Install dendrite bridge library under the REAL user's home so
     # the daemon can dlopen it without LD_LIBRARY_PATH gymnastics.
@@ -277,11 +310,11 @@ reload_shell() {
 }
 
 cleanup_stale_binaries() {
-    # Remove stale easynet/easynet-daemon/easynet-keyring/axon-runtime binaries from
+    # Remove stale Runtime process-set/axon-runtime binaries from
     # other PATH dirs
     # that would shadow the freshly installed copy. We're root here,
     # so direct rm — no nested sudo dance.
-    for bin in easynet easynet-daemon easynet-keyring axon-runtime; do
+    for bin in easynet easynet-daemon easynet-keyring easynet-remoteapp-native-host easynet-remoteapp-media-host axon-runtime; do
         IFS=:
         for dir in $PATH; do
             unset IFS

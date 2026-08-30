@@ -10,7 +10,7 @@ mod frame;
 mod io;
 mod process;
 mod stream;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use serde_json::Value;

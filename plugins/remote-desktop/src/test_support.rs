@@ -10,8 +10,10 @@ use serde_json::{json, Value};
 
 use axon_sdk::invocation::{CausalContext, ReceiptRef};
 
-use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
-use crate::daemon::ability::dispatch::EnvelopeContext;
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    ScreenSnapshotBackend, SyntheticScreenBackend,
+};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext};
 use crate::daemon::persistence::resources::{
     upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
 };
@@ -19,15 +21,22 @@ use crate::daemon::plugins::remote_desktop::constants::DEFAULT_FRAME_QUEUE_DEPTH
 use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
+use crate::daemon::plugins::remote_desktop::session::{
+    RemoteDesktopSession, RemoteDesktopSessionInit,
+};
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_transports;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{
-    AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteAppTargetResolver,
+    AppSurfaceLayoutProof, AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError,
     RemoteDesktopTargetKind, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
+    TargetGeometry,
 };
-use crate::daemon::plugins::PluginRuntimeLimits;
+use crate::daemon::plugins::{
+    DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
+    PluginRequirementSet, PluginRuntimeLimits,
+};
 
 static REMOTE_DESKTOP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -45,8 +54,91 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_plugin() -> Arc<RemoteDes
     )
 }
 
+/// Assemble the executable RemoteApp catalog used by unit-level invocation
+/// tests. Production registration remains bound to platform capture services;
+/// callers of this seam must inject their deterministic capture backend.
+pub(crate) fn test_catalog_with_screen_backend(
+    backend: Arc<dyn ScreenSnapshotBackend>,
+) -> AxonAbilityCatalog {
+    let limits = test_runtime_limits();
+    let mut builder = PluginContributionBuilder::new(
+        "easynet.remote_desktop",
+        "0.1.0",
+        PluginKind::Builtin,
+        limits,
+        PluginRequirementSet::default(),
+        Vec::new(),
+    );
+    crate::daemon::plugins::remote_desktop::registration::contribute_with_platform_services(
+        &mut builder,
+        backend,
+        Arc::new(TestRemoteAppTargetBindingVerifier),
+        limits,
+    )
+    .expect("remote desktop test contribution");
+    let contribution = builder
+        .finish()
+        .expect("remote desktop test contribution finish");
+    let contributions = PluginContributionSet::new(vec![contribution]);
+    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+        None,
+    );
+    let mut catalog = AxonAbilityCatalog::new_test_runtime_for_device_authority(
+        runtime,
+        "easynet:///r/acme/device/01DEV",
+    );
+    DaemonPluginBinder::static_catalog(&mut catalog)
+        .bind_set(&contributions)
+        .expect("bind remote desktop test contribution");
+    catalog
+}
+
 pub(in crate::daemon::plugins::remote_desktop) fn test_runtime_limits() -> PluginRuntimeLimits {
     PluginRuntimeLimits::new(128, DEFAULT_FRAME_QUEUE_DEPTH as usize)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn admit_decoded_video_for_test(
+    session: &mut RemoteDesktopSession,
+    epoch: TransportEpoch,
+    media_pipeline_id: &str,
+) {
+    let session_id = session.session_id().to_string();
+    let binding = session.target_binding();
+    let subject_ura = binding.subject_ura().to_string();
+    let binding_id = binding.binding_id().to_string();
+    let binding_epoch = binding.binding_epoch();
+    let media_source_epoch = binding.media_source_epoch();
+    session.record_media_stats(
+        epoch,
+        json!({
+            "media_pipeline_id": media_pipeline_id,
+            "backend_id": media_pipeline_id,
+            "video_codec": "h264",
+            "video_transport": "webrtc",
+        }),
+    );
+    assert!(session.merge_client_media_stats(
+        epoch,
+        json!({
+            "render_probe": {
+                "evidence_authority": "client_reported",
+                "probe_source": "browser_webrtc_receiver",
+                "selected_resource_ura": subject_ura,
+                "session_id": session_id,
+                "transport_epoch": epoch.value(),
+                "binding_id": binding_id,
+                "binding_epoch": binding_epoch,
+                "media_source_epoch": media_source_epoch,
+                "media_pipeline_id": media_pipeline_id,
+                "video_codec": "h264",
+                "video_transport": "webrtc",
+                "decoded_video_frames": 1,
+                "frame_width": 1280,
+                "frame_height": 720,
+            }
+        }),
+    ));
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn reset_store(plugin: &RemoteDesktopPlugin) {
@@ -66,14 +158,43 @@ pub(in crate::daemon::plugins::remote_desktop) fn env_for(subject: &str) -> Enve
 pub(in crate::daemon::plugins::remote_desktop) fn with_consent_ticket(
     plugin: &RemoteDesktopPlugin,
     env: &EnvelopeContext,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    with_consent_ticket_grants(plugin, env, args, false)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn with_input_control_consent_ticket(
+    plugin: &RemoteDesktopPlugin,
+    env: &EnvelopeContext,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    with_consent_ticket_grants(plugin, env, args, true)
+}
+
+fn with_consent_ticket_grants(
+    plugin: &RemoteDesktopPlugin,
+    env: &EnvelopeContext,
+    args: serde_json::Value,
+    input_control_granted: bool,
+) -> serde_json::Value {
+    with_consent_ticket_scope(plugin, env, args, input_control_granted, false)
+}
+
+fn with_consent_ticket_scope(
+    plugin: &RemoteDesktopPlugin,
+    env: &EnvelopeContext,
     mut args: serde_json::Value,
+    input_control_granted: bool,
+    remote_focus_granted: bool,
 ) -> serde_json::Value {
     let issued = plugin
         .consent_registry()
-        .issue(
+        .issue_with_grants(
             env.caller(),
             env.subject(),
             crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT,
+            input_control_granted,
+            remote_focus_granted,
         )
         .expect("test consent ticket issues");
     args.as_object_mut()
@@ -112,6 +233,7 @@ impl RemoteAppTargetBindingVerifier for TestRemoteAppTargetBindingVerifier {
                     locator.app_identity().map(ToOwned::to_owned),
                     locator.bundle_id().map(ToOwned::to_owned),
                 )
+                .with_process_instance_id(locator.process_instance_id().map(ToOwned::to_owned))
                 .with_native_dimensions(Some((1280, 720))),
         )
     }
@@ -165,6 +287,44 @@ pub(in crate::daemon::plugins::remote_desktop) fn live_remote_target_metadata(
             "source": "live_refresh",
         }),
     );
+    if !map.contains_key("front_to_back_surfaces") {
+        let window_ids = map
+            .get("resolved_window_ids")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !window_ids.is_empty() {
+            let geometries = window_ids
+                .iter()
+                .enumerate()
+                .map(|(index, window_id)| {
+                    (
+                        *window_id,
+                        TargetGeometry {
+                            x: Some(index as f64 * 120.0),
+                            y: Some(0.0),
+                            width: Some(100.0),
+                            height: Some(80.0),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let layout = AppSurfaceLayoutProof::from_front_to_back_geometries(
+                geometries
+                    .iter()
+                    .map(|(window_id, geometry)| (*window_id, geometry)),
+            )
+            .expect("test application surface layout");
+            map.insert(
+                "front_to_back_surfaces".to_string(),
+                layout.to_value()["front_to_back_surfaces"].clone(),
+            );
+            map.insert(
+                "surface_layout_epoch".to_string(),
+                json!(layout.layout_epoch()),
+            );
+        }
+    }
     metadata
 }
 
@@ -250,11 +410,101 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_application_target_bindin
         Some("com.example.Editor".to_string()),
     )
     .with_native_dimensions(Some((200, 100)))
-    .with_app_window_set(app_window_set);
+    .with_app_window_set(app_window_set)
+    .with_app_surface_layout(
+        AppSurfaceLayoutProof::from_front_to_back_geometries([
+            (
+                10,
+                &TargetGeometry {
+                    x: Some(10.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+            (
+                11,
+                &TargetGeometry {
+                    x: Some(110.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(100.0),
+                },
+            ),
+        ])
+        .expect("test application surface layout"),
+    );
     binding
         .commit_capture_proof("test.ability", proof)
         .expect("application proof commits");
     binding
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn test_window_target_binding(
+) -> RemoteAppTargetBinding {
+    let mut binding = ResourceEntryTargetResolver
+        .resolve_for_session(
+            "test.ability",
+            &ResourceEntry {
+                resource_ura: "easynet:///r/acme/resource/window.test".into(),
+                owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+                kind: ResourceType::Window,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: "window:macos:cgwindow:10:42".into(),
+                display_name: "Editor".into(),
+                metadata: live_remote_target_metadata(json!({
+                    "window_id": 42,
+                    "pid": 10,
+                    "app_name": "Editor",
+                    "x": 100,
+                    "y": 200,
+                    "width": 800,
+                    "height": 600,
+                    "target_identity_epoch": 7,
+                    "geometry_revision": 3,
+                })),
+                first_seen_at: "2026-06-01T00:00:00Z".into(),
+            },
+            "view_only",
+            1,
+        )
+        .expect("window target binding resolves");
+    let locator = binding.native_locator();
+    let proof =
+        ResolvedCaptureTargetProof::new(locator.capture_backend(), RemoteDesktopTargetKind::Window)
+            .with_native_identity(
+                locator.display_id(),
+                locator.window_id(),
+                locator.pid(),
+                locator.app_identity().map(ToOwned::to_owned),
+                locator.bundle_id().map(ToOwned::to_owned),
+            )
+            .with_process_instance_id(locator.process_instance_id().map(ToOwned::to_owned))
+            .with_native_dimensions(Some((800, 600)));
+    binding
+        .commit_capture_proof("test.ability", proof)
+        .expect("window proof commits");
+    binding
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn test_window_session_init(
+    session_id: &str,
+    transport_preferences: Vec<String>,
+) -> RemoteDesktopSessionInit {
+    let subject = "easynet:///r/acme/resource/window.test";
+    let env = env_for(subject);
+    RemoteDesktopSessionInit {
+        session_id: session_id.to_string(),
+        session_token: "token".to_string(),
+        creator_caller_ura: env.caller().to_string(),
+        consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env),
+        target_binding: test_window_target_binding(),
+        mode: "view_only".to_string(),
+        lease_ttl_ms: 5_000,
+        transport_preferences,
+        video: RemoteDesktopVideoConstraints::default(),
+        input_policy: RemoteDesktopInputPolicy::default(),
+    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn test_application_session_init(
@@ -290,7 +540,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_display(
             binding: ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Test Display",
-            metadata: json!({"primary_display": true, "backend": "xcap"}),
+            metadata: json!({"display_id": 1, "primary_display": true, "backend": "xcap"}),
         },
     )
     .expect("seed remote desktop display")
@@ -309,7 +559,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_xcap_display(
             binding: ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "xcap Display",
-            metadata: json!({"backend": "xcap", "primary_display": true}),
+            metadata: json!({"backend": "xcap", "display_id": 1, "primary_display": true}),
         },
     )
     .expect("seed remote desktop xcap display")

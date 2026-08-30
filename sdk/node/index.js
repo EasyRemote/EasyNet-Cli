@@ -2868,16 +2868,15 @@ function requireRuntimeReceiptEntityRef(value, field) {
 function requireRuntimeReceiptAuthorityBinding(value, field) {
   const binding = objectValue(value, field);
   const kind = requiredRuntimeText(binding.kind, `${field}.kind`);
-  if (kind === "self") {
-    requireRuntimeReceiptExactKeys(binding, field, ["kind", "principal_ura"]);
-    return { kind, principal_ura: requiredRuntimeText(binding.principal_ura, `${field}.principal_ura`) };
+  if (kind === "self+identity") {
+    requireRuntimeReceiptExactKeys(binding, field, ["kind", "authority_ura"]);
+    return { kind, authority_ura: requiredRuntimeText(binding.authority_ura, `${field}.authority_ura`) };
   }
-  if (kind === "delegation") {
+  if (kind === "delegated_by+delegation") {
     requireRuntimeReceiptExactKeys(binding, field, [
       "kind",
+      "authority_ura",
       "issuer_ura",
-      "subject_ura",
-      "caller_ura",
       "audience",
       "scopes",
       "issued_at_ms",
@@ -2886,9 +2885,8 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
     ]);
     return {
       kind,
+      authority_ura: requiredRuntimeText(binding.authority_ura, `${field}.authority_ura`),
       issuer_ura: requiredRuntimeText(binding.issuer_ura, `${field}.issuer_ura`),
-      subject_ura: requiredRuntimeText(binding.subject_ura, `${field}.subject_ura`),
-      caller_ura: requiredRuntimeText(binding.caller_ura, `${field}.caller_ura`),
       audience: requiredRuntimeText(binding.audience, `${field}.audience`),
       scopes: requiredRuntimeStringList(binding.scopes, `${field}.scopes`),
       issued_at_ms: requiredRuntimeNonNegativeInteger(binding.issued_at_ms, `${field}.issued_at_ms`),
@@ -2896,19 +2894,11 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
       signature_base64: requiredRuntimeBase64String(binding.signature_base64, `${field}.signature_base64`, 64),
     };
   }
-  if (kind === "capability") {
-    requireRuntimeReceiptExactKeys(binding, field, ["kind", "capability_ura"]);
-    return { kind, capability_ura: requiredRuntimeText(binding.capability_ura, `${field}.capability_ura`) };
-  }
-  if (kind === "policy") {
-    requireRuntimeReceiptExactKeys(binding, field, ["kind", "policy_ura"]);
-    return { kind, policy_ura: requiredRuntimeText(binding.policy_ura, `${field}.policy_ura`) };
-  }
-  if (kind === "session") {
+  if (kind === "session_of+session") {
     requireRuntimeReceiptExactKeys(binding, field, [
       "kind",
+      "authority_ura",
       "issuer_ura",
-      "subject_ura",
       "session_id",
       "scopes",
       "audiences",
@@ -2918,8 +2908,8 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
     ]);
     return {
       kind,
+      authority_ura: requiredRuntimeText(binding.authority_ura, `${field}.authority_ura`),
       issuer_ura: requiredRuntimeText(binding.issuer_ura, `${field}.issuer_ura`),
-      subject_ura: requiredRuntimeText(binding.subject_ura, `${field}.subject_ura`),
       session_id: requiredRuntimeText(binding.session_id, `${field}.session_id`),
       scopes: requiredRuntimeStringList(binding.scopes, `${field}.scopes`),
       audiences: requiredRuntimeStringList(binding.audiences, `${field}.audiences`),
@@ -3000,30 +2990,33 @@ function runtimeReceiptHash(value, field, allowZero) {
 
 function canonicalRuntimeAuthorityBytes(binding, field) {
   const chunks = [];
-  if (binding.kind === "self") {
-    chunks.push(Buffer.from([0x01]), runtimeLengthPrefixedText(binding.principal_ura));
-  } else if (binding.kind === "delegation") {
+  if (binding.kind === "self+identity") {
     chunks.push(
-      Buffer.from([0x02]),
+      runtimeLengthPrefixedText(binding.authority_ura),
+      runtimeLengthPrefixedText("axon-strict-v2"),
+      Buffer.from([0x01, 0x01]),
+    );
+  } else if (binding.kind === "delegated_by+delegation") {
+    chunks.push(
+      runtimeLengthPrefixedText(binding.authority_ura),
+      runtimeLengthPrefixedText("axon-strict-v2"),
+      Buffer.from([0x02, 0x02]),
       runtimeLengthPrefixedText(binding.issuer_ura),
-      runtimeLengthPrefixedText(binding.subject_ura),
-      runtimeLengthPrefixedText(binding.caller_ura),
-      runtimeLengthPrefixedText(binding.audience),
+      runtimeLengthPrefixedText("axon-strict-v2"),
       runtimeU32(binding.scopes.length),
       ...binding.scopes.map(runtimeLengthPrefixedText),
+      runtimeLengthPrefixedText(binding.audience),
       runtimeI64(binding.issued_at_ms),
       runtimeI64(binding.expires_at_ms),
       runtimeLengthPrefixedBytes(Buffer.from(binding.signature_base64, "base64")),
     );
-  } else if (binding.kind === "capability") {
-    chunks.push(Buffer.from([0x03]), runtimeLengthPrefixedText(binding.capability_ura));
-  } else if (binding.kind === "policy") {
-    chunks.push(Buffer.from([0x04]), runtimeLengthPrefixedText(binding.policy_ura));
-  } else if (binding.kind === "session") {
+  } else if (binding.kind === "session_of+session") {
     chunks.push(
-      Buffer.from([0x05]),
+      runtimeLengthPrefixedText(binding.authority_ura),
+      runtimeLengthPrefixedText("axon-strict-v2"),
+      Buffer.from([0x03, 0x03]),
       runtimeLengthPrefixedText(binding.issuer_ura),
-      runtimeLengthPrefixedText(binding.subject_ura),
+      runtimeLengthPrefixedText("axon-strict-v2"),
       runtimeLengthPrefixedText(binding.session_id),
       runtimeU32(binding.scopes.length),
       ...binding.scopes.map(runtimeLengthPrefixedText),

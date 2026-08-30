@@ -27,6 +27,7 @@ fi
 
 for required_test in \
   status_pairing_state_reports_paired_credentials \
+  status_pairing_json_projects_bound_current_user_identity \
   status_pairing_state_reports_unpaired_only_for_missing_credentials \
   status_pairing_state_rejects_malformed_credentials_as_invalid
 do
@@ -34,5 +35,9 @@ do
     fail "runtime status pairing state missing test: $required_test"
   fi
 done
+
+if ! rg -n 'payload\["pairing"\] = pairing' "$TARGET" >/dev/null; then
+  fail "runtime status JSON must expose the explicit pairing/current User projection"
+fi
 
 echo "check-status-pairing-state-boundary: ok"

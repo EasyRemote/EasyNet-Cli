@@ -15,6 +15,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
 use crate::daemon::plugins::remote_desktop::input::{
     EffectiveRemoteDesktopInputPolicy, RemoteDesktopInputPolicy,
 };
+use crate::daemon::plugins::remote_desktop::media::host_audio_capability::HostAudioSourceClass;
 use crate::daemon::plugins::remote_desktop::media::{
     webrtc_transport_backend_for_binding, MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
 };
@@ -24,6 +25,7 @@ use crate::daemon::plugins::remote_desktop::request::{
 };
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::transport::{
     start_direct_webrtc_endpoint, StartDirectWebRtcEndpointRequest,
@@ -69,14 +71,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
     let options = capture_options_from_video_constraints(&video)?;
     let target_bitrate_kbps = bitrate_kbps_from_video_constraints(&video);
     let max_frame_queue_depth = frame_queue_depth_from_video_constraints(&video);
-    let input_policy =
-        EffectiveRemoteDesktopInputPolicy::for_binding(&input_policy, &target_binding);
+    let input_policy = EffectiveRemoteDesktopInputPolicy::for_binding(
+        &input_policy,
+        &target_binding,
+        request.plugin.target_snapshot_executor(),
+    );
+    let host_audio_source = HostAudioSourceClass::for_target_kind(target_binding.target_kind());
     let epoch = request.plugin.transport_manager().allocate_epoch();
-    request
+    let host_audio_runtime = request.plugin.host_audio_runtime_snapshot();
+    let (recovery_snapshot, relay_lease) = request
         .plugin
         .session_store()
-        .with_sessions(|sessions| -> anyhow::Result<()> {
-            let session = sessions.get_mut(&session_id).ok_or_else(|| {
+        .with_target_operation_session(&session_id, |session| -> anyhow::Result<_> {
+            let session = session.ok_or_else(|| {
                 anyhow::anyhow!(
                     "{ABILITY_SET_DESCRIPTION}: session {session_id:?} disappeared before WebRTC negotiation; reason={REASON_SESSION_NOT_FOUND}"
                 )
@@ -88,9 +95,29 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
                 &request.access_args,
                 session,
             )?;
-            session.begin_webrtc_negotiation(epoch);
-            Ok(())
+            if !session.begin_webrtc_negotiation(epoch) {
+                anyhow::bail!(
+                    "{ABILITY_SET_DESCRIPTION}: transport epoch {} did not advance session {session_id:?}",
+                    epoch.value()
+                );
+            }
+            Ok((
+                RemoteDesktopRecoverySnapshot::from_session(session)?,
+                session.active_relay_lease().cloned(),
+            ))
         })?;
+    if let Err(error) = request.plugin.persist_recovery_snapshot(&recovery_snapshot) {
+        request
+            .plugin
+            .session_store()
+            .mark_direct_webrtc_generation_failed(
+                &session_id,
+                epoch,
+                "transport_epoch_checkpoint_failed",
+                error.to_string(),
+            );
+        return Err(error);
+    }
     let answer = match start_direct_webrtc_endpoint(StartDirectWebRtcEndpointRequest {
         sessions: request.plugin.session_store(),
         transports: request.plugin.transport_manager(),
@@ -102,15 +129,27 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
         max_frame_queue_depth,
         input_policy,
         offer_sdp,
+        relay_lease,
+        host_audio_runtime,
     }) {
         Ok(answer) => answer,
         Err(error) => {
-            request.plugin.session_store().mark_direct_webrtc_failed(
-                &session_id,
-                epoch,
-                "webrtc_endpoint_setup_failed",
-                error.to_string(),
-            );
+            if error.to_string().contains("host_audio") || error.to_string().contains("host-audio")
+            {
+                request.plugin.invalidate_host_audio_runtime(
+                    host_audio_source,
+                    "host_audio_endpoint_setup_failed",
+                );
+            }
+            request
+                .plugin
+                .session_store()
+                .mark_direct_webrtc_generation_failed(
+                    &session_id,
+                    epoch,
+                    "webrtc_endpoint_setup_failed",
+                    error.to_string(),
+                );
             return Err(error);
         }
     };

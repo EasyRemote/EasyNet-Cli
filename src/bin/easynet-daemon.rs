@@ -186,6 +186,11 @@ fn ensure_daemon_runtime_identity(config: &DaemonConfig) -> anyhow::Result<()> {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
+    if easynet_cli::daemon::execution::pty::supervisor::requested_by_environment() {
+        return tokio::task::spawn_blocking(easynet_cli::daemon::execution::pty::supervisor::run)
+            .await
+            .context("join internal PTY session supervisor")?;
+    }
     // Refuse non-empty argv. `easynet-daemon` does not parse
     // subcommand arguments at all; an invocation like
     // `easynet-daemon mcp serve --tenant ... --agent ...` would

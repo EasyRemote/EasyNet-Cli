@@ -25,6 +25,7 @@ additionalProperties = false
 
 [input_schema.properties.reason]
 type = "string"
+minLength = 1
 
 [input_schema.properties.session_id]
 type = "string"

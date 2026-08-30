@@ -3,10 +3,12 @@ import unittest
 from pathlib import Path
 
 from easynet_sdk import (
+    AddressingErrorReason,
     AxonAddressingTransport,
     ErrorCode,
     SDKError,
     SdkEnvironment,
+    addressing_error_reason,
     is_code,
 )
 
@@ -32,6 +34,12 @@ class AxonAddressingProviderTests(unittest.TestCase):
                 elif kind == "device":
                     built = addressing.device_ura(
                         request["realm"], request["device_id"]
+                    )
+                elif kind == "service":
+                    built = addressing.service_ura(
+                        request["realm"],
+                        request["user_id"],
+                        request["service_id"],
                     )
                 elif kind == "agent":
                     if request["owner_kind"] == "device":
@@ -197,6 +205,46 @@ class AxonAddressingProviderTests(unittest.TestCase):
             )
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        with self.assertRaises(SDKError) as caught:
+            addressing.owner_ability_ura(
+                "easynet:///r/example/device/dev-a",
+                "observe.health",
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(
+            addressing_error_reason(caught.exception),
+            AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
+        )
+        environment.close()
+
+    def test_device_owned_ability_rejection_has_one_typed_reason(self) -> None:
+        environment = SdkEnvironment()
+        addressing = environment.addressing_client()
+        ability_ura = "easynet:///r/example/ability/device.dev-a.observe.health"
+        descriptor_ref = (
+            f"{ability_ura}@1.0.0#"
+            f"{'a' * 64}!invoke"
+        )
+
+        for operation in (
+            lambda: addressing.parse_ura(ability_ura),
+            lambda: addressing.project_ability_ura(ability_ura),
+            lambda: addressing.project_descriptor_ref(descriptor_ref),
+        ):
+            with self.subTest(operation=operation):
+                with self.assertRaises(SDKError) as caught:
+                    operation()
+                self.assertEqual(caught.exception.stage, "addressing")
+                self.assertEqual(
+                    caught.exception.details,
+                    {"reason": "ability_owner_not_publisher"},
+                )
+                self.assertEqual(
+                    addressing_error_reason(caught.exception),
+                    AddressingErrorReason.ABILITY_OWNER_NOT_PUBLISHER,
+                )
+
         environment.close()
 
     def test_transport_requires_explicit_agent_owner_kind(self) -> None:

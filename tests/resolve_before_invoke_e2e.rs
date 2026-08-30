@@ -33,7 +33,7 @@
 //! Author: Silan Hu <silan.hu@u.nus.edu>
 //! Copyright (c) 2026 EasyNet. All rights reserved.
 
-#![cfg(feature = "axon-pb")]
+#![cfg(all(feature = "axon-pb", unix))]
 
 use std::io::Write;
 use std::sync::Arc;

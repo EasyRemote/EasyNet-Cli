@@ -8,6 +8,7 @@ pub(in crate::daemon::plugins::remote_desktop) mod add_ice_candidate;
 pub(in crate::daemon::plugins::remote_desktop) mod attach;
 pub(in crate::daemon::plugins::remote_desktop) mod create_session;
 pub(in crate::daemon::plugins::remote_desktop) mod end_session;
+pub(in crate::daemon::plugins::remote_desktop) mod focus_target;
 pub(in crate::daemon::plugins::remote_desktop) mod grant_consent;
 pub(in crate::daemon::plugins::remote_desktop) mod permission_status;
 pub(in crate::daemon::plugins::remote_desktop) mod refresh_lease;
@@ -76,14 +77,9 @@ mod tests {
             created["media_sdk"]["sdk_id"],
             json!(REMOTE_DESKTOP_MEDIA_SDK_ID)
         );
-        let expected_device_max_fps = if cfg!(target_os = "macos") {
-            MAX_ATTACH_FPS
-        } else {
-            XCAP_MACOS_RECORDER_MAX_FPS
-        };
         assert_eq!(
             created["device_capabilities"]["max_fps"],
-            json!(expected_device_max_fps)
+            json!(XCAP_MACOS_RECORDER_MAX_FPS)
         );
         assert_eq!(
             created["device_capabilities"]["requested_fps_ceiling"],
@@ -106,6 +102,14 @@ mod tests {
             signaled.get("session_token").is_none(),
             "session_token is create-only and must not appear in session views"
         );
+        plugin.session_store().with_sessions(|sessions| {
+            assert!(sessions
+                .get_mut("rd-test")
+                .unwrap()
+                .begin_webrtc_negotiation(
+                    crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch::new(1),
+                ));
+        });
 
         add_ice_candidate::handle(
             Arc::clone(&plugin),
@@ -113,6 +117,7 @@ mod tests {
             json!({
                 "session_id": "rd-test",
                 "session_token": token.clone(),
+                "transport_epoch": 1,
                 "candidate": { "candidate": "candidate:1" }
             }),
         )
@@ -145,6 +150,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ended["state"], json!("closed"));
+        assert_eq!(
+            ended["terminal_receipt"]["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        let terminal_receipt = ended["terminal_receipt"].clone();
         assert!(
             ended.get("session_token").is_none(),
             "terminal session views must not leak session_token"
@@ -159,6 +169,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ended_again["already_ended"], json!(true));
+        assert_eq!(
+            ended_again["terminal_receipt"], terminal_receipt,
+            "idempotent end_session must return the original terminal receipt"
+        );
     }
 
     #[test]
@@ -180,6 +194,8 @@ mod tests {
         .expect("grant_consent accepts selected target as envelope subject");
         assert_eq!(consent["subject_ura"], json!(ura));
         assert_eq!(consent["subject_type"], json!("display"));
+        assert_eq!(consent["grant_scope"]["media"], json!(true));
+        assert_eq!(consent["grant_scope"]["input_control"], json!(false));
         let consent_ticket = consent["consent_ticket"]
             .as_str()
             .expect("grant_consent returns a local consent ticket");
@@ -205,6 +221,30 @@ mod tests {
             created.get("subject").is_none(),
             "remote desktop lifecycle responses must not teach clients to pass subject in args"
         );
+    }
+
+    #[test]
+    fn grant_consent_projects_explicit_input_control_scope() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-input-control-consent");
+        resources::save(&file).unwrap();
+
+        let consent = grant_consent::handle(
+            Arc::clone(&plugin),
+            env_for(&ura),
+            json!({
+                "intent": CONSENT_INTENT,
+                "input_control": true
+            }),
+        )
+        .expect("grant_consent accepts explicit input control");
+
+        assert_eq!(consent["grant_scope"]["media"], json!(true));
+        assert_eq!(consent["grant_scope"]["input_control"], json!(true));
     }
 
     #[test]
@@ -237,10 +277,12 @@ mod tests {
             .expect("created session exposes target observation inputs");
         plugin
             .session_store()
-            .record_target_observation_for_session(
+            .commit_target_observation_for_session(
                 "rd-target-events",
                 &inputs.binding_id,
                 inputs.binding_epoch,
+                &inputs.snapshot,
+                &inputs.coherence_token,
                 TargetObservation::GeometryChanged {
                     geometry: TargetGeometry {
                         x: Some(12.0),

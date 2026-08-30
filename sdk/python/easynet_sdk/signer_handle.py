@@ -48,8 +48,6 @@ def signer_handle_provenance_error(handle: SignerHandle) -> str:
     if handle.profile.strip() != "signing":
         return "signer handle profile is unsupported"
     mode = handle.policy.get("mode")
-    if mode is None and not handle.policy and not handle.metadata:
-        return ""
     source = handle.metadata.get("source")
     if source != "provider_key_inventory":
         return "signer handle source must be provider key inventory"

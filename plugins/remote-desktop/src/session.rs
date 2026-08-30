@@ -4,19 +4,26 @@
 // File: plugins/remote-desktop/src/session.rs
 // Description: Session state and bounded event log for the remote desktop plugin.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, watch};
 
 use crate::daemon::persistence::resources::ResourceType;
-use crate::daemon::plugins::remote_desktop::constants::REASON_SESSION_EXPIRED;
+use crate::daemon::plugins::remote_desktop::constants::{
+    REASON_SESSION_EXPIRED, REASON_TARGET_PERMISSION_REVOKED,
+};
 use crate::daemon::plugins::remote_desktop::event_log::{
     RemoteDesktopEventLog, RemoteDesktopEventReplay,
 };
 use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints;
+use crate::daemon::plugins::remote_desktop::relay_lease::{
+    RemoteDesktopRelayLease, RemoteDesktopRelayLeaseAvailability,
+};
+use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::session_events;
+use crate::daemon::plugins::remote_desktop::session_signaling::RemoteDesktopNegotiatedMediaScope;
 pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remote_desktop::session_identity::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_identity::RemoteDesktopSessionProfile;
 use crate::daemon::plugins::remote_desktop::session_consent_state::{
@@ -27,17 +34,21 @@ use crate::daemon::plugins::remote_desktop::session_signaling::RemoteDesktopSign
 use crate::daemon::plugins::remote_desktop::session_state::{
     InputActivationGate, RemoteDesktopSessionPhase, RemoteDesktopSessionStateMachine,
 };
+use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
 pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopState;
 use crate::daemon::plugins::remote_desktop::session_transport_state::{
-    PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
+    ClientMediaFeedback, ClientRenderEvidence, PreviewTransportEpoch, PrimaryMediaPhase,
+    RemoteDesktopTransportState, TransportEpoch,
 };
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, ResolvedCaptureTargetProof, TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     RemoteAppTargetBindingStateMachine, TargetObservation, TargetTrackerSnapshot,
-    TargetTrackingEmission, TargetVisibilityState,
+    TargetRebindAttemptToken, TargetTrackingEmission, TargetVisibilityState,
 };
+
+const CLIENT_RENDER_EVIDENCE_MAX_AGE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetMediaSourceLost {
@@ -48,6 +59,15 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetMediaSourceLost {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetRebindDeadlineExpiration {
     media_source_lost: Option<TargetMediaSourceLost>,
+}
+
+/// Process-local CAS token for target observations performed outside the
+/// session operation mutex. A fresh incarnation prevents session-id reuse from
+/// accepting work sampled from an earlier aggregate row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct TargetCoherenceToken {
+    session_incarnation: String,
+    revision: u64,
 }
 
 impl TargetRebindDeadlineExpiration {
@@ -83,6 +103,22 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSession {
     transport: RemoteDesktopTransportState,
     target: RemoteAppTargetBindingStateMachine,
     event_log: RemoteDesktopEventLog,
+    input_runtime_block_reason: Option<String>,
+    terminal_receipt: Option<Value>,
+    session_incarnation: String,
+    target_coherence_revision: u64,
+    relay_lease: RemoteDesktopRelayLeaseAvailability,
+    /// Operational fence held only while this exact Closing revision is being
+    /// promoted to the authoritative recovery slot. It is process-local and is
+    /// intentionally absent from the recovery contract.
+    terminal_commit_in_progress: bool,
+}
+
+#[derive(Debug)]
+pub(in crate::daemon) enum RemoteDesktopRelayLeaseRotation {
+    Installed,
+    AlreadyOwned,
+    Unowned(RemoteDesktopRelayLease),
 }
 
 impl RemoteDesktopSession {
@@ -102,6 +138,12 @@ impl RemoteDesktopSession {
             signaling: RemoteDesktopSignalingState::new(),
             transport: RemoteDesktopTransportState::new(),
             event_log: RemoteDesktopEventLog::new(),
+            input_runtime_block_reason: None,
+            terminal_receipt: None,
+            session_incarnation: uuid::Uuid::new_v4().simple().to_string(),
+            target_coherence_revision: 1,
+            relay_lease: RemoteDesktopRelayLeaseAvailability::unavailable("hub_relay_not_acquired"),
+            terminal_commit_in_progress: false,
         };
         session.push_projected_event(session_events::session_created());
         session.push_projected_event(session_events::capture_target_resolved(
@@ -111,9 +153,180 @@ impl RemoteDesktopSession {
         session
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        snapshot: &RemoteDesktopRecoverySnapshot,
+    ) -> anyhow::Result<Self> {
+        let target_binding = RemoteAppTargetBinding::from_recovery_value(
+            snapshot.target_binding(),
+            snapshot.subject_display_name(),
+        )?;
+        if target_binding.subject_ura() != snapshot.selected_resource_ura() {
+            anyhow::bail!(
+                "RemoteApp recovery snapshot subject does not match target binding subject"
+            );
+        }
+        let consent_grant = RemoteDesktopConsentGrant::from_recovery_value(snapshot.consent())?;
+        let consent_epoch = target_binding.consent_epoch();
+        let (profile, _, target_binding, _) =
+            RemoteDesktopSessionProfile::from_init(RemoteDesktopSessionInit {
+                session_id: snapshot.session_id().to_string(),
+                session_token: snapshot.session_token().to_string(),
+                creator_caller_ura: snapshot.creator_caller_ura().to_string(),
+                consent: consent_grant.clone(),
+                target_binding,
+                mode: snapshot.mode().to_string(),
+                lease_ttl_ms: 1,
+                transport_preferences: snapshot.transport_preferences().to_vec(),
+                video: RemoteDesktopVideoConstraints::from_value(snapshot.video())?,
+                input_policy: RemoteDesktopInputPolicy::from_value(snapshot.input_policy())?,
+            });
+        let terminal_receipt = snapshot.terminal_receipt();
+        let terminal =
+            terminal_receipt.is_some() || matches!(snapshot.lifecycle_state(), "closed" | "failed");
+        let lifecycle = if terminal {
+            let public_state = match snapshot.lifecycle_state() {
+                "failed" => RemoteDesktopState::Failed,
+                _ => RemoteDesktopState::Closed,
+            };
+            RemoteDesktopSessionStateMachine::rehydrate_terminal(
+                public_state,
+                recovery_terminal_reason(terminal_receipt.as_ref()),
+            )?
+        } else if snapshot.lifecycle_state() == "closing" {
+            RemoteDesktopSessionStateMachine::rehydrate_terminating(
+                snapshot
+                    .termination_reason()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Closing recovery snapshot is missing termination_reason")
+                    })?
+                    .to_string(),
+            )?
+        } else {
+            RemoteDesktopSessionStateMachine::rehydrate_degraded()
+        };
+        let consent =
+            RemoteDesktopConsentState::rehydrate(consent_grant.clone(), snapshot.consent())
+                .unwrap_or_else(|_| {
+                    RemoteDesktopConsentState::active(consent_grant, consent_epoch)
+                });
+        let mut session = Self {
+            target: RemoteAppTargetBindingStateMachine::rehydrate(
+                target_binding,
+                snapshot.target_tracking(),
+            )?,
+            consent,
+            profile,
+            lifecycle,
+            lease: RemoteDesktopLease::rehydrate(
+                snapshot.created_at_ms(),
+                snapshot.updated_at_ms(),
+                snapshot.lease_expires_at_ms(),
+            )?,
+            signaling: RemoteDesktopSignalingState::new(),
+            transport: RemoteDesktopTransportState::rehydrate(
+                snapshot.transport_epoch_high_watermark(),
+            ),
+            event_log: RemoteDesktopEventLog::rehydrate(snapshot.events(), terminal)?,
+            input_runtime_block_reason: if terminal {
+                None
+            } else {
+                snapshot
+                    .input_runtime_block_reason()
+                    .map(ToString::to_string)
+            },
+            terminal_receipt,
+            session_incarnation: uuid::Uuid::new_v4().simple().to_string(),
+            target_coherence_revision: 1,
+            relay_lease: RemoteDesktopRelayLeaseAvailability::unavailable(
+                "hub_relay_requires_reacquire_after_recovery",
+            ),
+            terminal_commit_in_progress: false,
+        };
+        if !terminal {
+            session.push_projected_event(session_events::session_rehydrated(
+                session.target.binding(),
+                snapshot.lifecycle_state(),
+            ));
+        }
+        Ok(session)
+    }
+
     /// Stable opaque identifier for this remote desktop session.
     pub(in crate::daemon::plugins::remote_desktop) fn session_id(&self) -> &str {
         self.profile.session_id()
+    }
+
+    pub(in crate::daemon) fn install_relay_lease(
+        &mut self,
+        relay_lease: RemoteDesktopRelayLeaseAvailability,
+    ) {
+        self.relay_lease = relay_lease;
+    }
+
+    pub(in crate::daemon) fn active_relay_lease(&self) -> Option<&RemoteDesktopRelayLease> {
+        self.relay_lease.active()
+    }
+
+    /// Atomically rotate the Hub relay authorization owned by this session.
+    ///
+    /// Hub acquisition has already superseded the prior lease ID on success,
+    /// so only the fresh authorization remains releasable. An idempotent
+    /// duplicate refresh is reported as already owned and must not release the
+    /// session's current lease. A genuinely rejected fresh lease is returned
+    /// to the caller for release. This makes the current Hub authorization
+    /// have one explicit owner across refresh/session-terminal races.
+    pub(in crate::daemon) fn rotate_relay_lease_if_current(
+        &mut self,
+        expected_lease_id: &str,
+        refreshed: RemoteDesktopRelayLease,
+    ) -> RemoteDesktopRelayLeaseRotation {
+        if self
+            .active_relay_lease()
+            .is_some_and(|lease| lease.lease_id() == refreshed.lease_id())
+        {
+            return RemoteDesktopRelayLeaseRotation::AlreadyOwned;
+        }
+        if self.is_terminal()
+            || self
+                .active_relay_lease()
+                .is_none_or(|lease| lease.lease_id() != expected_lease_id)
+        {
+            return RemoteDesktopRelayLeaseRotation::Unowned(refreshed);
+        }
+        self.relay_lease = RemoteDesktopRelayLeaseAvailability::Active(refreshed);
+        RemoteDesktopRelayLeaseRotation::Installed
+    }
+
+    pub(in crate::daemon) fn retire_relay_lease_if_current(
+        &mut self,
+        expected_lease_id: &str,
+        reason: impl Into<String>,
+    ) -> Option<RemoteDesktopRelayLease> {
+        if self
+            .active_relay_lease()
+            .is_none_or(|lease| lease.lease_id() != expected_lease_id)
+        {
+            return None;
+        }
+        self.retire_relay_lease(reason)
+    }
+
+    pub(in crate::daemon) fn relay_lease_evidence(&self) -> Value {
+        self.relay_lease.evidence_value()
+    }
+
+    pub(in crate::daemon) fn retire_relay_lease(
+        &mut self,
+        reason: impl Into<String>,
+    ) -> Option<RemoteDesktopRelayLease> {
+        let prior = std::mem::replace(
+            &mut self.relay_lease,
+            RemoteDesktopRelayLeaseAvailability::unavailable(reason),
+        );
+        match prior {
+            RemoteDesktopRelayLeaseAvailability::Active(lease) => Some(lease),
+            RemoteDesktopRelayLeaseAvailability::Unavailable { .. } => None,
+        }
     }
 
     /// Return whether the caller supplied the session's bearer token.
@@ -128,6 +341,12 @@ impl RemoteDesktopSession {
 
     /// Opaque token returned only by create-session responses.
     pub(in crate::daemon::plugins::remote_desktop) fn session_token_for_create_response(
+        &self,
+    ) -> &str {
+        self.profile.session_token_for_create_response()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn session_token_for_recovery_snapshot(
         &self,
     ) -> &str {
         self.profile.session_token_for_create_response()
@@ -189,12 +408,58 @@ impl RemoteDesktopSession {
         self.target.snapshot()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn target_coherence_token(
+        &self,
+    ) -> TargetCoherenceToken {
+        TargetCoherenceToken {
+            session_incarnation: self.session_incarnation.clone(),
+            revision: self.target_coherence_revision,
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_coherence_matches(
+        &self,
+        expected: &TargetCoherenceToken,
+    ) -> bool {
+        self.session_incarnation == expected.session_incarnation
+            && self.target_coherence_revision == expected.revision
+    }
+
+    /// Reserve the next target-affecting operation generation before a host
+    /// effect starts. Failed or no-op host calls intentionally retain the new
+    /// generation so observations sampled before the attempt cannot commit.
+    pub(in crate::daemon::plugins::remote_desktop) fn reserve_target_operation(
+        &mut self,
+    ) -> TargetCoherenceToken {
+        if let Some(next) = self.target_coherence_revision.checked_add(1) {
+            self.target_coherence_revision = next;
+        } else {
+            // Rotate the process-local incarnation instead of allowing a
+            // saturated revision to make distinct operations compare equal.
+            self.session_incarnation = uuid::Uuid::new_v4().simple().to_string();
+            self.target_coherence_revision = 1;
+        }
+        self.target_coherence_token()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn target_tracking_state(&self) -> Value {
         self.target.snapshot().to_value()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn target_tracking_recovery_value(
+        &self,
+    ) -> Value {
+        self.target.snapshot().to_recovery_value()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn latest_target_diagnostic(&self) -> Value {
         self.target.snapshot().latest_diagnostic()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn input_runtime_block_reason(
+        &self,
+    ) -> Option<&str> {
+        self.input_runtime_block_reason.as_deref()
     }
 
     /// Requested session mode.
@@ -309,8 +574,15 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn production_media_ready(&self) -> bool {
         self.target.binding().production_scope_ready()
             && self.signaling.production_codec_negotiated()
+            && self.signaling.production_backend_ready()
             && self.transport.media_transport_ready()
             && self.transport.client_media_ready()
+            && self.client_decode_ready()
+            && (!self
+                .signaling
+                .negotiated_media_scope()
+                .is_some_and(|scope| scope.requires_audio())
+                || self.audio_operational_ready())
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn target_scope_ready(&self) -> bool {
@@ -321,12 +593,92 @@ impl RemoteDesktopSession {
         self.signaling.production_codec_negotiated()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn production_backend_ready(&self) -> bool {
+        self.signaling.production_backend_ready()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn client_media_ready(&self) -> bool {
         self.transport.client_media_ready()
     }
 
+    /// Whether fresh daemon-admitted receiver evidence proves the browser
+    /// decoded the exact current transport/target/media-source generation.
+    pub(in crate::daemon::plugins::remote_desktop) fn client_decode_ready(&self) -> bool {
+        let Some(epoch) = self.transport.active_epoch() else {
+            return false;
+        };
+        let Some(evidence) = self.transport.client_render_evidence(epoch) else {
+            return false;
+        };
+        self.client_render_evidence_matches(&evidence, Instant::now())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn audio_operational_ready(&self) -> bool {
+        self.transport
+            .media_stats()
+            .as_ref()
+            .and_then(|stats| stats.get("audio_operational_ready"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    fn client_render_evidence_matches(
+        &self,
+        evidence: &ClientRenderEvidence,
+        now: Instant,
+    ) -> bool {
+        let Some(stats) = self.transport.media_stats() else {
+            return false;
+        };
+        let Some(epoch) = self.transport.active_epoch() else {
+            return false;
+        };
+        let binding = self.target.binding();
+        let expected_pipeline = stats
+            .get("media_pipeline_id")
+            .or_else(|| stats.get("backend_id"))
+            .and_then(Value::as_str);
+        let expected_video_codec = stats.get("video_codec").and_then(Value::as_str);
+        let expected_video_transport = stats.get("video_transport").and_then(Value::as_str);
+        let expected_audio_codec = stats.get("audio_codec").and_then(Value::as_str);
+        let audio_required = self
+            .signaling
+            .negotiated_media_scope()
+            .is_some_and(|scope| scope.requires_audio());
+
+        now.saturating_duration_since(evidence.received_at) <= CLIENT_RENDER_EVIDENCE_MAX_AGE
+            && evidence.session_id == self.session_id()
+            && evidence.selected_resource_ura == binding.subject_ura()
+            && evidence.transport_epoch == epoch.value()
+            && evidence.binding_id == binding.binding_id()
+            && evidence.binding_epoch == binding.binding_epoch()
+            && evidence.media_source_epoch == binding.media_source_epoch()
+            && expected_pipeline == Some(evidence.media_pipeline_id.as_str())
+            && expected_video_codec
+                .is_some_and(|codec| codec.eq_ignore_ascii_case(&evidence.video_codec))
+            && expected_video_transport
+                .is_some_and(|transport| transport.eq_ignore_ascii_case(&evidence.video_transport))
+            && evidence.decoded_video_frames > 0
+            && evidence.frame_width > 0
+            && evidence.frame_height > 0
+            && (!audio_required
+                || (expected_audio_codec.is_some_and(|codec| {
+                    evidence
+                        .audio_codec
+                        .as_deref()
+                        .is_some_and(|actual| codec.eq_ignore_ascii_case(actual))
+                }) && (evidence.decoded_audio_packets > 0
+                    || evidence.decoded_audio_samples > 0)))
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn transport_epoch(&self) -> Option<u64> {
         self.transport.active_epoch().map(TransportEpoch::value)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn transport_epoch_high_watermark(
+        &self,
+    ) -> u64 {
+        self.transport.epoch_high_watermark()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn transport_state(&self) -> Value {
@@ -338,9 +690,30 @@ impl RemoteDesktopSession {
         self.signaling.negotiated_codec()
     }
 
+    /// Media tracks negotiated for the active WebRTC transport generation.
+    pub(in crate::daemon::plugins::remote_desktop) fn negotiated_media_scope(
+        &self,
+    ) -> Option<RemoteDesktopNegotiatedMediaScope> {
+        self.signaling.negotiated_media_scope()
+    }
+
     /// Latest media pipeline statistics.
     pub(in crate::daemon::plugins::remote_desktop) fn media_stats(&self) -> Option<Value> {
         self.transport.media_stats()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn client_media_feedback(
+        &self,
+        epoch: TransportEpoch,
+    ) -> Option<ClientMediaFeedback> {
+        self.transport.client_media_feedback(epoch)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn client_render_evidence(
+        &self,
+        epoch: TransportEpoch,
+    ) -> Option<ClientRenderEvidence> {
+        self.transport.client_render_evidence(epoch)
     }
 
     /// Whether the diagnostic preview transport is attached.
@@ -348,9 +721,19 @@ impl RemoteDesktopSession {
         self.transport.preview_attached()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_epoch(
+        &self,
+    ) -> Option<PreviewTransportEpoch> {
+        self.transport.preview_epoch()
+    }
+
     /// Bounded event-log projection.
     pub(in crate::daemon::plugins::remote_desktop) fn events(&self) -> Vec<Value> {
         self.event_log.events()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn latest_event_sequence(&self) -> u64 {
+        self.event_log.latest_sequence()
     }
 
     /// Bounded replay projection for `remote_desktop.watch_events`.
@@ -377,17 +760,58 @@ impl RemoteDesktopSession {
         self.lifecycle.end_reason()
     }
 
-    fn push_event(&mut self, event_type: &str, payload: Value) {
+    pub(in crate::daemon::plugins::remote_desktop) fn terminal_receipt(&self) -> Option<Value> {
+        self.terminal_receipt.clone()
+    }
+
+    fn push_event(&mut self, event_type: &str, payload: Value) -> Value {
         self.event_log.push(
             self.profile.session_id(),
             self.lifecycle.state(),
             event_type,
             payload,
-        );
+        )
     }
 
-    fn push_projected_event(&mut self, event: session_events::RemoteDesktopEventProjection) {
-        self.push_event(event.event_type(), event.into_payload());
+    fn push_projected_event(
+        &mut self,
+        event: session_events::RemoteDesktopEventProjection,
+    ) -> Value {
+        let event = event.with_target_binding_context(self.target.binding());
+        self.push_event(event.event_type(), event.into_payload())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn record_target_monitor_worker_crashed(
+        &mut self,
+        failed_generation: u64,
+        detail: &str,
+    ) {
+        self.push_projected_event(session_events::target_monitor_worker_crashed(
+            failed_generation,
+            detail,
+        ));
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn record_target_monitor_worker_restarted(
+        &mut self,
+        failed_generation: u64,
+        restarted_generation: u64,
+    ) {
+        self.push_projected_event(session_events::target_monitor_worker_restarted(
+            failed_generation,
+            restarted_generation,
+        ));
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn record_target_monitor_restarted(
+        &mut self,
+        failed_generation: u64,
+        restarted_generation: u64,
+    ) {
+        self.push_projected_event(session_events::target_monitor_restarted(
+            failed_generation,
+            restarted_generation,
+        ));
     }
 
     fn push_target_tracking_event(&mut self, event: TargetTrackingEmission) {
@@ -402,20 +826,51 @@ impl RemoteDesktopSession {
         }
     }
 
+    fn project_terminal_receipt(&self, reason: &str, terminal_event: &Value) -> Value {
+        json!({
+            "receipt_type": "remoteapp.session.terminal.v1",
+            "session_id": self.session_id(),
+            "subject_ura": self.subject_ura(),
+            "subject_type": self.subject_type().as_str(),
+            "binding_id": self.target.binding().binding_id(),
+            "binding_epoch": self.target.binding().binding_epoch(),
+            "target_identity_epoch": self.target.binding().target_identity_epoch(),
+            "target_geometry_revision": self.target.binding().target_geometry_revision(),
+            "media_source_epoch": self.target.binding().media_source_epoch(),
+            "consent_epoch": self.target.binding().consent_epoch(),
+            "reason": reason,
+            "reason_code": reason,
+            "terminal_event_id": terminal_event.get("event_id").cloned().unwrap_or(Value::Null),
+            "terminal_event_sequence": terminal_event.get("sequence").cloned().unwrap_or(Value::Null),
+            "terminal_event_type": terminal_event.get("event_type").cloned().unwrap_or(Value::Null),
+            "closed_at_ms": terminal_event.get("at_ms").cloned().unwrap_or(Value::Null),
+            "state": terminal_event.get("state").cloned().unwrap_or(Value::Null),
+            "state_proto": terminal_event.get("state_proto").cloned().unwrap_or(Value::Null),
+            "lifecycle_phase": self.lifecycle.phase().as_str(),
+            "terminal": true,
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation(
         &mut self,
         observation: TargetObservation,
     ) -> Option<TargetMediaSourceLost> {
-        if self.lifecycle.is_terminal() {
+        if self.lifecycle.is_terminal() || self.lifecycle.is_terminating() {
             return None;
         }
         let target_loss_reason = match &observation {
             TargetObservation::Lost { reason, .. } => Some(*reason),
+            TargetObservation::MonitorUnavailable { .. } => {
+                Some(TargetResolutionError::CaptureBackendUnavailable)
+            }
             TargetObservation::VisibilityChanged {
                 visibility_state: TargetVisibilityState::Lost,
                 ..
             } => Some(TargetResolutionError::TargetNotFound),
             TargetObservation::PermissionRevoked { .. } => {
+                Some(TargetResolutionError::TargetPermissionMissing)
+            }
+            TargetObservation::PermissionVerificationRequired { .. } => {
                 Some(TargetResolutionError::TargetPermissionMissing)
             }
             TargetObservation::DisplayTopologyChanged {
@@ -435,6 +890,9 @@ impl RemoteDesktopSession {
             if input_was_enabled && !self.target.snapshot().input_enabled() {
                 self.lifecycle.deactivate_input_for_target_block();
                 self.touch();
+                if let Some(reason) = target_loss_reason {
+                    self.push_projected_event(session_events::target_loss_pending(reason));
+                }
             }
             return None;
         };
@@ -455,17 +913,60 @@ impl RemoteDesktopSession {
         self.touch();
         self.push_target_tracking_event(event);
         self.push_media_source_lost_event(media_source_lost);
+        if permission_revoked {
+            self.begin_close_after_permission_revoked();
+        }
         media_source_lost
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn record_authorized_target_focus(
+        &mut self,
+        observed_at_ms: u64,
+        platform_backend: &str,
+    ) -> (u64, u64) {
+        let previous_target_focus_epoch = self.target.snapshot().target_focus_epoch();
+        if self.product_operations_closed() {
+            return (previous_target_focus_epoch, previous_target_focus_epoch);
+        }
+        if self.target.snapshot().focused() != Some(true) {
+            self.record_target_observation(TargetObservation::FocusChanged {
+                focused: true,
+                observed_at_ms,
+            });
+        }
+        let target_focus_epoch = self.target.snapshot().target_focus_epoch();
+        self.push_projected_event(session_events::target_focus_applied(
+            self.target.binding(),
+            previous_target_focus_epoch,
+            target_focus_epoch,
+            observed_at_ms,
+            platform_backend,
+        ));
+        self.touch();
+        (previous_target_focus_epoch, target_focus_epoch)
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding(
         &self,
     ) -> Option<&RemoteAppTargetBinding> {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return None;
         }
         self.target.pending_media_rebind_binding()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_rebind_attempt_token(
+        &self,
+    ) -> Option<TargetRebindAttemptToken> {
+        self.target.rebind_attempt_token()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn matches_target_rebind_attempt(
+        &self,
+        expected: &TargetRebindAttemptToken,
+    ) -> bool {
+        self.target.matches_rebind_attempt(expected)
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -476,7 +977,7 @@ impl RemoteDesktopSession {
         media_source_epoch: u64,
         capture_proof: ResolvedCaptureTargetProof,
     ) -> bool {
-        if self.lifecycle.is_terminal() || self.transport.active_epoch() != Some(epoch) {
+        if self.product_operations_closed() || self.transport.active_epoch() != Some(epoch) {
             return false;
         }
         let Some(event) = self.target.commit_pending_media_rebind(
@@ -494,22 +995,24 @@ impl RemoteDesktopSession {
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(in crate::daemon::plugins::remote_desktop) fn fail_pending_media_rebind(
+    pub(in crate::daemon::plugins::remote_desktop) fn supersede_pending_media_rebind(
         &mut self,
         epoch: TransportEpoch,
         reason: TargetResolutionError,
         detail: String,
     ) -> bool {
-        if self.lifecycle.is_terminal() || self.transport.active_epoch() != Some(epoch) {
+        if self.product_operations_closed() || self.transport.active_epoch() != Some(epoch) {
             return false;
         }
         let Some(event) = self
             .target
-            .commit_pending_media_rebind_failed(reason, detail, now_ms())
+            .supersede_pending_media_rebind(reason, detail, now_ms())
         else {
             return false;
         };
         self.lifecycle.reject_rebinding();
+        self.lifecycle.start_media();
+        self.reconcile_lifecycle();
         self.touch();
         self.push_target_tracking_event(event);
         true
@@ -519,7 +1022,7 @@ impl RemoteDesktopSession {
         &mut self,
         observed_at_ms: u64,
     ) -> Option<TargetRebindDeadlineExpiration> {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return None;
         }
         let event = self.target.expire_rebind_deadline(observed_at_ms)?;
@@ -560,8 +1063,14 @@ impl RemoteDesktopSession {
         self.lease.touch(now_ms());
     }
 
+    fn product_operations_closed(&self) -> bool {
+        self.terminal_commit_in_progress
+            || self.lifecycle.is_terminal()
+            || self.lifecycle.is_terminating()
+    }
+
     fn reconcile_lifecycle(&mut self) {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return;
         }
         match self.transport.primary_phase() {
@@ -599,7 +1108,7 @@ impl RemoteDesktopSession {
         &mut self,
         epoch: TransportEpoch,
     ) -> bool {
-        if self.lifecycle.is_terminal() || self.transport_epoch() != Some(epoch.value()) {
+        if self.product_operations_closed() || self.transport_epoch() != Some(epoch.value()) {
             return false;
         }
         if !self.consent.permits_media_input() {
@@ -613,9 +1122,53 @@ impl RemoteDesktopSession {
         }
         let changed = self.lifecycle.activate_input(InputActivationGate::Ready);
         if changed {
+            self.input_runtime_block_reason = None;
             self.touch();
         }
         changed
+    }
+
+    /// Confirm that an input frame has been accepted by the host OS for the
+    /// current direct-input epoch. This is the recovery edge after a runtime
+    /// permission block: the input plane supplies execution proof, while the
+    /// aggregate owns lifecycle reactivation and blocker clearing.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_input_frame_applied(
+        &mut self,
+        epoch: TransportEpoch,
+    ) -> bool {
+        let had_runtime_block = self.input_runtime_block_reason.is_some();
+        let changed = self.activate_input_for_transport_epoch(epoch);
+        if had_runtime_block && changed {
+            self.push_projected_event(session_events::input_permission_restored(
+                self.target.binding(),
+                epoch.value(),
+                self.transport.media_transport_ready(),
+            ));
+        }
+        changed
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn block_input_for_runtime_permission(
+        &mut self,
+        epoch: TransportEpoch,
+        reason: &str,
+    ) -> bool {
+        if self.product_operations_closed() || self.transport_epoch() != Some(epoch.value()) {
+            return false;
+        }
+        let changed = self.lifecycle.deactivate_input_for_runtime_block();
+        if !changed {
+            return false;
+        }
+        self.input_runtime_block_reason = Some(reason.to_string());
+        self.touch();
+        self.push_projected_event(session_events::input_permission_blocked(
+            self.target.binding(),
+            epoch.value(),
+            reason,
+            self.transport.media_transport_ready(),
+        ));
+        true
     }
 
     /// Commit a local or remote SDP description after validation.
@@ -624,7 +1177,7 @@ impl RemoteDesktopSession {
         side: &str,
         description: Value,
     ) -> anyhow::Result<()> {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return Ok(());
         }
         self.signaling.set_description(side, description)?;
@@ -646,7 +1199,7 @@ impl RemoteDesktopSession {
         application_state: &str,
         transport_epoch: Option<TransportEpoch>,
     ) -> anyhow::Result<()> {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return Ok(());
         }
         let candidate_count = self.signaling.push_remote_ice_candidate(candidate)?;
@@ -664,7 +1217,7 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn reserve_remote_ice_candidate_slot(
         &mut self,
     ) -> anyhow::Result<bool> {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return Ok(false);
         }
         self.signaling.reserve_remote_ice_candidate_slot()?;
@@ -678,7 +1231,7 @@ impl RemoteDesktopSession {
         application_state: &str,
         transport_epoch: Option<TransportEpoch>,
     ) -> anyhow::Result<()> {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             self.signaling.release_remote_ice_candidate_slot();
             return Ok(());
         }
@@ -697,6 +1250,9 @@ impl RemoteDesktopSession {
 
     /// Release remote ICE candidate capacity reserved for an uncommitted apply.
     pub(in crate::daemon::plugins::remote_desktop) fn release_remote_ice_candidate_slot(&mut self) {
+        if self.terminal_commit_in_progress {
+            return;
+        }
         self.signaling.release_remote_ice_candidate_slot();
     }
 
@@ -704,15 +1260,15 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn attach_preview_transport(
         &mut self,
         stop_tx: watch::Sender<bool>,
-    ) -> Option<watch::Sender<bool>> {
-        if self.lifecycle.is_terminal() {
+    ) -> Option<(PreviewTransportEpoch, Option<watch::Sender<bool>>)> {
+        if self.product_operations_closed() {
             return None;
         }
-        let old_stop = self.transport.attach_preview_transport(stop_tx);
+        let attachment = self.transport.attach_preview_transport(stop_tx);
         self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::preview_transport_connected());
-        old_stop
+        Some(attachment)
     }
 
     /// Refresh the lease and return the new expiry timestamp.
@@ -733,7 +1289,7 @@ impl RemoteDesktopSession {
         reason: &str,
         required_backend: &str,
     ) {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return;
         }
         self.signaling.set_webrtc_error(reason);
@@ -752,7 +1308,7 @@ impl RemoteDesktopSession {
         production_ready: bool,
         endpoint_ura: String,
     ) -> anyhow::Result<()> {
-        if self.lifecycle.is_terminal() || !self.transport.accepts_epoch(epoch) {
+        if self.product_operations_closed() || !self.transport.accepts_epoch(epoch) {
             return Ok(());
         }
         self.signaling.set_local_webrtc_answer(
@@ -774,14 +1330,18 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn begin_webrtc_negotiation(
         &mut self,
         epoch: TransportEpoch,
-    ) {
-        if self.lifecycle.is_terminal() {
-            return;
+    ) -> bool {
+        if self.product_operations_closed() {
+            return false;
         }
-        self.transport.begin_primary(epoch);
+        if !self.transport.begin_primary(epoch) {
+            return false;
+        }
+        self.signaling.begin_transport_generation();
         self.lifecycle.start_media();
         self.reconcile_lifecycle();
         self.touch();
+        true
     }
 
     /// Append a local ICE candidate produced by the device-side WebRTC endpoint.
@@ -789,14 +1349,18 @@ impl RemoteDesktopSession {
         &mut self,
         candidate: Value,
     ) -> anyhow::Result<()> {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return Ok(());
         }
+        let transport_epoch = self.transport.active_epoch().ok_or_else(|| {
+            anyhow::anyhow!("local ICE candidate requires an active transport epoch")
+        })?;
         let candidate_count = self.signaling.push_local_ice_candidate(candidate.clone())?;
         self.touch();
         self.push_projected_event(session_events::local_ice_candidate(
             candidate,
             candidate_count,
+            transport_epoch.value(),
             self.transport.media_transport_ready(),
         ));
         Ok(())
@@ -809,7 +1373,7 @@ impl RemoteDesktopSession {
         error: Option<String>,
         payload: Value,
     ) {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return;
         }
         self.signaling.record_webrtc_diagnostic(error, &payload);
@@ -820,20 +1384,24 @@ impl RemoteDesktopSession {
             self.signaling.webrtc_ice_state(),
             self.signaling.webrtc_error(),
         );
+        let payload = session_events::with_target_binding_context(self.target.binding(), payload);
         self.push_event(event_type, payload);
     }
 
     /// Record diagnostic input-channel activity without changing transport readiness.
     pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
         &mut self,
+        epoch: TransportEpoch,
         event_type: &str,
         payload: Value,
     ) {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
             return;
         }
         self.touch();
         let payload = session_events::input_channel_diagnostic(
+            self.target.binding(),
+            epoch.value(),
             self.transport.media_transport_ready(),
             payload,
         );
@@ -847,7 +1415,7 @@ impl RemoteDesktopSession {
         epoch: TransportEpoch,
         stats: Value,
     ) {
-        if self.lifecycle.is_terminal() {
+        if self.lifecycle.is_terminal() || self.terminal_commit_in_progress {
             return;
         }
         if !self.transport.record_media_stats(epoch, stats.clone()) {
@@ -855,55 +1423,83 @@ impl RemoteDesktopSession {
         }
         self.touch();
         self.push_projected_event(session_events::media_pipeline_stats(
+            self.target.binding(),
+            epoch.value(),
             self.transport.media_transport_ready(),
             stats,
         ));
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn merge_client_media_stats(
+        &mut self,
+        epoch: TransportEpoch,
+        stats: Value,
+    ) -> bool {
+        if self.product_operations_closed()
+            || !self.transport.merge_media_stats(epoch, stats.clone())
+        {
+            return false;
+        }
+        let merged_stats = self.transport.media_stats().unwrap_or(stats);
+        self.touch();
+        self.push_projected_event(session_events::media_pipeline_stats(
+            self.target.binding(),
+            epoch.value(),
+            self.transport.media_transport_ready(),
+            merged_stats,
+        ));
+        true
     }
 
     /// Detach preview transport state and return the stop signal to notify.
     pub(in crate::daemon::plugins::remote_desktop) fn detach_preview_transport(
         &mut self,
     ) -> Option<watch::Sender<bool>> {
+        if self.terminal_commit_in_progress {
+            return None;
+        }
         self.transport.detach_preview_transport()
     }
 
     /// Detach an InvokeBidi preview worker that reached a normal terminal path.
     pub(in crate::daemon::plugins::remote_desktop) fn detach_preview_transport_from_worker(
         &mut self,
+        epoch: PreviewTransportEpoch,
         reason: &str,
     ) -> Option<watch::Sender<bool>> {
-        if self.lifecycle.is_terminal() || !self.transport.preview_attached() {
+        if self.product_operations_closed() || !self.transport.preview_attached() {
             return None;
         }
-        let stop_tx = self.transport.detach_preview_transport();
+        let stop_tx = self.transport.detach_preview_transport_if_epoch(epoch)?;
         self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::preview_transport_detached(reason));
-        stop_tx
+        Some(stop_tx)
     }
 
     /// Record an InvokeBidi preview failure without failing production media.
     pub(in crate::daemon::plugins::remote_desktop) fn mark_preview_transport_failed(
         &mut self,
+        epoch: PreviewTransportEpoch,
         reason: &str,
         message: String,
     ) -> Option<watch::Sender<bool>> {
-        if self.lifecycle.is_terminal() || !self.transport.preview_attached() {
+        if self.product_operations_closed() || !self.transport.preview_attached() {
             return None;
         }
-        let stop_tx = self.transport.detach_preview_transport();
+        let stop_tx = self.transport.detach_preview_transport_if_epoch(epoch)?;
         self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::preview_transport_failed(reason, message));
-        stop_tx
+        Some(stop_tx)
     }
 
     #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn install_preview_transport_for_test(
         &mut self,
         stop_tx: watch::Sender<bool>,
-    ) {
-        self.transport.install_preview_transport_for_test(stop_tx);
+    ) -> PreviewTransportEpoch {
+        self.transport.install_preview_transport_for_test(stop_tx)
     }
 
     #[cfg(test)]
@@ -914,32 +1510,146 @@ impl RemoteDesktopSession {
         self.lease.set_expires_at_for_test(lease_expires_at_ms);
     }
 
-    /// Close an active session through the caller-requested terminal path.
-    pub(in crate::daemon::plugins::remote_desktop) fn close(&mut self, reason: &str) {
-        if !self.lifecycle.begin_termination() {
-            return;
+    /// Enter Closing before external transport teardown. While Closing, new
+    /// product operations are rejected but the active media generation may
+    /// still publish its final pipeline statistics.
+    pub(in crate::daemon::plugins::remote_desktop) fn begin_close(&mut self, reason: &str) -> bool {
+        if !self.lifecycle.begin_termination(reason) {
+            return false;
         }
+        self.reserve_target_operation();
         self.touch();
         self.push_projected_event(session_events::session_closing(reason));
         self.consent.expire();
+        true
+    }
+
+    /// Commit the terminal state only after every owned transport worker has
+    /// stopped. This is the sole point that emits the terminal receipt.
+    pub(in crate::daemon::plugins::remote_desktop) fn finish_close(&mut self, reason: &str) {
+        if !self.lifecycle.is_terminating() {
+            return;
+        }
         self.lifecycle.terminate_closed(reason);
         self.touch();
-        self.push_projected_event(session_events::session_closed(reason));
+        let terminal_event = self.push_projected_event(session_events::session_closed(reason));
+        self.terminal_receipt = Some(self.project_terminal_receipt(reason, &terminal_event));
         self.event_log.close();
+    }
+
+    /// Publish an explicit terminal failure after settlement ownership has
+    /// moved into the process quarantine. This does not claim that the worker
+    /// stopped; it closes product operations while the resource owner remains
+    /// retained for controlled runtime recovery.
+    pub(in crate::daemon::plugins::remote_desktop) fn finish_failed_termination(
+        &mut self,
+        reason: &str,
+    ) {
+        if !self.lifecycle.is_terminating() {
+            return;
+        }
+        let termination_intent = self.lifecycle.end_reason().map(ToString::to_string);
+        self.lifecycle.terminate_failed(reason);
+        self.touch();
+        let terminal_event = self.push_projected_event(session_events::session_failed(
+            reason,
+            termination_intent.as_deref(),
+        ));
+        self.terminal_receipt = Some(self.project_terminal_receipt(reason, &terminal_event));
+        self.event_log.close();
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn is_terminating(&self) -> bool {
+        self.lifecycle.is_terminating()
+    }
+
+    /// Freeze the exact Closing revision selected for durable promotion.
+    /// Returns false when another finalizer already owns the revision.
+    pub(in crate::daemon::plugins::remote_desktop) fn begin_terminal_commit(&mut self) -> bool {
+        if !self.lifecycle.is_terminating() || self.terminal_commit_in_progress {
+            return false;
+        }
+        self.terminal_commit_in_progress = true;
+        true
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn abort_terminal_commit(&mut self) {
+        self.terminal_commit_in_progress = false;
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn terminal_commit_in_progress(&self) -> bool {
+        self.terminal_commit_in_progress
+    }
+
+    fn begin_close_after_permission_revoked(&mut self) {
+        if !self
+            .lifecycle
+            .begin_termination(REASON_TARGET_PERMISSION_REVOKED)
+        {
+            return;
+        }
+        self.touch();
+        self.push_projected_event(session_events::session_closing(
+            REASON_TARGET_PERMISSION_REVOKED,
+        ));
     }
 
     /// Mark the session closed because its lease elapsed.
     pub(in crate::daemon::plugins::remote_desktop) fn expire(&mut self, now: u64) {
-        if !self.lifecycle.expire(REASON_SESSION_EXPIRED) {
+        if !self.begin_expiration(now) {
             return;
         }
+        self.finish_expiration(now);
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn begin_expiration(
+        &mut self,
+        now: u64,
+    ) -> bool {
+        if !self.lifecycle.begin_termination(REASON_SESSION_EXPIRED) {
+            return false;
+        }
+        self.reserve_target_operation();
         self.consent.expire();
         self.lease.touch(now);
-        self.push_projected_event(session_events::session_expired(
+        self.push_projected_event(session_events::session_closing(REASON_SESSION_EXPIRED));
+        true
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn finish_expiration(&mut self, now: u64) {
+        if !self.lifecycle.is_terminating() {
+            return;
+        }
+        self.lifecycle.terminate_closed(REASON_SESSION_EXPIRED);
+        self.lease.touch(now);
+        let terminal_event = self.push_projected_event(session_events::session_expired(
             REASON_SESSION_EXPIRED,
             self.lease.expires_at_ms(),
         ));
+        self.terminal_receipt =
+            Some(self.project_terminal_receipt(REASON_SESSION_EXPIRED, &terminal_event));
         self.event_log.close();
+    }
+
+    /// Complete a durable Closing intent after daemon restart. Process-local
+    /// transports cannot survive rehydration, so no media worker remains to
+    /// settle; the original reason determines the canonical terminal event.
+    pub(in crate::daemon::plugins::remote_desktop) fn finish_recovered_termination(
+        &mut self,
+        now: u64,
+    ) {
+        let Some(reason) = self.lifecycle.end_reason().map(ToString::to_string) else {
+            return;
+        };
+        if reason == REASON_SESSION_EXPIRED {
+            self.finish_expiration(now);
+        } else {
+            self.finish_close(&reason);
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn termination_reason(&self) -> Option<&str> {
+        self.lifecycle.end_reason()
     }
 
     /// Mark the active production endpoint as accepting encoded media.
@@ -948,7 +1658,7 @@ impl RemoteDesktopSession {
         epoch: TransportEpoch,
         endpoint_ura: String,
     ) {
-        if self.lifecycle.is_terminal() || !self.transport.mark_device_sending(epoch) {
+        if self.product_operations_closed() || !self.transport.mark_device_sending(epoch) {
             return;
         }
         self.record_target_observation(TargetObservation::VisibilityChanged {
@@ -968,8 +1678,12 @@ impl RemoteDesktopSession {
         &mut self,
         epoch: TransportEpoch,
         state: &str,
+        client_media_stats: Option<Value>,
     ) -> bool {
-        if self.lifecycle.is_terminal() {
+        if self.product_operations_closed() {
+            return false;
+        }
+        if self.transport_epoch() != Some(epoch.value()) {
             return false;
         }
         let changed = match state {
@@ -977,42 +1691,47 @@ impl RemoteDesktopSession {
             "stalled" | "detached" => self.transport.mark_client_stalled(epoch),
             _ => false,
         };
-        if !changed {
+        let stats_recorded = client_media_stats
+            .map(|stats| self.merge_client_media_stats(epoch, stats))
+            .unwrap_or(false);
+        if !changed && !stats_recorded && state != "presenting" {
             return false;
         }
-        self.reconcile_lifecycle();
-        self.touch();
-        self.push_projected_event(session_events::client_media_state_changed(
-            state,
-            epoch.value(),
-        ));
-        if let Some(phase @ PrimaryMediaPhase::Degraded) = self.transport.primary_phase() {
-            self.push_projected_event(session_events::session_degraded(
+        if changed {
+            self.reconcile_lifecycle();
+            self.touch();
+            self.push_projected_event(session_events::client_media_state_changed(
                 state,
                 epoch.value(),
-                phase.as_str(),
             ));
+            if let Some(phase @ PrimaryMediaPhase::Degraded) = self.transport.primary_phase() {
+                self.push_projected_event(session_events::session_degraded(
+                    state,
+                    epoch.value(),
+                    phase.as_str(),
+                ));
+            }
         }
         true
     }
 
-    /// Mark a non-terminal session failed and record the failure event.
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_failed_with_context(
+    /// Retire one failed WebRTC generation while preserving the product
+    /// session for an authenticated offer on a newer transport epoch.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_generation_failed_with_context(
         &mut self,
         epoch: TransportEpoch,
         event_kind: session_events::WebRtcFailureEventKind,
         reason: &str,
         message: String,
         context: serde_json::Value,
-    ) -> Option<watch::Sender<bool>> {
-        if !self.transport.accepts_epoch(epoch) {
-            return None;
+    ) -> bool {
+        if self.product_operations_closed() || !self.transport.accepts_epoch(epoch) {
+            return false;
         }
-        if !self.lifecycle.fail(reason) {
-            return None;
+        if !self.transport.mark_failed(epoch) {
+            return false;
         }
-        self.transport.mark_failed(epoch);
-        let preview_stop = self.transport.detach_preview_transport();
+        self.lifecycle.suspend();
         self.signaling.set_webrtc_error(reason);
         self.touch();
         self.push_projected_event(session_events::webrtc_failed_with_context(
@@ -1022,9 +1741,16 @@ impl RemoteDesktopSession {
             epoch.value(),
             context,
         ));
-        self.event_log.close();
-        preview_stop
+        true
     }
+}
+
+fn recovery_terminal_reason(terminal_receipt: Option<&Value>) -> String {
+    terminal_receipt
+        .and_then(|receipt| receipt.get("reason_code").or_else(|| receipt.get("reason")))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| "daemon_restart_rehydrated_terminal".to_string())
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {
@@ -1036,15 +1762,21 @@ pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use crate::daemon::plugins::remote_desktop::constants::{
-        direct_webrtc_endpoint_ura, REASON_SESSION_EXPIRED,
+        direct_webrtc_endpoint_ura, REASON_SESSION_EXPIRED, REASON_TARGET_PERMISSION_REVOKED,
+    };
+    use crate::daemon::plugins::remote_desktop::relay_lease::{
+        RemoteDesktopRelayLease, RemoteDesktopRelayLeaseAvailability, RemoteDesktopRelayLeaseInit,
+        EASYNET_RELAY_PROVIDER,
     };
     use crate::daemon::plugins::remote_desktop::session::{
-        RemoteDesktopSession, RemoteDesktopState,
+        RemoteDesktopRelayLeaseRotation, RemoteDesktopSession, RemoteDesktopState,
+        TargetMediaSourceLost,
     };
     use crate::daemon::plugins::remote_desktop::session_consent_state::RemoteDesktopConsentPhase;
+    use crate::daemon::plugins::remote_desktop::session_recovery::RemoteDesktopRecoverySnapshot;
     use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopSessionPhase;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
@@ -1054,9 +1786,158 @@ mod tests {
         TargetObservation, TargetVisibilityState,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
-        test_application_session_init, test_session_init,
+        admit_decoded_video_for_test, test_application_session_init, test_session_init,
+        test_window_session_init,
     };
     use crate::daemon::plugins::remote_desktop::view::serialize_session;
+
+    fn relay_lease(
+        lease_id: &str,
+        session_id: &str,
+        resource_ura: &str,
+    ) -> RemoteDesktopRelayLease {
+        RemoteDesktopRelayLease::from_init(
+            session_id,
+            resource_ura,
+            RemoteDesktopRelayLeaseInit {
+                provider: EASYNET_RELAY_PROVIDER.to_string(),
+                lease_id: lease_id.to_string(),
+                session_id: session_id.to_string(),
+                device_ura: "easynet:///r/acme/device/01DEV".to_string(),
+                resource_ura: resource_ura.to_string(),
+                urls: vec!["turn:relay.example.test:3478?transport=udp".to_string()],
+                username: format!("user-{lease_id}"),
+                credential: format!("secret-{lease_id}"),
+                issued_at_ms: 1,
+                refresh_after_ms: 2,
+                expires_at_ms: 3,
+            },
+        )
+        .expect("test relay lease")
+    }
+
+    fn assert_target_tracking_payload_context(event: &Value, session: &RemoteDesktopSession) {
+        let payload = &event["payload"];
+        assert_eq!(
+            payload["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            payload["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            payload["binding_epoch"],
+            json!(session.target_binding().binding_epoch())
+        );
+        assert_eq!(
+            payload["target_identity_epoch"],
+            event["target_identity_epoch"]
+        );
+        assert_eq!(
+            payload["target_geometry_revision"],
+            event["target_geometry_revision"]
+        );
+        assert_eq!(
+            payload["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
+            payload["consent_epoch"],
+            json!(session.target_binding().consent_epoch())
+        );
+        assert_eq!(
+            payload["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            payload["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            payload["target_binding"]["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
+            payload["target_binding"]["target_identity_epoch"],
+            payload["target_identity_epoch"]
+        );
+        assert_eq!(
+            payload["target_binding"]["target_geometry_revision"],
+            payload["target_geometry_revision"]
+        );
+        assert_eq!(payload["target_binding"]["bounds"], payload["geometry"]);
+        assert_eq!(
+            payload["scope_audit"]["input_scope_reason"],
+            payload["target_binding"]["input_scope_reason"]
+        );
+        assert!(
+            payload["latest_target_diagnostic"].is_object(),
+            "target lifecycle payload must include latest target diagnostic context"
+        );
+    }
+
+    #[test]
+    fn relay_rotation_returns_exact_resource_owner_for_success_and_rejection() {
+        let session_id = "rd-relay-ownership";
+        let resource_ura = "easynet:///r/acme/resource/display.test";
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            session_id,
+            resource_ura,
+            vec!["webrtc".into()],
+        ));
+        session.install_relay_lease(RemoteDesktopRelayLeaseAvailability::Active(relay_lease(
+            "lease-1",
+            session_id,
+            resource_ura,
+        )));
+
+        assert!(matches!(
+            session.rotate_relay_lease_if_current(
+                "lease-1",
+                relay_lease("lease-2", session_id, resource_ura),
+            ),
+            RemoteDesktopRelayLeaseRotation::Installed
+        ));
+        assert_eq!(
+            session
+                .active_relay_lease()
+                .expect("refreshed lease remains session-owned")
+                .lease_id(),
+            "lease-2"
+        );
+
+        assert!(matches!(
+            session.rotate_relay_lease_if_current(
+                "lease-1",
+                relay_lease("lease-2", session_id, resource_ura),
+            ),
+            RemoteDesktopRelayLeaseRotation::AlreadyOwned
+        ));
+
+        let RemoteDesktopRelayLeaseRotation::Unowned(unattached) = session
+            .rotate_relay_lease_if_current(
+                "lease-1",
+                relay_lease("lease-3", session_id, resource_ura),
+            )
+        else {
+            panic!("stale distinct refresh must return its unowned lease");
+        };
+        assert_eq!(unattached.lease_id(), "lease-3");
+        assert_eq!(
+            session
+                .active_relay_lease()
+                .expect("stale refresh preserves current lease")
+                .lease_id(),
+            "lease-2"
+        );
+
+        let expired = session
+            .retire_relay_lease_if_current("lease-2", "test_expired")
+            .expect("current lease retires");
+        assert_eq!(expired.lease_id(), "lease-2");
+        assert!(session.active_relay_lease().is_none());
+    }
 
     #[test]
     fn session_commits_target_observations_through_owned_tracker() {
@@ -1143,14 +2024,194 @@ mod tests {
     }
 
     #[test]
+    fn rehydrated_non_terminal_session_can_start_new_media_epoch_without_new_session() {
+        let mut source = RemoteDesktopSession::new(test_session_init(
+            "rd-rehydrate-media-resume",
+            "easynet:///r/acme/resource/display.rehydrate-media",
+            vec!["webrtc".into()],
+        ));
+        assert!(source.begin_webrtc_negotiation(TransportEpoch::new(6)));
+        let snapshot =
+            RemoteDesktopRecoverySnapshot::from_session(&source).expect("snapshot derives");
+        let mut session = RemoteDesktopSession::rehydrate(&snapshot).expect("session rehydrates");
+        let epoch = TransportEpoch::new(7);
+        let endpoint_ura = direct_webrtc_endpoint_ura("rd-rehydrate-media-resume");
+
+        assert_eq!(session.session_id(), "rd-rehydrate-media-resume");
+        assert_eq!(session.state(), RemoteDesktopState::Degraded);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+        assert!(!session.media_transport_ready());
+        assert_eq!(session.transport_epoch_high_watermark(), 6);
+        assert!(!session.begin_webrtc_negotiation(TransportEpoch::new(6)));
+
+        assert!(session.begin_webrtc_negotiation(epoch));
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0\r\n", "media_scope": "video_only"}),
+                "plugin.macos.screencapturekit.videotoolbox.webrtc.v1",
+                true,
+                endpoint_ura.clone(),
+            )
+            .expect("local answer records on rehydrated session");
+        session.mark_webrtc_media_sending(epoch, endpoint_ura);
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        admit_decoded_video_for_test(&mut session, epoch, "test-production-pipeline");
+
+        assert_eq!(session.session_id(), "rd-rehydrate-media-resume");
+        assert_eq!(session.transport_epoch(), Some(epoch.value()));
+        assert_eq!(session.state(), RemoteDesktopState::Connected);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+        assert!(session.media_transport_ready());
+        assert!(session.client_media_ready());
+        assert!(session.production_media_ready());
+        let rehydrated_event = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("SESSION_REHYDRATED"))
+            .expect("rehydration event is recorded");
+        assert_eq!(rehydrated_event["recoverability"], json!("retry_session"));
+        assert_eq!(
+            rehydrated_event["subject_ura"],
+            json!("easynet:///r/acme/resource/display.rehydrate-media")
+        );
+        assert_eq!(
+            rehydrated_event["payload"]["target_binding"]["subject_ura"],
+            json!("easynet:///r/acme/resource/display.rehydrate-media")
+        );
+        assert!(rehydrated_event["binding_epoch"].as_u64().unwrap_or(0) > 0);
+        assert!(
+            rehydrated_event["target_identity_epoch"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+        assert!(
+            rehydrated_event["target_geometry_revision"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+        assert!(rehydrated_event["media_source_epoch"].as_u64().unwrap_or(0) > 0);
+        assert!(rehydrated_event["consent_epoch"].as_u64().unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn rehydrated_non_terminal_session_preserves_runtime_input_block_reason() {
+        let source = RemoteDesktopSession::new(test_session_init(
+            "rd-rehydrate-input-block",
+            "easynet:///r/acme/resource/display.rehydrate-input-block",
+            vec!["webrtc".into()],
+        ));
+        let snapshot =
+            RemoteDesktopRecoverySnapshot::from_session(&source).expect("snapshot derives");
+        let snapshot = RemoteDesktopRecoverySnapshot::new(
+            snapshot.session_id().to_string(),
+            snapshot.session_token().to_string(),
+            snapshot.creator_caller_ura().to_string(),
+            snapshot.selected_resource_ura().to_string(),
+            snapshot.subject_display_name().to_string(),
+            snapshot.target_binding().clone(),
+            snapshot.consent().clone(),
+            snapshot.mode().to_string(),
+            snapshot.transport_preferences().to_vec(),
+            snapshot.video().clone(),
+            snapshot.input_policy().clone(),
+            snapshot.created_at_ms(),
+            snapshot.updated_at_ms(),
+            snapshot.lease_expires_at_ms(),
+            snapshot.lifecycle_state().to_string(),
+            snapshot.termination_reason().map(ToString::to_string),
+            Some("accessibility_permission_denied".to_string()),
+            snapshot.terminal_receipt(),
+            snapshot.events(),
+        )
+        .expect("snapshot with runtime input block reason stays valid");
+
+        let session = RemoteDesktopSession::rehydrate(&snapshot).expect("session rehydrates");
+
+        assert_eq!(
+            session.input_runtime_block_reason(),
+            Some("accessibility_permission_denied")
+        );
+        assert_eq!(session.state(), RemoteDesktopState::Degraded);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+    }
+
+    #[test]
+    fn closing_recovery_snapshot_preserves_reason_and_cannot_resume_as_degraded() {
+        let mut source = RemoteDesktopSession::new(test_session_init(
+            "rd-rehydrate-closing",
+            "easynet:///r/acme/resource/display.rehydrate-closing",
+            vec!["webrtc".into()],
+        ));
+        assert!(source.begin_close("caller_ended"));
+        let snapshot =
+            RemoteDesktopRecoverySnapshot::from_session(&source).expect("Closing snapshot derives");
+
+        assert_eq!(snapshot.lifecycle_state(), "closing");
+        assert_eq!(snapshot.termination_reason(), Some("caller_ended"));
+        let mut session =
+            RemoteDesktopSession::rehydrate(&snapshot).expect("Closing snapshot rehydrates");
+
+        assert!(session.is_terminating());
+        assert_eq!(session.state(), RemoteDesktopState::Closing);
+        assert_eq!(session.termination_reason(), Some("caller_ended"));
+        assert!(!session.begin_webrtc_negotiation(TransportEpoch::new(1)));
+
+        session.finish_recovered_termination(super::now_ms());
+        assert!(session.is_terminal());
+        assert_eq!(session.state(), RemoteDesktopState::Closed);
+        assert_eq!(session.end_reason(), Some("caller_ended"));
+        assert_eq!(
+            session.terminal_receipt().expect("terminal receipt")["reason_code"],
+            json!("caller_ended")
+        );
+    }
+
+    #[test]
     fn session_close_events_project_terminal_reason_code() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-close-event",
             "easynet:///r/acme/resource/display.test",
             vec!["webrtc".into()],
         ));
+        let epoch = TransportEpoch::new(73);
+        session.begin_webrtc_negotiation(epoch);
 
-        session.close("caller_ended");
+        assert!(session.begin_close("caller_ended"));
+        assert!(session.is_terminating());
+        assert_eq!(session.state(), RemoteDesktopState::Closing);
+        assert!(session.terminal_receipt().is_none());
+        assert!(!session
+            .events()
+            .iter()
+            .any(|event| event["event_type"] == json!("SESSION_CLOSED")));
+        session.record_media_stats(
+            epoch,
+            json!({"terminal": true, "audio_packets_written": 12}),
+        );
+        assert_eq!(
+            session
+                .media_stats()
+                .expect("Closing accepts final media stats")["terminal"],
+            json!(true)
+        );
+        session.finish_close("caller_ended");
+        session.record_media_stats(epoch, json!({"terminal": false}));
+        assert_eq!(
+            session.media_stats().expect("terminal stats remain frozen")["terminal"],
+            json!(true)
+        );
 
         let events = session.events();
         let closing_index = events
@@ -1168,16 +2229,63 @@ mod tests {
         let closing = &events[closing_index];
         assert_eq!(closing["reason_code"], json!("caller_ended"));
         assert_eq!(closing["recoverability"], json!("closing"));
+        assert_eq!(
+            closing["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            closing["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            closing["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
         assert_eq!(closing["payload"]["reason_code"], json!("caller_ended"));
         assert_eq!(closing["payload"]["recoverability"], json!("closing"));
+        assert_eq!(
+            closing["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
         assert_eq!(closing["terminal"], json!(false));
 
         let closed = &events[closed_index];
         assert_eq!(closed["reason_code"], json!("caller_ended"));
         assert_eq!(closed["recoverability"], json!("closed"));
+        assert_eq!(
+            closed["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            closed["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
         assert_eq!(closed["payload"]["reason_code"], json!("caller_ended"));
         assert_eq!(closed["payload"]["recoverability"], json!("closed"));
+        assert_eq!(
+            closed["payload"]["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
         assert_eq!(closed["terminal"], json!(true));
+
+        let terminal_receipt = session
+            .terminal_receipt()
+            .expect("caller close must project a terminal receipt");
+        assert_eq!(
+            terminal_receipt["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        assert_eq!(terminal_receipt["session_id"], json!("rd-close-event"));
+        assert_eq!(terminal_receipt["reason_code"], json!("caller_ended"));
+        assert_eq!(
+            terminal_receipt["terminal_event_id"],
+            closed["event_id"].clone()
+        );
+        assert_eq!(
+            terminal_receipt["terminal_event_sequence"],
+            closed["sequence"].clone()
+        );
+        assert_eq!(terminal_receipt["terminal"], json!(true));
     }
 
     #[test]
@@ -1209,6 +2317,14 @@ mod tests {
         let created = &events[created_index];
         assert_eq!(created["reason_code"], json!("session_created"));
         assert_eq!(created["recoverability"], json!("continue"));
+        assert_eq!(
+            created["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            created["payload"]["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
         assert_eq!(created["payload"]["reason_code"], json!("session_created"));
         assert_eq!(created["payload"]["recoverability"], json!("continue"));
 
@@ -1277,11 +2393,44 @@ mod tests {
         assert_eq!(event["reason_code"], json!(REASON_SESSION_EXPIRED));
         assert_eq!(event["recoverability"], json!("closed"));
         assert_eq!(
+            event["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            event["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
             event["payload"]["reason_code"],
             json!(REASON_SESSION_EXPIRED)
         );
         assert_eq!(event["payload"]["recoverability"], json!("closed"));
+        assert_eq!(
+            event["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
         assert_eq!(event["terminal"], json!(true));
+
+        let terminal_receipt = session
+            .terminal_receipt()
+            .expect("lease expiry must project a terminal receipt");
+        assert_eq!(
+            terminal_receipt["receipt_type"],
+            json!("remoteapp.session.terminal.v1")
+        );
+        assert_eq!(
+            terminal_receipt["reason_code"],
+            json!(REASON_SESSION_EXPIRED)
+        );
+        assert_eq!(
+            terminal_receipt["terminal_event_id"],
+            event["event_id"].clone()
+        );
+        assert_eq!(
+            terminal_receipt["terminal_event_sequence"],
+            event["sequence"].clone()
+        );
+        assert_eq!(terminal_receipt["terminal"], json!(true));
     }
 
     #[test]
@@ -1298,22 +2447,16 @@ mod tests {
             direct_webrtc_endpoint_ura("rd-target-transport-epoch"),
         );
 
-        session.record_target_observation(TargetObservation::GeometryChanged {
-            geometry: TargetGeometry {
-                x: Some(40.0),
-                y: Some(60.0),
-                width: Some(900.0),
-                height: Some(700.0),
-            },
-            target_geometry_revision: 2,
+        session.record_target_observation(TargetObservation::TitleChanged {
+            title: Some("Renamed display".to_string()),
             observed_at_ms: 100,
         });
 
         let events = session.events();
         let target_event = events
             .iter()
-            .find(|event| event["event_type"] == json!("TARGET_RESIZED"))
-            .expect("TARGET_RESIZED event");
+            .find(|event| event["event_type"] == json!("TARGET_TITLE_CHANGED"))
+            .expect("TARGET_TITLE_CHANGED event");
         assert_eq!(target_event["transport_epoch"], json!(epoch.value()));
         assert_eq!(
             target_event["payload"]["transport_epoch"],
@@ -1329,6 +2472,7 @@ mod tests {
                 .as_u64()
                 .unwrap())
         );
+        assert_target_tracking_payload_context(target_event, &session);
     }
 
     #[test]
@@ -1477,8 +2621,8 @@ mod tests {
             "input cannot activate while media is device-sending but not client-presenting"
         );
 
-        assert!(session.report_client_media_state(epoch, "presenting"));
-        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        assert!(session.mark_input_frame_applied(epoch));
         assert_eq!(
             session.lifecycle_phase(),
             RemoteDesktopSessionPhase::InputActive
@@ -1503,14 +2647,14 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-client-media-stalled"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert_eq!(session.state(), RemoteDesktopState::Connected);
         assert_eq!(
             session.transport_state()["primary"],
             json!("client_presenting")
         );
 
-        assert!(session.report_client_media_state(epoch, "stalled"));
+        assert!(session.report_client_media_state(epoch, "stalled", None));
         assert_eq!(session.state(), RemoteDesktopState::Degraded);
         assert_eq!(session.transport_state()["primary"], json!("degraded"));
         assert!(session.media_transport_ready());
@@ -1557,6 +2701,189 @@ mod tests {
     }
 
     #[test]
+    fn client_media_report_merges_transport_evidence_without_overwriting_device_stats() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-client-transport-evidence",
+            "easynet:///r/acme/resource/display.client-transport",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(41);
+
+        session.begin_webrtc_negotiation(epoch);
+        session.record_media_stats(
+            epoch,
+            json!({
+                "backend_id": "macos-sck-videotoolbox-webrtc",
+                "target_fps": 60,
+                "webrtc_stats": {
+                    "outbound_rtp": {
+                        "frames_sent": 10
+                    }
+                }
+            }),
+        );
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-client-transport-evidence"),
+        );
+
+        assert!(session.report_client_media_state(
+            epoch,
+            "presenting",
+            Some(json!({
+                "webrtc_stats": {
+                    "selected_candidate_pair": {
+                        "id": "pair-1",
+                        "candidate_pair_id": "pair-1",
+                        "local_candidate_id": "local-1",
+                        "remote_candidate_id": "remote-1",
+                        "selected_route_class": "direct",
+                        "state": "succeeded",
+                        "selected": true,
+                        "nominated": true
+                    }
+                },
+                "browser_stats": {
+                    "frames_decoded": 12,
+                    "frame_width": 1280,
+                    "frame_height": 720
+                },
+                "render_probe": {
+                    "probe_source": "browser_webrtc_receiver",
+                    "selected_resource_ura": session.target_binding().subject_ura(),
+                    "session_id": "rd-client-transport-evidence",
+                    "media_pipeline_id": "macos-sck-videotoolbox-webrtc",
+                    "video_codec": "h264",
+                    "video_transport": "webrtc",
+                    "observed_at_ms": 1787470677805u64,
+                    "decoded_video_frames": 12,
+                    "frame_width": 1280,
+                    "frame_height": 720
+                }
+            }))
+        ));
+        assert!(session.report_client_media_state(
+            epoch,
+            "presenting",
+            Some(json!({
+                "browser_stats": {
+                    "frames_decoded": 24,
+                    "decode_avg_ms": 5.0
+                }
+            }))
+        ));
+
+        let stats = session.media_stats().expect("merged media stats");
+        assert_eq!(stats["backend_id"], json!("macos-sck-videotoolbox-webrtc"));
+        assert_eq!(stats["target_fps"], json!(60));
+        assert_eq!(
+            stats["webrtc_stats"]["outbound_rtp"]["frames_sent"],
+            json!(10)
+        );
+        assert_eq!(
+            stats["webrtc_stats"]["selected_candidate_pair"]["candidate_pair_id"],
+            json!("pair-1")
+        );
+        assert_eq!(stats["browser_stats"]["frames_decoded"], json!(24));
+        assert_eq!(stats["browser_stats"]["frame_width"], json!(1280));
+        assert_eq!(stats["browser_stats"]["decode_avg_ms"], json!(5.0));
+        assert_eq!(
+            stats["render_probe"]["probe_source"],
+            json!("browser_webrtc_receiver")
+        );
+        assert_eq!(
+            stats["render_probe"]["selected_resource_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            stats["render_probe"]["media_pipeline_id"],
+            json!("macos-sck-videotoolbox-webrtc")
+        );
+
+        let media_events: Vec<_> = session
+            .events()
+            .into_iter()
+            .filter(|event| event["event_type"] == json!("MEDIA_PIPELINE_STATS"))
+            .collect();
+        assert_eq!(media_events.len(), 3);
+        let latest = media_events.last().expect("latest media stats event");
+        assert_eq!(
+            latest["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            latest["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            latest["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
+        assert_eq!(latest["transport_epoch"], json!(epoch.value()));
+        assert_eq!(
+            latest["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            latest["payload"]["stats"]["browser_stats"]["decode_avg_ms"],
+            json!(5.0)
+        );
+        assert_eq!(
+            latest["payload"]["stats"]["render_probe"]["decoded_video_frames"],
+            json!(12)
+        );
+    }
+
+    #[test]
+    fn record_webrtc_diagnostic_projects_target_binding_context() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-webrtc-diagnostic-target",
+            "easynet:///r/acme/resource/window.webrtc-diagnostic",
+            vec!["webrtc".into()],
+        ));
+
+        session.record_webrtc_diagnostic(
+            "WEBRTC_DIAGNOSTIC",
+            Some("ice_disconnected".to_string()),
+            json!({
+                "ice_connection_state": "disconnected",
+                "peer_connection_state": "connecting",
+                "selected_candidate_pair": {
+                    "candidate_pair_id": "pair-webrtc-1"
+                }
+            }),
+        );
+
+        let event = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("WEBRTC_DIAGNOSTIC"))
+            .expect("WEBRTC_DIAGNOSTIC event");
+        assert_eq!(
+            event["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            event["binding_epoch"],
+            json!(session.target_binding().binding_epoch())
+        );
+        assert_eq!(
+            event["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
+        assert_eq!(
+            event["payload"]["target_binding"]["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            event["payload"]["diagnostic"]["selected_candidate_pair"]["candidate_pair_id"],
+            json!("pair-webrtc-1")
+        );
+        assert_eq!(event["payload"]["webrtc_ice_state"], json!("disconnected"));
+        assert_eq!(event["payload"]["webrtc_error"], json!("ice_disconnected"));
+    }
+
+    #[test]
     fn input_activation_requires_target_input_enabled_snapshot() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-input-target-gate",
@@ -1568,7 +2895,7 @@ mod tests {
         session.begin_webrtc_negotiation(epoch);
         session
             .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-target-gate"));
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert_eq!(
             session.lifecycle_phase(),
             RemoteDesktopSessionPhase::MediaActive
@@ -1604,7 +2931,7 @@ mod tests {
 
         session.begin_webrtc_negotiation(epoch);
         session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-focus-loss"));
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -1643,6 +2970,105 @@ mod tests {
     }
 
     #[test]
+    fn runtime_input_permission_block_deactivates_input_without_failing_media() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-input-permission-blocked",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(21);
+
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-input-permission-blocked"),
+        );
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::InputActive
+        );
+
+        assert!(
+            session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied")
+        );
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+        assert_eq!(session.state(), RemoteDesktopState::Connected);
+        assert!(session.media_transport_ready());
+        assert!(session.client_media_ready());
+        assert_eq!(
+            session.input_runtime_block_reason(),
+            Some("accessibility_permission_denied")
+        );
+        assert!(
+            !session.block_input_for_runtime_permission(epoch, "accessibility_permission_denied"),
+            "permission block projection must be edge-triggered"
+        );
+        assert!(session.mark_input_frame_applied(epoch));
+        assert_eq!(
+            session.input_runtime_block_reason(),
+            None,
+            "runtime input block reason must clear only after input is proven active again"
+        );
+
+        let blocked_events: Vec<_> = session
+            .events()
+            .into_iter()
+            .filter(|event| event["event_type"] == json!("INPUT_PERMISSION_BLOCKED"))
+            .collect();
+        assert_eq!(blocked_events.len(), 1);
+        let blocked = &blocked_events[0];
+        assert_eq!(blocked["state"], json!("connected"));
+        assert_eq!(
+            blocked["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            blocked["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
+        assert_eq!(blocked["transport_epoch"], json!(epoch.value()));
+        assert_eq!(
+            blocked["payload"]["reason"],
+            json!("accessibility_permission_denied")
+        );
+        assert_eq!(
+            blocked["payload"]["target_binding"]["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            blocked["payload"]["frontend_action"],
+            json!("request_permission")
+        );
+        assert_eq!(blocked["payload"]["media_transport_ready"], json!(true));
+
+        let restored_events: Vec<_> = session
+            .events()
+            .into_iter()
+            .filter(|event| event["event_type"] == json!("INPUT_PERMISSION_RESTORED"))
+            .collect();
+        assert_eq!(restored_events.len(), 1);
+        let restored = &restored_events[0];
+        assert_eq!(restored["state"], json!("connected"));
+        assert_eq!(
+            restored["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            restored["payload"]["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
+        assert_eq!(restored["transport_epoch"], json!(epoch.value()));
+        assert_eq!(restored["payload"]["input_activation"], json!("enabled"));
+        assert_eq!(restored["payload"]["recoverability"], json!("resolved"));
+        assert_eq!(restored["payload"]["frontend_action"], Value::Null);
+    }
+
+    #[test]
     fn pending_target_loss_deactivates_input_before_media_loss_debounce() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-input-pending-loss",
@@ -1654,7 +3080,7 @@ mod tests {
         session.begin_webrtc_negotiation(epoch);
         session
             .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-pending-loss"));
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -1694,10 +3120,140 @@ mod tests {
                 .all(|event| event["event_type"] != json!("TARGET_LOST")),
             "pending loss must not emit committed TARGET_LOST before debounce"
         );
+        let pending = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("TARGET_LOSS_PENDING"))
+            .expect("pending target loss is an observable safety transition");
+        assert_eq!(
+            pending["payload"]["reason_code"],
+            json!("target_loss_pending")
+        );
+        assert_eq!(pending["payload"]["input_enabled"], json!(false));
+
+        let snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)
+            .expect("pending target-loss snapshot derives");
+        let recovered = RemoteDesktopSession::rehydrate(&snapshot)
+            .expect("pending target-loss safety state rehydrates");
+        assert_eq!(
+            recovered.target_tracking_state()["input_blocked_reason"],
+            json!("target_loss_pending")
+        );
     }
 
     #[test]
-    fn consent_revocation_suspends_media_and_blocks_input_activation() {
+    fn monitor_unavailable_bypasses_target_loss_debounce_and_stops_media() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-monitor-unavailable",
+            "easynet:///r/acme/resource/window.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(29);
+
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-monitor-unavailable"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+
+        let media_loss = session.record_target_observation(TargetObservation::MonitorUnavailable {
+            detail: "target monitor restart budget exhausted".into(),
+            observed_at_ms: 300,
+        });
+
+        assert_eq!(
+            media_loss,
+            Some(TargetMediaSourceLost {
+                transport_epoch: epoch,
+                reason: TargetResolutionError::CaptureBackendUnavailable,
+            })
+        );
+        assert_eq!(session.target_tracking_state()["status"], json!("lost"));
+        assert!(!session.media_transport_ready());
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+        assert!(session.events().into_iter().any(|event| {
+            event["event_type"] == json!("TARGET_LOST")
+                && event["payload"]["reason_code"] == json!("capture_backend_unavailable")
+        }));
+
+        let snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)
+            .expect("monitor-unavailable session snapshot derives");
+        let recovered = RemoteDesktopSession::rehydrate(&snapshot)
+            .expect("monitor-unavailable target state rehydrates");
+        assert_eq!(recovered.target_tracking_state()["status"], json!("lost"));
+        assert_eq!(
+            recovered.target_tracking_state()["input_enabled"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn first_permission_denial_suspends_media_without_revoking_consent_or_session() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-permission-verification",
+            "easynet:///r/acme/resource/display.permission-verification",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(16);
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-permission-verification"),
+        );
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+
+        let media_lost = session
+            .record_target_observation(TargetObservation::PermissionVerificationRequired {
+                detail: "screen-capture preflight returned false".to_string(),
+                observed_at_ms: 100,
+            })
+            .expect("first denial retires active media");
+
+        assert_eq!(media_lost.transport_epoch, epoch);
+        assert_eq!(
+            media_lost.reason,
+            TargetResolutionError::TargetPermissionMissing
+        );
+        assert_eq!(session.consent_phase(), RemoteDesktopConsentPhase::Active);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+        assert!(!session.is_terminating());
+        assert!(!session.is_terminal());
+        assert_eq!(
+            session.target_tracking_state()["status"],
+            json!("permission_verification_pending")
+        );
+        assert_eq!(
+            session.target_tracking_state()["input_enabled"],
+            json!(false)
+        );
+        assert!(session.events().iter().any(|event| {
+            event["event_type"] == json!("TARGET_PERMISSION_VERIFICATION_PENDING")
+        }));
+        assert!(!session
+            .events()
+            .iter()
+            .any(|event| { event["event_type"] == json!("TARGET_PERMISSION_REVOKED") }));
+
+        let snapshot = RemoteDesktopRecoverySnapshot::from_session(&session)
+            .expect("permission verification snapshot derives");
+        let recovered = RemoteDesktopSession::rehydrate(&snapshot)
+            .expect("permission verification snapshot rehydrates");
+        assert_eq!(recovered.consent_phase(), RemoteDesktopConsentPhase::Active);
+        assert_eq!(
+            recovered.target_tracking_state()["status"],
+            json!("permission_verification_pending")
+        );
+    }
+
+    #[test]
+    fn consent_revocation_terminates_session_and_blocks_input_activation() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-consent-revoked-gate",
             "easynet:///r/acme/resource/display.test",
@@ -1711,7 +3267,7 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-consent-revoked-gate"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
             session.lifecycle_phase(),
@@ -1732,14 +3288,24 @@ mod tests {
         assert_eq!(session.consent_phase(), RemoteDesktopConsentPhase::Revoked);
         assert_eq!(
             session.lifecycle_phase(),
-            RemoteDesktopSessionPhase::Suspended
+            RemoteDesktopSessionPhase::Terminating
         );
-        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(session.state(), RemoteDesktopState::Closing);
+        assert!(!session.is_terminal());
         assert!(!session.production_media_ready());
         assert!(
             !session.activate_input_for_transport_epoch(epoch),
-            "revoked consent must prevent input from reactivating even with the same transport epoch"
+            "Closing revoked consent must prevent input from reactivating even with the same transport epoch"
         );
+        session.record_media_stats(epoch, json!({"terminal": true}));
+        session.finish_close(REASON_TARGET_PERMISSION_REVOKED);
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Terminated
+        );
+        assert_eq!(session.state(), RemoteDesktopState::Closed);
+        assert_eq!(session.end_reason(), Some(REASON_TARGET_PERMISSION_REVOKED));
+        assert!(session.is_terminal());
 
         let events = session.events();
         let permission_revoked_index = events
@@ -1750,9 +3316,17 @@ mod tests {
             .iter()
             .position(|event| event["event_type"] == json!("MEDIA_SOURCE_LOST"))
             .expect("MEDIA_SOURCE_LOST event");
+        let session_closed_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("SESSION_CLOSED"))
+            .expect("SESSION_CLOSED event");
         assert!(
             permission_revoked_index < media_source_lost_index,
             "consent/permission event must precede media-source stop projection"
+        );
+        assert!(
+            media_source_lost_index < session_closed_index,
+            "media-source stop projection must precede terminal session closure"
         );
         assert_eq!(
             events[permission_revoked_index]["payload"]["reason_code"],
@@ -1761,6 +3335,18 @@ mod tests {
         assert_eq!(
             events[media_source_lost_index]["payload"]["transport_epoch"],
             json!(epoch.value())
+        );
+        assert_eq!(
+            events[session_closed_index]["payload"]["reason_code"],
+            json!(REASON_TARGET_PERMISSION_REVOKED)
+        );
+        assert_eq!(
+            session.terminal_receipt().unwrap()["reason_code"],
+            json!(REASON_TARGET_PERMISSION_REVOKED)
+        );
+        assert_eq!(
+            session.terminal_receipt().unwrap()["terminal_event_type"],
+            json!("SESSION_CLOSED")
         );
     }
 
@@ -1779,7 +3365,7 @@ mod tests {
         session
             .set_local_webrtc_answer(
                 epoch,
-                json!({"type": "answer", "sdp": "v=0"}),
+                json!({"type": "answer", "sdp": "v=0", "media_scope": "video_only"}),
                 "sck-native",
                 true,
                 "easynet:///r/acme/ability/remote-desktop.transport".into(),
@@ -1845,7 +3431,7 @@ mod tests {
         session
             .set_local_webrtc_answer(
                 epoch,
-                json!({"type": "answer", "sdp": "v=0"}),
+                json!({"type": "answer", "sdp": "v=0", "media_scope": "video_only"}),
                 "sck-native",
                 true,
                 endpoint_ura.clone(),
@@ -1925,7 +3511,7 @@ mod tests {
         );
         assert_eq!(session.transport_state()["device_sending"], json!(false));
 
-        assert!(!session.report_client_media_state(epoch, "stalled"));
+        assert!(!session.report_client_media_state(epoch, "stalled", None));
         assert_eq!(session.state(), RemoteDesktopState::Suspended);
         assert_eq!(
             session.transport_state()["primary"],
@@ -1946,7 +3532,7 @@ mod tests {
         session
             .set_local_webrtc_answer(
                 epoch,
-                json!({"type": "answer", "sdp": "v=0"}),
+                json!({"type": "answer", "sdp": "v=0", "media_scope": "video_only"}),
                 "sck-native",
                 true,
                 "easynet:///r/acme/ability/remote-desktop.transport".into(),
@@ -1956,7 +3542,8 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-target-rebind-failed"),
         );
-        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "presenting", None));
+        admit_decoded_video_for_test(&mut session, epoch, "test-production-pipeline");
         assert!(session.production_media_ready());
 
         session.record_target_observation(TargetObservation::Lost {
@@ -2067,6 +3654,7 @@ mod tests {
             rebind_attempted["payload"]["frontend_action"],
             json!("retry_session")
         );
+        assert_target_tracking_payload_context(rebind_attempted, &session);
         let rebind_failed = events
             .iter()
             .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
@@ -2112,6 +3700,7 @@ mod tests {
             rebind_failed["payload"]["reason_code"],
             json!("explicit_rebind_required")
         );
+        assert_target_tracking_payload_context(rebind_failed, &session);
         assert_eq!(
             rebind_failed["payload"]["frontend_action"],
             json!("refresh_targets")
@@ -2201,7 +3790,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_media_rebind_failure_rejects_session_rebinding() {
+    fn pending_media_rebind_candidate_failure_restores_active_session() {
         let mut session = RemoteDesktopSession::new(test_application_session_init(
             "rd-media-rebind-filter-failed",
             vec!["webrtc".into()],
@@ -2215,7 +3804,7 @@ mod tests {
         session
             .set_local_webrtc_answer(
                 epoch,
-                json!({"type": "answer", "sdp": "v=0"}),
+                json!({"type": "answer", "sdp": "v=0", "media_scope": "video_only"}),
                 "sck-native",
                 true,
                 "easynet:///r/acme/ability/remote-desktop.transport".into(),
@@ -2232,13 +3821,14 @@ mod tests {
 
         assert!(
             session
-                .record_target_observation(TargetObservation::ApplicationWindowSetChanged {
+                .record_target_observation(TargetObservation::ApplicationSurfaceChanged {
                     app_window_set: AppWindowSetProof::new(
                         42,
                         Some("com.example.Editor".to_string()),
                         Some(9001),
                         vec![10, 11, 12],
                     ),
+                    app_surface_layout: None,
                     geometry: TargetGeometry {
                         x: Some(10.0),
                         y: Some(20.0),
@@ -2261,7 +3851,7 @@ mod tests {
             RemoteDesktopSessionPhase::Rebinding
         );
 
-        assert!(session.fail_pending_media_rebind(
+        assert!(session.supersede_pending_media_rebind(
             epoch,
             TargetResolutionError::ScreenCaptureKitFilterFailed,
             "native content filter rejected pending application window set".to_string(),
@@ -2269,58 +3859,183 @@ mod tests {
 
         assert_eq!(
             session.lifecycle_phase(),
-            RemoteDesktopSessionPhase::Suspended
+            RemoteDesktopSessionPhase::MediaActive
         );
-        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(session.state(), RemoteDesktopState::Negotiating);
         assert_eq!(
             session.target_tracking_state()["status"],
-            json!("lost"),
-            "target projection must terminate rebind instead of remaining stuck in rebinding"
+            json!("resolved"),
+            "a stale candidate must restore the still-committed target"
         );
         assert!(session.pending_media_rebind_binding().is_none());
         let events = session.events();
-        let rebind_failed = events
+        let rebind_superseded = events
             .iter()
-            .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
-            .expect("pending media rebind failure emits target lifecycle failure");
+            .find(|event| event["event_type"] == json!("TARGET_REBIND_SUPERSEDED"))
+            .expect("stale candidate emits a non-terminal lifecycle event");
         assert_eq!(
-            rebind_failed["reason_code"],
+            rebind_superseded["reason_code"],
+            json!("target_rebind_candidate_superseded")
+        );
+        assert_eq!(
+            rebind_superseded["payload"]["candidate_rejection_reason"],
             json!("screencapturekit_filter_failed")
         );
-        assert_eq!(rebind_failed["payload"]["failure_domain"], json!("target"));
         assert_eq!(
-            rebind_failed["payload"]["frontend_action"],
-            json!("show_unsupported")
+            rebind_superseded["payload"]["recoverability"],
+            json!("continue")
         );
-        assert_eq!(rebind_failed["payload"]["target_status"], json!("lost"));
-        assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+        assert!(rebind_superseded["payload"]["frontend_action"].is_null());
         assert_eq!(
-            rebind_failed["binding_epoch"],
+            rebind_superseded["binding_epoch"],
             json!(original_binding_epoch)
         );
         assert_eq!(
-            rebind_failed["target_identity_epoch"],
+            rebind_superseded["target_identity_epoch"],
             json!(original_identity_epoch)
         );
         assert_eq!(
-            rebind_failed["media_source_epoch"],
+            rebind_superseded["media_source_epoch"],
             json!(original_media_source_epoch)
         );
         assert_eq!(
-            rebind_failed["payload"]["pending_binding_epoch"],
+            rebind_superseded["payload"]["pending_binding_epoch"],
             json!(pending.binding_epoch())
         );
         assert_eq!(
-            rebind_failed["payload"]["pending_target_identity_epoch"],
+            rebind_superseded["payload"]["pending_target_identity_epoch"],
             json!(pending.target_identity_epoch())
         );
         assert_eq!(
-            rebind_failed["payload"]["pending_media_source_epoch"],
+            rebind_superseded["payload"]["pending_media_source_epoch"],
             json!(pending.media_source_epoch())
         );
+        assert_target_tracking_payload_context(rebind_superseded, &session);
         assert_eq!(
-            rebind_failed["event_type_proto"],
+            rebind_superseded["payload"]["target_binding"]["binding_epoch"],
+            json!(original_binding_epoch),
+            "current binding context must not be overwritten by pending rebind evidence"
+        );
+        assert_eq!(
+            rebind_superseded["payload"]["target_binding"]["media_source_epoch"],
+            json!(original_media_source_epoch),
+            "superseded media rebind keeps the committed media source context"
+        );
+        assert_eq!(
+            rebind_superseded["event_type_proto"],
             json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
+        );
+        assert!(events
+            .iter()
+            .all(|event| event["event_type"] != json!("MEDIA_SOURCE_LOST")));
+    }
+
+    #[test]
+    fn active_window_resize_atomically_updates_session_binding_and_capture_proof() {
+        let session_id = "rd-window-resize-generation";
+        let mut session =
+            RemoteDesktopSession::new(test_window_session_init(session_id, vec!["webrtc".into()]));
+        let epoch = TransportEpoch::new(31);
+        let original_binding_epoch = session.target_binding().binding_epoch();
+        let original_media_source_epoch = session.target_binding().media_source_epoch();
+        let original_geometry_revision = session.target_binding().target_geometry_revision();
+
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0", "media_scope": "video_only"}),
+                "xcap-openh264-webrtc",
+                true,
+                direct_webrtc_endpoint_ura(session_id),
+            )
+            .expect("window WebRTC answer records");
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura(session_id));
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+
+        assert!(
+            session
+                .record_target_observation(TargetObservation::GeometryChanged {
+                    geometry: TargetGeometry {
+                        x: Some(100.0),
+                        y: Some(200.0),
+                        width: Some(1024.0),
+                        height: Some(720.0),
+                    },
+                    target_geometry_revision: original_geometry_revision + 1,
+                    observed_at_ms: 4_000,
+                })
+                .is_none(),
+            "resize is a generation transition, not media-source loss"
+        );
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Rebinding
+        );
+        assert_eq!(
+            session.target_binding().binding_epoch(),
+            original_binding_epoch
+        );
+        let pending = session
+            .pending_media_rebind_binding()
+            .expect("window resize exposes pending generation")
+            .clone();
+        assert_eq!(pending.binding_epoch(), original_binding_epoch + 1);
+        assert_eq!(
+            pending.media_source_epoch(),
+            original_media_source_epoch + 1
+        );
+        let capture_proof = pending
+            .require_capture_proof("test.ability")
+            .unwrap()
+            .clone()
+            .reverified_with_native_dimensions(Some((1024, 720)));
+
+        assert!(session.commit_pending_media_rebind(
+            epoch,
+            pending.binding_epoch(),
+            pending.media_source_epoch(),
+            capture_proof,
+        ));
+
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+        let view = serialize_session(&session);
+        assert_eq!(
+            view["target_binding"]["binding_epoch"],
+            json!(original_binding_epoch + 1)
+        );
+        assert_eq!(
+            view["target_binding"]["media_source_epoch"],
+            json!(original_media_source_epoch + 1)
+        );
+        assert_eq!(view["target_binding"]["bounds"]["width"], json!(1024.0));
+        assert_eq!(view["target_binding"]["bounds"]["height"], json!(720.0));
+        assert_eq!(
+            view["target_binding"]["capture_proof"]["native_width"],
+            json!(1024)
+        );
+        assert_eq!(
+            view["target_binding"]["capture_proof"]["native_height"],
+            json!(720)
+        );
+        let events = session.events();
+        let rebound = events
+            .iter()
+            .find(|event| {
+                event["event_type"] == json!("TARGET_REBOUND")
+                    && event["payload"]["detail"]
+                        == json!("target_geometry_change_requires_media_source_rebuild")
+            })
+            .expect("resize commit emits target rebound");
+        assert_eq!(
+            rebound["payload"]["reason_code"],
+            json!("target_geometry_media_source_rebound")
         );
     }
 }

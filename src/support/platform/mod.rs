@@ -1,5 +1,7 @@
 //! Low-level platform, transport, terminal, and process helpers.
 
+#[cfg(feature = "axon-pb")]
+pub(crate) mod bidi_session;
 pub(crate) mod errors;
 pub(crate) mod local_daemon_grpc;
 pub(crate) mod local_invoke;
@@ -13,3 +15,4 @@ pub(crate) mod remote_device;
 pub(crate) mod shutdown;
 pub(crate) mod sysinfo;
 pub(crate) mod timeouts;
+pub(crate) mod tunnel_codec;

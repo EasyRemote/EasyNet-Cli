@@ -80,11 +80,42 @@ impl RemoteDesktopEventLog {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        events: Vec<Value>,
+        terminal: bool,
+    ) -> anyhow::Result<Self> {
+        let mut retained = VecDeque::with_capacity(MAX_EVENTS_PER_SESSION);
+        let skip = events.len().saturating_sub(MAX_EVENTS_PER_SESSION);
+        let mut max_sequence = 0;
+        for event in events.into_iter().skip(skip) {
+            let sequence = event
+                .get("sequence")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery event is missing sequence"))?;
+            max_sequence = max_sequence.max(sequence);
+            retained.push_back(RemoteDesktopEventRecord::new(event));
+        }
+        let event_tx = if terminal {
+            None
+        } else {
+            Some(broadcast::channel(MAX_EVENTS_PER_SESSION).0)
+        };
+        Ok(Self {
+            events: retained,
+            event_tx,
+            next_sequence: max_sequence.saturating_add(1).max(1),
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn events(&self) -> Vec<Value> {
         self.events
             .iter()
             .map(RemoteDesktopEventRecord::to_value)
             .collect()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn latest_sequence(&self) -> u64 {
+        self.next_sequence.saturating_sub(1)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn replay_from(
@@ -136,7 +167,7 @@ impl RemoteDesktopEventLog {
         state: RemoteDesktopSessionState,
         event_type: &str,
         payload: Value,
-    ) {
+    ) -> Value {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
         let target_field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
@@ -182,6 +213,10 @@ impl RemoteDesktopEventLog {
         if let Some(event_tx) = self.event_tx.as_ref() {
             let _ = event_tx.send(event);
         }
+        self.events
+            .back()
+            .expect("event log push appends one record")
+            .to_value()
     }
 
     fn compaction_diagnostic_event(
@@ -249,11 +284,15 @@ const TARGET_CHANGED_EVENT_TYPES: &[&str] = &[
     "TARGET_VISIBLE",
     "TARGET_MINIMIZED",
     "TARGET_RESTORED",
+    "TARGET_LOSS_PENDING",
     "TARGET_LOST",
     "TARGET_REBIND_ATTEMPTED",
     "TARGET_REBOUND",
+    "TARGET_REBIND_SUPERSEDED",
     "TARGET_REBIND_FAILED",
     "TARGET_BINDING_CHANGED",
+    "TARGET_PERMISSION_VERIFICATION_PENDING",
+    "TARGET_PERMISSION_VERIFICATION_CLEARED",
     "TARGET_PERMISSION_REVOKED",
     "DISPLAY_TOPOLOGY_CHANGED",
 ];
@@ -288,7 +327,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
         | "INPUT_CHANNEL_REJECTED"
         | "INPUT_CHANNEL_ERROR"
         | "INPUT_FRAME_APPLIED"
-        | "INPUT_FRAME_REJECTED" => "REMOTE_DESKTOP_EVENT_INPUT",
+        | "INPUT_FRAME_REJECTED"
+        | "INPUT_PERMISSION_BLOCKED"
+        | "INPUT_PERMISSION_RESTORED" => "REMOTE_DESKTOP_EVENT_INPUT",
         "LEASE_REFRESHED" => "REMOTE_DESKTOP_EVENT_LEASE_REFRESHED",
         "SESSION_CLOSING" => "REMOTE_DESKTOP_EVENT_SESSION_CLOSING",
         "SESSION_CLOSED" => "REMOTE_DESKTOP_EVENT_SESSION_CLOSED",
@@ -305,6 +346,24 @@ mod tests {
         TARGET_CHANGED_EVENT_TYPES,
     };
     use crate::daemon::plugins::remote_desktop::contract::RemoteDesktopSessionState;
+
+    #[test]
+    fn event_log_push_returns_the_stored_event_record() {
+        let mut log = RemoteDesktopEventLog::new();
+
+        let event = log.push(
+            "rd-event-return",
+            RemoteDesktopSessionState::Closed,
+            "SESSION_CLOSED",
+            json!({ "reason_code": "caller_ended" }),
+        );
+
+        assert_eq!(event["event_id"], json!("rd-event-return:1"));
+        assert_eq!(event["sequence"], json!(1));
+        assert_eq!(event["event_type"], json!("SESSION_CLOSED"));
+        assert_eq!(event["terminal"], json!(true));
+        assert_eq!(log.events(), vec![event]);
+    }
 
     #[test]
     fn event_log_retains_fixed_ring_and_monotonic_sequences_under_large_storm() {
@@ -408,11 +467,15 @@ mod tests {
             "TARGET_VISIBLE",
             "TARGET_MINIMIZED",
             "TARGET_RESTORED",
+            "TARGET_LOSS_PENDING",
             "TARGET_LOST",
             "TARGET_REBIND_ATTEMPTED",
             "TARGET_REBOUND",
+            "TARGET_REBIND_SUPERSEDED",
             "TARGET_REBIND_FAILED",
             "TARGET_BINDING_CHANGED",
+            "TARGET_PERMISSION_VERIFICATION_PENDING",
+            "TARGET_PERMISSION_VERIFICATION_CLEARED",
             "TARGET_PERMISSION_REVOKED",
             "DISPLAY_TOPOLOGY_CHANGED",
         ];

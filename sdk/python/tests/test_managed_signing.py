@@ -19,7 +19,6 @@ from easynet_sdk import (
     ManagedSigningPeerRegistration,
     ManagedSigningStatus,
     SDKError,
-    SignerHandle,
     SignerPolicy,
     SigningMaterial,
 )
@@ -41,6 +40,55 @@ class ManagedSigningTests(unittest.TestCase):
                     ManagedSigningClient(socket_path=socket_path)
                 self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
                 self.assertEqual(caught.exception.stage, "key_service")
+
+    def test_active_subject_signer_matches_daemon_rotation_selection(self) -> None:
+        subject_ura = "easynet:///r/acme/user/alice"
+        purpose = "user_signing.cli"
+        public_key_1 = bytes(range(32))
+        public_key_2 = bytes(reversed(range(32)))
+        responses = [
+            {
+                "result": "inventory_keys",
+                "entries": [
+                    _key(
+                        "key-z",
+                        public_key_2,
+                        "active",
+                        1,
+                        "key-a",
+                        subject_ura,
+                        purpose=purpose,
+                    ),
+                    _key(
+                        "key-a",
+                        public_key_1,
+                        "active",
+                        0,
+                        None,
+                        subject_ura,
+                        purpose=purpose,
+                    ),
+                ],
+                "next_cursor": None,
+            }
+        ]
+        with KeyServiceServer(responses) as server:
+            signer = ManagedSigningClient(
+                socket_path=server.socket_path
+            ).active_signer_for_subject(subject_ura, purpose=purpose)
+
+        self.assertEqual(signer.key_id, "key-a")
+        self.assertEqual(
+            server.requests,
+            [
+                {
+                    "method": "inventory.list",
+                    "purpose": purpose,
+                    "status": "active",
+                    "limit": 16,
+                }
+            ],
+        )
 
     def test_signature_verification_fails_closed_when_required_crypto_is_unavailable(
         self,
@@ -338,26 +386,15 @@ class ManagedSigningTests(unittest.TestCase):
             self.assertEqual(signer.key_id, key_id)
             self.assertEqual(signer.signing_public_key(), public_key)
             self.assertEqual(signer.sign_canonical(canonical), signature)
-            handle = SignerHandle(
-                profile="signing",
-                signer_id="signer-managed-key-provider",
-                owner_ura=subject_ura,
-                key_id=key_id,
-                algorithm="ed25519",
-                policy={
-                    "mode": "provider_managed_signing",
-                    "usage": "invocation.sign",
-                    "signer_id": "signer-managed-key-provider",
-                    "policy_ref": policy_ref,
-                    "inventory_owner_ura": subject_ura,
-                    "key_state": "active",
-                },
-                metadata={
-                    "source": "provider_key_inventory",
-                    "policy_ref": policy_ref,
-                    "public_key_base64": _b64(public_key),
-                },
-            )
+            invocation_signer = signer.invocation_signer()
+            self.assertIs(invocation_signer.provider, signer)
+            handle = invocation_signer.handle
+            self.assertEqual(handle.profile, "signing")
+            self.assertEqual(handle.signer_id, "signer-managed-key-provider")
+            self.assertEqual(handle.owner_ura, subject_ura)
+            self.assertEqual(handle.key_id, key_id)
+            self.assertEqual(handle.policy["policy_ref"], policy_ref)
+            self.assertEqual(handle.metadata["public_key_base64"], _b64(public_key))
             material = SigningMaterial(
                 canonical_bytes_base64=_b64(canonical),
                 args_digest_hex="00" * 32,
@@ -373,7 +410,7 @@ class ManagedSigningTests(unittest.TestCase):
         self.assertEqual(
             base64.b64decode(invocation_signature.signature_base64), signature
         )
-        self.assertEqual(invocation_signature.key_id_hint, handle.signer_id)
+        self.assertEqual(invocation_signature.key_id_hint, _b64(public_key))
         self.assertEqual(
             invocation_signature.signer_public_key_base64, _b64(public_key)
         )
@@ -658,17 +695,19 @@ def _key(
     rotation_epoch: int,
     rotated_from: str | None,
     subject_ura: str | None,
+    *,
+    purpose: str = "invocation",
 ) -> dict[str, object]:
     revoked_unix_ms = 1700000000100 if status == "revoked" else None
     return {
         "key_id": key_id,
-        "purpose": "invocation",
+        "purpose": purpose,
         "public_key_b64": _b64(public_key),
         "status": status,
         "rotation_epoch": rotation_epoch,
         "bound_subject": subject_ura,
         "signer_policy_ref": (
-            _policy_ref("invocation", subject_ura, key_id, public_key)
+            _policy_ref(purpose, subject_ura, key_id, public_key)
             if subject_ura is not None
             else None
         ),

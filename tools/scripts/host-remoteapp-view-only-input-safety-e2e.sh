@@ -4,7 +4,7 @@
 # Boundary:
 # - This script proves SPEC E2E-11 at the public CLI/daemon boundary:
 #   a user asks for an interactive app/window remote desktop session, but the
-#   daemon has no proven focus-safe target-scoped input dispatcher. The public
+#   request deliberately omits explicit input-control consent. The public
 #   create/show session views must therefore report input_mode=view_only and a
 #   key/pointer rejection contract of input_scope_unsupported.
 # - It does not add a diagnostic input API. The live proof is the public
@@ -15,6 +15,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+PROVENANCE_HELPER="$SELF_DIR/remoteapp-evidence-provenance.py"
 BUNDLED_SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 
 MODE=run
@@ -86,8 +87,14 @@ SELECTED_RESOURCE_JSON="$OUT_DIR/selected-resource.json"
 SENTINEL_MANIFEST_JSON="$OUT_DIR/sentinel-manifest.json"
 CREATE_SESSION_JSON="$OUT_DIR/create-session.json"
 SHOW_SESSION_JSON="$OUT_DIR/show-session.json"
+ATTACH_BIDI_JSON="$OUT_DIR/attach-bidi-input-probe.json"
+ABILITY_CATALOG_JSON="$OUT_DIR/ability-catalog.json"
 SESSION_ID="rd-view-only-input-safety-e2e-$$"
 LEASE_TTL_MS=5000
+POINTER_CLIENT_SENT_AT_MS=1787331000123
+KEY_CLIENT_SENT_AT_MS=1787331000456
+POINTER_CLIENT_SEQUENCE=101
+KEY_CLIENT_SEQUENCE=102
 
 die() {
   echo "[FAIL] $*" >&2
@@ -110,6 +117,7 @@ run_easynet() {
 }
 
 validate_evidence() {
+  python3 "$PROVENANCE_HELPER" verify --mode "$MODE" --evidence "$EVIDENCE_JSON"
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
 import pathlib
@@ -170,6 +178,7 @@ scope_audit = get("create_session.session.scope_audit")
 input_policy = get("create_session.session.input_policy")
 input_plane_policy = get("create_session.session.input_plane.policy")
 expected_rejections = evidence.get("expected_input_rejections")
+attach_probe = evidence.get("diagnostic_input_probe")
 
 require(evidence.get("status") == "passed", "evidence.status must be passed")
 require(target_kind in {"window", "application"}, "target_kind must be window or application")
@@ -213,14 +222,14 @@ require(get("create_session.session.target_binding.target_kind") == target_kind,
 require(get("create_session.session.target_binding.input_scope") == "view_only",
         "target_binding.input_scope must be view_only")
 require(get("create_session.session.target_binding.input_scope_reason")
-        == "target_scoped_keyboard_pointer_dispatch_unsafe",
-        "target_binding must expose target_scoped_keyboard_pointer_dispatch_unsafe")
+        == "input_consent_required",
+        "target_binding must expose input_consent_required")
 require(isinstance(scope_audit, dict), "session.scope_audit must be recorded")
 require(get("create_session.session.scope_audit.input_mode") == "view_only",
         "scope_audit.input_mode must be view_only")
 require(get("create_session.session.scope_audit.input_scope_reason")
-        == "target_scoped_keyboard_pointer_dispatch_unsafe",
-        "scope_audit must expose target_scoped_keyboard_pointer_dispatch_unsafe")
+        == "input_consent_required",
+        "scope_audit must expose input_consent_required")
 require(get("create_session.session.scope_audit.scope_widened") is False,
         "view-only input downgrade must not widen capture scope")
 require(get("create_session.session.scope_audit.display_fallback_used") is False,
@@ -247,19 +256,94 @@ require(get("show_session.session.input_policy.input_scope") == "view_only",
 require(get("show_session.session.scope_audit.input_mode") == "view_only",
         "show_session must preserve input_mode=view_only")
 require(get("show_session.session.target_binding.input_scope_reason")
-        == "target_scoped_keyboard_pointer_dispatch_unsafe",
-        "show_session must preserve target-scoped input unsafe reason")
+        == "input_consent_required",
+        "show_session must preserve missing-consent reason")
+
+require(isinstance(attach_probe, dict), "diagnostic_input_probe must be recorded")
+if isinstance(attach_probe, dict):
+    require(attach_probe.get("ability") == "remote_desktop.attach",
+            "diagnostic_input_probe ability must be remote_desktop.attach")
+    attach_ability_ura = attach_probe.get("ability_ura")
+    require(isinstance(attach_ability_ura, str) and attach_ability_ura.startswith("easynet:///r/"),
+            "diagnostic_input_probe ability_ura must be a canonical EasyNet Ability URA")
+    if isinstance(attach_ability_ura, str):
+        require(attach_ability_ura.endswith(".remote_desktop.attach"),
+                "diagnostic_input_probe ability_ura must address remote_desktop.attach")
+    require(attach_probe.get("subject_ura") == resource_ura,
+            "diagnostic_input_probe subject must equal selected Resource URA")
+    require(attach_probe.get("exit_code") == 0,
+            "diagnostic_input_probe must succeed at the transport level")
+    require(attach_probe.get("input_transport") == "axon_invoke_bidi",
+            "diagnostic_input_probe must use Axon InvokeBidi")
+    causal_context = attach_probe.get("causal_context")
+    require(isinstance(causal_context, dict),
+            "diagnostic_input_probe.causal_context must be recorded")
+    if isinstance(causal_context, dict):
+        require(causal_context.get("form") == "scalar",
+                "diagnostic_input_probe causal_context must be scalar")
+        approval_receipt = get("create_session.session.consent.approval_receipt")
+        require(isinstance(approval_receipt, dict),
+                "create_session must expose session.consent.approval_receipt")
+        if isinstance(approval_receipt, dict):
+            require(causal_context.get("receipt_hash_hex") == approval_receipt.get("receipt_hash"),
+                    "diagnostic_input_probe causal_context must use the session approval receipt hash")
+            require(causal_context.get("receipt_ura") == approval_receipt.get("receipt_ura"),
+                    "diagnostic_input_probe causal_context must use the session approval receipt URA")
+    frames = attach_probe.get("frames")
+    require(isinstance(frames, list), "diagnostic_input_probe.frames must be recorded")
+    if isinstance(frames, list):
+        applied = [
+            frame for frame in frames
+            if isinstance(frame, dict) and frame.get("type") == "input_applied"
+        ]
+        require(not applied,
+                "view-only diagnostic input probe must not apply pointer or key frames")
+
+        def find_rejection(input_type, sequence, sent_at_ms):
+            for frame in frames:
+                if not isinstance(frame, dict):
+                    continue
+                if frame.get("type") != "warn":
+                    continue
+                if frame.get("code") != "input_scope_unsupported":
+                    continue
+                if frame.get("input_type") != input_type:
+                    continue
+                if frame.get("client_sequence") != sequence:
+                    continue
+                if frame.get("client_sent_at_ms") != sent_at_ms:
+                    continue
+                return frame
+            return None
+
+        require(find_rejection(
+            "pointer",
+            attach_probe.get("pointer_client_sequence"),
+            attach_probe.get("pointer_client_sent_at_ms"),
+        ) is not None,
+                "pointer diagnostic rejection must preserve input_scope_unsupported telemetry")
+        require(find_rejection(
+            "key",
+            attach_probe.get("key_client_sequence"),
+            attach_probe.get("key_client_sent_at_ms"),
+        ) is not None,
+                "key diagnostic rejection must preserve input_scope_unsupported telemetry")
 
 report = {
+    "script": "tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh",
     "status": "failed" if errors else "passed",
     "errors": errors,
     "evidence_json": evidence_path,
+    "product_complete_claim": False,
     "target_kind": target_kind,
     "selected_resource_ura": resource_ura,
     "requested_input_mode": evidence.get("requested_input_mode"),
     "effective_input_mode": get("create_session.session.scope_audit.input_mode"),
     "key_rejection": get("expected_input_rejections.key"),
     "pointer_rejection": get("expected_input_rejections.pointer"),
+    "diagnostic_input_transport": get("diagnostic_input_probe.input_transport"),
+    "diagnostic_pointer_sequence": get("diagnostic_input_probe.pointer_client_sequence"),
+    "diagnostic_key_sequence": get("diagnostic_input_probe.key_client_sequence"),
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -274,6 +358,9 @@ with open(md_path, "w", encoding="utf-8") as f:
     f.write(f"- Effective input mode: `{report['effective_input_mode']}`\n")
     f.write(f"- Key rejection: `{report['key_rejection']}`\n")
     f.write(f"- Pointer rejection: `{report['pointer_rejection']}`\n")
+    f.write(f"- Diagnostic input transport: `{report['diagnostic_input_transport']}`\n")
+    f.write(f"- Diagnostic pointer sequence: `{report['diagnostic_pointer_sequence']}`\n")
+    f.write(f"- Diagnostic key sequence: `{report['diagnostic_key_sequence']}`\n")
     f.write(f"- Evidence: `{evidence_path}`\n")
     if errors:
         f.write("\n## Errors\n")
@@ -284,6 +371,8 @@ if errors:
         print(error, file=sys.stderr)
     raise SystemExit(1)
 PY
+  python3 "$PROVENANCE_HELPER" project-report --mode "$MODE" \
+    --evidence "$EVIDENCE_JSON" --report "$REPORT_JSON"
 }
 
 if [[ "$MODE" == "self-test" ]]; then
@@ -306,17 +395,23 @@ session = {
     "session_id": "rd-view-only-input-safety-e2e-self-test",
     "subject_ura": subject,
     "mode": "interactive",
+    "consent": {
+        "approval_receipt": {
+            "receipt_hash": "0" * 64,
+            "receipt_ura": "easynet:///r/localhost/resource/device.dev/invocation/inv_self_test/history/receipt/4",
+        },
+    },
     "target_binding": {
         "subject_ura": subject,
         "target_kind": "window",
         "input_scope": "view_only",
-        "input_scope_reason": "target_scoped_keyboard_pointer_dispatch_unsafe",
+        "input_scope_reason": "input_consent_required",
     },
     "scope_audit": {
         "requested_target_kind": "window",
         "effective_target_kind": "window",
         "input_mode": "view_only",
-        "input_scope_reason": "target_scoped_keyboard_pointer_dispatch_unsafe",
+        "input_scope_reason": "input_consent_required",
         "scope_widened": False,
         "display_fallback_used": False,
     },
@@ -330,6 +425,7 @@ session = {
 }
 evidence = {
     "status": "passed",
+    "evidence_origin": "contract_self_test",
     "target_kind": "window",
     "requested_input_mode": "interactive",
     "lease_ttl_ms": 5000,
@@ -375,6 +471,41 @@ evidence = {
         "pointer": "input_scope_unsupported",
         "evidence_source": "public_session_input_policy",
     },
+    "diagnostic_input_probe": {
+        "ability": "remote_desktop.attach",
+        "ability_ura": "easynet:///r/localhost/ability/system-agent.node.remote-desktop.remote_desktop.attach",
+        "subject_ura": subject,
+        "causal_context": {
+            "form": "scalar",
+            "receipt_hash_hex": "0" * 64,
+            "receipt_ura": "easynet:///r/localhost/resource/device.dev/invocation/inv_self_test/history/receipt/4",
+        },
+        "exit_code": 0,
+        "input_transport": "axon_invoke_bidi",
+        "pointer_client_sent_at_ms": 1787331000123,
+        "pointer_client_sequence": 101,
+        "key_client_sent_at_ms": 1787331000456,
+        "key_client_sequence": 102,
+        "frames": [
+            {
+                "type": "warn",
+                "code": "input_scope_unsupported",
+                "input_type": "pointer",
+                "action": "move",
+                "client_sent_at_ms": 1787331000123,
+                "client_sequence": 101,
+            },
+            {
+                "type": "warn",
+                "code": "input_scope_unsupported",
+                "input_type": "key",
+                "action": "down",
+                "client_sent_at_ms": 1787331000456,
+                "client_sequence": 102,
+            },
+            {"type": "closed", "reason": "preview_client_closed"},
+        ],
+    },
 }
 path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -404,66 +535,12 @@ source "$SENTINEL_FIXTURE_DIR/env.sh"
 cp "$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_MANIFEST" "$SENTINEL_MANIFEST_JSON"
 
 run_easynet ability refresh-remote-targets --type "$TARGET_KIND" --format json >"$LIVE_INVENTORY_JSON"
-python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$TARGET_KIND" "$EASYNET_REMOTEAPP_TARGET_PID" "$EASYNET_REMOTEAPP_TARGET_HINT" <<'PY'
-import json
-import sys
-
-inventory_path, selected_path, target_kind, target_pid, target_hint = sys.argv[1:6]
-with open(inventory_path, encoding="utf-8") as f:
-    inventory = json.load(f)
-resources = inventory.get("resources")
-if not isinstance(resources, list):
-    raise SystemExit("resource.refresh_remote_targets response missing resources array")
-
-def metadata(resource):
-    return resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
-
-def pid_matches(resource):
-    meta = metadata(resource)
-    values = [meta.get("pid"), meta.get("primary_pid")]
-    return any(str(value) == str(target_pid) for value in values if value is not None)
-
-def text_matches(resource):
-    meta = metadata(resource)
-    fields = [
-        resource.get("display_name"),
-        meta.get("title"),
-        meta.get("primary_title"),
-        meta.get("app_name"),
-        meta.get("bundle_id"),
-        meta.get("app_identity"),
-    ]
-    return any(str(value) == target_hint for value in fields if value is not None)
-
-candidates = [
-    resource for resource in resources
-    if resource.get("type") == target_kind
-    and metadata(resource).get("availability") == "available"
-    and pid_matches(resource)
-    and text_matches(resource)
-]
-if len(candidates) != 1:
-    sample = [
-        {
-            "resource_ura": resource.get("resource_ura"),
-            "type": resource.get("type"),
-            "display_name": resource.get("display_name"),
-            "pid": metadata(resource).get("pid"),
-            "primary_pid": metadata(resource).get("primary_pid"),
-            "title": metadata(resource).get("title"),
-            "app_name": metadata(resource).get("app_name"),
-            "availability": metadata(resource).get("availability"),
-        }
-        for resource in resources
-        if resource.get("type") == target_kind
-    ][:12]
-    raise SystemExit(
-        f"known {target_kind} target must resolve exactly once from live refresh; got {len(candidates)} sample={sample}"
-    )
-with open(selected_path, "w", encoding="utf-8") as f:
-    json.dump(candidates[0], f, indent=2, sort_keys=True)
-    f.write("\n")
-PY
+python3 "$SELF_DIR/remoteapp-select-live-target.py" \
+  --inventory "$LIVE_INVENTORY_JSON" \
+  --output "$SELECTED_RESOURCE_JSON" \
+  --kind "$TARGET_KIND" \
+  --pid "$EASYNET_REMOTEAPP_TARGET_PID" \
+  --hint "$EASYNET_REMOTEAPP_TARGET_HINT"
 
 SELECTED_RESOURCE_URA="$(python3 - "$SELECTED_RESOURCE_JSON" <<'PY'
 import json
@@ -485,7 +562,135 @@ run_easynet ability show-remote-desktop-session \
   --session-json "$CREATE_SESSION_JSON" \
   --format json >"$SHOW_SESSION_JSON"
 
-python3 - "$EVIDENCE_JSON" "$TARGET_KIND" "$LEASE_TTL_MS" "$SENTINEL_MANIFEST_JSON" "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$CREATE_SESSION_JSON" "$SHOW_SESSION_JSON" <<'PY'
+SESSION_TOKEN="$(python3 - "$CREATE_SESSION_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    response = json.load(f)
+token = response.get("session", {}).get("session_token")
+if not isinstance(token, str) or not token:
+    raise SystemExit("create_session response missing session.session_token")
+print(token)
+PY
+)"
+ATTACH_CAUSAL_CONTEXT_JSON="$(python3 - "$CREATE_SESSION_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    response = json.load(f)
+approval = (
+    response.get("session", {})
+    .get("consent", {})
+    .get("approval_receipt")
+)
+if not isinstance(approval, dict):
+    raise SystemExit("create_session response missing session.consent.approval_receipt")
+receipt_hash = approval.get("receipt_hash")
+receipt_ura = approval.get("receipt_ura")
+if not isinstance(receipt_hash, str) or len(receipt_hash) != 64:
+    raise SystemExit("session approval receipt_hash must be 64 hex characters")
+if not isinstance(receipt_ura, str) or not receipt_ura.startswith("easynet:///r/"):
+    raise SystemExit("session approval receipt_ura must be a canonical EasyNet URA")
+print(json.dumps({
+    "form": "scalar",
+    "receipt_hash_hex": receipt_hash,
+    "receipt_ura": receipt_ura,
+}, separators=(",", ":")))
+PY
+)"
+run_easynet ability list --format json >"$ABILITY_CATALOG_JSON"
+ATTACH_ABILITY_URA="$(python3 - "$ABILITY_CATALOG_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    rows = json.load(f)
+if not isinstance(rows, list):
+    raise SystemExit("ability list --format json must return an array")
+candidates = [
+    row for row in rows
+    if row.get("name") == "remote_desktop.attach"
+    and row.get("call_mode") == "bidi"
+    and isinstance(row.get("ability_ura"), str)
+    and row["ability_ura"].startswith("easynet:///r/")
+]
+if len(candidates) != 1:
+    sample = [
+        {
+            "name": row.get("name"),
+            "call_mode": row.get("call_mode"),
+            "ability_ura": row.get("ability_ura"),
+            "descriptor_ref": row.get("descriptor_ref"),
+        }
+        for row in rows
+        if row.get("name") == "remote_desktop.attach"
+    ]
+    raise SystemExit(
+        f"remote_desktop.attach bidi Ability URA must resolve exactly once; got {len(candidates)} sample={sample}"
+    )
+print(candidates[0]["ability_ura"])
+PY
+)"
+BIDI_NONCE_HEX="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)"
+ATTACH_ARGS="$(python3 - "$SESSION_ID" "$SESSION_TOKEN" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "session_id": sys.argv[1],
+    "session_token": sys.argv[2],
+    "encoding": "jpeg_binary",
+    "fps": 1,
+    "resolution": "320x180",
+}, separators=(",", ":")))
+PY
+)"
+POINTER_INPUT="$(python3 - "$POINTER_CLIENT_SENT_AT_MS" "$POINTER_CLIENT_SEQUENCE" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "type": "pointer",
+    "action": "move",
+    "x": 10,
+    "y": 20,
+    "sent_at_ms": int(sys.argv[1]),
+    "client_sequence": int(sys.argv[2]),
+}, separators=(",", ":")))
+PY
+)"
+KEY_INPUT="$(python3 - "$KEY_CLIENT_SENT_AT_MS" "$KEY_CLIENT_SEQUENCE" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "type": "key",
+    "action": "down",
+    "code": "KeyA",
+    "sent_at_ms": int(sys.argv[1]),
+    "client_sequence": int(sys.argv[2]),
+}, separators=(",", ":")))
+PY
+)"
+
+run_easynet ability bidi "$ATTACH_ABILITY_URA" \
+  --subject "$SELECTED_RESOURCE_URA" \
+  --nonce-hex "$BIDI_NONCE_HEX" \
+  --causal-context-json "$ATTACH_CAUSAL_CONTEXT_JSON" \
+  --args "$ATTACH_ARGS" \
+  --input "$POINTER_INPUT" \
+  --input "$KEY_INPUT" \
+  --input '{"type":"close"}' \
+  --max-frames 16 \
+  --format json >"$ATTACH_BIDI_JSON"
+
+python3 - "$EVIDENCE_JSON" "$TARGET_KIND" "$LEASE_TTL_MS" "$SENTINEL_MANIFEST_JSON" "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$CREATE_SESSION_JSON" "$SHOW_SESSION_JSON" "$ATTACH_BIDI_JSON" "$ATTACH_ABILITY_URA" "$ATTACH_CAUSAL_CONTEXT_JSON" "$POINTER_CLIENT_SENT_AT_MS" "$POINTER_CLIENT_SEQUENCE" "$KEY_CLIENT_SENT_AT_MS" "$KEY_CLIENT_SEQUENCE" <<'PY'
 import json
 import pathlib
 import sys
@@ -499,7 +704,14 @@ import sys
     selected_resource_path,
     create_session_path,
     show_session_path,
-) = sys.argv[1:9]
+    attach_bidi_path,
+    attach_ability_ura,
+    attach_causal_context_json,
+    pointer_client_sent_at_ms,
+    pointer_client_sequence,
+    key_client_sent_at_ms,
+    key_client_sequence,
+) = sys.argv[1:16]
 
 def load(path):
     with open(path, encoding="utf-8") as f:
@@ -510,6 +722,10 @@ live_inventory = load(live_inventory_path)
 selected = load(selected_resource_path)
 create_response = load(create_session_path)
 show_response = load(show_session_path)
+attach_causal_context = json.loads(attach_causal_context_json)
+attach_bidi_text = pathlib.Path(attach_bidi_path).read_text(encoding="utf-8")
+decoder = json.JSONDecoder()
+attach_frames, _ = decoder.raw_decode(attach_bidi_text.lstrip())
 create_session = create_response.get("session")
 invocation = create_response.get("invocation")
 if not isinstance(create_session, dict):
@@ -518,9 +734,12 @@ if not isinstance(invocation, dict):
     raise SystemExit("create-remote-desktop-session response missing verified invocation metadata")
 if not isinstance(show_response, dict):
     raise SystemExit("show-remote-desktop-session response missing session object")
+if not isinstance(attach_frames, list):
+    raise SystemExit("remote_desktop.attach bidi output must start with a JSON array")
 
 evidence = {
     "status": "passed",
+    "evidence_origin": "live_runner",
     "target_kind": target_kind,
     "requested_input_mode": "interactive",
     "lease_ttl_ms": int(lease_ttl_ms),
@@ -553,6 +772,19 @@ evidence = {
         "key": "input_scope_unsupported",
         "pointer": "input_scope_unsupported",
         "evidence_source": "public_session_input_policy",
+    },
+    "diagnostic_input_probe": {
+        "ability": "remote_desktop.attach",
+        "ability_ura": attach_ability_ura,
+        "subject_ura": selected.get("resource_ura"),
+        "causal_context": attach_causal_context,
+        "exit_code": 0,
+        "input_transport": "axon_invoke_bidi",
+        "pointer_client_sent_at_ms": int(pointer_client_sent_at_ms),
+        "pointer_client_sequence": int(pointer_client_sequence),
+        "key_client_sent_at_ms": int(key_client_sent_at_ms),
+        "key_client_sequence": int(key_client_sequence),
+        "frames": attach_frames,
     },
 }
 pathlib.Path(evidence_path).write_text(

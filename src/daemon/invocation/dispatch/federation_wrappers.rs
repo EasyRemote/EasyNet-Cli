@@ -394,22 +394,22 @@ pub(crate) fn handle_advertise_abilities(
     catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
 ) -> AdvertiseAbilitiesResponse {
     let count = request.ability_count();
-    let stored = catalog
-        .upsert_projection(
-            crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
-                request.owner_ura.clone(),
-                request.host_device_ura.clone(),
-                request.generation,
-                request.projection_revision,
-                request.projection_digest.clone(),
-                request.lease_expires_unix_ms,
-                request.ability_summaries.clone(),
-            ),
-        )
-        .is_stored();
+    let outcome = catalog.upsert_projection(
+        crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
+            request.owner_ura.clone(),
+            request.host_device_ura.clone(),
+            request.generation,
+            request.projection_revision,
+            request.projection_digest.clone(),
+            request.lease_expires_unix_ms,
+            request.ability_summaries.clone(),
+        ),
+    );
+    let stored = outcome.is_stored();
     AdvertiseAbilitiesResponse {
         ack: stored,
         count: if stored { count } else { 0 },
+        outcome: Some(outcome.as_wire_str().to_string()),
     }
 }
 
@@ -2064,20 +2064,85 @@ mod tests {
             handle_advertise_abilities(&newer, &catalog),
             AdvertiseAbilitiesResponse {
                 ack: true,
-                count: 1
+                count: 1,
+                outcome: Some("inserted".to_string()),
             }
         );
         assert_eq!(
             handle_advertise_abilities(&stale, &catalog),
             AdvertiseAbilitiesResponse {
                 ack: false,
-                count: 0
+                count: 0,
+                outcome: Some("ignored_stale".to_string()),
             }
         );
 
         let got = catalog.get_at(owner_ura, 1_714_493_100_000).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0]["local_name"], "write");
+    }
+
+    #[test]
+    fn handle_advertise_abilities_reports_equal_revision_conflict_for_single_owner_row() {
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
+        let owner_ura = "easynet:///r/realm/agent/alice.worker";
+        let first = AdvertiseAbilitiesRequest {
+            owner_ura: owner_ura.to_string(),
+            host_device_ura: "easynet:///r/realm/device/provider".to_string(),
+            generation: 1,
+            projection_revision: 7,
+            projection_digest: "sha256:provider".to_string(),
+            lease_expires_unix_ms: 4_102_444_800_000,
+            purge_delivery: None,
+            ability_summaries: vec![projection_summary(
+                owner_ura,
+                "easynet:///r/realm/ability/alice.worker.project_list",
+                "pages",
+                "project_list",
+            )],
+        };
+        let conflict = AdvertiseAbilitiesRequest {
+            owner_ura: owner_ura.to_string(),
+            host_device_ura: "easynet:///r/realm/device/caller".to_string(),
+            generation: 1,
+            projection_revision: 7,
+            projection_digest: "sha256:caller".to_string(),
+            lease_expires_unix_ms: 4_102_444_800_000,
+            purge_delivery: None,
+            ability_summaries: vec![projection_summary(
+                owner_ura,
+                "easynet:///r/realm/ability/alice.worker.project_create",
+                "pages",
+                "project_create",
+            )],
+        };
+
+        assert_eq!(
+            handle_advertise_abilities(&first, &catalog),
+            AdvertiseAbilitiesResponse {
+                ack: true,
+                count: 1,
+                outcome: Some("inserted".to_string()),
+            }
+        );
+        assert_eq!(
+            handle_advertise_abilities(&conflict, &catalog),
+            AdvertiseAbilitiesResponse {
+                ack: false,
+                count: 0,
+                outcome: Some("rejected_conflict".to_string()),
+            }
+        );
+
+        let stored = catalog
+            .projection_for_owner(owner_ura)
+            .expect("first projection remains selected");
+        assert_eq!(
+            stored.host_device_ura(),
+            "easynet:///r/realm/device/provider"
+        );
+        assert_eq!(stored.ability_count(), 1);
     }
 
     #[test]

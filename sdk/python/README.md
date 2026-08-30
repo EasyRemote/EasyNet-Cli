@@ -1,4 +1,10 @@
-# Python Runtime SDK
+# Runtime Python SDK
+
+Install the `easynet-sdk` distribution and import it as `easynet_sdk`:
+
+```bash
+pip install easynet-sdk
+```
 
 The Python package is the Python binding of the canonical, product-neutral
 runtime SDK. It is not a product profile bundle.
@@ -32,6 +38,11 @@ Missing or unavailable providers fail explicitly. The SDK does not search for
 fallback transports, parse product directories, infer runtime-host state from product
 environment variables or expose private key material.
 
+For large native binary payloads, ABI v9 is available only through the explicit
+leased-stream surface documented in [LEASED_STREAMS.md](LEASED_STREAMS.md).
+The existing owned `StreamEvent` API remains unchanged and does not silently
+switch ownership models.
+
 ## Product boundary
 
 The following belong downstream, not in this package:
@@ -62,3 +73,24 @@ The public Python exports are covered by
 `../conformance/canonical-public-api.json`. Go/Python capability state is
 covered by `../conformance/sdk-parity-matrix.json`. Product-neutrality is
 enforced by `../../tools/scripts/check-sdk-product-neutrality.sh`.
+
+Before tagging a Python SDK release, synchronize and verify its independent
+version line without changing the runtime-host version:
+
+```bash
+SDK_VERSION="$(tide mark --local-only)"
+./tools/scripts/update-python-sdk-version.sh "$SDK_VERSION"
+./tools/scripts/update-python-sdk-version.sh --check "$SDK_VERSION"
+```
+
+Capture the release mark only after functional code is frozen. Keep that value
+through the metadata commit and tag; recomputing Tide after another commit would
+describe a different HEAD.
+
+## Source release scope
+
+This distribution is a deliberately bounded public SDK, not a source release
+of every downstream control-plane service, research mechanism, or evaluation
+asset. The [release-scope statement](../../SOURCE_RELEASE_SCOPE.md)
+explains the staged policy. It does not restrict the Apache-2.0 rights granted
+for files actually included in this distribution.

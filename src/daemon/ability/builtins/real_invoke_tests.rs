@@ -2533,6 +2533,99 @@ fn real_http_request_hits_a_localhost_listener() {
     assert_eq!(String::from_utf8(body).unwrap(), "{\"echo\":\"hi\"}");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_net_tunnel_round_trips_bytes_through_dispatcher() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind tunnel peer");
+    let port = listener.local_addr().expect("peer address").port();
+    let peer = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept tunnel");
+        let mut request = [0_u8; 4];
+        stream
+            .read_exact(&mut request)
+            .await
+            .expect("read tunnel request");
+        assert_eq!(&request, b"ping");
+        stream
+            .write_all(b"pong")
+            .await
+            .expect("write tunnel response");
+        stream.shutdown().await.expect("half-close tunnel peer");
+    });
+
+    let dispatcher = dispatcher_for(
+        build_registry_for_test_execution().expect("build executable test registry"),
+    );
+    let mut request = target(
+        "net.tunnel",
+        json!({
+            "mode": "connect",
+            "host": "127.0.0.1",
+            "port": port,
+            "idle_timeout_ms": 5_000,
+        }),
+    );
+    request.call_mode = CallMode::Bidi;
+    let bidi = dispatcher
+        .execute_bidi(request)
+        .expect("net.tunnel bidi dispatch");
+    let mut output = bidi.from_client;
+
+    let connected = tokio::time::timeout(std::time::Duration::from_secs(2), output.recv())
+        .await
+        .expect("connected frame timeout")
+        .expect("connected frame")
+        .into_json_value()
+        .expect("connected JSON");
+    assert_eq!(connected["type"], "connected", "{connected}");
+    let connection_id = connected["connection_id"]
+        .as_str()
+        .expect("connection id")
+        .to_string();
+
+    bidi.to_client
+        .send_frame(
+            crate::daemon::ability::dispatch::BidiInputFrame::new(b"ping".to_vec())
+                .with_content_type(
+                    crate::support::platform::tunnel_codec::TUNNEL_DATA_CONTENT_TYPE,
+                ),
+        )
+        .await
+        .expect("send tunnel data");
+    bidi.to_client
+        .send(json!({
+            "type": "half_close",
+            "connection_id": connection_id,
+            "direction": "write",
+        }))
+        .await
+        .expect("half-close tunnel write");
+
+    let mut response = Vec::new();
+    loop {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), output.recv())
+            .await
+            .expect("tunnel output timeout")
+            .expect("tunnel output");
+        if frame.content_type == crate::support::platform::tunnel_codec::TUNNEL_DATA_CONTENT_TYPE {
+            response.extend(frame.payload);
+            continue;
+        }
+        let frame = frame.into_json_value().expect("tunnel JSON");
+        match frame["type"].as_str().expect("tunnel frame type") {
+            "half_close" => {}
+            "complete" => break,
+            "error" => panic!("net.tunnel returned error: {frame}"),
+            other => panic!("unexpected net.tunnel frame {other}: {frame}"),
+        }
+    }
+    assert_eq!(response, b"pong");
+    peer.await.expect("join tunnel peer");
+}
+
 #[test]
 fn real_mcp_client_list_routes_with_no_upstream_configured() {
     // No ~/.easynet/mcp_clients.json under temp HOME → empty
@@ -2962,6 +3055,27 @@ fn real_device_plugin_status_reports_runtime_surface() {
 }
 
 #[test]
+#[cfg(feature = "remote-desktop")]
+fn real_device_plugin_status_surfaces_remoteapp_attach_wire_kind() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let d = dispatcher_for(reg);
+    let status = d
+        .execute_rpc(target("plugin.status", json!({})))
+        .expect("plugin.status must dispatch through plugin lifecycle ability");
+    let abilities = status["abilities"]
+        .as_array()
+        .expect("plugin.status abilities must be an array");
+    let attach = abilities
+        .iter()
+        .find(|row| row["ability"] == "remote_desktop.attach")
+        .expect("RemoteApp attach must appear in plugin.status abilities");
+
+    assert_eq!(attach["call_mode"], "bidi");
+    assert_eq!(attach["bidi_wire_kind"], "metadata_json_plus_binary");
+}
+
+#[test]
 fn real_device_plugin_reload_reports_registration_diff() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry_for_test_execution().expect("build executable test registry");
@@ -3306,9 +3420,10 @@ fn real_device_terminal_input_read_resize_round_trip() {
 async fn real_device_terminal_attach_returns_a_bidi_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
+    let io = terminal_io_ability::PtyIoService::new();
     let mut reg = runtime_attached_catalog();
-    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
-    terminal_attach_ability::register(&mut reg, Arc::clone(&pty));
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    terminal_attach_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
@@ -3318,7 +3433,11 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 
     let mut t = terminal_followup_target(
         "terminal.attach",
-        json!({"session_id": sid.clone()}),
+        json!({
+            "session_id": sid.clone(),
+            "attachment_id": "real-invoke-attachment",
+            "expected_epoch": 0,
+        }),
         &sid,
         "stream",
     );
@@ -3341,7 +3460,6 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 // requires a token-grep match for the ability name in this file.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
-    use base64::Engine;
     let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
@@ -3367,12 +3485,14 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
         .expect("file_transfer bidi");
 
     let bytes = b"real-invoke-device-file-transfer";
-    let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     bidi.to_client
-        .send(json!({"type": "chunk", "data": chunk_b64}))
+        .send_frame(
+            crate::daemon::ability::dispatch::BidiInputFrame::new(bytes.to_vec())
+                .with_content_type("application/octet-stream"),
+        )
         .await
         .unwrap();
-    bidi.to_client.send(json!({"type": "eof"})).await.unwrap();
+    drop(bidi.to_client);
 
     // Drain frames until we see complete or timeout.
     let mut from = bidi.from_client;
@@ -3387,7 +3507,8 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
                     break;
                 }
             }
-            _ => break,
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
     assert!(got_complete, "expected `complete` frame from fs.transfer");
@@ -3397,7 +3518,6 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
-    use base64::Engine;
     let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
@@ -3431,16 +3551,12 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     while std::time::Instant::now() < deadline {
         match tokio::time::timeout(std::time::Duration::from_millis(500), from.recv()).await {
             Ok(Some(f)) => {
+                if f.content_type == "application/octet-stream" {
+                    downloaded.extend(f.payload);
+                    continue;
+                }
                 let f = f.into_json_value().expect("fs.transfer emits JSON");
                 match f["type"].as_str() {
-                    Some("chunk") => {
-                        let chunk = f["data"].as_str().expect("chunk carries base64 data");
-                        downloaded.extend(
-                            base64::engine::general_purpose::STANDARD
-                                .decode(chunk)
-                                .expect("chunk base64 decodes"),
-                        );
-                    }
                     Some("complete") => {
                         got_complete = true;
                         break;
@@ -3448,7 +3564,8 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
                     other => panic!("unexpected file_transfer download frame {other:?}: {f}"),
                 }
             }
-            _ => break,
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
     assert!(
@@ -3491,7 +3608,7 @@ fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
             binding: crate::daemon::persistence::resources::ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Real Invoke Display",
-            metadata: json!({"primary_display": true, "backend": "xcap"}),
+            metadata: json!({"display_id": 1, "primary_display": true, "backend": "xcap"}),
         },
     )
     .expect("seed real-invoke display resource");
@@ -3696,7 +3813,13 @@ fn real_remote_desktop_create_session_requires_envelope_subject() {
 fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let subject = seed_real_invoke_display_resource("remote-desktop-real-invoke-display");
-    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let reg = Arc::new(
+        crate::daemon::plugins::remote_desktop::test_support::test_catalog_with_screen_backend(
+            Arc::new(
+                crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend,
+            ),
+        ),
+    );
     let d = dispatcher_for(reg);
     let session_id = unique_call_id("remote-desktop");
     let granted = d
@@ -3762,19 +3885,25 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     assert_eq!(signaled["state"], "negotiating");
     let token = created["session_token"].as_str().unwrap().to_string();
 
-    let candidate_view = d
+    let candidate_err = d
         .execute_rpc(explicit_target(
             "remote_desktop.add_ice_candidate",
             json!({
                 "session_id": session_id,
                 "session_token": token,
+                "transport_epoch": 1,
                 "candidate": {"candidate": "candidate:1"}
             }),
             subject.clone(),
             remote_desktop_test_consent_causal_context(),
         ))
-        .expect("remote_desktop.add_ice_candidate must dispatch");
-    assert_eq!(candidate_view["signaling"]["ice_candidate_count"], 1);
+        .expect_err("ICE without an active WebRTC generation must fail closed");
+    assert!(
+        candidate_err
+            .to_string()
+            .contains("transport epoch 1 is not active"),
+        "unexpected inactive-generation ICE error: {candidate_err}"
+    );
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let mut watch = explicit_target(
@@ -3789,10 +3918,10 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
         .expect("remote_desktop.watch_events must dispatch")
         .into_snapshot();
     assert!(
-        events
+        !events
             .iter()
             .any(|event| event["event_type"] == "ICE_CANDIDATE_ADDED"),
-        "watch_events must include the ICE candidate event: {events:?}"
+        "inactive-generation ICE must not mutate the session event log: {events:?}"
     );
     let token = created["session_token"].as_str().unwrap().to_string();
 
@@ -3856,12 +3985,22 @@ fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
         json!({"session_id": "missing-real-invoke-session"}),
     );
     attach.call_mode = CallMode::Bidi;
-    let err = d
+    let mut bidi = d
         .execute_bidi(attach)
-        .expect_err("remote_desktop.attach with missing session must reject");
+        .expect("remote_desktop.attach must open the typed bidi outcome stream");
+    let frame = tokio::runtime::Runtime::new()
+        .expect("bidi rejection observer runtime")
+        .block_on(async move {
+            tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+                .await
+                .expect("remote_desktop.attach rejection must be bounded")
+                .expect("remote_desktop.attach rejection must emit a terminal frame")
+                .into_json_value()
+                .expect("remote_desktop.attach rejection must be JSON")
+        });
     assert!(
-        err.to_string().contains("session_not_found"),
-        "attach must route to the remote desktop session gate; got {err}"
+        frame.to_string().contains("session_not_found"),
+        "attach must route to the remote desktop session gate; got {frame}"
     );
 }
 
@@ -4092,7 +4231,7 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = runtime_attached_catalog();
-    terminal_attach_ability::register(&mut reg, pty);
+    terminal_attach_ability::register(&mut reg, pty, terminal_io_ability::PtyIoService::new());
     assert!(
         reg.resolve_bidi_with_env("terminal.attach").is_some(),
         "terminal.attach (v2 alias) must be registered as bidi"

@@ -63,6 +63,8 @@ pub enum PluginHostError {
     InvalidRealtimeCapability { id: String, reason: String },
     #[error("plugin manifest declares invalid desktop companion for {id}: {reason}")]
     InvalidCompanionManifest { id: String, reason: String },
+    #[error("plugin manifest declares invalid runtime helper for {id}: {reason}")]
+    InvalidRuntimeHelperManifest { id: String, reason: String },
     #[error(
         "desktop companion install rollback failed for {id}@{version}: install_error={install_error}; rollback_error={rollback_error}; stale_path={stale_path}"
     )]
@@ -279,6 +281,10 @@ impl PartialEq for PluginHostError {
             (
                 InvalidCompanionManifest { id: ai, reason: ar },
                 InvalidCompanionManifest { id: bi, reason: br },
+            ) => ai == bi && ar == br,
+            (
+                InvalidRuntimeHelperManifest { id: ai, reason: ar },
+                InvalidRuntimeHelperManifest { id: bi, reason: br },
             ) => ai == bi && ar == br,
             (
                 CompanionInstallRollbackFailed {

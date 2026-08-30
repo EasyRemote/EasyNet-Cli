@@ -180,6 +180,7 @@ mod tests {
             node_id: "node".to_string(),
             device_ura: "easynet:///r/realm/device/node".to_string(),
             hub_endpoint: Some("http://127.0.0.1:50051".to_string()),
+            hub_api_endpoint: Some("http://127.0.0.1:8080".to_string()),
             source: "test".to_string(),
             observed_at_unix_ms: 0,
         }

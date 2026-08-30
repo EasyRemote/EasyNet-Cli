@@ -1790,21 +1790,24 @@ impl<'a> DaemonRouteResolver<'a> {
         selector: &RouteSelector,
         call_mode: Option<CallMode>,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
-        let row = self
+        let rows = self
             .catalog
-            .projection_for_owner_at(&selector.owner_ura, self.now_unix_ms)
+            .projection_rows_for_owner_at(&selector.owner_ura, self.now_unix_ms);
+        if rows.is_empty() {
+            return Err(ResolveRouteFailure::owner_offline(
+                selector.query_name.clone(),
+                NegativeReason::Nxdomain,
+            ));
+        }
+        let row = rows
+            .into_iter()
+            .find(|row| self.registry.contains(row.host_device_ura()))
             .ok_or_else(|| {
                 ResolveRouteFailure::owner_offline(
                     selector.query_name.clone(),
-                    NegativeReason::Nxdomain,
+                    NegativeReason::Noroute,
                 )
             })?;
-        if !self.registry.contains(row.host_device_ura()) {
-            return Err(ResolveRouteFailure::owner_offline(
-                selector.query_name.clone(),
-                NegativeReason::Noroute,
-            ));
-        }
         let host = crate::core::ura::parse_ura(row.host_device_ura()).map_err(|err| {
             ResolveRouteFailure::new(
                 selector.query_name.clone(),
@@ -1844,16 +1847,14 @@ impl<'a> DaemonRouteResolver<'a> {
                     "service owner projection does not publish the requested ability",
                 )
             })?;
-        let selected = SelectedAbilityRoute::from_owner_summary(
+        let selected = SelectedAbilityRoute::from_service_owner_summary(
             &selector.query_name,
             &selector.owner_ura,
             &selector.public_name,
             call_mode,
-            Some(host_node_id),
+            row.host_device_ura(),
+            host_node_id,
             summary,
-            self.advertised_agents,
-            self.catalog,
-            self.now_unix_ms,
         )?;
         let owner_record = id_record(&selector.owner_ura, self.now_unix_ms);
         let ability_record =
@@ -2238,7 +2239,7 @@ struct RouteSelector {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RouteOwnerKind {
-    LegacyDeviceProfileProjection,
+    DevicePlacement,
     Authority,
     Agent,
     SystemAgent,
@@ -2251,7 +2252,6 @@ impl RouteOwnerKind {
         query_name: &str,
     ) -> Result<Self, ResolveRouteFailure> {
         match selector.owner_kind() {
-            "device" => Ok(Self::LegacyDeviceProfileProjection),
             "authority" => Ok(Self::Authority),
             "agent" => Ok(Self::Agent),
             "system-agent" => Ok(Self::SystemAgent),
@@ -2356,10 +2356,16 @@ fn executable_route_selector_from_query(
     local_authority: Option<&LocalAbilityPublicationSnapshot>,
     federation_catalog: Option<(&AbilityCatalogStore, i64)>,
 ) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
-    let Some(selector) = route_selector_from_query(query_name, ability_name)? else {
+    let selector = if let Some(selector) =
+        device_placement_route_selector_from_query(query_name, ability_name)?
+    {
+        selector
+    } else if let Some(selector) = route_selector_from_query(query_name, ability_name)? {
+        selector
+    } else {
         return Ok(None);
     };
-    if selector.owner_kind != RouteOwnerKind::LegacyDeviceProfileProjection {
+    if selector.owner_kind != RouteOwnerKind::DevicePlacement {
         return Ok(Some(selector));
     }
     if ability_name.trim().is_empty()
@@ -2421,6 +2427,44 @@ fn executable_route_selector_from_query(
         owner_kind: RouteOwnerKind::SystemAgent,
         ability_ura,
         public_name: selector.public_name,
+    }))
+}
+
+fn device_placement_route_selector_from_query(
+    query_name: &str,
+    ability_name: &str,
+) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
+    let execution_target_ura = query_name.trim();
+    let ability_name = ability_name.trim();
+    if execution_target_ura.is_empty()
+        || ability_name.is_empty()
+        || is_ability_ura(ability_name)
+        || looks_like_descriptor_ref(ability_name)
+    {
+        return Ok(None);
+    }
+    let parsed = match crate::core::ura::parse_ura(execution_target_ura) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        return Ok(None);
+    }
+    let public_name =
+        crate::core::ura::descriptor_public_ability_name(execution_target_ura, ability_name);
+    if public_name.is_empty() {
+        return Err(ResolveRouteFailure::new(
+            execution_target_ura,
+            NegativeReason::Refused,
+            "Device placement ability name is empty",
+        ));
+    }
+    Ok(Some(RouteSelector {
+        query_name: format!("{execution_target_ura}#{public_name}"),
+        owner_ura: execution_target_ura.to_string(),
+        owner_kind: RouteOwnerKind::DevicePlacement,
+        ability_ura: String::new(),
+        public_name,
     }))
 }
 
@@ -2644,18 +2688,7 @@ impl SelectedAbilityRoute {
                 )
             })?
             .to_string();
-        let route_ura = summary
-            .get("route_summary_ref")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                ResolveRouteFailure::new(
-                    query_name,
-                    NegativeReason::Noroute,
-                    "ability projection is missing executable route_summary_ref",
-                )
-            })?
-            .to_string();
+        let route_ura = route_ura_from_summary(query_name, summary)?;
         let descriptor_ref = descriptor_ref_from_summary(query_name, summary, call_mode)?;
         let (kind, callee_ura, execution_host_ura, host_node_id) = selected_execution_for_owner(
             query_name,
@@ -2677,6 +2710,41 @@ impl SelectedAbilityRoute {
         })
     }
 
+    fn from_service_owner_summary(
+        query_name: &str,
+        owner_ura: &str,
+        public_name: &str,
+        call_mode: Option<CallMode>,
+        host_device_ura: &str,
+        host_node_id: &str,
+        summary: &Value,
+    ) -> Result<Self, ResolveRouteFailure> {
+        let ability_ura = summary
+            .get("ability_ura")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    query_name,
+                    NegativeReason::Noroute,
+                    "ability projection is missing canonical ability_ura",
+                )
+            })?
+            .to_string();
+        let route_ura = route_ura_from_summary(query_name, summary)?;
+        let descriptor_ref = descriptor_ref_from_summary(query_name, summary, call_mode)?;
+        Ok(Self {
+            ability_ura,
+            route_ura,
+            descriptor_ref,
+            dispatch_name: public_name.to_string(),
+            callee_ura: owner_ura.to_string(),
+            execution_host_ura: host_device_ura.to_string(),
+            host_node_id: Some(host_node_id.to_string()),
+            kind: SelectedRouteKind::RoutableAgentOwned,
+        })
+    }
+
     fn route_record(&self, now_unix_ms: i64) -> Value {
         route_record(
             &self.route_ura,
@@ -2688,6 +2756,24 @@ impl SelectedAbilityRoute {
             now_unix_ms,
         )
     }
+}
+
+fn route_ura_from_summary(
+    query_name: &str,
+    summary: &Value,
+) -> Result<String, ResolveRouteFailure> {
+    summary
+        .get("route_summary_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ResolveRouteFailure::new(
+                query_name,
+                NegativeReason::Noroute,
+                "ability projection is missing executable route_summary_ref",
+            )
+        })
 }
 
 fn descriptor_ref_from_summary(
@@ -3735,7 +3821,8 @@ mod tests {
         // Hub-side resolve of a REMOTE device placement: the hub has no
         // device_local snapshot and the plugin ability is not in the static
         // registry ownership table. The device's advertised owner projection
-        // (plugin-management SystemAgent publishing browser.*) must be
+        // (plugin-management SystemAgent publishing a package-owned ability)
+        // must be
         // accepted as the third owner-normalization evidence source instead
         // of REFUSED "cannot select a unique ... SystemAgent owner".
         let registry = PresenceRegistry::default();
@@ -3750,20 +3837,20 @@ mod tests {
             &catalog,
             &owner_ura,
             &host_device_ura,
-            "browser",
+            "plugin_example",
             "open_session",
             true,
         );
         let resolver = DaemonRouteResolver::new(&registry, Some(&advertised_agents), &catalog);
 
         let route = resolver
-            .resolve_route(&host_device_ura, "browser.open_session")
+            .resolve_route(&host_device_ura, "plugin_example.open_session")
             .expect("device placement must normalize to the advertised plugin SystemAgent");
 
         assert_eq!(route.owner_ura, owner_ura);
         assert_eq!(route.callee_ura, owner_ura);
         assert_eq!(route.execution_host_ura, host_device_ura);
-        assert_eq!(route.dispatch_name, "browser.open_session");
+        assert_eq!(route.dispatch_name, "plugin_example.open_session");
     }
 
     #[test]
@@ -3938,7 +4025,7 @@ mod tests {
 
     #[test]
     fn hub_route_provider_rejects_non_final_answer() {
-        let owner_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("meta.list_resources");
         let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "meta.list_resources")
             .expect("test ability ura");
         let answer = ResolveRouteFailure::owner_offline(&ability_ura, NegativeReason::Nxdomain)
@@ -4366,12 +4453,15 @@ mod tests {
         let device_ura = device_owner_ura();
         let device_ability =
             crate::core::ura::owner_ability_ura(&device_ura, "agent.list").expect("device ability");
-        let device_selector = route_selector_from_query(&device_ability, "")
-            .expect("device selector")
-            .expect("device selector present");
-        assert_eq!(
-            device_selector.owner_kind,
-            RouteOwnerKind::LegacyDeviceProfileProjection
+        let device_failure = route_selector_from_query(&device_ability, "")
+            .expect_err("explicit Device-owned Ability URA must fail closed");
+        assert_eq!(device_failure.reason, NegativeReason::Refused);
+        assert!(
+            device_failure
+                .detail
+                .contains("Device is execution substrate"),
+            "{}",
+            device_failure.detail
         );
 
         let authority_ura = crate::core::ura::authority_ura("test-realm");
@@ -4516,7 +4606,11 @@ mod tests {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let owner_ura = device_owner_ura();
-        let other_owner_ura = crate::core::ura::device_ura("test-realm", "other-daemon");
+        let other_owner_ura = crate::core::ura::device_agent_ura(
+            "test-realm",
+            "other-daemon",
+            crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
         mark_online(&registry, &owner_ura);
         let ability_ura = crate::core::ura::owner_ability_ura(&other_owner_ura, "agent.list")
             .expect("ability ura");
@@ -5702,7 +5796,7 @@ mod tests {
             .expect_err("Device-owned Ability URA must not be rewritten as a placement request");
 
         assert_eq!(failure.reason, NegativeReason::Refused);
-        assert!(failure.detail.contains("migration read-models"));
+        assert!(failure.detail.contains("Device is execution substrate"));
     }
 
     #[test]
@@ -6234,6 +6328,29 @@ mod tests {
             records.is_empty(),
             "Service route resolution must not project the Service as a generic Agent directory row: {answer:#}"
         );
+    }
+
+    #[test]
+    fn service_owner_projection_selects_live_host_from_multihost_rows() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let offline_host = crate::core::ura::device_ura("test-realm", "mac-offline");
+        let live_host = crate::core::ura::device_ura("test-realm", "win-live");
+        let owner_ura = crate::core::ura::service_ura("test-realm", "principal-123", "pages");
+        publish_ability(&catalog, &owner_ura, &offline_host, "project", "list");
+        let ability_ura = publish_ability(&catalog, &owner_ura, &live_host, "project", "list");
+        mark_online(&registry, &live_host);
+
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
+            .at(TEST_NOW_MS)
+            .resolve_route(&owner_ura, "project.list")
+            .expect("Service-owned ability must select a live host placement");
+
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.callee_ura, route.owner_ura);
+        assert_eq!(route.execution_host_ura, live_host);
+        assert_eq!(route.host_node_id.as_deref(), Some("win-live"));
+        assert_eq!(route.ability_ura, ability_ura);
     }
 
     #[test]

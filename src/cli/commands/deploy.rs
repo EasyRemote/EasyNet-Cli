@@ -267,16 +267,29 @@ fn ensure_remote_upload_completed(
             anyhow::bail!("remote ability bundle upload failed: {}", frame.payload);
         }
     }
-    if frames.iter().any(|frame| {
-        frame
-            .payload
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            == Some("complete")
-    }) {
+    if frames.iter().any(upload_frame_is_complete) {
         return Ok(());
     }
     anyhow::bail!("remote ability bundle upload did not emit a complete frame")
+}
+
+fn upload_frame_is_complete(
+    frame: &crate::support::platform::local_invoke::LocalBidiFrame,
+) -> bool {
+    if frame
+        .payload
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        == Some("complete")
+    {
+        return true;
+    }
+    frame
+        .payload
+        .get("payload")
+        .and_then(|payload| payload.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("complete")
 }
 
 fn render_deploy_result(
@@ -479,6 +492,7 @@ mod tests {
             content_type: "application/json".to_string(),
             terminal: false,
             payload: json!({"type": "error", "message": "denied"}),
+            binary: None,
         }];
 
         let err = super::ensure_remote_upload_completed(&frames)
@@ -487,5 +501,27 @@ mod tests {
         assert!(err
             .to_string()
             .contains("remote ability bundle upload failed"));
+    }
+
+    #[test]
+    fn remote_upload_completion_accepts_canonical_receipt_payload() {
+        let frames = vec![crate::support::platform::local_invoke::LocalBidiFrame {
+            sequence: 2,
+            content_type: "application/octet-stream".to_string(),
+            terminal: true,
+            payload: json!({
+                "type": "receipt",
+                "state": 4,
+                "payload": {
+                    "type": "complete",
+                    "bytes": 3,
+                    "sha256": "abc"
+                }
+            }),
+            binary: None,
+        }];
+
+        super::ensure_remote_upload_completed(&frames)
+            .expect("canonical terminal receipt payload completes remote upload");
     }
 }

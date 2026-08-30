@@ -1503,6 +1503,13 @@ func directAgentBinding(binding *axonpb.AgentIdentity) map[string]any {
 	return map[string]any{"ura": binding.GetUra(), "profile": binding.GetProfile()}
 }
 
+func directAgentURA(binding *axonpb.AgentIdentity) string {
+	if binding == nil {
+		return ""
+	}
+	return binding.GetUra()
+}
+
 func directReceiptSignerBinding(receipt *axonpb.InvocationReceipt) map[string]any {
 	if receipt == nil {
 		return nil
@@ -1646,54 +1653,58 @@ func directCausalBindingKind(context *axonpb.CausalContext) string {
 }
 
 func directAuthorityBinding(binding *axonpb.AuthorityBinding) map[string]any {
-	switch authority := binding.GetAuthority().(type) {
-	case *axonpb.AuthorityBinding_SelfAuthority:
-		return map[string]any{
-			"kind":          "self",
-			"principal_ura": authority.SelfAuthority.GetPrincipalUra(),
+	switch form := binding.GetForm().(type) {
+	case *axonpb.AuthorityBinding_Binding:
+		value := form.Binding
+		switch evidence := value.GetEvidence().(type) {
+		case *axonpb.AuthorityRelationBinding_Identity:
+			return map[string]any{
+				"kind":          directAuthorityRelationBindingKind(value),
+				"authority_ura": directAgentURA(value.GetAuthority()),
+			}
+		case *axonpb.AuthorityRelationBinding_Delegation:
+			delegation := evidence.Delegation
+			return map[string]any{
+				"kind":             directAuthorityRelationBindingKind(value),
+				"authority_ura":    directAgentURA(value.GetAuthority()),
+				"issuer_ura":       directAgentURA(delegation.GetIssuer()),
+				"audience":         delegation.GetAudience(),
+				"scopes":           append([]string(nil), delegation.GetScopes()...),
+				"issued_at_ms":     delegation.GetIssuedAtMs(),
+				"expires_at_ms":    delegation.GetExpiresAtMs(),
+				"signature_base64": base64.StdEncoding.EncodeToString(delegation.GetSignature()),
+			}
+		case *axonpb.AuthorityRelationBinding_Session:
+			session := evidence.Session
+			return map[string]any{
+				"kind":             directAuthorityRelationBindingKind(value),
+				"authority_ura":    directAgentURA(value.GetAuthority()),
+				"issuer_ura":       directAgentURA(session.GetIssuer()),
+				"session_id":       session.GetSessionId(),
+				"scopes":           append([]string(nil), session.GetScopes()...),
+				"audiences":        append([]string(nil), session.GetAudiences()...),
+				"issued_at_ms":     session.GetIssuedAtMs(),
+				"expires_at_ms":    session.GetExpiresAtMs(),
+				"signature_base64": base64.StdEncoding.EncodeToString(session.GetSignature()),
+			}
+		case *axonpb.AuthorityRelationBinding_Attestation:
+			return map[string]any{
+				"kind":          directAuthorityRelationBindingKind(value),
+				"authority_ura": directAgentURA(value.GetAuthority()),
+			}
+		default:
+			return map[string]any{
+				"kind":          directAuthorityRelationBindingKind(value),
+				"authority_ura": directAgentURA(value.GetAuthority()),
+			}
 		}
-	case *axonpb.AuthorityBinding_DelegatedAuthority:
-		value := authority.DelegatedAuthority
-		return map[string]any{
-			"kind":             "delegation",
-			"issuer_ura":       value.GetIssuerUra(),
-			"subject_ura":      value.GetSubjectUra(),
-			"caller_ura":       value.GetCallerUra(),
-			"audience":         value.GetAudience(),
-			"scopes":           append([]string(nil), value.GetScopes()...),
-			"issued_at_ms":     value.GetIssuedAtMs(),
-			"expires_at_ms":    value.GetExpiresAtMs(),
-			"signature_base64": base64.StdEncoding.EncodeToString(value.GetSignature()),
-		}
-	case *axonpb.AuthorityBinding_CapabilityGrant:
-		return map[string]any{
-			"kind":           "capability",
-			"capability_ura": authority.CapabilityGrant.GetCapabilityUra(),
-		}
-	case *axonpb.AuthorityBinding_PolicyGrant:
-		return map[string]any{
-			"kind":       "policy",
-			"policy_ura": authority.PolicyGrant.GetPolicyUra(),
-		}
-	case *axonpb.AuthorityBinding_SessionAuthority:
-		value := authority.SessionAuthority
-		return map[string]any{
-			"kind":             "session",
-			"issuer_ura":       value.GetIssuerUra(),
-			"subject_ura":      value.GetSubjectUra(),
-			"session_id":       value.GetSessionId(),
-			"scopes":           append([]string(nil), value.GetScopes()...),
-			"audiences":        append([]string(nil), value.GetAudiences()...),
-			"issued_at_ms":     value.GetIssuedAtMs(),
-			"expires_at_ms":    value.GetExpiresAtMs(),
-			"signature_base64": base64.StdEncoding.EncodeToString(value.GetSignature()),
-		}
-	case *axonpb.AuthorityBinding_BootstrapAuthority:
+	case *axonpb.AuthorityBinding_Bootstrap:
+		value := form.Bootstrap
 		return map[string]any{
 			"kind":          "bootstrap",
-			"principal_ura": authority.BootstrapAuthority.GetPrincipalUra(),
-			"realm":         authority.BootstrapAuthority.GetRealm(),
-			"ability":       authority.BootstrapAuthority.GetAbility(),
+			"principal_ura": value.GetPrincipalUra(),
+			"realm":         value.GetRealm(),
+			"ability":       value.GetAbility(),
 		}
 	default:
 		return nil
@@ -1701,22 +1712,40 @@ func directAuthorityBinding(binding *axonpb.AuthorityBinding) map[string]any {
 }
 
 func directAuthorityBindingKind(binding *axonpb.AuthorityBinding) string {
-	switch binding.GetAuthority().(type) {
-	case *axonpb.AuthorityBinding_SelfAuthority:
-		return "self"
-	case *axonpb.AuthorityBinding_DelegatedAuthority:
-		return "delegation"
-	case *axonpb.AuthorityBinding_CapabilityGrant:
-		return "capability"
-	case *axonpb.AuthorityBinding_PolicyGrant:
-		return "policy"
-	case *axonpb.AuthorityBinding_SessionAuthority:
-		return "session"
-	case *axonpb.AuthorityBinding_BootstrapAuthority:
+	switch form := binding.GetForm().(type) {
+	case *axonpb.AuthorityBinding_Binding:
+		return directAuthorityRelationBindingKind(form.Binding)
+	case *axonpb.AuthorityBinding_Bootstrap:
 		return "bootstrap"
 	default:
 		return ""
 	}
+}
+
+func directAuthorityRelationBindingKind(binding *axonpb.AuthorityRelationBinding) string {
+	relation := "unspecified"
+	switch binding.GetRelation() {
+	case axonpb.AuthorityRelation_AUTHORITY_RELATION_SELF:
+		relation = "self"
+	case axonpb.AuthorityRelation_AUTHORITY_RELATION_DELEGATED_BY:
+		relation = "delegated_by"
+	case axonpb.AuthorityRelation_AUTHORITY_RELATION_SESSION_OF:
+		relation = "session_of"
+	case axonpb.AuthorityRelation_AUTHORITY_RELATION_CREDENTIAL_OF:
+		relation = "credential_of"
+	}
+	evidence := "none"
+	switch binding.GetEvidence().(type) {
+	case *axonpb.AuthorityRelationBinding_Identity:
+		evidence = "identity"
+	case *axonpb.AuthorityRelationBinding_Delegation:
+		evidence = "delegation"
+	case *axonpb.AuthorityRelationBinding_Session:
+		evidence = "session"
+	case *axonpb.AuthorityRelationBinding_Attestation:
+		evidence = "attestation"
+	}
+	return relation + "+" + evidence
 }
 
 func directStateName(state axonpb.InvocationState, stage string) (string, error) {

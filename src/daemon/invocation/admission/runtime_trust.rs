@@ -52,6 +52,20 @@ use crate::daemon::trust::anchor::{
 };
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
+/// Private in-process marker carried by a product gRPC status until the daemon
+/// route adapter projects it into Axon's public `CALLER_KEY_REVOKED` code.
+///
+/// The bytes never cross the public Invocation wire. Keeping the marker in
+/// `Status::details` avoids branching on operator-facing message text while
+/// preserving Axon's ownership of the public error taxonomy.
+pub(crate) const USER_PUBKEY_REVOKED_STATUS_DETAIL: &[u8] =
+    b"easynet.identity.user_pubkey_revoked.v1";
+
+pub(crate) fn is_user_pubkey_revoked_status(status: &Status) -> bool {
+    status.code() == tonic::Code::FailedPrecondition
+        && status.details() == USER_PUBKEY_REVOKED_STATUS_DETAIL
+}
+
 /// Stable daemon runtime trust context. This is threaded through the
 /// identity plane once at boot and borrowed per invocation.
 #[derive(Debug, Clone)]
@@ -462,9 +476,13 @@ fn realm_error_to_status(ability: &'static str, err: RealmTrustError) -> Status 
             ))
         }
         RealmTrustError::RevokedUserPubkey { agent_ura } => {
-            Status::failed_precondition(format!(
-                "{ability}: user `{agent_ura}` cannot register a public key that was already revoked; generate a fresh keypair",
-            ))
+            Status::with_details(
+                tonic::Code::FailedPrecondition,
+                format!(
+                    "{ability}: user `{agent_ura}` cannot register a public key that was already revoked; generate a fresh keypair",
+                ),
+                bytes::Bytes::from_static(USER_PUBKEY_REVOKED_STATUS_DETAIL),
+            )
         }
         RealmTrustError::ReadFailed { path, source } => {
             Status::internal(format!("{ability}: read {path:?}: {source}"))
@@ -843,6 +861,7 @@ mod tests {
             .register_pubkey(user_ura.to_string(), key, TrustAnchorRole::User)
             .expect_err("tombstoned key rejected");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(super::is_user_pubkey_revoked_status(&err));
     }
 
     #[test]

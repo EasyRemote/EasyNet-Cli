@@ -150,6 +150,7 @@ type = "string"
 
 [input_schema.properties.video.properties.scale_mode]
 type = "string"
+enum = ["native"]
 
 [input_schema.properties.video.properties.target_latency_ms]
 type = "integer"

@@ -25,6 +25,7 @@ CONCURRENCY="${EASYNET_E2E_CONCURRENCY:-6}"
 KEEP=0
 BUILD=1
 SELF_TEST=0
+REMOTE_ACCESS_ONLY=0
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${EASYNET_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/cli-hub-device-daemon/$TIMESTAMP}"
 
@@ -40,6 +41,8 @@ Options:
   --concurrency N    Concurrent workers per load-test target. Default: 6.
   --out-dir DIR      Report directory.
   --self-test        Syntax/prerequisite check only.
+  --remote-access-only
+                     Stop after the two-device exec/terminal/copy/tunnel proof.
   -h, --help         Show this help.
 USAGE
 }
@@ -52,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --concurrency) CONCURRENCY="${2:?missing value for --concurrency}"; shift 2 ;;
     --out-dir) OUT_DIR="${2:?missing value for --out-dir}"; shift 2 ;;
     --self-test) SELF_TEST=1; shift ;;
+    --remote-access-only) REMOTE_ACCESS_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 64 ;;
   esac
@@ -74,6 +78,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "device join" "$0"
   grep -q "agent add" "$0"
   grep -q "ability.unpublish" "$0"
+  grep -q "two_device_remote_access_completed" "$0"
   echo "cli-hub-device-daemon-e2e self-test ok"
   exit 0
 fi
@@ -100,6 +105,10 @@ DEV1_HOME="$WORK_ROOT/device-a"
 DEV2_HOME="$WORK_ROOT/device-b"
 mkdir -p "$HUB_HOME" "$DEV1_HOME" "$DEV2_HOME"
 printf '%s\n' "$WORK_ROOT" > "$OUT_DIR/work-root.txt"
+PEER_PID=""
+PRIVATE_ASSET_PATH=""
+PRIVATE_LINK_PATH=""
+REMOTE_COPY_PATH=""
 
 cli_home() {
   local home="$1"
@@ -127,10 +136,22 @@ cleanup() {
     dump_logs
   fi
   if [[ "$KEEP" != "1" ]]; then
+    if [[ -n "$PEER_PID" ]]; then
+      kill "$PEER_PID" >/dev/null 2>&1 || true
+    fi
     cli_home "$DEV1_HOME" runtime stop >/dev/null 2>&1 || true
     cli_home "$DEV2_HOME" runtime stop >/dev/null 2>&1 || true
     cli_home "$HUB_HOME" runtime stop >/dev/null 2>&1 || true
     rm -rf "$WORK_ROOT"
+    if [[ -n "$PRIVATE_ASSET_PATH" ]]; then
+      rm -f "$PRIVATE_ASSET_PATH"
+    fi
+    if [[ -n "$PRIVATE_LINK_PATH" ]]; then
+      rm -f "$PRIVATE_LINK_PATH"
+    fi
+    if [[ -n "$REMOTE_COPY_PATH" ]]; then
+      rm -f "$REMOTE_COPY_PATH"
+    fi
   else
     echo "kept work root: $WORK_ROOT"
   fi
@@ -198,6 +219,29 @@ wait_hub_devices() {
   echo "hub did not observe both devices" >&2
   cat "$OUT_DIR/hub-device-list.json" >&2 2>/dev/null || true
   cat "$OUT_DIR/hub-device-list.err" >&2 2>/dev/null || true
+  return 1
+}
+
+wait_remote_access_abilities() {
+  local home="$1"
+  local target="$2"
+  local out="$3"
+  local err="$4"
+  for _ in $(seq 1 240); do
+    if cli_home "$home" device abilities "$target" --format json >"$out" 2>"$err"; then
+      if jq -e '
+        (if type == "array" then . else (.abilities // []) end)
+        | map(.name // .ability_name // .ability // "") as $names
+        | (["process.exec", "terminal.create", "terminal.attach", "fs.transfer", "net.tunnel"]
+          | all(. as $name | $names | index($name) != null))
+      ' "$out" >/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+  cat "$out" >&2 2>/dev/null || true
+  cat "$err" >&2 2>/dev/null || true
   return 1
 }
 
@@ -430,6 +474,165 @@ echo "==> querying device online state"
 wait_hub_devices "$DEV1_NODE" "$DEV2_NODE"
 cli_home "$HUB_HOME" device show "$DEV1_NODE" --authority --format json >"$OUT_DIR/hub-device-a-show.json" 2>"$OUT_DIR/hub-device-a-show.err"
 cli_home "$HUB_HOME" device show "$DEV2_NODE" --authority --format json >"$OUT_DIR/hub-device-b-show.json" 2>"$OUT_DIR/hub-device-b-show.err"
+
+DEV1_URA="easynet:///r/${REALM}/device/${DEV1_NODE}"
+echo "==> proving two-device governed remote access"
+wait_remote_access_abilities \
+  "$DEV2_HOME" "$DEV1_URA" \
+  "$OUT_DIR/device-b-abilities-device-a.json" \
+  "$OUT_DIR/device-b-abilities-device-a.err"
+
+cli_home "$DEV2_HOME" device exec "$DEV1_URA" -- /usr/bin/printf DEVICE_EXEC_REMOTE_OK \
+  >"$OUT_DIR/device-b-exec-device-a.txt" 2>"$OUT_DIR/device-b-exec-device-a.err"
+grep -q "DEVICE_EXEC_REMOTE_OK" "$OUT_DIR/device-b-exec-device-a.txt"
+
+COPY_MARKER="device-cp-host-e2e-${TIMESTAMP}"
+printf '%s' "$COPY_MARKER" >"$DEV2_HOME/device-cp-source.txt"
+REMOTE_COPY_PATH="/tmp/easynet-device-cp-${TIMESTAMP}.txt"
+cli_home "$DEV2_HOME" device cp "$DEV2_HOME/device-cp-source.txt" "$DEV1_URA:$REMOTE_COPY_PATH" --overwrite \
+  >"$OUT_DIR/device-b-cp-upload.txt" 2>"$OUT_DIR/device-b-cp-upload.err"
+cli_home "$DEV2_HOME" device cp "$DEV1_URA:$REMOTE_COPY_PATH" "$DEV2_HOME/device-cp-download.txt" --overwrite \
+  >"$OUT_DIR/device-b-cp-download.txt" 2>"$OUT_DIR/device-b-cp-download.err"
+cmp "$DEV2_HOME/device-cp-source.txt" "$DEV2_HOME/device-cp-download.txt"
+touch "$OUT_DIR/device-b-cp-round-trip.ok"
+
+PRIVATE_ASSET_MARKER="provider-private-asset-${TIMESTAMP}"
+PRIVATE_ASSET_PATH="$REPO_ROOT/target/easynet-private-asset-${TIMESTAMP}.txt"
+printf '%s' "$PRIVATE_ASSET_MARKER" >"$PRIVATE_ASSET_PATH"
+PRIVATE_LINK_PATH="/tmp/easynet-private-link-${TIMESTAMP}"
+ln -s "$PRIVATE_ASSET_PATH" "$PRIVATE_LINK_PATH"
+if cli_home "$DEV2_HOME" device cp "$DEV1_URA:$PRIVATE_LINK_PATH" "$DEV2_HOME/private-asset.txt" --overwrite \
+  >"$OUT_DIR/device-b-private-asset.txt" 2>"$OUT_DIR/device-b-private-asset.err"
+then
+  echo "remote copy crossed the provider virtual-root boundary" >&2
+  exit 1
+fi
+test ! -e "$DEV2_HOME/private-asset.txt"
+if grep -R -F -q -- "$PRIVATE_ASSET_MARKER" "$OUT_DIR"; then
+  echo "private asset bytes leaked into caller artifacts or receipts" >&2
+  exit 1
+fi
+touch "$OUT_DIR/device-b-private-asset-denied.ok"
+
+TUNNEL_PORT="$(free_port)"
+cat >"$WORK_ROOT/tunnel-peer.py" <<'PY'
+import pathlib
+import socket
+import sys
+
+port = int(sys.argv[1])
+ready = pathlib.Path(sys.argv[2])
+with socket.socket() as listener:
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", port))
+    listener.listen(1)
+    ready.write_text("ready", encoding="utf-8")
+    stream, _ = listener.accept()
+    with stream:
+        request = bytearray()
+        while True:
+            chunk = stream.recv(65536)
+            if not chunk:
+                break
+            request.extend(chunk)
+        stream.sendall(b"DEVICE_TUNNEL_REMOTE_OK:" + bytes(request))
+PY
+python3 "$WORK_ROOT/tunnel-peer.py" "$TUNNEL_PORT" "$WORK_ROOT/tunnel-peer.ready" &
+PEER_PID="$!"
+for _ in $(seq 1 80); do
+  [[ -f "$WORK_ROOT/tunnel-peer.ready" ]] && break
+  sleep 0.1
+done
+test -f "$WORK_ROOT/tunnel-peer.ready"
+printf 'ping' | cli_home "$DEV2_HOME" device proxy "$DEV1_URA" 127.0.0.1 "$TUNNEL_PORT" \
+  >"$OUT_DIR/device-b-proxy-device-a.txt" 2>"$OUT_DIR/device-b-proxy-device-a.err"
+wait "$PEER_PID"
+PEER_PID=""
+grep -q "DEVICE_TUNNEL_REMOTE_OK:ping" "$OUT_DIR/device-b-proxy-device-a.txt"
+
+cat >"$WORK_ROOT/terminal-probe.py" <<'PY'
+import os
+import pty
+import select
+import signal
+import sys
+import time
+
+cli, daemon, keyring, home, target = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    env = dict(os.environ)
+    env.update({
+        "HOME": home,
+        "EASYNET_DAEMON_BIN": daemon,
+        "EASYNET_KEYRING_BIN": keyring,
+        "EASYNET_BOOTSTRAP_MEDIA_RESOURCES": "0",
+    })
+    os.execve(cli, [cli, "device", "terminal", target], env)
+
+output = bytearray()
+sent = False
+status = None
+deadline = time.monotonic() + 45.0
+while time.monotonic() < deadline:
+    # Do not type into zsh while it is still initializing: zle may discard
+    # bytes queued before the first prompt. Any first PTY output proves the
+    # remote attach and shell reader are live.
+    if not sent and output:
+        os.write(fd, b"printf 'DEVICE_TERMINAL_REMOTE_OK'\rexit\r")
+        sent = True
+    ready, _, _ = select.select([fd], [], [], 0.2)
+    if ready:
+        try:
+            output.extend(os.read(fd, 65536))
+        except OSError:
+            pass
+    waited, status = os.waitpid(pid, os.WNOHANG)
+    if waited == pid:
+        break
+else:
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    sys.stdout.buffer.write(output)
+    raise SystemExit("remote terminal probe timed out")
+
+sys.stdout.buffer.write(output)
+if status is None or os.waitstatus_to_exitcode(status) != 0:
+    raise SystemExit("remote terminal exited unsuccessfully")
+if b"DEVICE_TERMINAL_REMOTE_OK" not in output:
+    raise SystemExit("remote terminal marker missing")
+PY
+python3 "$WORK_ROOT/terminal-probe.py" \
+  "$CLI_BIN" "$DAEMON_BIN" "$KEYRING_BIN" "$DEV2_HOME" "$DEV1_URA" \
+  >"$OUT_DIR/device-b-terminal-device-a.txt" 2>"$OUT_DIR/device-b-terminal-device-a.err"
+
+# two_device_remote_access_completed
+if [[ "$REMOTE_ACCESS_ONLY" == "1" ]]; then
+  python3 - "$OUT_DIR" "$DEV1_NODE" "$DEV2_NODE" <<'PY' >"$OUT_DIR/remote-access-report.json"
+import json
+import pathlib
+import sys
+
+out = pathlib.Path(sys.argv[1])
+def contains(name, marker):
+    path = out / name
+    return path.exists() and marker in path.read_text(encoding="utf-8", errors="replace")
+
+print(json.dumps({
+    "topology": {"provider_device": sys.argv[2], "caller_device": sys.argv[3]},
+    "assertions": {
+        "remote_exec": contains("device-b-exec-device-a.txt", "DEVICE_EXEC_REMOTE_OK"),
+        "remote_terminal": contains("device-b-terminal-device-a.txt", "DEVICE_TERMINAL_REMOTE_OK"),
+        "remote_copy": (out / "device-b-cp-round-trip.ok").exists(),
+        "private_asset_denied": (out / "device-b-private-asset-denied.ok").exists(),
+        "remote_tunnel": contains("device-b-proxy-device-a.txt", "DEVICE_TUNNEL_REMOTE_OK:ping"),
+    },
+}, indent=2, sort_keys=True))
+PY
+  jq -e '.assertions | all(. == true)' "$OUT_DIR/remote-access-report.json" >/dev/null
+  echo "PASS: $OUT_DIR/remote-access-report.json"
+  exit 0
+fi
 
 FAKE_AGENT="$WORK_ROOT/fake-agent.sh"
 cat >"$FAKE_AGENT" <<'EOF'

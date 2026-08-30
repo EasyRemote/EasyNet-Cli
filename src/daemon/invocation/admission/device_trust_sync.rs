@@ -6,13 +6,14 @@
 //! pre-know every caller that may address it. Device keys are
 //! registered at the realm hub (`register_device_pubkey` during
 //! `device join`), and same-realm browser user keys are registered
-//! there as `role = "user"`. This sync closes the gap with the same
-//! authority direction as the session prelude: on an anchor MISS for a
-//! syncable origin caller, PULL the key from the hub
-//! (`federation.resolve_key`, routed through this daemon's
-//! authenticated session channel) and import it through the same
-//! `register_device_pubkey` write policy. Admission itself never
-//! consults the network — the anchor is just kept warm.
+//! there as `role = "user"`. This sync closes the gap with the same authority
+//! direction as the session prelude: on a trust MISS for a syncable origin
+//! caller, PULL the key from the hub (`federation.resolve_key`, routed through
+//! this daemon's authenticated session channel). Device callers are imported
+//! through the durable singleton trust policy. User/Authority caller keys
+//! remain bounded, expiring Hub-attested runtime projections and never enter
+//! this Device's local revocation ledger. Admission itself never consults the
+//! network; the projection is warmed before the canonical admission retry.
 //!
 //! Hygiene: syncs are serialized (single-flight — a burst of frames
 //! from one unknown caller triggers one resolve), and only an
@@ -57,9 +58,9 @@ pub struct DeviceTrustSync {
     /// shadows hub routing) and can never learn a new key.
     source: KeySource,
     /// Ephemeral trust projection consumed by the exact KeyResolver already
-    /// installed in Axon's LocalRuntime. External User keys belong to their
-    /// origin realm, so they are never written into this Device's durable
-    /// local trust anchor.
+    /// installed in Axon's LocalRuntime. User and remote Authority keys are
+    /// Hub-owned trust facts, so they are never written into this Device's
+    /// durable local trust anchor.
     hub_attested_caller_keys: SharedHubAttestedCallerKeys,
 }
 
@@ -85,6 +86,7 @@ pub(crate) enum DeviceTrustSyncStatus {
     HubReturnedNoKeys,
     ResolveFailed(String),
     ImportDidNotTrust,
+    LocalAuthorityNotTrusted,
 }
 
 impl DeviceTrustSyncStatus {
@@ -102,7 +104,11 @@ impl DeviceTrustSyncStatus {
             Self::HubReturnedNoKeys => Some("hub returned no public keys".to_string()),
             Self::ResolveFailed(err) => Some(format!("hub resolve_key failed: {err}")),
             Self::ImportDidNotTrust => Some(
-                "hub-attested key import completed but trust anchor still misses caller"
+                "hub-attested key projection completed but exact caller trust is still missing"
+                    .to_string(),
+            ),
+            Self::LocalAuthorityNotTrusted => Some(
+                "same-realm Authority key is absent from or does not match the local trust anchor"
                     .to_string(),
             ),
         }
@@ -115,6 +121,12 @@ enum SyncableCaller {
         presented_pubkey_b64: Option<String>,
     },
     LocalUser {
+        presented_pubkey_b64: String,
+    },
+    /// The current realm Authority is the session peer that forwards the
+    /// invocation. Its key is provisioned in the durable realm trust anchor.
+    /// Resolving it over that same session would wait on its own reply path.
+    LocalAuthority {
         presented_pubkey_b64: Option<String>,
     },
     ExternalCaller {
@@ -127,6 +139,7 @@ impl SyncableCaller {
         match self {
             Self::Device { .. } => "device",
             Self::LocalUser { .. } => "user",
+            Self::LocalAuthority { .. } => "authority",
             Self::ExternalCaller { .. } => "external",
         }
     }
@@ -134,8 +147,9 @@ impl SyncableCaller {
     fn persisted_role(&self) -> Option<TrustAnchorRole> {
         match self {
             Self::Device { .. } => Some(TrustAnchorRole::Device),
-            Self::LocalUser { .. } => Some(TrustAnchorRole::User),
-            Self::ExternalCaller { .. } => None,
+            Self::LocalUser { .. } | Self::LocalAuthority { .. } | Self::ExternalCaller { .. } => {
+                None
+            }
         }
     }
 
@@ -149,9 +163,12 @@ impl SyncableCaller {
             },
             Self::LocalUser {
                 presented_pubkey_b64,
+            } => format!("user:{caller_ura}:{presented_pubkey_b64}"),
+            Self::LocalAuthority {
+                presented_pubkey_b64,
             } => match presented_pubkey_b64 {
-                Some(pk) => format!("user:{caller_ura}:{pk}"),
-                None => format!("user:{caller_ura}:*"),
+                Some(pk) => format!("authority:{caller_ura}:{pk}"),
+                None => format!("authority:{caller_ura}:*"),
             },
             Self::ExternalCaller {
                 presented_pubkey_b64,
@@ -165,6 +182,9 @@ impl SyncableCaller {
                 presented_pubkey_b64,
             } => presented_pubkey_b64.as_deref(),
             Self::LocalUser {
+                presented_pubkey_b64,
+            } => Some(presented_pubkey_b64),
+            Self::LocalAuthority {
                 presented_pubkey_b64,
             } => presented_pubkey_b64.as_deref(),
             Self::ExternalCaller {
@@ -270,6 +290,9 @@ impl DeviceTrustSync {
         };
         if self.anchor_has_caller_key(caller_ura, &role) {
             return DeviceTrustSyncStatus::AlreadyTrusted;
+        }
+        if matches!(role, SyncableCaller::LocalAuthority { .. }) {
+            return DeviceTrustSyncStatus::LocalAuthorityNotTrusted;
         }
         let cache_key = role.cache_key(caller_ura);
 
@@ -382,7 +405,18 @@ impl DeviceTrustSync {
                     .map(str::to_string),
             })),
             crate::core::ura::URAKind::User if parsed.realm == self.daemon_realm => {
+                let presented_pubkey_b64 = presented_pubkey_b64
+                    .map(str::trim)
+                    .filter(|pk| !pk.is_empty())
+                    .ok_or_else(|| {
+                        "User caller requires an exact presented public key".to_string()
+                    })?;
                 Ok(Some(SyncableCaller::LocalUser {
+                    presented_pubkey_b64: presented_pubkey_b64.to_string(),
+                }))
+            }
+            crate::core::ura::URAKind::Authority if parsed.realm == self.daemon_realm => {
+                Ok(Some(SyncableCaller::LocalAuthority {
                     presented_pubkey_b64: presented_pubkey_b64
                         .filter(|pk| !pk.is_empty())
                         .map(str::to_string),
@@ -417,11 +451,19 @@ impl DeviceTrustSync {
                 presented_pubkey_b64: None,
             } => anchor.lookup(caller_ura).is_some(),
             SyncableCaller::LocalUser {
+                presented_pubkey_b64,
+            } => self
+                .hub_attested_caller_keys
+                .contains(caller_ura, presented_pubkey_b64),
+            SyncableCaller::LocalAuthority {
                 presented_pubkey_b64: Some(pk),
-            } => anchor.lookup_user_by_pubkey(caller_ura, pk).is_some(),
-            SyncableCaller::LocalUser {
+            } => anchor
+                .lookup(caller_ura)
+                .map(|entry| entry.public_key_b64 == *pk)
+                .unwrap_or(false),
+            SyncableCaller::LocalAuthority {
                 presented_pubkey_b64: None,
-            } => !anchor.lookup_user_all(caller_ura).is_empty(),
+            } => anchor.lookup(caller_ura).is_some(),
             SyncableCaller::ExternalCaller {
                 presented_pubkey_b64,
             } => self
@@ -430,27 +472,31 @@ impl DeviceTrustSync {
         }
     }
 
-    /// Import hub-attested keys through the SAME write policy the gRPC
-    /// surface and the prelude sync use, then report whether the anchor
-    /// now resolves the caller.
+    /// Project Hub-owned caller keys into the bounded runtime cache, or import
+    /// Device keys through the durable singleton write policy. These are two
+    /// distinct authority planes: a Device must never create permanent User
+    /// revocation facts from cache eviction.
     fn import_caller_trust(
         &self,
         caller_ura: &str,
         resolved: &ResolvedCallerTrust,
         role: &SyncableCaller,
     ) -> bool {
-        if let SyncableCaller::ExternalCaller {
+        if let SyncableCaller::LocalUser {
+            presented_pubkey_b64,
+        }
+        | SyncableCaller::ExternalCaller {
             presented_pubkey_b64,
         } = role
         {
-            if let Err(error) = self.hub_attested_caller_keys.attest_external_caller_key(
+            if let Err(error) = self.hub_attested_caller_keys.attest_caller_key(
                 caller_ura,
                 presented_pubkey_b64,
                 &resolved.public_keys_b64,
             ) {
                 crate::op_event!(
                     component = device_trust_sync,
-                    kind = hub_attested_external_user_key_rejected,
+                    kind = hub_attested_caller_key_rejected,
                     caller_ura = caller_ura,
                     error = error.to_string(),
                 );
@@ -460,7 +506,7 @@ impl DeviceTrustSync {
         }
         let persisted_role = role
             .persisted_role()
-            .expect("local caller trust always has a durable role");
+            .expect("only Device caller trust reaches durable import");
         for public_key_b64 in &resolved.public_keys_b64 {
             let request = match resolved.principal_owner_ura.as_deref() {
                 Some(owner_ura) => {
@@ -481,23 +527,6 @@ impl DeviceTrustSync {
             ) {
                 Ok(_) => {}
                 Err(status) if status.code() == tonic::Code::AlreadyExists => {}
-                // The hub attests a key that this daemon's local anchor has
-                // a permanent revocation tombstone for (e.g. an operator
-                // revoked it locally after the hub last synced, or the
-                // caller is presenting a stale cached key). The anchor's
-                // tombstone is authoritative and re-registering it will
-                // never succeed, so skip this one key rather than failing
-                // the whole caller's trust resolution — another key in the
-                // same hub-attested batch may still admit the caller.
-                Err(status) if status.code() == tonic::Code::FailedPrecondition => {
-                    crate::op_event!(
-                        component = device_trust_sync,
-                        kind = import_skipped_locally_revoked,
-                        caller_ura = caller_ura,
-                        role = role.register_role(),
-                        error = status.message(),
-                    );
-                }
                 Err(status) => {
                     crate::op_event!(
                         component = device_trust_sync,
@@ -818,13 +847,7 @@ mod tests {
         );
     }
 
-    /// Regression: a hub-attested key can carry a permanent local
-    /// revocation tombstone (e.g. an operator revoked it locally after the
-    /// hub last synced, as happened in production when a self-heal
-    /// rotation was tested against local state only). Re-registering a
-    /// tombstoned key always fails with FailedPrecondition; the import loop
-    /// must skip that one key instead of leaving the caller permanently
-    /// unresolvable when a later key in the same batch would admit it.
+    /// Deterministic User keys for the Hub-attested runtime projection tests.
     fn tombstoned_key_test_b64() -> String {
         B64.encode(
             SigningKey::from_bytes(&[0x71; 32])
@@ -833,22 +856,13 @@ mod tests {
         )
     }
 
-    fn admitting_key_test_b64() -> String {
-        B64.encode(
-            SigningKey::from_bytes(&[0x72; 32])
-                .verifying_key()
-                .to_bytes(),
-        )
-    }
-
     #[tokio::test]
-    async fn import_skips_locally_tombstoned_key_and_admits_via_other_hub_attested_key() {
+    async fn same_realm_user_hub_attestation_does_not_enter_local_revocation_ledger() {
         fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
-            Ok(vec![tombstoned_key_test_b64(), admitting_key_test_b64()])
+            Ok(vec![tombstoned_key_test_b64()])
         }
         let user_ura = "easynet:///r/test-realm/user/alice";
         let tombstoned = tombstoned_key_test_b64();
-        let admits = admitting_key_test_b64();
         let dir = tempfile::tempdir().expect("tmp");
         let cell = SharedTrustAnchor::new(Arc::new(
             RealmTrustAnchor::from_parts(
@@ -862,27 +876,31 @@ mod tests {
             )
             .expect("anchor with tombstone"),
         ));
+        let hub_attested = SharedHubAttestedCallerKeys::new();
         let sync = DeviceTrustSync::with_source(
             "test-realm".into(),
             dir.path().join("realm-trust.toml"),
             cell,
             KeySource::Static(resolver),
-            SharedHubAttestedCallerKeys::new(),
+            hub_attested.clone(),
         );
 
-        let status = sync.ensure_caller_key_status(user_ura, None).await;
+        let status = sync
+            .ensure_caller_key_status(user_ura, Some(&tombstoned))
+            .await;
 
         assert_eq!(status, DeviceTrustSyncStatus::Synced);
         let snapshot = sync.cell.snapshot();
         assert!(
-            snapshot.lookup_user_by_pubkey(user_ura, &admits).is_some(),
-            "the non-tombstoned hub-attested key must still be imported and admit the caller"
-        );
-        assert!(
             snapshot
                 .lookup_user_by_pubkey(user_ura, &tombstoned)
                 .is_none(),
-            "the tombstoned key must never be re-admitted"
+            "Hub-owned caller proof must not resurrect or mutate local durable User trust"
+        );
+        assert!(snapshot.is_user_pubkey_revoked(user_ura, &tombstoned));
+        assert!(
+            hub_attested.contains(user_ura, &tombstoned),
+            "exact Hub proof must remain available to the runtime resolver"
         );
     }
 
@@ -942,7 +960,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_realm_user_miss_resolves_imports_presented_key() {
+    async fn same_realm_user_miss_projects_presented_key_ephemerally() {
         fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
             Ok(vec![B64.encode(
                 SigningKey::from_bytes(&[0x51; 32])
@@ -962,17 +980,14 @@ mod tests {
         assert!(
             sync.ensure_caller_key_with_presented_pubkey(user_ura, Some(&presented))
                 .await,
-            "hub-attested user key must be imported before admission"
+            "hub-attested user key must be projected before admission"
         );
-        assert!(sync
-            .cell
-            .snapshot()
-            .lookup_user_by_pubkey(user_ura, &presented)
-            .is_some());
+        assert!(sync.cell.snapshot().lookup_user_all(user_ura).is_empty());
+        assert!(sync.hub_attested_caller_keys.contains(user_ura, &presented));
     }
 
     #[tokio::test]
-    async fn same_realm_user_without_presented_key_warms_all_hub_attested_keys() {
+    async fn same_realm_user_without_presented_key_fails_before_hub_resolution() {
         fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
             Ok(vec![B64.encode(
                 SigningKey::from_bytes(&[0x52; 32])
@@ -986,16 +1001,12 @@ mod tests {
 
         let status = sync.ensure_caller_key_status(user_ura, None).await;
 
-        assert_eq!(status, DeviceTrustSyncStatus::Synced);
-        assert_eq!(sync.cell.snapshot().lookup_user_all(user_ura).len(), 1);
-        assert!(
-            !sync
-                .state
-                .lock()
-                .await
-                .contains_key(&format!("user:{user_ura}:*")),
-            "successful user warmup must not leave a negative cache row"
-        );
+        assert!(matches!(
+            status,
+            DeviceTrustSyncStatus::MalformedCaller(message)
+                if message.contains("exact presented public key")
+        ));
+        assert!(sync.state.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -1033,8 +1044,81 @@ mod tests {
             "presented browser key must not be hidden by another key under the same user URA"
         );
         let anchor = sync.cell.snapshot();
-        assert_eq!(anchor.lookup_user_all(user_ura).len(), 2);
-        assert!(anchor.lookup_user_by_pubkey(user_ura, &presented).is_some());
+        assert_eq!(anchor.lookup_user_all(user_ura).len(), 1);
+        assert!(anchor.lookup_user_by_pubkey(user_ura, &old_key).is_some());
+        assert!(anchor.lookup_user_by_pubkey(user_ura, &presented).is_none());
+        assert!(sync.hub_attested_caller_keys.contains(user_ura, &presented));
+    }
+
+    #[tokio::test]
+    async fn same_realm_authority_uses_exact_local_anchor_without_session_resolution() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            panic!("same-realm Authority must not resolve over its own session");
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let authority_ura = "easynet:///r/test-realm/authority";
+        let presented = B64.encode(resolver_key_bytes(0x75));
+        let cell = SharedTrustAnchor::new(Arc::new(
+            RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                agent_ura: authority_ura.to_string(),
+                public_key_b64: presented.clone(),
+                role: TrustAnchorRole::Hub,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            }])
+            .expect("same-realm Authority anchor"),
+        ));
+        let sync = DeviceTrustSync::with_source(
+            "test-realm".into(),
+            dir.path().join("realm-trust.toml"),
+            cell,
+            KeySource::Static(resolver),
+            SharedHubAttestedCallerKeys::new(),
+        );
+
+        let status = sync
+            .ensure_caller_key_status(authority_ura, Some(&presented))
+            .await;
+
+        assert_eq!(status, DeviceTrustSyncStatus::AlreadyTrusted);
+    }
+
+    #[tokio::test]
+    async fn same_realm_authority_key_mismatch_fails_closed_without_session_resolution() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            panic!("same-realm Authority mismatch must fail locally");
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let authority_ura = "easynet:///r/test-realm/authority";
+        let anchored = B64.encode(resolver_key_bytes(0x75));
+        let presented = B64.encode(resolver_key_bytes(0x76));
+        let cell = SharedTrustAnchor::new(Arc::new(
+            RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                agent_ura: authority_ura.to_string(),
+                public_key_b64: anchored,
+                role: TrustAnchorRole::Hub,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            }])
+            .expect("same-realm Authority anchor"),
+        ));
+        let sync = DeviceTrustSync::with_source(
+            "test-realm".into(),
+            dir.path().join("realm-trust.toml"),
+            cell,
+            KeySource::Static(resolver),
+            SharedHubAttestedCallerKeys::new(),
+        );
+
+        let status = sync
+            .ensure_caller_key_status(authority_ura, Some(&presented))
+            .await;
+
+        assert_eq!(status, DeviceTrustSyncStatus::LocalAuthorityNotTrusted);
     }
 
     #[tokio::test]

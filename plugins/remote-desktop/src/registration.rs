@@ -40,17 +40,21 @@ use crate::daemon::plugins::package::{
 use crate::daemon::plugins::remote_desktop::consent_registry::ConsentTicketError;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
-    ABILITY_GRANT_CONSENT, ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE,
+    ABILITY_FOCUS_TARGET, ABILITY_GRANT_CONSENT, ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE,
     ABILITY_REPORT_CLIENT_STATE, ABILITY_REQUEST_PERMISSION, ABILITY_SET_DESCRIPTION,
     ABILITY_SHOW_SESSION, ABILITY_WATCH_EVENTS,
 };
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::handlers;
+use crate::daemon::plugins::remote_desktop::relay_lease::{
+    RemoteDesktopRelayLeaseProvider, UnavailableRemoteDesktopRelayLeaseProvider,
+};
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::schema;
 #[cfg(test)]
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetError;
+use crate::daemon::plugins::remote_desktop::target_focus::RemoteAppTargetFocusError;
 use crate::daemon::plugins::{
     PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder, PluginRuntimeLimits, Result,
 };
@@ -151,6 +155,8 @@ fn classify_handler_result<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
             consent_ticket_error_to_axon(error)
         } else if let Some(error) = error.downcast_ref::<RemoteAppTargetError>() {
             error.to_axon()
+        } else if let Some(error) = error.downcast_ref::<RemoteAppTargetFocusError>() {
+            error.to_axon()
         } else {
             AxonError::new(AxonErrorKind::Internal)
                 .with_code(ErrorCode::ExecutionFailed)
@@ -237,6 +243,23 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
             },
             handler: RemoteDesktopAbilityBinding::Rpc {
                 handler: handlers::create_session::handle,
+            },
+        },
+        RemoteDesktopCompiledAbilityBinding {
+            spec: BuiltinPluginAbilitySpec {
+                name: ABILITY_FOCUS_TARGET,
+                layer: PluginAbilityLayer::Control,
+                call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
+                bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
+                description: schema::focus_target_description,
+                input_schema: schema::focus_target_input_schema,
+            },
+            handler: RemoteDesktopAbilityBinding::Rpc {
+                handler: handlers::focus_target::handle,
             },
         },
         RemoteDesktopCompiledAbilityBinding {
@@ -364,7 +387,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 layer: PluginAbilityLayer::Operational,
                 call_mode: CallMode::Bidi,
                 admission_action: AdmissionAction::Stream,
-                bidi_wire_kind: Some(PluginBidiWireKind::JsonFrames),
+                bidi_wire_kind: Some(PluginBidiWireKind::MetadataJsonPlusBinary),
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
                 frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
@@ -427,13 +450,35 @@ pub fn contribute(
     builder: &mut PluginContributionBuilder,
     limits: PluginRuntimeLimits,
 ) -> Result<()> {
+    contribute_with_relay_lease_provider(
+        builder,
+        limits,
+        Arc::new(UnavailableRemoteDesktopRelayLeaseProvider),
+    )
+}
+
+pub(in crate::daemon) fn contribute_with_relay_lease_provider(
+    builder: &mut PluginContributionBuilder,
+    limits: PluginRuntimeLimits,
+    relay_lease_provider: Arc<dyn RemoteDesktopRelayLeaseProvider>,
+) -> Result<()> {
     #[cfg(feature = "native-media")]
     {
-        contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits)
+        contribute_with_screen_backend_and_relay_provider(
+            builder,
+            Arc::new(XcapBackend),
+            limits,
+            relay_lease_provider,
+        )
     }
     #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
     {
-        contribute_with_screen_backend(builder, Arc::new(SyntheticScreenBackend), limits)
+        contribute_with_screen_backend_and_relay_provider(
+            builder,
+            Arc::new(SyntheticScreenBackend),
+            limits,
+            relay_lease_provider,
+        )
     }
     #[cfg(not(any(feature = "native-media", feature = "headless-media")))]
     {
@@ -449,12 +494,27 @@ pub fn contribute(
 ///
 /// This is the only non-production registration entry point. Unit tests inject
 /// deterministic synthetic capture here while production uses [`contribute`].
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend(
     builder: &mut PluginContributionBuilder,
     backend: Arc<dyn ScreenSnapshotBackend>,
     limits: PluginRuntimeLimits,
 ) -> Result<()> {
-    let plugin = RemoteDesktopPlugin::new(backend, limits.into());
+    contribute_with_screen_backend_and_relay_provider(
+        builder,
+        backend,
+        limits,
+        Arc::new(UnavailableRemoteDesktopRelayLeaseProvider),
+    )
+}
+
+fn contribute_with_screen_backend_and_relay_provider(
+    builder: &mut PluginContributionBuilder,
+    backend: Arc<dyn ScreenSnapshotBackend>,
+    limits: PluginRuntimeLimits,
+    relay_lease_provider: Arc<dyn RemoteDesktopRelayLeaseProvider>,
+) -> Result<()> {
+    let plugin = RemoteDesktopPlugin::new(backend, limits.into(), relay_lease_provider);
     contribute_with_plugin(builder, plugin)
 }
 
@@ -494,6 +554,9 @@ mod tests {
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
+    use crate::daemon::plugins::remote_desktop::target_focus::{
+        RemoteAppTargetFocusError, TargetFocusFailureReason,
+    };
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
@@ -520,6 +583,23 @@ mod tests {
                 "remote desktop product lifecycle must be descriptor-owned, with permission probes publishing their host-local subject policy"
             );
         }
+    }
+
+    #[test]
+    fn attach_registry_manifest_preserves_metadata_binary_bidi_wire_kind() {
+        let attach = compiled_ability_bindings()
+            .into_iter()
+            .find(|binding| binding.spec.name == ABILITY_ATTACH_SESSION)
+            .expect("remote desktop attach binding");
+        let manifest = attach
+            .spec
+            .to_registry_manifest()
+            .expect("remote desktop attach registry manifest");
+
+        assert_eq!(
+            manifest.bidi_wire_kind(),
+            Some(crate::daemon::ability::manifest::AbilityBidiWireKind::MetadataJsonPlusBinary)
+        );
     }
 
     #[test]
@@ -585,6 +665,70 @@ mod tests {
                 .contains("reason=target_metadata_incomplete"),
             "target failure must keep canonical reason in message: {}",
             axon_error.message
+        );
+    }
+
+    #[test]
+    fn target_focus_failures_are_machine_readable_without_polluting_target_resolution() {
+        let error = RemoteAppTargetFocusError::new(
+            TargetFocusFailureReason::RemoteFocusNotConsented,
+            "explicit remote-focus consent is required",
+        );
+        assert_eq!(
+            error.reason(),
+            TargetFocusFailureReason::RemoteFocusNotConsented
+        );
+
+        let err = classify_handler_result::<()>(Err(error.into())).unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured target-focus failure");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::PermissionDenied);
+        assert_eq!(axon_error.code, ErrorCode::AbilityForbidden);
+        assert_eq!(axon_error.reason, "remote_focus_not_consented");
+        assert_eq!(axon_error.stage, Some(ErrorStage::AbilityPolicy));
+        assert_eq!(
+            axon_error.security_class,
+            Some(SecurityClass::Authorization)
+        );
+        assert_eq!(
+            axon_error
+                .context
+                .get("frontend_action")
+                .map(String::as_str),
+            Some("request_consent")
+        );
+        assert_eq!(
+            axon_error
+                .context
+                .get("target_event_type")
+                .map(String::as_str),
+            Some("TARGET_FOCUS_DENIED")
+        );
+
+        let permission = classify_handler_result::<()>(Err(RemoteAppTargetFocusError::new(
+            TargetFocusFailureReason::TargetFocusPermissionMissing,
+            "macOS Accessibility permission is required",
+        )
+        .into()))
+        .unwrap_err();
+        let permission = permission
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured focus-permission failure")
+            .axon_error();
+        assert_eq!(permission.kind, AxonErrorKind::PermissionDenied);
+        assert_eq!(permission.code, ErrorCode::AuthorityRequired);
+        assert_eq!(permission.reason, "target_focus_permission_missing");
+        assert_eq!(permission.stage, Some(ErrorStage::AuthorityValidation));
+        assert_eq!(permission.security_class, Some(SecurityClass::Authority));
+        assert_eq!(
+            permission
+                .context
+                .get("frontend_action")
+                .map(String::as_str),
+            Some("request_permission")
         );
     }
 

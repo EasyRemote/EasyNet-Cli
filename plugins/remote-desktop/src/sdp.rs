@@ -6,8 +6,8 @@
 //              transport path.
 //
 // Protocol Responsibility:
-// - Preserve browser/device SDP semantics while enforcing one negotiated
-//   device-to-browser video sender.
+// - Preserve browser/device SDP semantics while enforcing negotiated
+//   device-to-browser video and, when offered, audio senders.
 //
 // Implementation Approach:
 // - Normalize line endings/candidates and inspect media-section direction
@@ -27,6 +27,7 @@ use webrtc::peer_connection::RTCIceCandidateInit;
 use crate::daemon::plugins::remote_desktop::constants::{
     MAX_ICE_CANDIDATE_BYTES, MAX_SIGNALING_DESCRIPTION_BYTES,
 };
+use crate::daemon::plugins::remote_desktop::media::h264_level::{H264Level, H264ReceiveLimits};
 
 /// Ensure a browser/device SDP carries an explicit end-of-candidates marker.
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_sdp_end_of_candidates(
@@ -153,27 +154,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn validate_ice_candidate_row(
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_answer_sends_video(
     sdp: &str,
 ) -> anyhow::Result<()> {
-    let mut in_video_section = false;
-    let mut video_direction = None;
-    for line in sdp.lines().map(str::trim_end) {
-        if line.starts_with("m=") {
-            if in_video_section {
-                break;
-            }
-            in_video_section = line.starts_with("m=video ");
-            continue;
-        }
-        if !in_video_section {
-            continue;
-        }
-        video_direction = match line {
-            "a=sendonly" => Some("sendonly"),
-            "a=sendrecv" => Some("sendrecv"),
-            "a=recvonly" => Some("recvonly"),
-            "a=inactive" => Some("inactive"),
-            _ => video_direction,
-        };
-    }
+    let video_direction = media_section_direction(sdp, "video");
 
     if matches!(video_direction, Some("sendonly" | "sendrecv")) {
         return Ok(());
@@ -183,6 +164,192 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_answer_sends_video(
          direction={}; reason=webrtc_video_sender_not_negotiated",
         video_direction.unwrap_or("missing")
     )
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn remote_offer_accepts_audio(sdp: &str) -> bool {
+    media_section_direction(sdp, "audio")
+        .is_some_and(|direction| matches!(direction, "recvonly" | "sendrecv"))
+}
+
+/// Resolve the browser's RFC 6184 receive ceiling for the Baseline,
+/// non-interleaved H.264 format this runtime can actually emit.
+pub(in crate::daemon::plugins::remote_desktop) fn remote_offer_h264_receive_limits(
+    sdp: &str,
+) -> anyhow::Result<H264ReceiveLimits> {
+    if !matches!(
+        media_section_direction(sdp, "video"),
+        Some("recvonly" | "sendrecv")
+    ) {
+        anyhow::bail!("remote WebRTC offer does not accept device-to-browser video");
+    }
+    let section = media_section_lines(sdp, "video")
+        .ok_or_else(|| anyhow::anyhow!("remote WebRTC offer has no video media section"))?;
+    let payload_types = section[0].split_whitespace().skip(3).collect::<Vec<_>>();
+    let mut rejected = Vec::new();
+    for payload_type in payload_types {
+        let rtpmap_prefix = format!("a=rtpmap:{payload_type} ");
+        let Some(rtpmap) = section.iter().find_map(|line| {
+            line.strip_prefix(&rtpmap_prefix)
+                .map(str::trim)
+                .filter(|codec| codec.eq_ignore_ascii_case("H264/90000"))
+        }) else {
+            continue;
+        };
+        let _ = rtpmap;
+        let fmtp_prefix = format!("a=fmtp:{payload_type} ");
+        let Some(fmtp) = section
+            .iter()
+            .find_map(|line| line.strip_prefix(&fmtp_prefix).map(str::trim))
+        else {
+            rejected.push(format!("payload {payload_type} has no fmtp"));
+            continue;
+        };
+        match h264_receive_limits_from_fmtp(fmtp) {
+            Ok(Some(limits)) => return Ok(limits),
+            Ok(None) => rejected.push(format!(
+                "payload {payload_type} is not Baseline packetization-mode=1"
+            )),
+            Err(error) => rejected.push(format!("payload {payload_type}: {error}")),
+        }
+    }
+    anyhow::bail!(
+        "remote WebRTC offer has no compatible H.264 Baseline packetization-mode=1 receive format{}",
+        (!rejected.is_empty())
+            .then(|| format!(": {}", rejected.join("; ")))
+            .unwrap_or_default()
+    )
+}
+
+fn h264_receive_limits_from_fmtp(fmtp: &str) -> anyhow::Result<Option<H264ReceiveLimits>> {
+    let parameters = fmtp
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if parameters.get("packetization-mode").copied().unwrap_or("0") != "1" {
+        return Ok(None);
+    }
+    let profile_level_id = parameters
+        .get("profile-level-id")
+        .ok_or_else(|| anyhow::anyhow!("profile-level-id is required"))?;
+    let profile_level = parse_fixed_hex(profile_level_id, 6, "profile-level-id")?;
+    let profile_idc = ((profile_level >> 16) & 0xff) as u8;
+    if profile_idc != 0x42 {
+        return Ok(None);
+    }
+    let profile_iop = ((profile_level >> 8) & 0xff) as u8;
+    let default_level_idc = (profile_level & 0xff) as u8;
+    let default_level = H264Level::from_profile_level_bytes(profile_iop, default_level_idc)
+        .ok_or_else(|| anyhow::anyhow!("unsupported H.264 level_idc {default_level_idc}"))?;
+    let receive_level = match parameters.get("max-recv-level") {
+        Some(value) => {
+            let raw = parse_fixed_hex(value, 4, "max-recv-level")?;
+            let max_profile_iop = ((raw >> 8) & 0xff) as u8;
+            let max_level_idc = (raw & 0xff) as u8;
+            let level = H264Level::from_profile_level_bytes(max_profile_iop, max_level_idc)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("unsupported max-recv-level level_idc {max_level_idc}")
+                })?;
+            if level <= default_level {
+                anyhow::bail!(
+                    "max-recv-level {} must exceed profile-level-id level {}",
+                    level.as_str(),
+                    default_level.as_str()
+                );
+            }
+            level
+        }
+        None => default_level,
+    };
+    H264ReceiveLimits::new(
+        receive_level,
+        parse_optional_positive_u32(&parameters, "max-fs")?,
+        parse_optional_positive_u32(&parameters, "max-mbps")?,
+        parse_optional_positive_u32(&parameters, "max-br")?,
+    )
+    .map(Some)
+}
+
+fn parse_fixed_hex(value: &str, digits: usize, name: &str) -> anyhow::Result<u32> {
+    if value.len() != digits || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("{name} must contain exactly {digits} hexadecimal digits");
+    }
+    u32::from_str_radix(value, 16).map_err(Into::into)
+}
+
+fn parse_optional_positive_u32(
+    parameters: &std::collections::BTreeMap<String, &str>,
+    name: &str,
+) -> anyhow::Result<Option<u32>> {
+    parameters
+        .get(name)
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|_| anyhow::anyhow!("{name} must be a positive integer"))
+                .and_then(|value| {
+                    (value > 0)
+                        .then_some(value)
+                        .ok_or_else(|| anyhow::anyhow!("{name} must be a positive integer"))
+                })
+        })
+        .transpose()
+}
+
+fn media_section_lines<'a>(sdp: &'a str, media_kind: &str) -> Option<Vec<&'a str>> {
+    let mut section = Vec::new();
+    let mut in_section = false;
+    for line in sdp.lines().map(str::trim_end) {
+        if line.starts_with("m=") {
+            if in_section {
+                break;
+            }
+            in_section = line.starts_with(&format!("m={media_kind} "));
+        }
+        if in_section {
+            section.push(line);
+        }
+    }
+    (!section.is_empty()).then_some(section)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn ensure_answer_sends_audio(
+    sdp: &str,
+) -> anyhow::Result<()> {
+    let direction = media_section_direction(sdp, "audio");
+    if matches!(direction, Some("sendonly" | "sendrecv")) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "direct WebRTC answer has no device-to-browser audio sender; \
+         direction={}; reason=webrtc_audio_sender_not_negotiated",
+        direction.unwrap_or("missing")
+    )
+}
+
+fn media_section_direction<'a>(sdp: &'a str, media_kind: &str) -> Option<&'a str> {
+    let mut in_section = false;
+    let mut direction = None;
+    for line in sdp.lines().map(str::trim_end) {
+        if line.starts_with("m=") {
+            if in_section {
+                break;
+            }
+            in_section = line.starts_with(&format!("m={media_kind} "));
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        direction = match line {
+            "a=sendonly" => Some("sendonly"),
+            "a=sendrecv" => Some("sendrecv"),
+            "a=recvonly" => Some("recvonly"),
+            "a=inactive" => Some("inactive"),
+            _ => direction,
+        };
+    }
+    direction
 }
 
 fn is_rtcp_component_candidate(line: &str) -> bool {
@@ -353,5 +520,91 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("direction=missing"));
+    }
+
+    #[test]
+    fn audio_sender_is_required_only_when_offer_accepts_audio() {
+        let offer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na=recvonly\r\n\
+                     m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n";
+        assert!(remote_offer_accepts_audio(offer));
+        let answer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na=sendonly\r\n\
+                      m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n";
+        ensure_answer_sends_audio(answer).unwrap();
+
+        let video_only = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na=recvonly\r\n";
+        assert!(!remote_offer_accepts_audio(video_only));
+        let err = ensure_answer_sends_audio(video_only)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("webrtc_audio_sender_not_negotiated"));
+    }
+
+    #[test]
+    fn h264_offer_projects_browser_receive_level_and_extensions() {
+        let offer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 102\r\n\
+                     a=recvonly\r\na=rtpmap:96 VP8/90000\r\n\
+                     a=rtpmap:102 H264/90000\r\n\
+                     a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;\
+                     profile-level-id=42e01f;max-fs=8192;max-mbps=245760;max-br=20000\r\n";
+        let limits = remote_offer_h264_receive_limits(offer).unwrap();
+        assert_eq!(limits.level(), H264Level::Level3_1);
+        let (options, bitrate) = limits
+            .constrain(
+                &crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions {
+                    fps: 60,
+                    resolution: Some(crate::daemon::ability::builtins::resources::media::screen_snapshot::VideoResolution { width: 1920, height: 1080 }),
+                    resize_mode: crate::daemon::ability::builtins::resources::media::screen_snapshot::CaptureResizeMode::FitWithin,
+                    region: None,
+                },
+                50_000,
+            )
+            .unwrap();
+        assert_eq!(options.resolution.unwrap().width, 1920);
+        assert_eq!(options.fps, 30);
+        assert_eq!(bitrate, 20_000);
+    }
+
+    #[test]
+    fn h264_offer_projects_explicit_level_4_2_browser_receive_capability() {
+        let offer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=recvonly\r\n\
+                     a=rtpmap:102 H264/90000\r\n\
+                     a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;\
+                     profile-level-id=42e01f;max-recv-level=e02a\r\n";
+        let limits = remote_offer_h264_receive_limits(offer).unwrap();
+        assert_eq!(limits.level(), H264Level::Level4_2);
+        let (options, bitrate) = limits
+            .constrain(
+                &crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions {
+                    fps: 60,
+                    resolution: Some(crate::daemon::ability::builtins::resources::media::screen_snapshot::VideoResolution { width: 1920, height: 1080 }),
+                    resize_mode: crate::daemon::ability::builtins::resources::media::screen_snapshot::CaptureResizeMode::FitWithin,
+                    region: None,
+                },
+                50_000,
+            )
+            .unwrap();
+        assert_eq!(options.resolution.unwrap().width, 1920);
+        assert_eq!(options.resolution.unwrap().height, 1080);
+        assert_eq!(options.fps, 60);
+        assert_eq!(bitrate, 50_000);
+    }
+
+    #[test]
+    fn h264_offer_rejects_high_profile_and_malformed_receive_extensions() {
+        let high = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=recvonly\r\n\
+                    a=rtpmap:102 H264/90000\r\n\
+                    a=fmtp:102 packetization-mode=1;profile-level-id=640c2a\r\n";
+        assert!(remote_offer_h264_receive_limits(high)
+            .unwrap_err()
+            .to_string()
+            .contains("no compatible H.264 Baseline"));
+
+        let malformed = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=recvonly\r\n\
+                         a=rtpmap:102 H264/90000\r\n\
+                         a=fmtp:102 packetization-mode=1;profile-level-id=42e01f;max-fs=100\r\n";
+        let error = remote_offer_h264_receive_limits(malformed)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("max-fs=100"), "got {error}");
     }
 }

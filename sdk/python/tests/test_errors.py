@@ -11,6 +11,19 @@ from easynet_sdk.errors import (
 
 
 class ErrorTests(unittest.TestCase):
+    def test_sdk_error_allows_exception_traceback_lifecycle(self) -> None:
+        error = SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="boom",
+        )
+
+        try:
+            raise error
+        except SDKError as caught:
+            self.assertIsNotNone(caught.__traceback__)
+
     def test_from_json_decodes_fixture_shape(self) -> None:
         error = SDKError.from_json(
             b"""{

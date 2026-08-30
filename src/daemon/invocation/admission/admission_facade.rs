@@ -1270,6 +1270,56 @@ impl AdmissionFacade {
         self.daemon_ura.as_deref()
     }
 
+    /// Verify runtime authority metadata carried by the daemon-owned
+    /// `session.open` control request codec.
+    ///
+    /// The session carrier already authenticates `caller_device_ura` as the
+    /// live device session member. This method verifies only the independent
+    /// runtime authority metadata needed when the control request acts on a
+    /// user/service-bound subject. The returned binding is the only value
+    /// downstream publication handlers may consume.
+    pub(crate) fn verify_session_control_authority_metadata(
+        &self,
+        caller_device_ura: &str,
+        subject_ura: &str,
+        ability: &str,
+        action: AccessAction,
+        metadata: &HashMap<String, String>,
+    ) -> Result<Option<AuthorityOrBootstrap>, Status> {
+        let hub_ura = self.daemon_ura().ok_or_else(|| {
+            Status::failed_precondition(
+                "session control authority metadata verification requires the selected hub identity",
+            )
+        })?;
+        let envelope = Envelope {
+            caller: Some(axon_sdk::pb::axon::v1::AgentIdentity {
+                ura: caller_device_ura.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            callee: Some(axon_sdk::pb::axon::v1::AgentIdentity {
+                ura: hub_ura.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            subject: Some(axon_sdk::pb::axon::v1::SubjectIdentity {
+                ura: subject_ura.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            ..Envelope::default()
+        };
+        let trust_anchor = self.trust_anchor_snapshot();
+        verify_delegation_metadata(
+            &envelope,
+            ability,
+            action,
+            Some(metadata),
+            trust_anchor.as_ref(),
+            self.federated_keys.as_deref(),
+            current_unix_ms(),
+        )
+        .map_err(|status| self.authority_denied_status(&envelope, ability, status))
+        .map(|authority| authority.map(|authority| authority.binding))
+    }
+
     fn authority_proof_audience_ura(&self) -> Result<&str, Status> {
         self.daemon_ura
             .as_deref()
@@ -2753,11 +2803,29 @@ fn require_local_hosted_agent_publication_ready(
             "HOSTED_AGENT_NOT_PUBLISHED: Agent owner `{owner_ura}` is not an exact local hosted authority"
         ))
     })?;
-    crate::daemon::persistence::hosted_agent_publications::require_published_for_host(
+    crate::daemon::persistence::hosted_agent_publications::wait_until_published_for_host(
         owner_ura,
         exact_host_device_ura,
+        hosted_agent_publication_ready_wait_timeout(),
+        hosted_agent_publication_ready_wait_interval(),
     )
     .map_err(|error| Status::permission_denied(format!("HOSTED_AGENT_NOT_PUBLISHED: {error:#}")))
+}
+
+fn hosted_agent_publication_ready_wait_timeout() -> std::time::Duration {
+    if cfg!(test) {
+        std::time::Duration::from_millis(1)
+    } else {
+        std::time::Duration::from_secs(5)
+    }
+}
+
+fn hosted_agent_publication_ready_wait_interval() -> std::time::Duration {
+    if cfg!(test) {
+        std::time::Duration::from_millis(1)
+    } else {
+        std::time::Duration::from_millis(25)
+    }
 }
 
 /// Bootstrap authority abilities mutate identity or presence roots.
@@ -2807,9 +2875,13 @@ fn verify_delegation_metadata(
         now_ms,
         RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
         &|issuer_ura| {
+            let request_key = caller_authority_issuer_key_projection(envelope, issuer_ura);
             if let Some(resolver) = federated_keys {
-                return resolver
-                    .resolve_all(issuer_ura)
+                let resolved = match request_key.as_deref() {
+                    Some(key) => resolver.resolve_signature_keys(issuer_ura, key),
+                    None => resolver.resolve_all(issuer_ura),
+                };
+                return resolved
                     .map(|keys| {
                         keys.into_iter()
                             .map(|key| BASE64_STANDARD.encode(key.to_bytes()))
@@ -2820,6 +2892,20 @@ fn verify_delegation_metadata(
                             "{REASON_AUTHORITY_ISSUER_UNKNOWN}: authority issuer `{issuer_ura}` has no canonical invocation key: {error}"
                         ))
                     });
+            }
+            if let Some(request_key) = request_key.as_deref() {
+                if let Some(issuer) = trust_anchor.lookup_user_by_pubkey(issuer_ura, request_key) {
+                    return Ok(vec![issuer.public_key_b64.clone()]);
+                }
+                if let Some(issuer) = trust_anchor
+                    .lookup(issuer_ura)
+                    .filter(|issuer| issuer.public_key_b64 == request_key)
+                {
+                    return Ok(vec![issuer.public_key_b64.clone()]);
+                }
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_UNKNOWN}: authority issuer `{issuer_ura}` has no canonical invocation key matching the caller signature selector"
+                )));
             }
             let user_keys = trust_anchor.lookup_user_all(issuer_ura);
             if !user_keys.is_empty() {
@@ -2838,6 +2924,21 @@ fn verify_delegation_metadata(
             )
         },
     )
+}
+
+/// Select the issuer key already proven for this exact signed request when a
+/// caller self-issues its SessionAuthority. The selector is never authority
+/// evidence: downstream resolution must still prove the key belongs to the
+/// issuer. Delegation by a different issuer deliberately stays on the bounded
+/// multi-key path because the caller signature says nothing about that issuer.
+fn caller_authority_issuer_key_projection(envelope: &Envelope, issuer_ura: &str) -> Option<String> {
+    let caller_ura = envelope.caller.as_ref()?.ura.trim();
+    if caller_ura != issuer_ura {
+        return None;
+    }
+    let hint = envelope.caller_signature.as_ref()?.key_id_hint.trim();
+    let bytes = BASE64_STANDARD.decode(hint).ok()?;
+    (bytes.len() == ed25519_dalek::PUBLIC_KEY_LENGTH).then(|| BASE64_STANDARD.encode(bytes))
 }
 
 fn reject_unverified_runtime_authority_metadata(
@@ -3221,7 +3322,9 @@ fn verify_session_issuer_authorized(
                 )));
             }
             let subject_kind = authority_metadata::authority_subject_kind(&payload.subject_ura);
-            if subject_kind == AuthoritySubjectKind::Resource {
+            if subject_kind == AuthoritySubjectKind::Resource
+                && session_authority_subject_is_device_owned_resource(&payload.subject_ura)
+            {
                 return match authorize_user_session_device_resource(
                     UserSessionDeviceResourceTuple {
                         issuer_ura: &payload.issuer_ura,
@@ -3707,6 +3810,18 @@ fn session_owner_user_ura(payload: &SessionAuthorityPayload) -> Result<String, S
         &subject.realm,
         payload.session_owner_user_id.as_str(),
     ))
+}
+
+fn session_authority_subject_is_device_owned_resource(subject_ura: &str) -> bool {
+    parse_authority_runtime_ura("subject_ura", subject_ura)
+        .ok()
+        .filter(|subject| subject.kind == URAKind::Resource)
+        .and_then(|subject| {
+            subject
+                .resource_owner_id()
+                .map(|owner| owner.starts_with("device."))
+        })
+        .unwrap_or(false)
 }
 
 fn delegation_subject_owner_user_ura(subject_ura: &str) -> Result<String, Status> {
@@ -5210,6 +5325,141 @@ mod tests {
     }
 
     #[test]
+    fn realm_trust_session_allows_user_for_exact_generic_resource_subject() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/user/alice";
+        let callee = &crate::core::ura::device_agent_ura(
+            "example",
+            "dev-a",
+            crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let subject = "easynet:///r/example/resource/e2e/user-plugin/echo";
+        let signing_key = SigningKey::from_bytes(&[0x4c; 32]);
+        let request = authority_metadata::SessionAuthorityRequest {
+            issuer_ura: issuer.to_string(),
+            session_id: "invoke-user-plugin-echo".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: issuer.to_string(),
+            callee_ura: callee.to_string(),
+            subject_ura: subject.to_string(),
+            audience: callee.to_string(),
+            scopes: vec!["user_plugin.echo".to_string()],
+            allowed_actions: vec!["invoke".to_string()],
+            allowed_followup_abilities: vec!["user_plugin.echo".to_string()],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        };
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        verify_authority_metadata_with_issuer_key(
+            &envelope,
+            "user_plugin.echo",
+            AccessAction::Invoke,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("User SessionAuthority should authorize an exact generic Resource subject without entering Device Resource pairing");
+    }
+
+    #[test]
+    fn user_session_authority_selects_the_exact_request_attested_issuer_key() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/user/alice";
+        let callee = crate::core::ura::device_agent_ura(
+            "example",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
+        let subject =
+            crate::core::ura::resource_dot_ura("example", "user.alice", "runtime-state/read");
+        let durable_key = SigningKey::from_bytes(&[0x4d; 32]);
+        let request_key = SigningKey::from_bytes(&[0x4e; 32]);
+        let durable_key_b64 = BASE64_STANDARD.encode(durable_key.verifying_key().to_bytes());
+        let request_key_b64 = BASE64_STANDARD.encode(request_key.verifying_key().to_bytes());
+        let trust_anchor = RealmTrustAnchor::from_entries(vec![
+            crate::daemon::trust::anchor::TrustedAgent {
+                agent_ura: issuer.to_string(),
+                public_key_b64: durable_key_b64.clone(),
+                role: TrustAnchorRole::User,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            crate::daemon::trust::anchor::TrustedAgent {
+                agent_ura: issuer.to_string(),
+                public_key_b64: request_key_b64.clone(),
+                role: TrustAnchorRole::User,
+                added_at_unix_ms: 1_700_000_000_001,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+        ])
+        .expect("multi-key User trust anchor");
+        let request = authority_metadata::SessionAuthorityRequest {
+            issuer_ura: issuer.to_string(),
+            session_id: "invoke-request-key-selection".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: issuer.to_string(),
+            callee_ura: callee.clone(),
+            subject_ura: subject.clone(),
+            audience: callee.clone(),
+            scopes: vec!["meta.list_resources".to_string()],
+            allowed_actions: vec!["read".to_string()],
+            allowed_followup_abilities: vec!["meta.list_resources".to_string()],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        };
+        let metadata = signed_session_metadata(request, &request_key);
+        let mut envelope = authority_wire_envelope(Some(issuer), Some(&callee), Some(&subject));
+        envelope.caller_signature = Some(axon_sdk::pb::axon::v1::CallerSignature {
+            algorithm: "ed25519".to_string(),
+            signature: vec![0; ed25519_dalek::SIGNATURE_LENGTH],
+            key_id_hint: request_key_b64,
+        });
+
+        let authority = verify_delegation_metadata(
+            &envelope,
+            "meta.list_resources",
+            AccessAction::Read,
+            Some(&metadata),
+            &trust_anchor,
+            None,
+            now_ms,
+        )
+        .expect("request-selected User SessionAuthority key must verify")
+        .expect("SessionAuthority must project");
+        assert_eq!(authority.binding.form(), "session_of+session");
+
+        envelope
+            .caller_signature
+            .as_mut()
+            .expect("caller signature")
+            .key_id_hint = durable_key_b64;
+        let error = require_authority_metadata_error(
+            verify_delegation_metadata(
+                &envelope,
+                "meta.list_resources",
+                AccessAction::Read,
+                Some(&metadata),
+                &trust_anchor,
+                None,
+                now_ms,
+            ),
+            "different active User key must not substitute for the request signer",
+        );
+        assert!(
+            error.message().contains(REASON_AUTHORITY_SIGNATURE_INVALID),
+            "unexpected authority rejection: {error}"
+        );
+    }
+
+    #[test]
     fn realm_trust_session_allows_paired_user_for_exact_local_device_resource() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         crate::daemon::persistence::config::save_credentials(
@@ -5805,7 +6055,7 @@ mod tests {
         );
         resolver
             .hub_attested_caller_keys()
-            .attest_external_caller_key(issuer, &encoded_key, std::slice::from_ref(&encoded_key))
+            .attest_caller_key(issuer, &encoded_key, std::slice::from_ref(&encoded_key))
             .expect("authenticated upstream Hub attests the origin Authority key");
         let mut request =
             realm_account_adapter_session_request(now_ms, ability, AccessAction::Invoke);
@@ -6794,7 +7044,7 @@ mod tests {
         ));
         resolver
             .hub_attested_caller_keys()
-            .attest_external_caller_key(user, &encoded_key, std::slice::from_ref(&encoded_key))
+            .attest_caller_key(user, &encoded_key, std::slice::from_ref(&encoded_key))
             .expect("authenticated upstream Hub attests the exact signed User key");
         let facade = AdmissionFacade::with_trust_anchor_cell(
             trust,

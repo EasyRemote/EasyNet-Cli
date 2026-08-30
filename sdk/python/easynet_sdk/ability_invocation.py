@@ -19,6 +19,7 @@ from .runtime import (
     PrepareOptions,
     RuntimeClient,
 )
+from .runtime_authority import DraftAuthorityProvider
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 from .stream import StreamHandle
 
@@ -174,15 +175,17 @@ class AbilityInvocationClient:
 
     runtime: RuntimeClient
     addressing: AddressingClient
+    authority: DraftAuthorityProvider | None = None
     _closed: bool = False
 
     def build_invocation(self, request: AbilityCallRequest) -> InvocationDraft:
         """Build a complete `InvocationDraft` without dispatching it."""
 
         self._require_open()
-        return _build_provider_backed_ability_invocation(
+        draft = _build_provider_backed_ability_invocation(
             self.runtime, self.addressing, request
         )
+        return self._bind_authority(draft)
 
     def resolve_target(self, request: AbilityTargetRequest) -> ResolvedAbilityTarget:
         """Resolve a generic ability target through runtime identity helpers."""
@@ -253,7 +256,7 @@ class AbilityInvocationClient:
             )
         if request.caller_signature is not None:
             builder.with_caller_signature(request.caller_signature)
-        return builder.build()
+        return self._bind_authority(builder.build())
 
     def invoke_target(self, request: AbilityTargetRequest) -> InvocationResult:
         """Resolve and submit one unary ability Invocation."""
@@ -462,6 +465,11 @@ class AbilityInvocationClient:
                 message="ability invocation client is closed",
             )
         return self.runtime
+
+    def _bind_authority(self, draft: InvocationDraft) -> InvocationDraft:
+        if self.authority is None:
+            return draft
+        return self.authority.bind(draft)
 
 
 @dataclass(frozen=True)

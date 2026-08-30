@@ -500,6 +500,26 @@ mod tests {
     }
 
     #[test]
+    fn watch_input_schema_has_single_types_description_contract() {
+        const TYPES_DESCRIPTION: &str = "\"description\": \"Optional filter for watched remote targets. Absent or empty returns display, application, and window rows.\"";
+        let source = include_str!("watch_remote_targets.rs");
+        assert_eq!(
+            source.matches(TYPES_DESCRIPTION).count(),
+            1,
+            "resource.watch_remote_targets DescriptorContract source must not duplicate the types.description field"
+        );
+
+        let schema = input_schema();
+        let description = schema
+            .pointer("/properties/types/description")
+            .and_then(Value::as_str);
+        assert_eq!(
+            description,
+            Some("Optional filter for watched remote targets. Absent or empty returns display, application, and window rows.")
+        );
+    }
+
+    #[test]
     fn stable_signature_ignores_freshness_metadata() {
         let first = remote_target_entry("res-a", "Window A", 10);
         let second = remote_target_entry("res-a", "Window A", 20);

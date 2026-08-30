@@ -462,7 +462,7 @@ pub(crate) async fn serve_booting_one_for_test(
     serve_connection(stream, ControlServerState::new(boot)).await
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::path::PathBuf;

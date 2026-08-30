@@ -58,11 +58,11 @@ or rediscover a control descriptor path.
 
 ```json
 {
-  "mode": "device",
-  "node_id": "dev-a",
-  "daemon_bin": "/path/to/easynet-daemon",
+  "mode": "edge",
+  "runtime_instance_id": "dev-a",
+  "runtime_bin": "/path/to/easynet-daemon",
   "log_path": "/path/to/easynet-daemon.log",
-  "detach": true,
+  "detached": true,
   "env": {"KEY": "VALUE"}
 }
 ```
@@ -109,7 +109,7 @@ MUST pass Axon `parse_ura`; do not use flat `agent/<id>` or nested
 ```json
 {
   "caller_ura": "easynet:///r/example/agent/alice.sdk",
-  "callee_ura": "easynet:///r/example/device/dev-a",
+  "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
   "ability": "observe.health",
   "subject_ura": "easynet:///r/example/device/dev-a",
   "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",

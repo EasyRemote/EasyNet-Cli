@@ -23,7 +23,7 @@ from .providers.runtime.key_service import (
 from .errors import ErrorCode, RetryHint, SDKError
 from .signer_handle import SignerHandle, signer_handle_provenance_error
 from .invocation import InvocationSignature
-from .signing import SignatureProvider, SigningMaterial
+from .signing import SignatureProvider, Signer, SigningMaterial
 
 DEFAULT_MANAGED_SIGNING_PAGE_SIZE = 16
 MAX_MANAGED_SIGNING_PAGE_SIZE = 16
@@ -246,6 +246,54 @@ class ManagedSigningClient:
             timeout_seconds=self.timeout_seconds,
         )
 
+    def active_signer_for_subject(
+        self,
+        subject_ura: str,
+        *,
+        purpose: str,
+    ) -> "ManagedSigner":
+        """Resolve the daemon-canonical active signer for one subject.
+
+        Rotation can transiently leave multiple active projections. The daemon
+        selects the lexicographically first key id from the purpose-filtered
+        active set, so the SDK uses the same deterministic rule instead of
+        requiring an impossible global uniqueness invariant.
+        """
+
+        subject = _required_text("bound subject URA", subject_ura)
+        normalized_purpose = _required_text("purpose", purpose)
+        candidates = sorted(
+            (
+                key
+                for key in self.list(
+                    ManagedSigningKeyFilter(
+                        purpose=normalized_purpose,
+                        status=ManagedSigningStatus.ACTIVE,
+                    )
+                )
+                if key.bound_subject_ura == subject
+            ),
+            key=lambda key: key.key_id,
+        )
+        if not candidates:
+            raise SDKError(
+                code=ErrorCode.CALLER_SIGNER_UNAVAILABLE,
+                stage="managed_signing",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message=f"active managed signer is unavailable for {subject}",
+            )
+        key = candidates[0]
+        if key.signer_policy_ref is None:
+            raise _policy_error(
+                "active managed signing key has no signer policy reference"
+            )
+        return ManagedSigner(
+            key=key,
+            socket_path=self.socket_path,
+            timeout_seconds=self.timeout_seconds,
+        )
+
     def rotate(self, key_id: str) -> ManagedSigningKey:
         predecessor = _required_text("key ID", key_id)
         response = self._client.call(
@@ -416,6 +464,44 @@ class ManagedSigner(SignatureProvider):
     def signing_public_key(self) -> bytes:
         return self.public_key
 
+    def invocation_signer(self) -> Signer:
+        """Project this managed key into the canonical Invocation signer."""
+
+        if self.key.status is not ManagedSigningStatus.ACTIVE:
+            raise _policy_error("only active managed signing keys can sign")
+        subject_ura = self.key.bound_subject_ura
+        policy_ref = self.key.signer_policy_ref
+        if subject_ura is None or policy_ref is None:
+            raise _policy_error(
+                "managed signer requires a bound subject and signer policy"
+            )
+        signer_id = f"signer-{self.key.key_id}"
+        return Signer(
+            handle=SignerHandle(
+                profile="signing",
+                signer_id=signer_id,
+                owner_ura=subject_ura,
+                key_id=self.key.key_id,
+                algorithm="ed25519",
+                policy={
+                    "mode": "provider_managed_signing",
+                    "usage": "invocation.sign",
+                    "signer_id": signer_id,
+                    "policy_ref": policy_ref,
+                    "inventory_owner_ura": subject_ura,
+                    "key_state": "active",
+                },
+                metadata={
+                    "source": "provider_key_inventory",
+                    "policy_ref": policy_ref,
+                    "public_key_base64": base64.b64encode(self.public_key).decode(
+                        "ascii"
+                    ),
+                },
+            ),
+            provider=self,
+        )
+
     def sign_canonical(self, canonical_bytes: bytes) -> bytes:
         if self.key.status != ManagedSigningStatus.ACTIVE:
             raise _policy_error("only active managed signing keys can sign")
@@ -493,7 +579,7 @@ class ManagedSigner(SignatureProvider):
         return InvocationSignature(
             algorithm="ed25519",
             signature_base64=base64.b64encode(signature).decode("ascii"),
-            key_id_hint=handle.signer_id,
+            key_id_hint=expected_public_key,
             signer_public_key_base64=expected_public_key,
         )
 

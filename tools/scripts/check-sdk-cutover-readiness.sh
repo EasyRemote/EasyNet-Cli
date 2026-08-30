@@ -74,7 +74,7 @@ make_easyremote_good() {
   cat >"$root/pyproject.toml" <<'EOF'
 [project]
 name = "easyremote"
-dependencies = ["easynet-sdk>=0.91.30"]
+dependencies = ["easynet-sdk>=0.142.22,<0.143"]
 EOF
   cat >"$root/easyremote/client.py" <<'EOF'
 from easynet_sdk import AbilityInvocationClient, InvocationDraft
@@ -114,6 +114,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "SDK product-neutrality syntax" bash -n "$SELF_DIR/check-sdk-product-neutrality.sh"
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
   run_gate "generic FFI ABI v7 exact-surface self-test" bash "$REPO_ROOT/tests/scripts/test_check_ffi_abi_v7_header.sh"
+  run_gate "generic FFI ABI v8 extension self-test" bash "$REPO_ROOT/tests/scripts/test_check_ffi_abi_v8_header.sh"
   run_gate "SDK package metadata self-test" bash "$SELF_DIR/check-sdk-package-metadata.sh" --self-test
   run_gate "downstream SDK consumer cutover self-test" bash "$SELF_DIR/check-downstream-sdk-consumer-cutover.sh" --self-test
   run_gate "product key-custody boundary self-test" bash "$SELF_DIR/check-product-key-custody-boundary.sh" --self-test
@@ -207,6 +208,8 @@ run_gate "retired edge-adapter policy absence" check_retired_edge_adapter_policy
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_sdk_conformance_live_gates "$CUTOVER_LIVE_RESULTS_DIR" || status=1
 run_gate "generic FFI ABI v7 exact surface" bash "$SELF_DIR/check-ffi-abi-v7-header.sh" || status=1
+run_gate "generic FFI ABI v8 binary stream extension" bash "$SELF_DIR/check-ffi-abi-v8-header.sh" || status=1
+run_gate "generic FFI ABI v9 buffer lease extension" bash "$SELF_DIR/check-ffi-abi-v9-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1
 run_gate "canonical runtime convergence V2" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" || status=1

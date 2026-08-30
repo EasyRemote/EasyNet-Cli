@@ -26,15 +26,24 @@ class HostStreamExec:
 
     host_socket: str
     function: str
+    protocol: str = "json_lines_v1"
 
     def to_mapping(self) -> dict[str, object]:
         host_socket = _required_text(self.host_socket, "host_socket")
         function = _required_text(self.function, "function")
-        return {
+        protocol = _required_text(self.protocol, "protocol")
+        if protocol not in {"json_lines_v1", "binary_v1"}:
+            raise _invalid_manifest(
+                "host_stream protocol must be json_lines_v1 or binary_v1"
+            )
+        mapping: dict[str, object] = {
             "kind": "host_stream",
             "host_socket": host_socket,
             "function": function,
         }
+        if protocol != "json_lines_v1":
+            mapping["protocol"] = protocol
+        return mapping
 
 
 @dataclass(frozen=True)

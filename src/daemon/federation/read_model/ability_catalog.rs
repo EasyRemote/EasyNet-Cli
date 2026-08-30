@@ -38,7 +38,7 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use dashmap::mapref::entry::Entry;
@@ -150,11 +150,26 @@ impl ProjectionUpsertOutcome {
     pub(crate) fn is_stored(self) -> bool {
         matches!(self, Self::Inserted | Self::Updated | Self::Idempotent)
     }
+
+    #[must_use]
+    pub(crate) fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Inserted => "inserted",
+            Self::Updated => "updated",
+            Self::Idempotent => "idempotent",
+            Self::IgnoredStale => "ignored_stale",
+            Self::RejectedConflict => "rejected_conflict",
+        }
+    }
 }
 
-/// Stores the most recent owner projection row by owner URA. Cheap clone
+/// Stores the most recent owner projection row by owner placement. Cheap clone
 /// (`Arc` wrapper); shared between the advertise dispatch handler and the
 /// resolve dispatch handler inside `DaemonInvocationService`.
+///
+/// Non-Service owners remain keyed by owner URA. Service owners are keyed by
+/// `(owner_ura, host_device_ura)` because a Service is a stable callee that
+/// can be hosted by multiple paired Devices.
 #[derive(Debug, Clone, Default)]
 pub struct AbilityCatalogStore {
     inner: Arc<DashMap<String, OwnerAbilityProjectionRow>>,
@@ -194,17 +209,20 @@ impl AbilityCatalogStore {
             .is_stored())
     }
 
-    /// Upsert the owner projection row behind a per-owner revision fence.
+    /// Upsert the owner projection row behind a per-owner-placement revision
+    /// fence.
     ///
     /// This is read-model protection, not namespace authority: signature,
     /// caller, and host authorization checks happen before this store. The
     /// fence prevents stale or conflicting projections that have already
     /// reached the admitted handler from corrupting resolver summaries.
+    /// Service owners are fenced per host Device so same-user multi-device
+    /// Service publication does not collapse into a false conflict.
     pub(crate) fn upsert_projection(
         &self,
         row: OwnerAbilityProjectionRow,
     ) -> ProjectionUpsertOutcome {
-        match self.inner.entry(row.owner_ura.clone()) {
+        match self.inner.entry(storage_key_for_row(&row)) {
             Entry::Vacant(entry) => {
                 entry.insert(row);
                 ProjectionUpsertOutcome::Inserted
@@ -244,15 +262,25 @@ impl AbilityCatalogStore {
 
     /// Remove only the projection belonging to the revoked incarnation.
     pub(crate) fn remove_generation(&self, owner_ura: &str, generation: u64) -> bool {
-        self.inner
-            .remove_if(owner_ura, |_owner, row| row.generation == generation)
-            .is_some()
+        self.keys_for_owner(owner_ura)
+            .into_iter()
+            .filter(|key| {
+                self.inner
+                    .remove_if(key, |_key, row| row.generation == generation)
+                    .is_some()
+            })
+            .count()
+            > 0
     }
 
     /// Remove the current projection for an owner when the revoke command does
     /// not carry an incarnation fence.
     pub(crate) fn remove_owner(&self, owner_ura: &str) -> bool {
-        self.inner.remove(owner_ura).is_some()
+        self.keys_for_owner(owner_ura)
+            .into_iter()
+            .filter(|key| self.inner.remove(key).is_some())
+            .count()
+            > 0
     }
 
     /// Return namespace-safe ability summaries for an owner, or `None`
@@ -267,10 +295,29 @@ impl AbilityCatalogStore {
     /// Return namespace-safe ability summaries if the owner's projection
     /// exists and its lease has not expired at `now_unix_ms`.
     pub(crate) fn get_at(&self, owner_ura: &str, now_unix_ms: i64) -> Option<Vec<Value>> {
-        self.inner
-            .get(owner_ura)
-            .filter(|entry| entry.is_live_at(now_unix_ms))
-            .map(|entry| entry.summaries_as_json())
+        let rows = self.projection_rows_for_owner_at(owner_ura, now_unix_ms);
+        if rows.is_empty() {
+            return None;
+        }
+        let mut by_ability = BTreeMap::<String, Value>::new();
+        for row in rows {
+            for summary in row.summaries_as_json() {
+                let key = summary
+                    .get("ability_ura")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        summary
+                            .get("callable_summary")
+                            .and_then(|callable| callable.get("public_name"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| summary.to_string());
+                by_ability.entry(key).or_insert(summary);
+            }
+        }
+        Some(by_ability.into_values().collect())
     }
 
     /// Return live projection rows whose execution host Device is present.
@@ -307,18 +354,22 @@ impl AbilityCatalogStore {
     /// extended, `false` when no projection exists for the owner (the
     /// device must re-publish via `advertise_abilities` first).
     pub(crate) fn refresh_lease(&self, owner_ura: &str, new_expires_unix_ms: i64) -> bool {
-        match self.inner.get_mut(owner_ura) {
-            Some(mut row) => {
-                if row.lease_expires_unix_ms <= 0 {
-                    return true;
+        self.keys_for_owner(owner_ura)
+            .into_iter()
+            .filter(|key| match self.inner.get_mut(key) {
+                Some(mut row) => {
+                    if row.lease_expires_unix_ms <= 0 {
+                        return true;
+                    }
+                    if new_expires_unix_ms > row.lease_expires_unix_ms {
+                        row.lease_expires_unix_ms = new_expires_unix_ms;
+                    }
+                    true
                 }
-                if new_expires_unix_ms > row.lease_expires_unix_ms {
-                    row.lease_expires_unix_ms = new_expires_unix_ms;
-                }
-                true
-            }
-            None => false,
-        }
+                None => false,
+            })
+            .count()
+            > 0
     }
 
     /// Select the unique live device-sponsored SystemAgent owner that this
@@ -369,10 +420,31 @@ impl AbilityCatalogStore {
         owner_ura: &str,
         now_unix_ms: i64,
     ) -> Option<OwnerAbilityProjectionRow> {
-        self.inner
-            .get(owner_ura)
+        self.projection_rows_for_owner_at(owner_ura, now_unix_ms)
+            .into_iter()
+            .next()
+    }
+
+    /// Return the live stored rows for a specific owner, sorted by host
+    /// placement for deterministic route selection.
+    pub(crate) fn projection_rows_for_owner_at(
+        &self,
+        owner_ura: &str,
+        now_unix_ms: i64,
+    ) -> Vec<OwnerAbilityProjectionRow> {
+        let mut rows: Vec<_> = self
+            .inner
+            .iter()
+            .filter(|entry| entry.owner_ura() == owner_ura)
             .filter(|entry| entry.is_live_at(now_unix_ms))
             .map(|entry| entry.clone())
+            .collect();
+        rows.sort_by(|left, right| {
+            left.host_device_ura()
+                .cmp(right.host_device_ura())
+                .then_with(|| left.projection_revision.cmp(&right.projection_revision))
+        });
+        rows
     }
 
     /// Return the full stored row for tests.
@@ -381,7 +453,14 @@ impl AbilityCatalogStore {
         &self,
         owner_ura: &str,
     ) -> Option<OwnerAbilityProjectionRow> {
-        self.inner.get(owner_ura).map(|entry| entry.clone())
+        let mut rows: Vec<_> = self
+            .inner
+            .iter()
+            .filter(|entry| entry.owner_ura() == owner_ura)
+            .map(|entry| entry.clone())
+            .collect();
+        rows.sort_by(|left, right| left.host_device_ura().cmp(right.host_device_ura()));
+        rows.into_iter().next()
     }
 
     /// Total number of owner URAs with stored projections. Used by
@@ -395,6 +474,32 @@ impl AbilityCatalogStore {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
+
+    fn keys_for_owner(&self, owner_ura: &str) -> Vec<String> {
+        self.inner
+            .iter()
+            .filter(|entry| entry.owner_ura() == owner_ura)
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+}
+
+fn storage_key_for_row(row: &OwnerAbilityProjectionRow) -> String {
+    if is_service_owner_ura(row.owner_ura()) {
+        format!(
+            "service-owner-placement\0{}\0{}",
+            row.owner_ura(),
+            row.host_device_ura()
+        )
+    } else {
+        row.owner_ura().to_string()
+    }
+}
+
+fn is_service_owner_ura(owner_ura: &str) -> bool {
+    crate::core::ura::parse_ura(owner_ura)
+        .map(|owner| owner.kind == crate::core::ura::URAKind::Service)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -496,6 +601,58 @@ mod tests {
         let got = store.get("ura").unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0]["local_name"], "read");
+    }
+
+    #[test]
+    fn service_owner_projection_is_fenced_per_host_device() {
+        let store = AbilityCatalogStore::new();
+        let owner = crate::core::ura::service_ura("easynet.run", "alice", "pages");
+        let host_a = crate::core::ura::device_ura("easynet.run", "mac-a");
+        let host_b = crate::core::ura::device_ura("easynet.run", "win-b");
+
+        let first = OwnerAbilityProjectionRow::new(
+            owner.clone(),
+            host_a.clone(),
+            1,
+            7,
+            "sha256:mac".to_string(),
+            0,
+            vec![summary_for_owner(&owner, "project_list")],
+        );
+        let second = OwnerAbilityProjectionRow::new(
+            owner.clone(),
+            host_b.clone(),
+            1,
+            7,
+            "sha256:win".to_string(),
+            0,
+            vec![summary_for_owner(&owner, "project_create")],
+        );
+
+        assert_eq!(
+            store.upsert_projection(first),
+            ProjectionUpsertOutcome::Inserted
+        );
+        assert_eq!(
+            store.upsert_projection(second),
+            ProjectionUpsertOutcome::Inserted
+        );
+
+        let rows = store.projection_rows_for_owner_at(&owner, 1_700_000_000_000);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].host_device_ura(), host_a);
+        assert_eq!(rows[1].host_device_ura(), host_b);
+        let summaries = store.get_at(&owner, 1_700_000_000_000).unwrap();
+        let names: BTreeSet<_> = summaries
+            .iter()
+            .filter_map(|summary| {
+                summary
+                    .get("callable_summary")
+                    .and_then(|callable| callable.get("public_name"))
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert_eq!(names, BTreeSet::from(["project_create", "project_list"]));
     }
 
     #[test]
@@ -664,6 +821,26 @@ mod tests {
             tags: vec!["class:unary".to_string()],
             callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                 ability_id,
+            ),
+        }
+    }
+
+    fn summary_for_owner(owner_ura: &str, public_name: &str) -> AbilityProjectionSummary {
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(owner_ura, public_name).expect("owner ability URA");
+        AbilityProjectionSummary {
+            ability_ura,
+            owner_ura: owner_ura.to_string(),
+            namespace: "pages".to_string(),
+            local_name: public_name.to_string(),
+            descriptor_revision: "sha256:descriptor".to_string(),
+            schema_ref: None,
+            schema_hash: None,
+            policy_ref: "visibility:PUBLIC".to_string(),
+            route_summary_ref: None,
+            tags: vec!["class:unary".to_string()],
+            callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
+                public_name,
             ),
         }
     }

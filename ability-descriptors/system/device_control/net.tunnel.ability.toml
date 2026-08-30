@@ -1,0 +1,57 @@
+schema_version = "3"
+name = "net.tunnel"
+descriptor_version = "1.0.0"
+description = "Governed TCP connect or loopback listener over InvokeBidi with resolved-address policy, bounded connections, byte and rate budgets, idle timeout, and half-close semantics."
+exposure = "operator"
+dedicated_surface = "tunnel"
+subject_contract_kind = "dedicated-surface"
+call_mode = "bidi"
+bidi_wire_kind = "json_frames"
+capability_state = "cutover_ready"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":true}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["mode"]
+additionalProperties = false
+
+[input_schema.properties.bind_host]
+type = "string"
+minLength = 1
+
+[input_schema.properties.bind_port]
+type = "integer"
+minimum = 0
+maximum = 65535
+
+[input_schema.properties.connect_timeout_ms]
+type = "integer"
+minimum = 1
+maximum = 30000
+
+[input_schema.properties.host]
+type = "string"
+minLength = 1
+
+[input_schema.properties.idle_timeout_ms]
+type = "integer"
+minimum = 1
+maximum = 600000
+
+[input_schema.properties.mode]
+type = "string"
+enum = ["connect", "listen"]
+
+[input_schema.properties.port]
+type = "integer"
+minimum = 1
+maximum = 65535

@@ -1,9 +1,33 @@
-//! Verification of finalized invocations forwarded across daemon sessions.
+//! EasyNet CLI — forwarded invocation finalization
+//! ================================================
 //!
-//! This module verifies two lifecycle checkpoints, not a complete receipt
-//! chain. Admission and terminal receipts need not be adjacent. Full-chain
-//! verification remains an Axon verifier concern and requires all intermediate
-//! receipts or a separately verifiable chain proof.
+//! File: src/daemon/invocation/dispatch/forwarded_finalization.rs
+//! Description: Verifies descriptor-bound lifecycle closure returned across
+//! daemon forwarding boundaries.
+//!
+//! Protocol Responsibility:
+//! - Bind forwarded request tuples and descriptor refs to resolver-selected
+//!   owner, callee, route, and execution-host facts.
+//! - Verify admission and terminal checkpoints before projecting results.
+//!
+//! Implementation Approach:
+//! - Axon verifies receipt canonical bytes, signatures, hosted attestation, and
+//!   checkpoint continuity.
+//! - EasyNet then applies the product route policy Axon intentionally leaves to
+//!   the directory layer: a selected-route receipt's effective signer must be
+//!   the resolver-selected execution host.
+//!
+//! Usage Contract:
+//! - Direct selected-route forwarding must use `for_selected_route`.
+//! - Delegated forwarding may use `for_delegated_request` only when this daemon
+//!   has not selected the final execution host.
+//! - Two verified checkpoints prove finalization, not a complete receipt chain;
+//!   full-chain verification still requires all intermediate receipts or a
+//!   separately verifiable chain proof.
+//!
+//! Architectural Position:
+//! - EasyNet Runtime dispatch policy above Axon's protocol verifier and below
+//!   unary, stream, and bidi carrier projection.
 
 use std::sync::Arc;
 
@@ -20,16 +44,55 @@ use crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::receipts::finalization_projection::{
     self, FinalizationProjectionError, ReceiptCheckpointStage,
 };
+use crate::daemon::invocation::routing::route_resolver::{SelectedInvokeRoute, SelectedRouteKind};
+
+#[derive(Debug, Clone)]
+enum ForwardedReceiptAuthority {
+    /// The final execution host is selected by a remote authority. This daemon
+    /// can bind the request and verify the returned proof, but must not invent a
+    /// local route-host constraint.
+    Delegated,
+    /// The local resolver selected the exact host that receives the forwarded
+    /// carrier. Its identity is therefore part of the receipt acceptance
+    /// contract, not merely a key-prefetch hint.
+    SelectedExecutionHost(String),
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ForwardedInvocationBinding {
     envelope: Envelope,
     ability_binding: String,
     input_hash: [u8; 32],
+    receipt_authority: ForwardedReceiptAuthority,
 }
 
 impl ForwardedInvocationBinding {
-    pub(crate) fn from_request(request: &InvokeRequest) -> Result<Self, Status> {
+    /// Bind a request whose final execution host is selected beyond this
+    /// daemon's routing boundary.
+    pub(crate) fn for_delegated_request(request: &InvokeRequest) -> Result<Self, Status> {
+        Self::from_request(request, ForwardedReceiptAuthority::Delegated)
+    }
+
+    /// Bind a direct selected-route forwarding request.
+    ///
+    /// This is the single contract seam joining descriptor identity, ability
+    /// ownership, route selection, and forwarded receipt authority.
+    pub(crate) fn for_selected_route(
+        request: &InvokeRequest,
+        route: &SelectedInvokeRoute,
+    ) -> Result<Self, Status> {
+        let binding = Self::from_request(
+            request,
+            ForwardedReceiptAuthority::SelectedExecutionHost(route.execution_host_ura.clone()),
+        )?;
+        binding.verify_selected_route(route)?;
+        Ok(binding)
+    }
+
+    fn from_request(
+        request: &InvokeRequest,
+        receipt_authority: ForwardedReceiptAuthority,
+    ) -> Result<Self, Status> {
         let envelope = request
             .envelope
             .clone()
@@ -50,7 +113,110 @@ impl ForwardedInvocationBinding {
             envelope,
             ability_binding,
             input_hash: sha256(&request.arguments),
+            receipt_authority,
         })
+    }
+
+    fn verify_selected_route(&self, route: &SelectedInvokeRoute) -> Result<(), Status> {
+        let callee_ura = self
+            .envelope
+            .callee
+            .as_ref()
+            .map(|callee| callee.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| invalid("forwarded invocation is missing its callee binding"))?;
+        let selector =
+            crate::daemon::axon_bridge::descriptor_ref::ability_selector_from_descriptor_ref(
+                &self.ability_binding,
+            )
+            .map_err(|error| {
+                invalid(format!(
+                    "forwarded invocation descriptor ref cannot project its ability owner: {error}"
+                ))
+            })?;
+
+        if route.owner_ura != route.callee_ura
+            || selector.owner_ura() != route.owner_ura
+            || callee_ura != route.callee_ura
+        {
+            return Err(invalid(format!(
+                "forwarded descriptor owner `{}` must equal selected owner `{}`, callee `{}`, and request callee `{callee_ura}`",
+                selector.owner_ura(), route.owner_ura, route.callee_ura,
+            )));
+        }
+        if selector.ability_ura() != route.ability_ura {
+            return Err(invalid(format!(
+                "forwarded descriptor ability `{}` does not match selected route ability `{}`",
+                selector.ability_ura(),
+                route.ability_ura,
+            )));
+        }
+        if self.ability_binding != route.descriptor_ref {
+            return Err(invalid(format!(
+                "forwarded descriptor ref does not match selected route `{}` descriptor proof",
+                route.route_ura,
+            )));
+        }
+
+        let execution_host =
+            crate::core::ura::parse_ura(&route.execution_host_ura).map_err(|error| {
+                invalid(format!(
+                    "selected execution host `{}` is not canonical: {error}",
+                    route.execution_host_ura,
+                ))
+            })?;
+        match route.kind() {
+            SelectedRouteKind::RealmAuthorityOwned => {
+                if selector.owner_kind() != "authority"
+                    || execution_host.kind != crate::core::ura::URAKind::Authority
+                    || route.execution_host_ura != route.callee_ura
+                {
+                    return Err(invalid(
+                        "Authority-owned selected route must use the same Authority as owner, callee, and execution host",
+                    ));
+                }
+            }
+            SelectedRouteKind::RoutableAgentOwned => {
+                if !matches!(selector.owner_kind(), "agent" | "system-agent" | "service")
+                    || execution_host.kind != crate::core::ura::URAKind::Device
+                {
+                    return Err(invalid(
+                        "Agent/SystemAgent/Service selected route must keep the actor as owner/callee and a Device as execution host",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn selected_execution_host_ura(&self) -> Option<&str> {
+        match &self.receipt_authority {
+            ForwardedReceiptAuthority::Delegated => None,
+            ForwardedReceiptAuthority::SelectedExecutionHost(execution_host_ura) => {
+                Some(execution_host_ura)
+            }
+        }
+    }
+
+    fn verify_receipt_authority(
+        &self,
+        receipt: &WireInvocationReceipt,
+        stage: &str,
+    ) -> Result<(), Status> {
+        let Some(expected_signer_ura) = self.selected_execution_host_ura() else {
+            return Ok(());
+        };
+        let actual_signer_ura = receipt_signer_ura(receipt).ok_or_else(|| {
+            invalid(format!(
+                "{stage} checkpoint has no effective receipt signer binding"
+            ))
+        })?;
+        if actual_signer_ura != expected_signer_ura {
+            return Err(invalid(format!(
+                "{stage} checkpoint signer `{actual_signer_ura}` does not match selected execution host `{expected_signer_ura}`"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -462,6 +628,7 @@ fn verify_request_binding(
             "{stage} checkpoint ability binding differs from the signed descriptor ref"
         )));
     }
+    binding.verify_receipt_authority(receipt, stage)?;
     require_hash(
         &format!("{stage}.input_hash"),
         &receipt.input_hash,
@@ -567,7 +734,7 @@ mod tests {
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
 
-    const CALLEE: &str = "easynet:///r/acme/device/callee";
+    const CALLEE: &str = "easynet:///r/acme/agent/device.edge-1.runtime-introspection";
 
     fn descriptor_ref() -> String {
         let binding = crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
@@ -626,7 +793,7 @@ mod tests {
         InvokeRequest {
             envelope: Some(Envelope {
                 caller: Some(agent("easynet:///r/acme/agent/caller")),
-                callee: Some(agent("easynet:///r/acme/device/callee")),
+                callee: Some(agent(CALLEE)),
                 subject: Some(SubjectIdentity {
                     ura: "easynet:///r/acme/resource/job/1".to_string(),
                     profile: "axon-strict-v2".to_string(),
@@ -656,9 +823,20 @@ mod tests {
         }
     }
 
-    fn checkpoint(state: InvocationState, index: u64, payload: &[u8]) -> WireInvocationReceipt {
-        let request = request();
-        let envelope = request.envelope.expect("envelope");
+    fn checkpoint_for_request(
+        request: &InvokeRequest,
+        state: InvocationState,
+        index: u64,
+        payload: &[u8],
+    ) -> WireInvocationReceipt {
+        let envelope = request.envelope.clone().expect("envelope");
+        let callee_ura = envelope.callee.as_ref().expect("callee").ura.as_str();
+        let ability_binding = super::super::invocation_wire::descriptor_ref_from_invocation_target(
+            "forwarded finalization test",
+            callee_ura,
+            request.target.as_ref(),
+        )
+        .expect("descriptor ref");
         WireInvocationReceipt {
             index,
             invocation_id: "inv-real-binding".to_string(),
@@ -680,7 +858,7 @@ mod tests {
                 ..CalleeSignature::default()
             }),
             authority_binding: Some(AuthorityBinding::default()),
-            ability_binding: descriptor_ref(),
+            ability_binding,
             subject_ref: Some(EntityRef {
                 ura: "easynet:///r/acme/resource/job/1".to_string(),
                 profile: "axon-strict-v2".to_string(),
@@ -697,9 +875,22 @@ mod tests {
         }
     }
 
+    fn checkpoint(state: InvocationState, index: u64, payload: &[u8]) -> WireInvocationReceipt {
+        checkpoint_for_request(&request(), state, index, payload)
+    }
+
+    fn selected_route() -> SelectedInvokeRoute {
+        SelectedInvokeRoute::test_local_runtime(CALLEE, "job.run", "job.run")
+    }
+
+    fn bind_receipt_to_host(receipt: &mut WireInvocationReceipt, host_ura: &str) {
+        receipt.signer_binding = Some(agent(host_ura));
+        receipt.host_attestation = vec![0x41; 64];
+    }
+
     #[test]
     fn accepts_non_adjacent_checkpoints_and_empty_output() {
-        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
         let admission = checkpoint(InvocationState::Admitted, 1, b"");
         let terminal = checkpoint(InvocationState::Completed, 7, b"");
         let finalized =
@@ -709,8 +900,109 @@ mod tests {
     }
 
     #[test]
+    fn selected_route_binds_descriptor_owner_callee_and_receipt_host() {
+        let route = selected_route();
+        let request = request();
+        let binding = ForwardedInvocationBinding::for_selected_route(&request, &route)
+            .expect("selected route contract");
+        let mut admission = checkpoint_for_request(&request, InvocationState::Admitted, 1, b"");
+        let mut terminal = checkpoint_for_request(&request, InvocationState::Completed, 7, b"done");
+        bind_receipt_to_host(&mut admission, &route.execution_host_ura);
+        bind_receipt_to_host(&mut terminal, &route.execution_host_ura);
+
+        let finalized =
+            ForwardedFinalizedInvocation::verify_structure(&binding, admission, terminal)
+                .expect("selected host receipt contract");
+
+        assert_eq!(finalized.terminal_state, InvocationState::Completed);
+    }
+
+    #[test]
+    fn selected_route_rejects_descriptor_proof_drift_before_forwarding() {
+        let mut route = selected_route();
+        route.descriptor_ref = route
+            .descriptor_ref
+            .replace(&"a".repeat(64), &"b".repeat(64));
+
+        let error = ForwardedInvocationBinding::for_selected_route(&request(), &route)
+            .expect_err("route descriptor drift must fail closed");
+
+        assert!(error.message().contains("descriptor ref"));
+    }
+
+    #[test]
+    fn selected_route_rejects_ability_owner_and_callee_drift_before_forwarding() {
+        let mut route = selected_route();
+        route.owner_ura = crate::core::ura::hub_ura("acme");
+
+        let error = ForwardedInvocationBinding::for_selected_route(&request(), &route)
+            .expect_err("route owner drift must fail closed");
+
+        assert!(error.message().contains("descriptor owner"));
+    }
+
+    #[test]
+    fn selected_route_rejects_non_selected_signer_at_post_axon_policy_boundary() {
+        let route = selected_route();
+        let request = request();
+        let binding = ForwardedInvocationBinding::for_selected_route(&request, &route)
+            .expect("selected route contract");
+        let wrong_host = "easynet:///r/acme/device/edge-2";
+        let mut admission = checkpoint_for_request(&request, InvocationState::Admitted, 1, b"");
+        let mut terminal = checkpoint_for_request(&request, InvocationState::Completed, 7, b"done");
+        bind_receipt_to_host(&mut admission, wrong_host);
+        bind_receipt_to_host(&mut terminal, wrong_host);
+
+        let error = ForwardedFinalizedInvocation::verify_structure(&binding, admission, terminal)
+            .expect_err("Axon's projected signer must still match the locally selected host");
+
+        assert!(error.message().contains("selected execution host"));
+    }
+
+    #[test]
+    fn selected_authority_route_accepts_self_signed_receipt_authority() {
+        let authority_ura = crate::core::ura::hub_ura("acme");
+        let route = SelectedInvokeRoute::test_local_runtime(
+            &authority_ura,
+            "federation.status",
+            "federation.status",
+        );
+        let request = InvokeRequest {
+            envelope: Some(Envelope {
+                caller: Some(agent("easynet:///r/acme/device/caller")),
+                callee: Some(agent(&authority_ura)),
+                subject: Some(SubjectIdentity {
+                    ura: "easynet:///r/acme/resource/federation/status".to_string(),
+                    profile: "axon-strict-v2".to_string(),
+                }),
+                invocation_nonce: vec![7; 16],
+                causal_context: Some(CausalContext {
+                    form: Some(causal_context::Form::None(Empty {})),
+                }),
+                ..Envelope::default()
+            }),
+            target: Some(
+                crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+                    &route.descriptor_ref,
+                    "federation.status",
+                )
+                .expect("Authority descriptor target"),
+            ),
+            arguments: b"{}".to_vec(),
+            ..InvokeRequest::default()
+        };
+        let binding = ForwardedInvocationBinding::for_selected_route(&request, &route)
+            .expect("selected Authority route contract");
+        let admission = checkpoint_for_request(&request, InvocationState::Admitted, 1, b"");
+        let terminal = checkpoint_for_request(&request, InvocationState::Completed, 7, b"done");
+
+        ForwardedFinalizedInvocation::verify_structure(&binding, admission, terminal)
+            .expect("Authority self-signature is the selected execution authority");
+    }
+
+    #[test]
     fn rejects_changed_real_invocation_binding() {
-        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
         let admission = checkpoint(InvocationState::Admitted, 1, b"");
         let mut terminal = checkpoint(InvocationState::Completed, 5, b"done");
         terminal.invocation_nonce[0] ^= 1;
@@ -721,7 +1013,7 @@ mod tests {
 
     #[test]
     fn rejects_admission_payload_not_bound_by_output_hash() {
-        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
         let mut admission = checkpoint(InvocationState::Admitted, 1, b"");
         admission.payload = b"tampered admission payload".to_vec();
         let terminal = checkpoint(InvocationState::Completed, 5, b"done");
@@ -734,7 +1026,7 @@ mod tests {
 
     #[test]
     fn ordered_verifier_rejects_checkpoints_after_terminal() {
-        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
         let mut verifier = ForwardedFinalizationVerifier {
             binding,
             resolver: Arc::new(RejectingResolver),
@@ -752,7 +1044,7 @@ mod tests {
     #[test]
     fn projects_cancelled_and_timed_out_from_terminal_failure() {
         for state in [InvocationState::Cancelled, InvocationState::TimedOut] {
-            let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+            let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
             let admission = checkpoint(InvocationState::Admitted, 2, b"");
             let mut terminal = checkpoint(state, 8, b"canonical failure");
             terminal.failure = Some(Error {
@@ -771,7 +1063,7 @@ mod tests {
 
     #[test]
     fn carrier_bound_verifier_rejects_receipts_without_valid_cryptographic_proof() {
-        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
         let admission = checkpoint(InvocationState::Admitted, 1, b"");
         let terminal = checkpoint(InvocationState::Completed, 4, b"done");
 
@@ -790,7 +1082,7 @@ mod tests {
 
     #[test]
     fn completed_forwarded_result_requires_carrier_content_type() {
-        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
         let admission = checkpoint(InvocationState::Admitted, 1, b"");
         let terminal = checkpoint(InvocationState::Completed, 4, b"done");
         let mut finalized =
@@ -805,7 +1097,7 @@ mod tests {
 
     #[test]
     fn completed_forwarded_result_payload_must_match_terminal_checkpoint() {
-        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let binding = ForwardedInvocationBinding::for_delegated_request(&request()).unwrap();
         let admission = checkpoint(InvocationState::Admitted, 1, b"");
         let terminal = checkpoint(InvocationState::Completed, 4, b"done");
         let mut finalized =

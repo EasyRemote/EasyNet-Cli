@@ -912,12 +912,13 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             },
         )
         .expect("canonical presence key");
-    publish_test_projected_route(
+    publish_test_projected_route_with_descriptor_ref(
         &svc,
         &target_system_agent_ura,
         ABILITY,
         TARGET_DEVICE_URA,
         crate::daemon::ability::CallMode::Stream,
+        &descriptor_ref,
     );
 
     let resp = svc
@@ -982,7 +983,13 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         crate::daemon::invocation::bidi::state::pending_dispatch::StreamDeliver::Delivered
     );
     assert_eq!(
-        pending_stream.try_push_chunk(call_id, br#"{"delta":"part-1"}"#.to_vec()),
+        pending_stream.try_push_chunk(
+            call_id,
+            crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamChunk::new(
+                br#"{"delta":"part-1"}"#.to_vec(),
+                "application/json",
+            ),
+        ),
         crate::daemon::invocation::bidi::state::pending_dispatch::StreamDeliver::Delivered
     );
     assert_eq!(
@@ -1060,7 +1067,6 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     use crate::daemon::persistence::config::{save_credentials, Credentials};
-    use base64::Engine as _;
     use ed25519_dalek::Signer as _;
 
     let _home = crate::cli::commands::test_support::HomeGuard::new();
@@ -1229,13 +1235,6 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
         .expect("commit daemon runtime admission");
     let (input, mut output) = handle.split();
 
-    input
-        .send(
-            BidiInputFrame::new(serde_json::to_vec(&serde_json::json!({"type":"eof"})).unwrap())
-                .with_content_type("application/json"),
-        )
-        .await
-        .expect("send ready/eof");
     let _ = input.close_input().await;
 
     let mut downloaded = Vec::new();
@@ -1255,17 +1254,13 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
         if frame.payload.is_empty() {
             continue;
         }
+        if !frame.terminal && frame.content_type == "application/octet-stream" {
+            downloaded.extend(frame.payload);
+            continue;
+        }
         let value: serde_json::Value =
             serde_json::from_slice(&frame.payload).expect("file transfer JSON frame");
         match value["type"].as_str() {
-            Some("chunk") => {
-                let chunk = value["data"].as_str().expect("chunk data");
-                downloaded.extend(
-                    base64::engine::general_purpose::STANDARD
-                        .decode(chunk)
-                        .expect("chunk base64"),
-                );
-            }
             Some("complete") => {
                 got_complete = true;
                 break;

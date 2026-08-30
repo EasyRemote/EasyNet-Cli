@@ -39,13 +39,31 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         }
         .into());
     }
-    let issued = plugin
-        .consent_registry()
-        .issue(env.caller(), &entry.resource_ura, intent)?;
+    let input_control = optional_bool(&args, "input_control", ABILITY_GRANT_CONSENT)?;
+    let allow_remote_focus = optional_bool(&args, "allow_remote_focus", ABILITY_GRANT_CONSENT)?;
+    if allow_remote_focus && !input_control {
+        return Err(RemoteDesktopError::InvalidArgument {
+            ability: ABILITY_GRANT_CONSENT,
+            detail: "allow_remote_focus requires input_control consent".to_string(),
+        }
+        .into());
+    }
+    let issued = plugin.consent_registry().issue_with_grants(
+        env.caller(),
+        &entry.resource_ura,
+        intent,
+        input_control,
+        allow_remote_focus,
+    )?;
     Ok(json!({
         "consent": "granted",
         "intent": intent,
         "policy": "local_user_consent",
+        "grant_scope": {
+            "media": true,
+            "input_control": input_control,
+            "remote_focus": allow_remote_focus,
+        },
         "approval_actor_ura": env.caller(),
         "subject_ura": entry.resource_ura,
         "subject_type": entry.kind.as_str(),
@@ -53,4 +71,16 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         "consent_ticket": issued.ticket,
         "consent_expires_at_ms": issued.expires_at_ms,
     }))
+}
+
+fn optional_bool(args: &Value, key: &'static str, ability: &'static str) -> anyhow::Result<bool> {
+    match args.get(key) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(RemoteDesktopError::InvalidArgument {
+            ability,
+            detail: format!("{key} must be a boolean"),
+        }
+        .into()),
+    }
 }

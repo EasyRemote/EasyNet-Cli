@@ -522,6 +522,39 @@ func (c *RuntimeClient) InvokeStream(ctx context.Context, draft InvocationDraft)
 	return NewStreamHandleFromJSON(streamTransport, rawOpen)
 }
 
+// InvokeLeasedStream opens the explicit ABI v9 copy-avoiding payload facade. It
+// never falls back to v8 because doing so would silently change ownership and
+// backpressure semantics.
+func (c *RuntimeClient) InvokeLeasedStream(ctx context.Context, draft InvocationDraft) (*LeasedStreamHandle, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	opener, ok := transport.(leasedStreamOpener)
+	if !ok {
+		return nil, &SDKError{
+			Code:      ErrNotImplemented,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   "runtime transport does not expose ABI v9 leased streams",
+		}
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode invocation draft: %v", err), err)
+	}
+	streamTransport, rawOpen, err := opener.OpenLeasedStream(ctx, draftJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return nil, sdkErr
+		}
+		return nil, transportRuntimeError("open leased stream transport failed", err)
+	}
+	return newLeasedStreamHandleFromJSON(streamTransport, rawOpen)
+}
+
 // OpenSignedStream opens a server stream over an immutable signed envelope.
 func (c *RuntimeClient) OpenSignedStream(ctx context.Context, signed SignedInvocation) (*StreamHandle, error) {
 	transport, err := c.runtimeTransport(ctx)
@@ -548,6 +581,45 @@ func (c *RuntimeClient) OpenSignedStream(ctx context.Context, signed SignedInvoc
 		return nil, transportRuntimeError("open signed stream transport failed", err)
 	}
 	return NewStreamHandleFromJSON(streamTransport, rawOpen)
+}
+
+// OpenSignedLeasedStream opens an ABI v9 leased stream over an immutable
+// submit-ready signed envelope.
+func (c *RuntimeClient) OpenSignedLeasedStream(ctx context.Context, signed SignedInvocation) (*LeasedStreamHandle, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	opener, ok := transport.(leasedStreamOpener)
+	if !ok {
+		return nil, &SDKError{
+			Code:      ErrNotImplemented,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   "runtime transport does not expose ABI v9 leased streams",
+		}
+	}
+	if !signed.SubmitReady() {
+		return nil, invalidRuntimePayload("signed invocation is not submit-ready", nil)
+	}
+	draft, err := signed.InvocationDraft()
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation draft: %v", err), err)
+	}
+	streamTransport, rawOpen, err := opener.OpenLeasedStream(ctx, draftJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return nil, sdkErr
+		}
+		return nil, transportRuntimeError("open signed leased stream transport failed", err)
+	}
+	return newLeasedStreamHandleFromJSON(streamTransport, rawOpen)
 }
 
 // OpenBidi opens a bidirectional session over a complete Invocation tuple.
@@ -1699,7 +1771,7 @@ func validateRuntimeReceiptAuthorityBindingShape(binding map[string]any, field s
 		return err
 	}
 	// Kind is the compound "<relation>+<evidence>" tag produced by the
-	// daemon's authority-binding JSON projection — see RFC
+	// runtime host's authority-binding JSON projection — see RFC
 	// 001-authority-binding-relation-evidence.md in EasyNet-Axon.
 	// "credential_of+attestation" is deliberately NOT a recognized kind
 	// here: it is reserved/inadmissible in v1, so it falls through to
@@ -1987,14 +2059,14 @@ func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {
 	return nil
 }
 
-// runtimeReceiptAuthorityBinding parses the daemon's authority-binding JSON
+// runtimeReceiptAuthorityBinding parses the runtime host's authority-binding JSON
 // projection into the Axon Go SDK's AuthorityOrBootstrap shape. The "kind"
 // discriminator is the compound "<relation>+<evidence>" tag (e.g. "self+identity",
 // "delegated_by+delegation", "session_of+session"); Bootstrap stays a
 // separate top-level "bootstrap" kind — see RFC
 // 001-authority-binding-relation-evidence.md in EasyNet-Axon. Bare URA
 // strings on the wire (no profile sibling key) are parsed with
-// axoninv.ProfileStrictV2, matching axoninv.SelfAuthority's own
+// axoninv.ProfileStrictV2, matching the self+identity authority projection's
 // convention for the same case.
 func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv.AuthorityOrBootstrap, error) {
 	if value == nil {

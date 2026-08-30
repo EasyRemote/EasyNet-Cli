@@ -177,6 +177,40 @@ ENTITY_REF_KIND_STATE_OBJECT: EntityRefKind.ValueType  # 6
 ENTITY_REF_KIND_DEVICE: EntityRefKind.ValueType  # 7
 global___EntityRefKind = EntityRefKind
 
+class _AuthorityRelation:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _AuthorityRelationEnumTypeWrapper(google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[_AuthorityRelation.ValueType], builtins.type):
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    AUTHORITY_RELATION_UNSPECIFIED: _AuthorityRelation.ValueType  # 0
+    """invalid; a producer MUST set one of the below"""
+    AUTHORITY_RELATION_SELF: _AuthorityRelation.ValueType  # 1
+    """envelope.caller == authority; no delegation, no session"""
+    AUTHORITY_RELATION_DELEGATED_BY: _AuthorityRelation.ValueType  # 2
+    """envelope.caller acts under a signed grant from authority"""
+    AUTHORITY_RELATION_SESSION_OF: _AuthorityRelation.ValueType  # 3
+    """envelope.subject == authority, admitted under a session"""
+    AUTHORITY_RELATION_CREDENTIAL_OF: _AuthorityRelation.ValueType  # 4
+    """RESERVED, inadmissible in v1 — see RFC doc "Three states" """
+
+class AuthorityRelation(_AuthorityRelation, metaclass=_AuthorityRelationEnumTypeWrapper):
+    """WHAT relationship binds `authority` to this invocation. Orthogonal to
+    the evidence oneof (HOW the daemon believes the relation holds).
+    """
+
+AUTHORITY_RELATION_UNSPECIFIED: AuthorityRelation.ValueType  # 0
+"""invalid; a producer MUST set one of the below"""
+AUTHORITY_RELATION_SELF: AuthorityRelation.ValueType  # 1
+"""envelope.caller == authority; no delegation, no session"""
+AUTHORITY_RELATION_DELEGATED_BY: AuthorityRelation.ValueType  # 2
+"""envelope.caller acts under a signed grant from authority"""
+AUTHORITY_RELATION_SESSION_OF: AuthorityRelation.ValueType  # 3
+"""envelope.subject == authority, admitted under a session"""
+AUTHORITY_RELATION_CREDENTIAL_OF: AuthorityRelation.ValueType  # 4
+"""RESERVED, inadmissible in v1 — see RFC doc "Three states" """
+global___AuthorityRelation = AuthorityRelation
+
 class _ErrorStage:
     ValueType = typing.NewType("ValueType", builtins.int)
     V: typing_extensions.TypeAlias = ValueType
@@ -719,184 +753,180 @@ global___CalleeSignature = CalleeSignature
 class AuthorityBinding(google.protobuf.message.Message):
     """─── Protocol: Authority Binding (RFC 001 §A14) ─────────
 
-    Records WHO had authority over the invocation's subject/ability.
-    Lives in the receipt's SIGNED region (canonical_receipt_bytes).
-    Exactly one arm is set. Unknown/absent arm ⇒ verification reject.
+    Records WHO had authority over the invocation, decomposed along two
+    independent axes instead of one flat per-mechanism oneof — see
+    document/rfcs/001-authority-binding-relation-evidence.md for the full
+    design rationale and field provenance archaeology.
+
+    Lives in the receipt's SIGNED region (canonical_receipt_bytes). Exactly
+    one `form` arm is set. Unknown/absent arm ⇒ verification reject.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    SELF_AUTHORITY_FIELD_NUMBER: builtins.int
-    DELEGATED_AUTHORITY_FIELD_NUMBER: builtins.int
-    CAPABILITY_GRANT_FIELD_NUMBER: builtins.int
-    POLICY_GRANT_FIELD_NUMBER: builtins.int
-    SESSION_AUTHORITY_FIELD_NUMBER: builtins.int
-    BOOTSTRAP_AUTHORITY_FIELD_NUMBER: builtins.int
+    BINDING_FIELD_NUMBER: builtins.int
+    BOOTSTRAP_FIELD_NUMBER: builtins.int
     @property
-    def self_authority(self) -> global___SelfAuthority:
-        """caller == authority principal; no delegation"""
+    def binding(self) -> global___AuthorityRelationBinding:
+        """an invocation-time authority relationship"""
 
     @property
-    def delegated_authority(self) -> global___DelegationProof:
-        """caller acts for subject under issuer delegation"""
-
-    @property
-    def capability_grant(self) -> global___CapabilityGrant:
-        """reserved (RFC 002)"""
-
-    @property
-    def policy_grant(self) -> global___PolicyGrant:
-        """reserved (RFC 002)"""
-
-    @property
-    def session_authority(self) -> global___SessionAuthority:
-        """backend-signed interactive login session authority"""
-
-    @property
-    def bootstrap_authority(self) -> global___BootstrapAuthority:
-        """trust-anchor / self-identity bootstrap authority"""
+    def bootstrap(self) -> global___BootstrapAuthority:
+        """admission-plane fact — NOT an authority relation,"""
 
     def __init__(
         self,
         *,
-        self_authority: global___SelfAuthority | None = ...,
-        delegated_authority: global___DelegationProof | None = ...,
-        capability_grant: global___CapabilityGrant | None = ...,
-        policy_grant: global___PolicyGrant | None = ...,
-        session_authority: global___SessionAuthority | None = ...,
-        bootstrap_authority: global___BootstrapAuthority | None = ...,
+        binding: global___AuthorityRelationBinding | None = ...,
+        bootstrap: global___BootstrapAuthority | None = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing.Literal["authority", b"authority", "bootstrap_authority", b"bootstrap_authority", "capability_grant", b"capability_grant", "delegated_authority", b"delegated_authority", "policy_grant", b"policy_grant", "self_authority", b"self_authority", "session_authority", b"session_authority"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["authority", b"authority", "bootstrap_authority", b"bootstrap_authority", "capability_grant", b"capability_grant", "delegated_authority", b"delegated_authority", "policy_grant", b"policy_grant", "self_authority", b"self_authority", "session_authority", b"session_authority"]) -> None: ...
-    def WhichOneof(self, oneof_group: typing.Literal["authority", b"authority"]) -> typing.Literal["self_authority", "delegated_authority", "capability_grant", "policy_grant", "session_authority", "bootstrap_authority"] | None: ...
+    def HasField(self, field_name: typing.Literal["binding", b"binding", "bootstrap", b"bootstrap", "form", b"form"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["binding", b"binding", "bootstrap", b"bootstrap", "form", b"form"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["form", b"form"]) -> typing.Literal["binding", "bootstrap"] | None: ...
 
 global___AuthorityBinding = AuthorityBinding
 
 @typing.final
-class SelfAuthority(google.protobuf.message.Message):
-    """caller is itself the authority principal (caller == subject principal).
-    The structural complement of DelegationProof: present precisely when
-    no delegation is required. NOT callee authority.
+class AuthorityRelationBinding(google.protobuf.message.Message):
+    """`authority` is NOT structurally pinned to a fixed envelope slot (not
+    always caller, not always subject). Its meaning is: the principal whose
+    authority this invocation is permitted to exercise. WHICH envelope
+    identity participates in that claim is defined by `relation` — see the
+    compatibility matrix in the RFC doc.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    PRINCIPAL_URA_FIELD_NUMBER: builtins.int
-    principal_ura: builtins.str
-    """The principal URA the caller asserts authority as. MUST equal
-    caller_binding.ura; verifiers reject otherwise.
-    """
+    AUTHORITY_FIELD_NUMBER: builtins.int
+    RELATION_FIELD_NUMBER: builtins.int
+    IDENTITY_FIELD_NUMBER: builtins.int
+    DELEGATION_FIELD_NUMBER: builtins.int
+    SESSION_FIELD_NUMBER: builtins.int
+    ATTESTATION_FIELD_NUMBER: builtins.int
+    relation: global___AuthorityRelation.ValueType
+    @property
+    def authority(self) -> global___AgentIdentity: ...
+    @property
+    def identity(self) -> global___Identity:
+        """relation = SELF — zero-payload marker"""
+
+    @property
+    def delegation(self) -> global___DelegationEvidence:
+        """relation = DELEGATED_BY"""
+
+    @property
+    def session(self) -> global___SessionEvidence:
+        """relation = SESSION_OF"""
+
+    @property
+    def attestation(self) -> global___Attestation:
+        """relation = CREDENTIAL_OF — RESERVED, inadmissible in v1"""
+
     def __init__(
         self,
         *,
-        principal_ura: builtins.str = ...,
+        authority: global___AgentIdentity | None = ...,
+        relation: global___AuthorityRelation.ValueType = ...,
+        identity: global___Identity | None = ...,
+        delegation: global___DelegationEvidence | None = ...,
+        session: global___SessionEvidence | None = ...,
+        attestation: global___Attestation | None = ...,
     ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["principal_ura", b"principal_ura"]) -> None: ...
+    def HasField(self, field_name: typing.Literal["attestation", b"attestation", "authority", b"authority", "delegation", b"delegation", "evidence", b"evidence", "identity", b"identity", "session", b"session"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["attestation", b"attestation", "authority", b"authority", "delegation", b"delegation", "evidence", b"evidence", "identity", b"identity", "relation", b"relation", "session", b"session"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["evidence", b"evidence"]) -> typing.Literal["identity", "delegation", "session", "attestation"] | None: ...
 
-global___SelfAuthority = SelfAuthority
+global___AuthorityRelationBinding = AuthorityRelationBinding
 
 @typing.final
-class DelegationProof(google.protobuf.message.Message):
-    """Canonical delegated-authority evidence. Verification semantics are owned by
-    the authority provider that admits the invocation; core transports do not
-    infer this evidence from product metadata.
+class Identity(google.protobuf.message.Message):
+    """Zero-payload marker: the relation itself (SELF) IS the proof, verified
+    by equality against envelope fields — nothing more to carry.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    ISSUER_URA_FIELD_NUMBER: builtins.int
-    SUBJECT_URA_FIELD_NUMBER: builtins.int
-    CALLER_URA_FIELD_NUMBER: builtins.int
-    AUDIENCE_FIELD_NUMBER: builtins.int
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___Identity = Identity
+
+@typing.final
+class DelegationEvidence(google.protobuf.message.Message):
+    """Signed delegation grant. `issuer` is who signed this grant — a DISTINCT
+    role from AuthorityRelationBinding.authority (the accountable
+    principal). `issuer` MAY differ from `authority`: the SDK proves the
+    grant is authentically signed by `issuer`, not that `issuer` was
+    entitled to vouch for `authority` — that is realm-specific policy left
+    to the caller/daemon (see RFC doc "Issuer authenticity vs. issuer
+    authority"). Verification semantics are owned by the authority provider
+    that admits the invocation; core transports do not infer this evidence
+    from product metadata.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    ISSUER_FIELD_NUMBER: builtins.int
     SCOPES_FIELD_NUMBER: builtins.int
+    AUDIENCE_FIELD_NUMBER: builtins.int
     ISSUED_AT_MS_FIELD_NUMBER: builtins.int
     EXPIRES_AT_MS_FIELD_NUMBER: builtins.int
     SIGNATURE_FIELD_NUMBER: builtins.int
-    issuer_ura: builtins.str
-    subject_ura: builtins.str
-    caller_ura: builtins.str
     audience: builtins.str
     issued_at_ms: builtins.int
     expires_at_ms: builtins.int
     signature: builtins.bytes
-    """ed25519 signature by issuer over canonical_delegation_payload_json."""
+    """ed25519 signature by issuer over the canonical unsigned claim bytes
+    (which additionally bind envelope.caller as delegatee — see the RFC
+    doc "Canonical bytes").
+    """
+    @property
+    def issuer(self) -> global___AgentIdentity: ...
     @property
     def scopes(self) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]: ...
     def __init__(
         self,
         *,
-        issuer_ura: builtins.str = ...,
-        subject_ura: builtins.str = ...,
-        caller_ura: builtins.str = ...,
-        audience: builtins.str = ...,
+        issuer: global___AgentIdentity | None = ...,
         scopes: collections.abc.Iterable[builtins.str] | None = ...,
+        audience: builtins.str = ...,
         issued_at_ms: builtins.int = ...,
         expires_at_ms: builtins.int = ...,
         signature: builtins.bytes = ...,
     ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["audience", b"audience", "caller_ura", b"caller_ura", "expires_at_ms", b"expires_at_ms", "issued_at_ms", b"issued_at_ms", "issuer_ura", b"issuer_ura", "scopes", b"scopes", "signature", b"signature", "subject_ura", b"subject_ura"]) -> None: ...
+    def HasField(self, field_name: typing.Literal["issuer", b"issuer"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["audience", b"audience", "expires_at_ms", b"expires_at_ms", "issued_at_ms", b"issued_at_ms", "issuer", b"issuer", "scopes", b"scopes", "signature", b"signature"]) -> None: ...
 
-global___DelegationProof = DelegationProof
-
-@typing.final
-class CapabilityGrant(google.protobuf.message.Message):
-    """Reserved for RFC 002 capability tokens. Minimal today."""
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    CAPABILITY_URA_FIELD_NUMBER: builtins.int
-    capability_ura: builtins.str
-    def __init__(
-        self,
-        *,
-        capability_ura: builtins.str = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["capability_ura", b"capability_ura"]) -> None: ...
-
-global___CapabilityGrant = CapabilityGrant
+global___DelegationEvidence = DelegationEvidence
 
 @typing.final
-class PolicyGrant(google.protobuf.message.Message):
-    """Reserved for RFC 002 policy grants. Minimal today."""
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    POLICY_URA_FIELD_NUMBER: builtins.int
-    policy_ura: builtins.str
-    def __init__(
-        self,
-        *,
-        policy_ura: builtins.str = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["policy_ura", b"policy_ura"]) -> None: ...
-
-global___PolicyGrant = PolicyGrant
-
-@typing.final
-class SessionAuthority(google.protobuf.message.Message):
-    """Session authority is not user delegation. It proves that a trusted
-    issuer is acting under an authenticated interactive subject session,
-    and is signed by the issuer identity. It does not claim that the
-    subject private key signed the invocation authority.
+class SessionEvidence(google.protobuf.message.Message):
+    """Issuer-signed interactive session authority. Deliberately separate from
+    DelegationEvidence: the issuer signs it with the issuer key, so it
+    proves runtime session authority rather than user-private-key
+    delegation. `issuer` here is checked against envelope.caller (who is
+    presenting this session), NOT against `authority` (the session's
+    owner) — those are expected to differ in the normal case (a backend
+    presents a session on behalf of its owning user).
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    ISSUER_URA_FIELD_NUMBER: builtins.int
-    SUBJECT_URA_FIELD_NUMBER: builtins.int
+    ISSUER_FIELD_NUMBER: builtins.int
     SESSION_ID_FIELD_NUMBER: builtins.int
     SCOPES_FIELD_NUMBER: builtins.int
     AUDIENCES_FIELD_NUMBER: builtins.int
     ISSUED_AT_MS_FIELD_NUMBER: builtins.int
     EXPIRES_AT_MS_FIELD_NUMBER: builtins.int
     SIGNATURE_FIELD_NUMBER: builtins.int
-    issuer_ura: builtins.str
-    subject_ura: builtins.str
     session_id: builtins.str
     issued_at_ms: builtins.int
     expires_at_ms: builtins.int
     signature: builtins.bytes
-    """ed25519 signature by issuer over canonical_session_authority_payload_json."""
+    """ed25519 signature by issuer over the canonical unsigned claim bytes."""
+    @property
+    def issuer(self) -> global___AgentIdentity: ...
     @property
     def scopes(self) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]: ...
     @property
@@ -904,8 +934,7 @@ class SessionAuthority(google.protobuf.message.Message):
     def __init__(
         self,
         *,
-        issuer_ura: builtins.str = ...,
-        subject_ura: builtins.str = ...,
+        issuer: global___AgentIdentity | None = ...,
         session_id: builtins.str = ...,
         scopes: collections.abc.Iterable[builtins.str] | None = ...,
         audiences: collections.abc.Iterable[builtins.str] | None = ...,
@@ -913,17 +942,39 @@ class SessionAuthority(google.protobuf.message.Message):
         expires_at_ms: builtins.int = ...,
         signature: builtins.bytes = ...,
     ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["audiences", b"audiences", "expires_at_ms", b"expires_at_ms", "issued_at_ms", b"issued_at_ms", "issuer_ura", b"issuer_ura", "scopes", b"scopes", "session_id", b"session_id", "signature", b"signature", "subject_ura", b"subject_ura"]) -> None: ...
+    def HasField(self, field_name: typing.Literal["issuer", b"issuer"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["audiences", b"audiences", "expires_at_ms", b"expires_at_ms", "issued_at_ms", b"issued_at_ms", "issuer", b"issuer", "scopes", b"scopes", "session_id", b"session_id", "signature", b"signature"]) -> None: ...
 
-global___SessionAuthority = SessionAuthority
+global___SessionEvidence = SessionEvidence
+
+@typing.final
+class Attestation(google.protobuf.message.Message):
+    """RESERVED for the CREDENTIAL_OF relation (e.g. API-key credentials
+    attested by a trusted backend rather than signed). Recognized on the
+    wire (this message exists so a decoder does not choke on the tag) but
+    NOT Serializable via any public constructor and NOT Admissible by any
+    v1 verifier — see RFC doc "Three states". Blocked on a not-yet-designed
+    attestation-scope addendum; do not populate this message.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___Attestation = Attestation
 
 @typing.final
 class BootstrapAuthority(google.protobuf.message.Message):
-    """Bootstrap authority is the signed-receipt authority binding for
+    """Bootstrap authority is the signed-receipt admission-plane fact for
     identity/presence bootstrap abilities whose caller already passed
     strict caller admission but must not depend on normal delegation:
     `identity.register_pubkey`, `runtime.bootstrap_self_identity`,
-    and `federation.advertise_agent`.
+    and `federation.advertise_agent`. Deliberately OUTSIDE
+    AuthorityRelationBinding — see the RFC doc: Bootstrap answers "how did
+    this identity get admitted at all", a different plane than "on whose
+    authority does an already-admitted caller act".
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor

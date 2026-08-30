@@ -59,8 +59,165 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
+use super::file_lock::ExclusiveFileLock;
 
 pub(crate) const FILE_NAME: &str = "resources.json";
+
+const RESOURCE_EPOCH_FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const RESOURCE_EPOCH_FNV_PRIME: u64 = 0x100000001b3;
+const RESOURCE_EPOCH_JSON_SAFE_MAX: u64 = (1_u64 << 53) - 1;
+
+fn write_resource_epoch(state: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *state ^= u64::from(*byte);
+        *state = state.wrapping_mul(RESOURCE_EPOCH_FNV_PRIME);
+    }
+}
+
+fn write_optional_resource_epoch_u64(state: &mut u64, value: Option<u64>) {
+    write_resource_epoch(state, &[u8::from(value.is_some())]);
+    if let Some(value) = value {
+        write_resource_epoch(state, &value.to_le_bytes());
+    }
+}
+
+/// Project one deterministic hash into the positive JSON integer domain shared
+/// by Rust, Go, Python, and IEEE-754 Browser clients.
+///
+/// These values are opaque equality epochs, not cryptographic digests. Keeping
+/// the canonical source within `2^53 - 1` prevents JavaScript from rounding a
+/// selected target epoch before it is sent back to guarded Runtime abilities.
+fn finalize_resource_epoch(state: u64) -> u64 {
+    match state & RESOURCE_EPOCH_JSON_SAFE_MAX {
+        0 => 1,
+        epoch => epoch,
+    }
+}
+
+/// Deterministic identity epoch for one committed application window set.
+///
+/// Resource discovery and RemoteApp session tracking must use the same
+/// versioned byte representation. `DefaultHasher` is deliberately avoided:
+/// its output is not a persisted cross-version contract and integer-width
+/// differences between platform inventory and session types can create false
+/// target rebinds.
+pub(crate) fn application_window_set_epoch(
+    display_id: Option<u64>,
+    bundle_id: Option<&str>,
+    primary_pid: Option<i64>,
+    resolved_window_ids: &[u64],
+) -> u64 {
+    let mut resolved_window_ids = resolved_window_ids.to_vec();
+    resolved_window_ids.sort_unstable();
+    resolved_window_ids.dedup();
+
+    let mut state = RESOURCE_EPOCH_FNV_OFFSET_BASIS;
+    write_resource_epoch(&mut state, b"easynet.application-window-set.v1\0");
+    write_optional_resource_epoch_u64(&mut state, display_id);
+    match bundle_id.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(bundle_id) => {
+            write_resource_epoch(&mut state, &[1]);
+            write_resource_epoch(&mut state, &(bundle_id.len() as u64).to_le_bytes());
+            write_resource_epoch(&mut state, bundle_id.as_bytes());
+        }
+        None => write_resource_epoch(&mut state, &[0]),
+    }
+    write_resource_epoch(&mut state, &[u8::from(primary_pid.is_some())]);
+    if let Some(primary_pid) = primary_pid {
+        write_resource_epoch(&mut state, &primary_pid.to_le_bytes());
+    }
+    write_resource_epoch(
+        &mut state,
+        &(resolved_window_ids.len() as u64).to_le_bytes(),
+    );
+    for window_id in &resolved_window_ids {
+        write_resource_epoch(&mut state, &window_id.to_le_bytes());
+    }
+    finalize_resource_epoch(state)
+}
+
+/// Process-instance-aware application identity epoch for platforms where a
+/// PID may be reused while an old RemoteApp binding still exists.
+///
+/// The v1 result is preserved when no process-instance identity is available,
+/// so macOS/Windows bindings do not churn. Linux inventory supplies the
+/// boot-scoped `/proc` identity and therefore uses the v2 domain.
+pub(crate) fn application_window_set_epoch_with_process_instance(
+    display_id: Option<u64>,
+    bundle_id: Option<&str>,
+    primary_pid: Option<i64>,
+    process_instance_id: Option<&str>,
+    resolved_window_ids: &[u64],
+) -> u64 {
+    let Some(process_instance_id) = process_instance_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return application_window_set_epoch(
+            display_id,
+            bundle_id,
+            primary_pid,
+            resolved_window_ids,
+        );
+    };
+    let mut resolved_window_ids = resolved_window_ids.to_vec();
+    resolved_window_ids.sort_unstable();
+    resolved_window_ids.dedup();
+
+    let mut state = RESOURCE_EPOCH_FNV_OFFSET_BASIS;
+    write_resource_epoch(&mut state, b"easynet.application-window-set.v2\0");
+    write_optional_resource_epoch_u64(&mut state, display_id);
+    match bundle_id.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(bundle_id) => {
+            write_resource_epoch(&mut state, &[1]);
+            write_resource_epoch(&mut state, &(bundle_id.len() as u64).to_le_bytes());
+            write_resource_epoch(&mut state, bundle_id.as_bytes());
+        }
+        None => write_resource_epoch(&mut state, &[0]),
+    }
+    write_resource_epoch(&mut state, &[u8::from(primary_pid.is_some())]);
+    if let Some(primary_pid) = primary_pid {
+        write_resource_epoch(&mut state, &primary_pid.to_le_bytes());
+    }
+    write_resource_epoch(
+        &mut state,
+        &(process_instance_id.len() as u64).to_le_bytes(),
+    );
+    write_resource_epoch(&mut state, process_instance_id.as_bytes());
+    write_resource_epoch(
+        &mut state,
+        &(resolved_window_ids.len() as u64).to_le_bytes(),
+    );
+    for window_id in &resolved_window_ids {
+        write_resource_epoch(&mut state, &window_id.to_le_bytes());
+    }
+    finalize_resource_epoch(state)
+}
+
+/// Deterministic epoch for the concrete application surface composition.
+///
+/// Unlike `application_window_set_epoch`, input order is significant and is
+/// the committed front-to-back z-order. Geometry is represented as integral
+/// host pixels so CoreGraphics inventory, ScreenCaptureKit capture, recovery,
+/// and target observation compare one stable contract.
+pub(crate) fn application_surface_layout_epoch(
+    front_to_back_surfaces: &[(u64, i64, i64, u64, u64)],
+) -> u64 {
+    let mut state = RESOURCE_EPOCH_FNV_OFFSET_BASIS;
+    write_resource_epoch(&mut state, b"easynet.application-surface-layout.v1\0");
+    write_resource_epoch(
+        &mut state,
+        &(front_to_back_surfaces.len() as u64).to_le_bytes(),
+    );
+    for (window_id, x, y, width, height) in front_to_back_surfaces {
+        write_resource_epoch(&mut state, &window_id.to_le_bytes());
+        write_resource_epoch(&mut state, &x.to_le_bytes());
+        write_resource_epoch(&mut state, &y.to_le_bytes());
+        write_resource_epoch(&mut state, &width.to_le_bytes());
+        write_resource_epoch(&mut state, &height.to_le_bytes());
+    }
+    finalize_resource_epoch(state)
+}
 
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
 /// lowercase string, and every accepted v1 type is enumerated here so callers
@@ -258,6 +415,26 @@ pub fn save(file: &ResourcesFile) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(file)?;
     atomic_write_with_permissions(&path(), json.as_bytes(), WritePermissions::OwnerReadWrite)
         .map_err(Into::into)
+}
+
+/// Execute one read-modify-write transaction against the resources table.
+///
+/// Callers that derive a new table from the current persisted table must use
+/// this instead of open-coding `load(); mutate; save();`. Atomic file writes
+/// protect readers from torn JSON, but they do not protect concurrent writers
+/// from lost updates; the adjacent `<resources.json>.lock` serializes those
+/// transactions across daemon/CLI processes sharing one local state directory.
+pub fn update<R>(
+    mutation: impl FnOnce(&mut ResourcesFile) -> anyhow::Result<(R, bool)>,
+) -> anyhow::Result<R> {
+    let data_path = path();
+    let _guard = ExclusiveFileLock::acquire_for_data_path(&data_path)?;
+    let mut file = load()?;
+    let (result, should_save) = mutation(&mut file)?;
+    if should_save {
+        save(&file)?;
+    }
+    Ok(result)
 }
 
 /// Build the generic resource URA for a given realm + id.
@@ -493,6 +670,84 @@ mod tests {
 
     fn empty() -> ResourcesFile {
         ResourcesFile::default()
+    }
+
+    #[test]
+    fn application_window_set_epoch_is_canonical_across_callers() {
+        let canonical =
+            application_window_set_epoch(None, Some("com.example.Editor"), Some(9001), &[10, 11]);
+        assert_eq!(
+            canonical,
+            application_window_set_epoch(
+                None,
+                Some(" com.example.Editor "),
+                Some(9001),
+                &[11, 10, 10],
+            )
+        );
+        assert_ne!(
+            canonical,
+            application_window_set_epoch(None, Some("com.example.Editor"), Some(9001), &[10, 12],)
+        );
+        assert!((1..=RESOURCE_EPOCH_JSON_SAFE_MAX).contains(&canonical));
+    }
+
+    #[test]
+    fn process_instance_epoch_rejects_pid_reuse_without_churning_v1_callers() {
+        let v1 =
+            application_window_set_epoch(None, Some("com.example.Editor"), Some(9001), &[10, 11]);
+        assert_eq!(
+            application_window_set_epoch_with_process_instance(
+                None,
+                Some("com.example.Editor"),
+                Some(9001),
+                None,
+                &[11, 10],
+            ),
+            v1,
+        );
+        let first = application_window_set_epoch_with_process_instance(
+            None,
+            Some("com.example.Editor"),
+            Some(9001),
+            Some("linux:boot-a:9001:100"),
+            &[10, 11],
+        );
+        let reused = application_window_set_epoch_with_process_instance(
+            None,
+            Some("com.example.Editor"),
+            Some(9001),
+            Some("linux:boot-a:9001:200"),
+            &[10, 11],
+        );
+        assert_ne!(first, reused);
+        assert!((1..=(1_u64 << 53) - 1).contains(&first));
+        assert!((1..=(1_u64 << 53) - 1).contains(&reused));
+    }
+
+    #[test]
+    fn application_surface_layout_epoch_tracks_geometry_and_z_order() {
+        let front_to_back = [(10, -100, 20, 800, 600), (11, 40, 60, 400, 300)];
+        let canonical = application_surface_layout_epoch(&front_to_back);
+        assert_eq!(canonical, application_surface_layout_epoch(&front_to_back));
+        assert_ne!(
+            canonical,
+            application_surface_layout_epoch(&[(11, 40, 60, 400, 300), (10, -100, 20, 800, 600)])
+        );
+        assert_ne!(
+            canonical,
+            application_surface_layout_epoch(&[(10, -99, 20, 800, 600), (11, 40, 60, 400, 300)])
+        );
+        assert!((1..=RESOURCE_EPOCH_JSON_SAFE_MAX).contains(&canonical));
+    }
+
+    #[test]
+    fn resource_epoch_finalizer_never_emits_zero_or_an_unsafe_json_integer() {
+        assert_eq!(finalize_resource_epoch(0), 1);
+        assert_eq!(
+            finalize_resource_epoch(u64::MAX),
+            RESOURCE_EPOCH_JSON_SAFE_MAX
+        );
     }
 
     /// One-line spec builder for tests so each call site fits on

@@ -1,0 +1,265 @@
+# EasyNet Runtime native release
+# Author: Silan Hu <silan.hu@u.nus.edu>
+# Copyright 2026 EasyNet.run
+
+name: Release EasyNet Runtime
+
+on:
+  push:
+    tags:
+      - "runtime-v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-easynet-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  EASYNET_AXON_COMPAT_REV: 25a97cc5e32610c3c81f26d085cb34deb50d7230
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout EasyNet-Cli
+        uses: actions/checkout@v4
+        with:
+          path: EasyNet-Cli
+
+      - name: Checkout compatible EasyNet-Axon
+        uses: actions/checkout@v4
+        with:
+          repository: EasyRemote/EasyNet-Axon
+          path: EasyNet-Axon
+          token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
+          ref: ${{ env.EASYNET_AXON_COMPAT_REV }}
+
+      - name: Validate runtime version and tag
+        working-directory: EasyNet-Cli
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          CARGO_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          if [[ "${VERSION}" != "${CARGO_VERSION}" ]]; then
+            echo "::error::VERSION (${VERSION}) and Cargo.toml (${CARGO_VERSION}) differ"
+            exit 1
+          fi
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            EXPECTED_TAG="runtime-v${VERSION}"
+            if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match ${EXPECTED_TAG}"
+              exit 1
+            fi
+          else
+            echo "Manual dispatch is validation-only; no release will be created."
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Install CMake for bundled libopus
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: "3.31.x"
+
+      - name: Verify native codec toolchain
+        run: |
+          cmake --version
+          cc --version
+
+      - name: Import macOS Developer ID identity
+        if: runner.os == 'macOS'
+        env:
+          EASYNET_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.EASYNET_MACOS_CERTIFICATE_P12_BASE64 }}
+          EASYNET_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.EASYNET_MACOS_CERTIFICATE_PASSWORD }}
+          EASYNET_MACOS_CODESIGN_IDENTITY_SECRET: ${{ secrets.EASYNET_MACOS_CODESIGN_IDENTITY }}
+          EASYNET_MACOS_TEAM_ID_SECRET: ${{ secrets.EASYNET_MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$EASYNET_MACOS_CERTIFICATE_P12_BASE64"
+          test -n "$EASYNET_MACOS_CERTIFICATE_PASSWORD"
+          test -n "$EASYNET_MACOS_CODESIGN_IDENTITY_SECRET"
+          test -n "$EASYNET_MACOS_TEAM_ID_SECRET"
+          SIGNING_KEYCHAIN="$RUNNER_TEMP/easynet-runtime-signing.keychain-db"
+          SIGNING_KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          CERTIFICATE_PATH="$RUNNER_TEMP/easynet-runtime-signing.p12"
+          printf '%s' "$EASYNET_MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          security create-keychain -p "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$SIGNING_KEYCHAIN"
+          security unlock-keychain -p "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security import "$CERTIFICATE_PATH" -k "$SIGNING_KEYCHAIN" \
+            -P "$EASYNET_MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security list-keychains -d user -s "$SIGNING_KEYCHAIN"
+          echo "EASYNET_MACOS_CODESIGN_IDENTITY=$EASYNET_MACOS_CODESIGN_IDENTITY_SECRET" >> "$GITHUB_ENV"
+          echo "EASYNET_MACOS_TEAM_ID=$EASYNET_MACOS_TEAM_ID_SECRET" >> "$GITHUB_ENV"
+          echo "EASYNET_MACOS_SIGNING_KEYCHAIN=$SIGNING_KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Build production-shape archive
+        working-directory: EasyNet-Cli
+        run: bash packaging/release/build-release-tarball.sh
+
+      - name: Verify install shape
+        working-directory: EasyNet-Cli
+        run: bash packaging/release/e2e-release-install.sh
+
+      - name: Verify target identity
+        working-directory: EasyNet-Cli
+        run: |
+          test -f "target/release-tarball/easynet-${{ matrix.target }}.tar.gz"
+
+      - name: Upload runtime archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: easynet-runtime-${{ matrix.target }}
+          path: EasyNet-Cli/target/release-tarball/easynet-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+      - name: Remove macOS signing keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [[ -n "${EASYNET_MACOS_SIGNING_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$EASYNET_MACOS_SIGNING_KEYCHAIN" || true
+          fi
+
+  build-windows:
+    name: Build x86_64-pc-windows-gnu
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout EasyNet-Cli
+        uses: actions/checkout@v4
+        with:
+          path: EasyNet-Cli
+
+      - name: Checkout compatible EasyNet-Axon
+        uses: actions/checkout@v4
+        with:
+          repository: EasyRemote/EasyNet-Axon
+          path: EasyNet-Axon
+          token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
+          ref: ${{ env.EASYNET_AXON_COMPAT_REV }}
+
+      - name: Validate runtime version and tag
+        working-directory: EasyNet-Cli
+        shell: pwsh
+        run: |
+          $Version = (Get-Content VERSION -Raw).Trim()
+          $CargoVersion = ((Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value)
+          if ($Version -ne $CargoVersion) {
+            throw "VERSION ($Version) and Cargo.toml ($CargoVersion) differ"
+          }
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $ExpectedTag = "runtime-v$Version"
+            if ("${{ github.ref_name }}" -ne $ExpectedTag) {
+              throw "tag ${{ github.ref_name }} does not match $ExpectedTag"
+            }
+          }
+
+      - name: Install Rust GNU target
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install MinGW-w64
+        uses: egor-tensin/setup-mingw@v2
+        with:
+          platform: x64
+
+      - name: Install CMake for bundled libopus
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: "3.31.x"
+
+      - name: Verify native codec toolchain
+        shell: pwsh
+        run: |
+          cmake --version
+          gcc --version
+
+      - name: Compile and run RemoteApp audio gates
+        working-directory: EasyNet-Cli
+        shell: pwsh
+        run: |
+          cargo test --locked --target x86_64-pc-windows-gnu --features remote-desktop media::audio::tests --lib
+          if ($LASTEXITCODE -ne 0) { throw "RemoteApp Opus tests failed" }
+          cargo test --locked --target x86_64-pc-windows-gnu --features remote-desktop webrtc_audio --lib
+          if ($LASTEXITCODE -ne 0) { throw "RemoteApp audio transport tests failed" }
+
+      - name: Build production-shape Windows archive
+        working-directory: EasyNet-Cli
+        shell: pwsh
+        run: .\packaging\release\build-windows-cli.ps1 -Configuration Release -Target x86_64-pc-windows-gnu -RequireBridge
+
+      - name: Verify bundled Opus has no runtime DLL dependency
+        working-directory: EasyNet-Cli
+        shell: pwsh
+        run: |
+          $Imports = & objdump -p target\x86_64-pc-windows-gnu\release\easynet-daemon.exe
+          if ($Imports -match '(?im)DLL Name:.*opus') {
+            throw "release daemon unexpectedly depends on a dynamic Opus DLL"
+          }
+
+      - name: Verify Windows v9 C ABI exports
+        working-directory: EasyNet-Cli
+        shell: pwsh
+        run: |
+          $Dll = "target\windows-package\x86_64-pc-windows-gnu\easynet_cli.dll"
+          if (-not (Test-Path $Dll)) { throw "staged easynet_cli.dll is missing" }
+          $Expected = Get-Content "include\easynet_cli.exports.v9" | Sort-Object
+          $Actual = & nm --defined-only --extern-only $Dll |
+            ForEach-Object { ($_ -split '\s+')[-1] } |
+            Where-Object { $_ -match '^runtime_' } |
+            Sort-Object -Unique
+          $Diff = Compare-Object $Expected $Actual
+          if ($Diff) {
+            $Diff | Format-Table | Out-String | Write-Host
+            throw "Windows easynet_cli.dll exports do not match ABI v9"
+          }
+
+      - name: Upload Windows runtime archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: easynet-runtime-x86_64-pc-windows-gnu
+          path: EasyNet-Cli/target/windows-package/easynet-x86_64-pc-windows-gnu.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    needs: [build, build-windows]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download runtime archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: easynet-runtime-*
+          path: release-assets/
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/easynet-*

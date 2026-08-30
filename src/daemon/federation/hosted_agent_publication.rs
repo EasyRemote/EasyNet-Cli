@@ -232,7 +232,6 @@ impl HostedAgentPublicationPlan {
     pub(crate) fn begin(
         agent_ura: &str,
         host_device_ura: &str,
-        host_node_id: Option<&str>,
         available_descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
     ) -> Result<Self, String> {
         if !available_descriptors
@@ -243,13 +242,7 @@ impl HostedAgentPublicationPlan {
                 "hosted Agent `{agent_ura}` has no committed LocalRuntime descriptors; refusing to publish an empty owner projection"
             ));
         }
-        Self::begin_at_catalog_epoch(
-            agent_ura,
-            host_device_ura,
-            host_node_id,
-            available_descriptors,
-            None,
-        )
+        Self::begin_at_catalog_epoch(agent_ura, host_device_ura, available_descriptors, None)
     }
 
     /// Begin from an already captured durable catalog epoch. Dynamic
@@ -258,7 +251,6 @@ impl HostedAgentPublicationPlan {
     pub(crate) fn begin_at_catalog_epoch(
         agent_ura: &str,
         host_device_ura: &str,
-        host_node_id: Option<&str>,
         available_descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
         captured_catalog_epoch: Option<u64>,
     ) -> Result<Self, String> {
@@ -266,12 +258,6 @@ impl HostedAgentPublicationPlan {
             .iter()
             .filter(|descriptor| descriptor.owner_ura == agent_ura)
             .cloned()
-            .map(|descriptor| match host_node_id {
-                Some(node_id) => {
-                    descriptor.with_metadata_entry("host_node_id", node_id.to_string())
-                }
-                None => descriptor,
-            })
             .collect::<Vec<_>>();
         let _lifecycle_guard =
             crate::daemon::persistence::agent_lifecycle::AgentLifecycleMutationGuard::acquire()
@@ -486,7 +472,7 @@ mod tests {
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
         )
         .expect("test descriptor");
-        let first = HostedAgentPublicationPlan::begin(agent, host, Some("dev-1"), &[descriptor])
+        let first = HostedAgentPublicationPlan::begin(agent, host, &[descriptor])
             .expect("initial non-empty plan");
         let assignment = HostedAgentGenerationAssignment {
             agent_ura: agent.to_string(),
@@ -509,7 +495,6 @@ mod tests {
         let tombstone = HostedAgentPublicationPlan::begin_at_catalog_epoch(
             agent,
             host,
-            Some("dev-1"),
             &[],
             Some(removal_epoch),
         )
@@ -528,6 +513,64 @@ mod tests {
                 .publication_state(),
             "published"
         );
+    }
+
+    #[test]
+    fn hosted_agent_projection_preserves_executable_descriptor_refs_for_every_mode() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let host = "easynet:///r/test/device/dev-1";
+        let agent = "easynet:///r/test/agent/alice.worker";
+        crate::daemon::persistence::local_agents::save_test_llm_publication_owner(host, agent)
+            .expect("persist test publication owner");
+
+        let rpc = crate::daemon::ability::descriptors::AbilityDescriptor::new(
+            "chat",
+            agent,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("RPC descriptor")
+        .with_source("daemon:control-plane")
+        .with_metadata_entry("subject_contract_kind", "authenticated-user");
+        let stream = rpc
+            .clone()
+            .with_call_mode(crate::daemon::ability::CallMode::Stream);
+        let descriptors = vec![rpc, stream];
+        let expected_refs = descriptors
+            .iter()
+            .map(|descriptor| {
+                (
+                    descriptor.call_mode().as_str().to_string(),
+                    descriptor
+                        .descriptor_ref()
+                        .expect("executable descriptor ref"),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let plan = HostedAgentPublicationPlan::begin(agent, host, &descriptors)
+            .expect("hosted Agent publication plan");
+        let assignment = HostedAgentGenerationAssignment {
+            agent_ura: agent.to_string(),
+            host_device_ura: host.to_string(),
+            incarnation_id: plan.incarnation_id().clone(),
+            generation: 1,
+        };
+        let active = plan.activate(assignment).expect("active publication");
+        let published_refs = active
+            .publication
+            .ability_summaries
+            .iter()
+            .flat_map(|summary| summary.callable_summary.mode_geometry.iter())
+            .map(|geometry| {
+                (
+                    geometry.call_mode.as_str().to_string(),
+                    geometry.descriptor_ref.clone(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(published_refs, expected_refs);
     }
 
     #[test]

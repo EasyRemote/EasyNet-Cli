@@ -258,6 +258,14 @@ mod tests {
             attach.spec.bidi_wire_kind,
             Some(PluginBidiWireKind::JsonFrames)
         );
+        let manifest = attach
+            .spec
+            .to_registry_manifest()
+            .expect("browser attach registry manifest");
+        assert_eq!(
+            manifest.bidi_wire_kind(),
+            Some(crate::daemon::ability::manifest::AbilityBidiWireKind::JsonFrames)
+        );
     }
 
     #[test]

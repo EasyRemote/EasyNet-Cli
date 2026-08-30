@@ -87,6 +87,7 @@ impl SystemAbilityDescriptorGroup {
             | device_control::FS_EDIT
             | device_control::FS_TRANSFER
             | device_control::HTTP_REQUEST
+            | device_control::NET_TUNNEL
             | device_control::PROCESS_EXEC
             | device_control::SHELL_RUN
             | device_control::SESSION_LIST

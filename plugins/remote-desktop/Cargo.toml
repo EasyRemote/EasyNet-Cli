@@ -1,6 +1,6 @@
 [package]
 name = "easynet-plugin-remote-desktop"
-version = "0.139.14"
+version = "0.149.10"
 edition = "2021"
 publish = false
 description = "Package-owned native-static provider for EasyNet remote desktop abilities."

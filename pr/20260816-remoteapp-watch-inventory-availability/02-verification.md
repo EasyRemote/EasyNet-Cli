@@ -5,6 +5,7 @@
 - Unit coverage for unavailable watch observations not emitting removals.
 - Unit coverage that discovery availability changes are observable even with no resources.
 - Regression coverage that real removals after successful scans still emit removed resource URAs.
+- Source-level unit coverage that the watch input schema does not duplicate `types.description`.
 - Static boundary coverage to keep watch availability semantics explicit.
 - Existing remoteapp target, E2E, lifecycle, performance, and frontend invocation gates continue to pass.
 

@@ -19,6 +19,11 @@ use std::sync::{Arc, RwLock};
 use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::{PluginBidiWireKind, PluginHostError, PluginRuntimeState};
 
+/// Reserved binary stream carrying structured PTY lifecycle controls that do
+/// not have a first-class Axon `BidiControl` variant.
+pub(crate) const CONTROL_STREAM_ID: u32 = u32::MAX;
+pub(crate) const CONTROL_CONTENT_TYPE: &str = "application/json";
+
 /// Bidi wire codec used when an ability crosses the daemon/Axon session bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbilityBidiWireKind {
@@ -28,6 +33,9 @@ pub enum AbilityBidiWireKind {
     /// File-transfer stream. Binary chunks and JSON control frames follow the
     /// daemon's file-transfer envelope contract.
     FileTransfer,
+    /// Governed TCP byte stream. Stream 1 carries raw payload bytes while the
+    /// reserved control stream carries JSON lifecycle frames.
+    Tunnel,
     /// JSON control-frame stream. Input and output payloads are structured JSON
     /// values owned by the ability implementation.
     JsonFrames,
@@ -137,12 +145,16 @@ pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKi
     {
         return Some(AbilityBidiWireKind::FileTransfer);
     }
+    if ability == crate::daemon::ability::builtins::device_control::net_tunnel::ABILITY_NET_TUNNEL {
+        return Some(AbilityBidiWireKind::Tunnel);
+    }
     None
 }
 
 fn map_plugin_wire_kind(kind: PluginBidiWireKind) -> AbilityBidiWireKind {
     match kind {
         PluginBidiWireKind::JsonFrames => AbilityBidiWireKind::JsonFrames,
+        PluginBidiWireKind::MetadataJsonPlusBinary => AbilityBidiWireKind::JsonFrames,
     }
 }
 
@@ -165,6 +177,12 @@ mod tests {
                 crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
             ),
             Some(AbilityBidiWireKind::FileTransfer)
+        );
+        assert_eq!(
+            registry.bidi_wire_kind_for(
+                crate::daemon::ability::builtins::device_control::net_tunnel::ABILITY_NET_TUNNEL
+            ),
+            Some(AbilityBidiWireKind::Tunnel)
         );
     }
 
@@ -196,7 +214,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plugin_metadata_json_plus_binary_maps_to_binary_capable_json_adapter() {
+        let root = tempfile::tempdir().expect("package root");
+        write_bidi_sidecar_package_with_wire_kind(
+            root.path(),
+            "remote_desktop.attach",
+            "metadata_json_plus_binary",
+        );
+        let package =
+            crate::daemon::plugins::package::PluginPackage::from_installed(root.path(), None)
+                .expect("package");
+        let index =
+            crate::daemon::plugins::PluginPackageIndex::from_packages(vec![Arc::new(package)])
+                .expect("index");
+        let state = crate::daemon::plugins::PluginRuntimeState::from_index(index);
+        let registry = AbilityWireRegistry::from_plugin_runtime_state(&state);
+
+        assert_eq!(
+            registry.bidi_wire_kind_for("remote_desktop.attach"),
+            Some(AbilityBidiWireKind::JsonFrames),
+            "metadata/binary product declaration must keep using the existing binary-capable local adapter"
+        );
+    }
+
     fn write_bidi_sidecar_package(root: &std::path::Path, ability: &str) {
+        write_bidi_sidecar_package_with_wire_kind(root, ability, "json_frames")
+    }
+
+    fn write_bidi_sidecar_package_with_wire_kind(
+        root: &std::path::Path,
+        ability: &str,
+        wire_kind: &str,
+    ) {
         std::fs::create_dir_all(root.join("abilities")).expect("abilities dir");
         std::fs::create_dir_all(root.join("bin")).expect("bin dir");
         std::fs::write(
@@ -221,7 +271,7 @@ max_frame_queue = 1
 name = "{ability}"
 layer = "operational"
 call_mode = "bidi"
-bidi_wire_kind = "json_frames"
+bidi_wire_kind = "{wire_kind}"
 "#
             ),
         )
@@ -237,6 +287,7 @@ exposure = "task"
 dedicated_surface = "none"
 subject_contract_kind = "authenticated-user"
 admission_action = "stream"
+bidi_wire_kind = "{wire_kind}"
 
 [input_schema]
 type = "object"

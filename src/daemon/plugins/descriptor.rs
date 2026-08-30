@@ -9,9 +9,11 @@ use serde_json::Value;
 use crate::daemon::ability::catalog::SystemAbilityContract;
 use crate::daemon::ability::conformance::CapabilityState;
 use crate::daemon::ability::descriptors::{AbilityHints, ReceiptSemantics, ScopeRule, Visibility};
+use crate::daemon::ability::manifest::AbilityBidiWireKind;
 use crate::daemon::plugins::errors::PluginHostError;
 use crate::daemon::plugins::errors::Result;
 use crate::daemon::plugins::index::PluginPackageIndex;
+use crate::daemon::plugins::manifest::PluginBidiWireKind;
 
 /// Descriptor-generation metadata for one plugin-owned ability.
 #[derive(Debug, Clone)]
@@ -29,6 +31,14 @@ pub struct PluginAbilityMetadata {
     pub dedicated_surface: crate::daemon::ability::manifest::AbilityDedicatedSurface,
     pub subject_contract_kind: crate::daemon::ability::manifest::AbilitySubjectContractKind,
     pub subject_contract_ura: Option<String>,
+    pub bidi_wire_kind: Option<AbilityBidiWireKind>,
+}
+
+fn plugin_bidi_wire_kind_to_descriptor(kind: PluginBidiWireKind) -> AbilityBidiWireKind {
+    match kind {
+        PluginBidiWireKind::JsonFrames => AbilityBidiWireKind::JsonFrames,
+        PluginBidiWireKind::MetadataJsonPlusBinary => AbilityBidiWireKind::MetadataJsonPlusBinary,
+    }
 }
 
 /// Convert plugin discovery metadata into the canonical generated descriptor
@@ -42,6 +52,7 @@ pub fn plugin_ability_contract(meta: &PluginAbilityMetadata) -> SystemAbilityCon
         dedicated_surface: meta.dedicated_surface,
         subject_contract_kind: meta.subject_contract_kind,
         subject_contract_ura: meta.subject_contract_ura.clone(),
+        bidi_wire_kind: meta.bidi_wire_kind,
         input_schema: meta.input_schema.clone(),
         output_receipt_schema: meta
             .output_schema
@@ -94,6 +105,9 @@ impl PluginDescriptorProjector {
                     dedicated_surface: descriptor.dedicated_surface(),
                     subject_contract_kind: descriptor.subject_contract_kind(),
                     subject_contract_ura: descriptor.subject_contract_ura().map(str::to_string),
+                    bidi_wire_kind: ability
+                        .bidi_wire_kind()
+                        .map(plugin_bidi_wire_kind_to_descriptor),
                 });
             }
         }
@@ -160,6 +174,15 @@ mod tests {
             crate::daemon::ability::CallMode::Stream
         );
         assert_eq!(attach.call_mode, crate::daemon::ability::CallMode::Bidi);
+        assert_eq!(
+            attach.bidi_wire_kind,
+            Some(crate::daemon::ability::manifest::AbilityBidiWireKind::MetadataJsonPlusBinary)
+        );
+        let generated = plugin_ability_contract(attach);
+        assert_eq!(
+            generated.bidi_wire_kind,
+            Some(crate::daemon::ability::manifest::AbilityBidiWireKind::MetadataJsonPlusBinary)
+        );
         for descriptor in descriptors
             .iter()
             .filter(|descriptor| descriptor.name.starts_with("remote_desktop."))

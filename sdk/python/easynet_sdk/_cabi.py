@@ -15,11 +15,13 @@ import json
 import queue as queue_module
 import sys
 import threading
+import weakref
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
 from .runtime import InvocationControlCapability
+from .stream import LeasedPayload, LeasedStreamEvent, RawStreamPacket
 
 EXPECTED_ABI_VERSION = 7
 RUNTIME_OK = 0
@@ -63,7 +65,94 @@ _CABI_ERROR_METADATA: dict[int, tuple[ErrorCode, str, RetryHint, str]] = {
     16: (ErrorCode.TIMEOUT, "transport", RetryHint.SAFE, "ERR_TIMEOUT"),
 }
 
+class _RuntimeBytesViewV8(ctypes.Structure):
+    _fields_ = [("data", ctypes.c_void_p), ("len", ctypes.c_size_t)]
+
+
+class _RuntimeInvocationStreamFrameV8(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint16),
+        ("kind", ctypes.c_uint8),
+        ("state", ctypes.c_uint8),
+        ("flags", ctypes.c_uint32),
+        ("sequence", ctypes.c_uint64),
+        ("elapsed_ms", ctypes.c_uint64),
+        ("payload_content_type", _RuntimeBytesViewV8),
+        ("payload", _RuntimeBytesViewV8),
+        ("admission_receipt_json", _RuntimeBytesViewV8),
+        ("terminal_receipt_json", _RuntimeBytesViewV8),
+        ("error_json", _RuntimeBytesViewV8),
+    ]
+
+
+class _RuntimeBufferLeaseV9(ctypes.Structure):
+    _fields_ = [
+        ("lease_id", ctypes.c_uint64),
+        ("data", ctypes.c_void_p),
+        ("len", ctypes.c_size_t),
+    ]
+
+
+class _RuntimeInvocationStreamFrameV9(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint16),
+        ("kind", ctypes.c_uint8),
+        ("state", ctypes.c_uint8),
+        ("flags", ctypes.c_uint32),
+        ("sequence", ctypes.c_uint64),
+        ("elapsed_ms", ctypes.c_uint64),
+        ("payload_content_type", _RuntimeBytesViewV8),
+        ("payload", _RuntimeBufferLeaseV9),
+        ("admission_receipt_json", _RuntimeBytesViewV8),
+        ("terminal_receipt_json", _RuntimeBytesViewV8),
+        ("error_json", _RuntimeBytesViewV8),
+    ]
+
+
+_STREAM_V8_ABI_VERSION = 8
+_STREAM_V9_ABI_VERSION = 9
+_STREAM_V8_KINDS = {
+    1: "data",
+    2: "terminal",
+    3: "error",
+    4: "cancelled",
+    5: "timeout",
+    6: "receipt_verification_error",
+}
+_STREAM_V8_STATES = {
+    1: "Accepted",
+    2: "Admitted",
+    3: "Dispatched",
+    4: "Running",
+    5: "Completed",
+    6: "Failed",
+    7: "TimedOut",
+    8: "Cancelled",
+}
+_STREAM_V8_FLAG_TERMINAL = 1 << 0
+_STREAM_V8_FLAG_TRANSPORT_TERMINAL = 1 << 1
+_STREAM_V8_FLAG_HAS_PAYLOAD = 1 << 2
+_STREAM_V8_FLAG_HAS_CONTENT_TYPE = 1 << 3
+_STREAM_V8_FLAG_HAS_ADMISSION_RECEIPT = 1 << 4
+_STREAM_V8_FLAG_HAS_TERMINAL_RECEIPT = 1 << 5
+_STREAM_V8_FLAG_HAS_ERROR = 1 << 6
+_STREAM_V8_KNOWN_FLAGS = (1 << 7) - 1
+_MAX_STREAM_V8_PAYLOAD_BYTES = 256 * 1024 * 1024
+_MAX_STREAM_V8_SIDECAR_BYTES = 16 * 1024 * 1024
+
 _StreamCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+_StreamV8Callback = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_void_p,
+    ctypes.POINTER(_RuntimeInvocationStreamFrameV8),
+)
+_StreamV9Callback = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_void_p,
+    ctypes.POINTER(_RuntimeInvocationStreamFrameV9),
+)
 _BidiCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 _CALLBACK_REGISTRY_LOCK = threading.Lock()
 _CALLBACK_INBOXES: dict[int, "_CallbackInbox"] = {}
@@ -75,7 +164,15 @@ class RuntimeCABILibrary:
 
     def __init__(self, raw: Any) -> None:
         self._raw = raw
+        self.stream_v8_available = False
+        self.stream_v9_available = False
         self._bind_symbols()
+        self.stream_v8_available = (
+            self.stream_v8_available and self._stream_v8_feature_enabled()
+        )
+        self.stream_v9_available = (
+            self.stream_v9_available and self._stream_v9_feature_enabled()
+        )
 
     @classmethod
     def load(cls, path: str | None = None) -> "RuntimeCABILibrary":
@@ -126,6 +223,50 @@ class RuntimeCABILibrary:
 
     def feature_discovery(self) -> bytes:
         return self._call_output(self._raw.runtime_feature_discovery)
+
+    def _stream_v8_feature_enabled(self) -> bool:
+        try:
+            decoded = json.loads(self.feature_discovery().decode("utf-8"))
+        except Exception:
+            return False
+        if not isinstance(decoded, dict):
+            return False
+        extensions = decoded.get("abi_extensions")
+        if not isinstance(extensions, dict):
+            return False
+        v8 = extensions.get("v8")
+        if not isinstance(v8, dict):
+            return False
+        symbols = decoded.get("symbols")
+        if not isinstance(symbols, dict):
+            return False
+        return (
+            v8.get("stream_binary_frame") is True
+            and v8.get("symbol") == "runtime_invocation_stream_open_v8"
+            and symbols.get("stream_binary_frame_v8") is True
+        )
+
+    def _stream_v9_feature_enabled(self) -> bool:
+        try:
+            decoded = json.loads(self.feature_discovery().decode("utf-8"))
+        except Exception:
+            return False
+        if not isinstance(decoded, dict):
+            return False
+        extensions = decoded.get("abi_extensions")
+        symbols = decoded.get("symbols")
+        if not isinstance(extensions, dict) or not isinstance(symbols, dict):
+            return False
+        v9 = extensions.get("v9")
+        if not isinstance(v9, dict):
+            return False
+        return (
+            v9.get("stream_buffer_lease") is True
+            and v9.get("open_symbol") == "runtime_invocation_stream_open_v9"
+            and v9.get("retain_symbol") == "runtime_buffer_lease_retain_v9"
+            and v9.get("release_symbol") == "runtime_buffer_lease_release_v9"
+            and symbols.get("stream_buffer_lease_v9") is True
+        )
 
     def init(self, control_path: str = "") -> int:
         out_handle = ctypes.c_uint64(0)
@@ -336,6 +477,61 @@ class RuntimeCABILibrary:
         )
         self._raise_for_code(code)
         return int(out_stream_id.value)
+
+    def invocation_stream_open_v8(
+        self, handle: int, invocation_json: bytes, callback_token: int
+    ) -> int:
+        out_stream_id = ctypes.c_uint64(0)
+        code = int(
+            self._raw.runtime_invocation_stream_open_v8(
+                ctypes.c_uint64(handle),
+                ctypes.c_char_p(invocation_json),
+                _STREAM_V8_CALLBACK_HANDLE,
+                ctypes.c_void_p(callback_token),
+                ctypes.byref(out_stream_id),
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_stream_id.value)
+
+    def invocation_stream_open_v9(
+        self, handle: int, invocation_json: bytes, callback_token: int
+    ) -> int:
+        if not self.stream_v9_available:
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                message="C ABI v9 leased stream capability is unavailable",
+            )
+        out_stream_id = ctypes.c_uint64(0)
+        code = int(
+            self._raw.runtime_invocation_stream_open_v9(
+                ctypes.c_uint64(handle),
+                ctypes.c_char_p(invocation_json),
+                _STREAM_V9_CALLBACK_HANDLE,
+                ctypes.c_void_p(callback_token),
+                ctypes.byref(out_stream_id),
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_stream_id.value)
+
+    def buffer_lease_retain_v9(self, handle: int, lease_id: int) -> None:
+        code = int(
+            self._raw.runtime_buffer_lease_retain_v9(
+                ctypes.c_uint64(handle), ctypes.c_uint64(lease_id)
+            )
+        )
+        self._raise_for_code(code)
+
+    def buffer_lease_release_v9(self, handle: int, lease_id: int) -> None:
+        code = int(
+            self._raw.runtime_buffer_lease_release_v9(
+                ctypes.c_uint64(handle), ctypes.c_uint64(lease_id)
+            )
+        )
+        self._raise_for_code(code)
 
     def invocation_stream_cancel(self, handle: int, stream_id: int) -> None:
         code = int(
@@ -558,6 +754,34 @@ class RuntimeCABILibrary:
             ctypes.POINTER(ctypes.c_uint64),
         ]
         self._raw.runtime_invocation_stream_open.restype = ctypes.c_int32
+        stream_v8 = getattr(self._raw, "runtime_invocation_stream_open_v8", None)
+        if stream_v8 is not None:
+            stream_v8.argtypes = [
+                ctypes.c_uint64,
+                ctypes.c_char_p,
+                _StreamV8Callback,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            stream_v8.restype = ctypes.c_int32
+            self.stream_v8_available = True
+        stream_v9 = getattr(self._raw, "runtime_invocation_stream_open_v9", None)
+        retain_v9 = getattr(self._raw, "runtime_buffer_lease_retain_v9", None)
+        release_v9 = getattr(self._raw, "runtime_buffer_lease_release_v9", None)
+        if stream_v9 is not None and retain_v9 is not None and release_v9 is not None:
+            stream_v9.argtypes = [
+                ctypes.c_uint64,
+                ctypes.c_char_p,
+                _StreamV9Callback,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            stream_v9.restype = ctypes.c_int32
+            retain_v9.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+            retain_v9.restype = ctypes.c_int32
+            release_v9.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+            release_v9.restype = ctypes.c_int32
+            self.stream_v9_available = True
         self._raw.runtime_invocation_stream_cancel.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
@@ -930,7 +1154,9 @@ class CABIRuntimeTransport:
     _prepared_handles: _CABIPreparedHandleRegistry = field(
         default_factory=_CABIPreparedHandleRegistry
     )
-    _streams: dict[int, "_CABIStreamTransport"] = field(default_factory=dict)
+    _streams: dict[int, "_CABIStreamTransport | _CABILeasedStreamTransport"] = field(
+        default_factory=dict
+    )
     _bidis: dict[int, "_CABIBidiTransport"] = field(default_factory=dict)
     _closed: bool = False
 
@@ -951,12 +1177,20 @@ class CABIRuntimeTransport:
         return self.lib.governance_read(self._require_open(), draft_json)
 
     def open_stream(self, draft_json: bytes) -> tuple[Any, bytes]:
-        inbox = _CallbackInbox(MAX_CABI_CALLBACK_QUEUE)
+        inbox = _CallbackInbox(
+            MAX_CABI_CALLBACK_QUEUE,
+            raw_stream=self.lib.stream_v8_available,
+        )
         token = _register_callback_inbox(inbox)
         try:
-            stream_id = self.lib.invocation_stream_open(
-                self._require_open(), draft_json, token
-            )
+            if self.lib.stream_v8_available:
+                stream_id = self.lib.invocation_stream_open_v8(
+                    self._require_open(), draft_json, token
+                )
+            else:
+                stream_id = self.lib.invocation_stream_open(
+                    self._require_open(), draft_json, token
+                )
             if stream_id <= 0:
                 raise SDKError(
                     code=ErrorCode.INVALID_HANDLE,
@@ -977,6 +1211,53 @@ class CABIRuntimeTransport:
             )
         except Exception:
             _release_callback_inbox(token)
+            raise
+
+    def open_leased_stream(self, draft_json: bytes) -> tuple[Any, bytes]:
+        """Open the explicit ABI v9 lease surface without changing v8 ownership."""
+
+        handle = self._require_open()
+        if not self.lib.stream_v9_available:
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                message="Runtime does not advertise the complete C ABI v9 lease contract",
+            )
+        lease_owner = _CABILeaseOwner(self.lib, handle)
+        inbox = _CallbackInbox(
+            MAX_CABI_CALLBACK_QUEUE,
+            raw_stream=True,
+            lease_owner=lease_owner,
+        )
+        token = _register_callback_inbox(inbox)
+        try:
+            stream_id = self.lib.invocation_stream_open_v9(handle, draft_json, token)
+            if stream_id <= 0:
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="cabi",
+                    retry=RetryHint.NEVER,
+                    message="C ABI v9 stream open returned an invalid stream id",
+                )
+            transport = _CABILeasedStreamTransport(
+                owner=self,
+                stream_id=stream_id,
+                callback_token=token,
+                inbox=inbox,
+                lease_owner=lease_owner,
+            )
+            self._streams[stream_id] = transport
+            return transport, _json_bytes(
+                {
+                    "stream_id": str(stream_id),
+                    "state": "Open",
+                    "max_buffered_events": MAX_CABI_CALLBACK_QUEUE,
+                }
+            )
+        except Exception:
+            _release_callback_inbox(token)
+            lease_owner.release_all()
             raise
 
     def open_bidi(self, draft_json: bytes, streams_json: bytes) -> tuple[Any, bytes]:
@@ -1268,6 +1549,132 @@ class CABIRuntimeConnector:
             raise _closed_error("runtime connector is closed")
 
 
+class _CABILeaseOwner:
+    """Owns the deterministic release boundary for one leased stream."""
+
+    def __init__(self, lib: RuntimeCABILibrary, handle: int) -> None:
+        self._lib = lib
+        self._handle = handle
+        self._payloads: weakref.WeakSet[LeasedPayload] = weakref.WeakSet()
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def payload(self, lease_id: int, data: int, length: int) -> LeasedPayload:
+        if lease_id <= 0 or not data or length <= 0:
+            if lease_id > 0:
+                self._lib.buffer_lease_release_v9(self._handle, lease_id)
+            raise ValueError("v9 non-empty payload lease is not canonical")
+        with self._lock:
+            if self._closed:
+                self._lib.buffer_lease_release_v9(self._handle, lease_id)
+                raise ValueError("v9 payload arrived after lease owner closed")
+
+        def copy_bytes() -> bytes:
+            return ctypes.string_at(data, length)
+
+        def copy_into(destination: memoryview) -> int:
+            if len(destination) < length:
+                raise ValueError("v9 destination is too small")
+            target = ctypes.addressof(ctypes.c_ubyte.from_buffer(destination))
+            ctypes.memmove(target, data, length)
+            return length
+
+        def retain() -> LeasedPayload:
+            self._lib.buffer_lease_retain_v9(self._handle, lease_id)
+            return self.payload(lease_id, data, length)
+
+        payload = LeasedPayload(
+            lease_id=lease_id,
+            length=length,
+            copy_bytes=copy_bytes,
+            copy_into=copy_into,
+            retain=retain,
+            release=lambda: self._lib.buffer_lease_release_v9(
+                self._handle, lease_id
+            ),
+        )
+        with self._lock:
+            if self._closed:
+                payload.release()
+                raise ValueError("v9 payload arrived after lease owner closed")
+            self._payloads.add(payload)
+        return payload
+
+    def release_id(self, lease_id: int) -> None:
+        self._lib.buffer_lease_release_v9(self._handle, lease_id)
+
+    def release_all(self) -> None:
+        with self._lock:
+            self._closed = True
+            payloads = tuple(self._payloads)
+        first_error: SDKError | None = None
+        for payload in payloads:
+            try:
+                payload.release()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+
+@dataclass
+class _CABILeasedStreamTransport:
+    owner: CABIRuntimeTransport
+    stream_id: int
+    callback_token: int
+    inbox: "_CallbackInbox"
+    lease_owner: _CABILeaseOwner
+    _terminal_action_done: bool = False
+    _cancel_sent: bool = False
+
+    def recv(self, timeout: float | None = None) -> LeasedStreamEvent:
+        if self._terminal_action_done:
+            raise _closed_error("leased stream transport is closed")
+        item = self.inbox.recv(timeout)
+        if not isinstance(item, LeasedStreamEvent):
+            _release_callback_item(item)
+            raise _invalid_cabi_payload("C ABI v9 callback returned a non-leased event")
+        return item
+
+    def cancel(self, reason: str) -> bytes:
+        if not self._terminal_action_done and not self._cancel_sent:
+            self.owner.lib.invocation_stream_cancel(
+                self.owner._handle_if_open(), self.stream_id
+            )
+            self._cancel_sent = True
+        return _json_bytes(
+            {
+                "stream_id": str(self.stream_id),
+                "cancelled": False,
+                "state": "CancelRequested",
+                "terminal": False,
+            }
+        )
+
+    def close(self) -> None:
+        if self._terminal_action_done:
+            return
+        first_error: SDKError | None = None
+        try:
+            self.owner.lib.invocation_stream_close(
+                self.owner._handle_if_open(), self.stream_id
+            )
+        except SDKError as exc:
+            if exc.code != ErrorCode.INVALID_HANDLE:
+                first_error = exc
+        finally:
+            self._terminal_action_done = True
+            self.owner._remove_stream(self.stream_id, self.callback_token)
+            try:
+                self.lease_owner.release_all()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+
 @dataclass
 class _CABIStreamTransport:
     owner: CABIRuntimeTransport
@@ -1278,7 +1685,7 @@ class _CABIStreamTransport:
     _cancel_sent: bool = False
     _next_sequence: int = 1
 
-    def recv(self, timeout: float | None = None) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes | RawStreamPacket:
         if self._terminal_action_done:
             raise _closed_error("stream transport is closed")
         return _project_cabi_ordered_event(
@@ -1318,8 +1725,9 @@ class _CABIStreamTransport:
             self.owner._remove_stream(self.stream_id, self.callback_token)
 
     def _allocate_sequence(self, observed: int | None) -> int:
-        if observed is not None and observed >= self._next_sequence:
-            self._next_sequence = observed + 1
+        if observed is not None:
+            if observed >= self._next_sequence:
+                self._next_sequence = observed + 1
             return observed
         sequence = self._next_sequence
         self._next_sequence += 1
@@ -1493,12 +1901,16 @@ class _CABIBidiTransport:
 
 
 def _project_cabi_ordered_event(
-    raw: bytes,
+    raw: bytes | RawStreamPacket,
     allocate_sequence: Callable[[int | None], int],
     *,
     use_observed_sequence: bool,
     include_state: bool = True,
-) -> bytes:
+) -> bytes | RawStreamPacket:
+    if isinstance(raw, RawStreamPacket):
+        # The v8 fixed header is already the canonical Runtime frame. It must
+        # reach the strict typed decoder without legacy v7 JSON repair.
+        return raw
     try:
         event = _json_object(raw, "C ABI callback frame")
     except SDKError:
@@ -1551,30 +1963,60 @@ def _axon_invocation_state_name(state: int) -> str:
 @dataclass
 class _CallbackInbox:
     max_items: int
-    _queue: queue_module.Queue[bytes | None] = field(init=False)
+    raw_stream: bool = False
+    lease_owner: _CABILeaseOwner | None = None
+    _queue: queue_module.Queue[bytes | RawStreamPacket | LeasedStreamEvent | None] = field(
+        init=False
+    )
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _closed: bool = False
-    _failure: bytes | None = None
+    _failure: bytes | RawStreamPacket | LeasedStreamEvent | SDKError | None = None
     _failure_delivered: bool = False
 
     def __post_init__(self) -> None:
         self._queue = queue_module.Queue(maxsize=self.max_items)
 
-    def push(self, raw: bytes) -> None:
+    def push(self, raw: bytes | RawStreamPacket | LeasedStreamEvent) -> None:
+        dropped: list[bytes | RawStreamPacket | LeasedStreamEvent | None] = []
         with self._lock:
             if self._closed:
-                return
-            try:
-                self._queue.put_nowait(raw)
-            except queue_module.Full:
-                self._failure = _callback_backpressure_failure()
-                self._closed = True
+                dropped.append(raw)
+            else:
+                try:
+                    self._queue.put_nowait(raw)
+                except queue_module.Full:
+                    dropped.append(raw)
+                    self._failure = (
+                        _callback_backpressure_error()
+                        if self.raw_stream
+                        else _callback_backpressure_failure()
+                    )
+                    self._closed = True
+                    dropped.extend(self._drain_locked())
+        for item in dropped:
+            _release_callback_item(item)
 
-    def recv(self, timeout: float | None = None) -> bytes:
+    def _drain_locked(
+        self,
+    ) -> list[bytes | RawStreamPacket | LeasedStreamEvent | None]:
+        items: list[bytes | RawStreamPacket | LeasedStreamEvent | None] = []
+        while True:
+            try:
+                items.append(self._queue.get_nowait())
+            except queue_module.Empty:
+                return items
+
+    def recv(
+        self, timeout: float | None = None
+    ) -> bytes | RawStreamPacket | LeasedStreamEvent:
         with self._lock:
             if self._failure is not None and not self._failure_delivered:
                 self._failure_delivered = True
+                if isinstance(self._failure, SDKError):
+                    raise self._failure
                 return self._failure
+            if self._closed and self._queue.empty():
+                raise _closed_error("C ABI callback inbox is closed")
         try:
             item = self._queue.get(timeout=timeout)
         except queue_module.Empty:
@@ -1589,15 +2031,47 @@ class _CallbackInbox:
             raise _closed_error("C ABI callback inbox is closed")
         return item
 
-    def close(self) -> None:
+    def fail(self, message: str) -> None:
+        dropped: list[bytes | RawStreamPacket | LeasedStreamEvent | None] = []
         with self._lock:
             if self._closed:
                 return
+            self._failure = SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message=message,
+            )
             self._closed = True
-            try:
-                self._queue.put_nowait(None)
-            except queue_module.Full:
-                pass
+            dropped.extend(self._drain_locked())
+        for item in dropped:
+            _release_callback_item(item)
+
+    def close(self, *, drain: bool = False) -> None:
+        dropped: list[bytes | RawStreamPacket | LeasedStreamEvent | None] = []
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                if not drain:
+                    try:
+                        self._queue.put_nowait(None)
+                    except queue_module.Full:
+                        pass
+            if drain:
+                dropped.extend(self._drain_locked())
+        for item in dropped:
+            _release_callback_item(item)
+
+
+def _release_callback_item(
+    item: bytes | RawStreamPacket | LeasedStreamEvent | None,
+) -> None:
+    if isinstance(item, LeasedStreamEvent):
+        try:
+            item.release()
+        except SDKError:
+            return
 
 
 def _callback_backpressure_failure() -> bytes:
@@ -1607,6 +2081,9 @@ def _callback_backpressure_failure() -> bytes:
             "state": "Failed",
             "terminal": False,
             "transport_terminal": True,
+            "payload_content_type": "",
+            "admission_receipt": None,
+            "terminal_receipt": None,
             "error": {
                 "code": "ADMISSION_DENIED",
                 "stage": "cabi_callback",
@@ -1619,6 +2096,21 @@ def _callback_backpressure_failure() -> bytes:
                 },
             },
         }
+    )
+
+
+def _callback_backpressure_error() -> SDKError:
+    return SDKError(
+        code=ErrorCode.ADMISSION_DENIED,
+        stage="cabi_callback",
+        retry=RetryHint.AFTER_BACKOFF,
+        retryable=True,
+        message="C ABI callback queue limit exceeded",
+        details={
+            "wire_code": "RESOURCE_EXHAUSTED",
+            "reason": "callback_queue_overflow",
+            "bounded_queue": True,
+        },
     )
 
 
@@ -1635,7 +2127,7 @@ def _release_callback_inbox(token: int) -> None:
     with _CALLBACK_REGISTRY_LOCK:
         inbox = _CALLBACK_INBOXES.pop(token, None)
     if inbox is not None:
-        inbox.close()
+        inbox.close(drain=True)
 
 
 def _callback_inbox(token: int) -> _CallbackInbox | None:
@@ -1644,7 +2136,276 @@ def _callback_inbox(token: int) -> _CallbackInbox | None:
 
 
 def _stream_callback(user_data: int | None, chunk_json: int | None) -> None:
+    if user_data and not chunk_json:
+        inbox = _callback_inbox(int(user_data))
+        if inbox is not None:
+            inbox.close()
+        return
     _push_callback_payload(user_data, chunk_json)
+
+
+def _stream_v8_callback(
+    user_data: int | None,
+    frame_pointer: ctypes.POINTER(_RuntimeInvocationStreamFrameV8) | None,
+) -> None:
+    try:
+        if not user_data:
+            return
+        inbox = _callback_inbox(int(user_data))
+        if inbox is None:
+            return
+        if not frame_pointer:
+            inbox.close()
+            return
+        frame = frame_pointer.contents
+        if frame.struct_size < ctypes.sizeof(_RuntimeInvocationStreamFrameV8):
+            inbox.fail("v8 binary frame struct_size is smaller than the required ABI layout")
+            return
+        if frame.abi_version != _STREAM_V8_ABI_VERSION:
+            inbox.fail("v8 binary frame has an unsupported abi_version")
+            return
+        if frame.kind not in _STREAM_V8_KINDS or frame.state not in _STREAM_V8_STATES:
+            inbox.fail("v8 binary frame has an unknown kind or state")
+            return
+        if frame.sequence == 0 or frame.flags & ~_STREAM_V8_KNOWN_FLAGS:
+            inbox.fail("v8 binary frame has an invalid sequence or flags")
+            return
+        content_type = _copy_stream_v8_view(
+            frame.payload_content_type,
+            4096,
+            "payload_content_type",
+        )
+        payload_bytes = _copy_stream_v8_view(
+            frame.payload,
+            _MAX_STREAM_V8_PAYLOAD_BYTES,
+            "payload",
+        )
+        admission_receipt_json = _copy_stream_v8_view(
+            frame.admission_receipt_json,
+            _MAX_STREAM_V8_SIDECAR_BYTES,
+            "admission_receipt_json",
+        )
+        terminal_receipt_json = _copy_stream_v8_view(
+            frame.terminal_receipt_json,
+            _MAX_STREAM_V8_SIDECAR_BYTES,
+            "terminal_receipt_json",
+        )
+        error_json = _copy_stream_v8_view(
+            frame.error_json,
+            _MAX_STREAM_V8_SIDECAR_BYTES,
+            "error_json",
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags, _STREAM_V8_FLAG_HAS_CONTENT_TYPE, content_type, "content type"
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags, _STREAM_V8_FLAG_HAS_PAYLOAD, payload_bytes, "payload"
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags,
+            _STREAM_V8_FLAG_HAS_ADMISSION_RECEIPT,
+            admission_receipt_json,
+            "admission receipt",
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags,
+            _STREAM_V8_FLAG_HAS_TERMINAL_RECEIPT,
+            terminal_receipt_json,
+            "terminal receipt",
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags, _STREAM_V8_FLAG_HAS_ERROR, error_json, "error"
+        )
+        try:
+            content_type_text = content_type.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"v8 binary frame content type is not UTF-8: {exc}") from exc
+        inbox.push(
+            RawStreamPacket(
+                sequence=int(frame.sequence),
+                kind=_STREAM_V8_KINDS[int(frame.kind)],
+                state=_STREAM_V8_STATES[int(frame.state)],
+                terminal=bool(frame.flags & _STREAM_V8_FLAG_TERMINAL),
+                transport_terminal=bool(
+                    frame.flags & _STREAM_V8_FLAG_TRANSPORT_TERMINAL
+                ),
+                elapsed_ms=int(frame.elapsed_ms),
+                payload_content_type=content_type_text,
+                payload=payload_bytes,
+                admission_receipt_json=admission_receipt_json,
+                terminal_receipt_json=terminal_receipt_json,
+                error_json=error_json,
+            )
+        )
+    except BaseException as exc:
+        if user_data:
+            inbox = _callback_inbox(int(user_data))
+            if inbox is not None:
+                inbox.fail(f"invalid v8 binary stream frame: {exc}")
+        return
+
+
+def _stream_v9_callback(
+    user_data: int | None,
+    frame_pointer: ctypes.POINTER(_RuntimeInvocationStreamFrameV9) | None,
+) -> None:
+    lease_owner: _CABILeaseOwner | None = None
+    unclaimed_lease_id = 0
+    claimed_payload: LeasedPayload | None = None
+    try:
+        if not user_data:
+            return
+        inbox = _callback_inbox(int(user_data))
+        if inbox is None:
+            return
+        lease_owner = inbox.lease_owner
+        if lease_owner is None:
+            inbox.fail("v9 callback inbox has no lease owner")
+            return
+        if not frame_pointer:
+            inbox.close()
+            return
+        frame = frame_pointer.contents
+        unclaimed_lease_id = int(frame.payload.lease_id)
+        if frame.struct_size < ctypes.sizeof(_RuntimeInvocationStreamFrameV9):
+            raise ValueError("v9 leased frame struct_size is smaller than the required ABI layout")
+        if frame.abi_version != _STREAM_V9_ABI_VERSION:
+            raise ValueError("v9 leased frame has an unsupported abi_version")
+        if frame.kind not in _STREAM_V8_KINDS or frame.state not in _STREAM_V8_STATES:
+            raise ValueError("v9 leased frame has an unknown kind or state")
+        if frame.sequence == 0 or frame.flags & ~_STREAM_V8_KNOWN_FLAGS:
+            raise ValueError("v9 leased frame has an invalid sequence or flags")
+
+        content_type = _copy_stream_v8_view(
+            frame.payload_content_type, 4096, "payload_content_type"
+        )
+        admission_receipt_json = _copy_stream_v8_view(
+            frame.admission_receipt_json,
+            _MAX_STREAM_V8_SIDECAR_BYTES,
+            "admission_receipt_json",
+        )
+        terminal_receipt_json = _copy_stream_v8_view(
+            frame.terminal_receipt_json,
+            _MAX_STREAM_V8_SIDECAR_BYTES,
+            "terminal_receipt_json",
+        )
+        error_json = _copy_stream_v8_view(
+            frame.error_json, _MAX_STREAM_V8_SIDECAR_BYTES, "error_json"
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags, _STREAM_V8_FLAG_HAS_CONTENT_TYPE, content_type, "content type"
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags,
+            _STREAM_V8_FLAG_HAS_ADMISSION_RECEIPT,
+            admission_receipt_json,
+            "admission receipt",
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags,
+            _STREAM_V8_FLAG_HAS_TERMINAL_RECEIPT,
+            terminal_receipt_json,
+            "terminal receipt",
+        )
+        _require_stream_v8_presence_flag(
+            frame.flags, _STREAM_V8_FLAG_HAS_ERROR, error_json, "error"
+        )
+        try:
+            content_type_text = content_type.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"v9 leased frame content type is not UTF-8: {exc}") from exc
+
+        payload_length = int(frame.payload.len)
+        payload_present = payload_length > 0
+        if bool(frame.flags & _STREAM_V8_FLAG_HAS_PAYLOAD) != payload_present:
+            raise ValueError("v9 leased frame payload presence flag is inconsistent")
+        if payload_length > _MAX_STREAM_V8_PAYLOAD_BYTES:
+            raise ValueError("v9 leased frame payload exceeds its bounded size")
+        if payload_present:
+            incoming_lease_id = unclaimed_lease_id
+            unclaimed_lease_id = 0
+            payload = lease_owner.payload(
+                incoming_lease_id,
+                int(frame.payload.data or 0),
+                payload_length,
+            )
+            claimed_payload = payload
+        else:
+            if unclaimed_lease_id != 0 or frame.payload.data:
+                raise ValueError("v9 empty payload lease must be {0, NULL, 0}")
+            payload = None
+
+        event = LeasedStreamEvent(
+            sequence=int(frame.sequence),
+            kind=_STREAM_V8_KINDS[int(frame.kind)],
+            state=_STREAM_V8_STATES[int(frame.state)],
+            terminal=bool(frame.flags & _STREAM_V8_FLAG_TERMINAL),
+            transport_terminal=bool(
+                frame.flags & _STREAM_V8_FLAG_TRANSPORT_TERMINAL
+            ),
+            elapsed_ms=int(frame.elapsed_ms),
+            payload_content_type=content_type_text,
+            payload=payload,
+            admission_receipt=_decode_stream_v9_sidecar(
+                admission_receipt_json, "admission_receipt"
+            ),
+            terminal_receipt=_decode_stream_v9_sidecar(
+                terminal_receipt_json, "terminal_receipt"
+            ),
+            error=_decode_stream_v9_sidecar(error_json, "error"),
+        )
+        inbox.push(event)
+        claimed_payload = None
+    except BaseException as exc:
+        if claimed_payload is not None:
+            try:
+                claimed_payload.release()
+            except BaseException:
+                pass
+        if unclaimed_lease_id and lease_owner is not None:
+            try:
+                lease_owner.release_id(unclaimed_lease_id)
+            except BaseException:
+                pass
+        if user_data:
+            inbox = _callback_inbox(int(user_data))
+            if inbox is not None:
+                inbox.fail(f"invalid v9 leased stream frame: {exc}")
+        return
+
+
+def _decode_stream_v9_sidecar(raw: bytes, field_name: str) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"v9 leased frame {field_name} is invalid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"v9 leased frame {field_name} must be a JSON object")
+    return value
+
+
+def _copy_stream_v8_view(
+    view: _RuntimeBytesViewV8, maximum: int, field_name: str
+) -> bytes:
+    length = int(view.len)
+    if length > maximum:
+        raise ValueError(f"v8 binary frame {field_name} exceeds its copy bound")
+    if length == 0:
+        if view.data:
+            raise ValueError(f"v8 binary frame empty {field_name} must use a null pointer")
+        return b""
+    if not view.data:
+        raise ValueError(f"v8 binary frame {field_name} pointer is null")
+    return ctypes.string_at(view.data, length)
+
+
+def _require_stream_v8_presence_flag(
+    flags: int, flag: int, value: bytes, field_name: str
+) -> None:
+    if bool(flags & flag) != bool(value):
+        raise ValueError(f"v8 binary frame {field_name} presence flag is inconsistent")
 
 
 def _bidi_callback(user_data: int | None, frame_json: int | None) -> None:
@@ -1664,6 +2425,8 @@ def _push_callback_payload(user_data: int | None, raw_ptr: int | None) -> None:
 
 
 _STREAM_CALLBACK_HANDLE = _StreamCallback(_stream_callback)
+_STREAM_V8_CALLBACK_HANDLE = _StreamV8Callback(_stream_v8_callback)
+_STREAM_V9_CALLBACK_HANDLE = _StreamV9Callback(_stream_v9_callback)
 _BIDI_CALLBACK_HANDLE = _BidiCallback(_bidi_callback)
 
 

@@ -190,20 +190,20 @@ fn extract_envelope_open_rejects_payload_none() {
 }
 
 #[test]
-fn map_local_bidi_handler_stdout_decodes_to_binary_chunk() {
-    use base64::Engine as _;
-
+fn map_local_bidi_handler_rejects_legacy_json_stdout() {
     let frame = map_local_bidi_handler_frame(
         LocalBidiWireKind::Pty,
         &serde_json::json!({
             "type": "stdout",
-            "data": base64::engine::general_purpose::STANDARD.encode(b"hello"),
+            "data": "legacy-text-envelope",
         }),
         7,
     );
-    let chunk = forwarded_binary_chunk(frame);
-    assert_eq!(chunk.stream_id, 7);
-    assert_eq!(chunk.data, b"hello");
+    assert!(matches!(
+        frame,
+        LocalBidiHandlerFrame::ProtocolFailure(message)
+            if message.contains("native binary frame")
+    ));
 }
 
 #[test]
@@ -224,20 +224,20 @@ fn map_local_bidi_handler_exit_remains_data_until_runtime_terminal() {
 }
 
 #[test]
-fn map_local_bidi_handler_file_transfer_chunk_decodes_to_binary_chunk() {
-    use base64::Engine as _;
-
+fn map_local_bidi_handler_rejects_legacy_json_file_chunk() {
     let frame = map_local_bidi_handler_frame(
         LocalBidiWireKind::FileTransfer,
         &serde_json::json!({
             "type": "chunk",
-            "data": base64::engine::general_purpose::STANDARD.encode(b"file-bytes"),
+            "data": "legacy-text-envelope",
         }),
         11,
     );
-    let chunk = forwarded_binary_chunk(frame);
-    assert_eq!(chunk.stream_id, 11);
-    assert_eq!(chunk.data, b"file-bytes");
+    assert!(matches!(
+        frame,
+        LocalBidiHandlerFrame::ProtocolFailure(message)
+            if message.contains("native binary frame")
+    ));
 }
 
 #[test]
@@ -276,8 +276,6 @@ fn map_local_bidi_handler_file_transfer_error_remains_data_until_runtime_termina
 
 #[test]
 fn map_local_bidi_up_payload_translates_file_transfer_binary_chunk() {
-    use base64::Engine as _;
-
     let mapped = map_local_bidi_up_payload(
         LocalBidiWireKind::FileTransfer,
         UpPayload::BinaryChunk(BinaryChunk {
@@ -287,11 +285,8 @@ fn map_local_bidi_up_payload_translates_file_transfer_binary_chunk() {
     );
     match mapped {
         LocalBidiUpFrame::Forward(value) => {
-            assert_eq!(value["type"], "chunk");
-            assert_eq!(
-                value["data"],
-                base64::engine::general_purpose::STANDARD.encode(b"abc")
-            );
+            assert_eq!(value.content_type, "application/octet-stream");
+            assert_eq!(value.payload, b"abc");
         }
         other => panic!("expected file_transfer binary → chunk JSON, got {other:?}"),
     }
@@ -305,12 +300,7 @@ fn map_local_bidi_up_payload_translates_file_transfer_eof_control() {
             control: Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true)),
         }),
     );
-    match mapped {
-        LocalBidiUpFrame::ForwardAndClose(value) => {
-            assert_eq!(value["type"], "eof");
-        }
-        other => panic!("expected file_transfer eof → eof JSON, got {other:?}"),
-    }
+    assert!(matches!(mapped, LocalBidiUpFrame::Close));
 }
 
 #[test]
@@ -336,7 +326,10 @@ fn map_local_bidi_handler_json_frames_preserves_json_payload() {
         3,
     );
     let chunk = forwarded_binary_chunk(frame);
-    assert_eq!(chunk.stream_id, 3);
+    assert_eq!(
+        chunk.stream_id,
+        crate::daemon::ability::wire::CONTROL_STREAM_ID
+    );
     let payload: serde_json::Value =
         serde_json::from_slice(&chunk.data).expect("json frame payload");
     assert_eq!(payload["type"], "frame");
@@ -417,8 +410,11 @@ fn map_local_bidi_up_payload_json_frames_forwards_json_control() {
     );
     match mapped {
         LocalBidiUpFrame::Forward(value) => {
-            assert_eq!(value["type"], "close");
-            assert_eq!(value["reason"], "test");
+            assert_eq!(value.content_type, "application/json");
+            let payload: serde_json::Value =
+                serde_json::from_slice(&value.payload).expect("JSON control");
+            assert_eq!(payload["type"], "close");
+            assert_eq!(payload["reason"], "test");
         }
         other => panic!("expected JSON BinaryChunk → handler JSON, got {other:?}"),
     }
@@ -721,7 +717,13 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
     let target_ura = "easynet:///r/test-realm/device/target-stream";
     let mut handle = pending_stream.register_pending_for(target_ura);
     assert_eq!(
-        pending_stream.try_push_chunk(handle.call_id(), b"partial".to_vec()),
+        pending_stream.try_push_chunk(
+            handle.call_id(),
+            crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamChunk::new(
+                b"partial".to_vec(),
+                "application/octet-stream",
+            ),
+        ),
         crate::daemon::invocation::bidi::state::pending_dispatch::StreamDeliver::Delivered
     );
 
@@ -738,8 +740,9 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
             );
 
             match tokio::time::timeout(std::time::Duration::from_millis(20), handle.recv()).await {
-                Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Chunk(bytes))) => {
-                    assert_eq!(bytes, b"partial");
+                Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Chunk(chunk))) => {
+                    assert_eq!(chunk.payload, b"partial");
+                    assert_eq!(chunk.content_type, "application/octet-stream");
                 }
                 Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Admission(_))) => {
                     panic!("offline cancellation fixture did not dispatch an invocation");

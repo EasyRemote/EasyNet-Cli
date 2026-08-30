@@ -11,16 +11,17 @@ from typing import Any, Mapping, Optional, Protocol, cast, runtime_checkable
 from axon_sdk.invocation import (
     AgentIdentity as _AxonAgentIdentity,
     AuthorityBinding as _AxonAuthorityBinding,
+    AuthorityOrBootstrap as _AxonAuthorityOrBootstrap,
     AxonError as _AxonError,
-    BootstrapAuthorityBody as _AxonBootstrapAuthorityBody,
+    BootstrapBinding as _AxonBootstrapBinding,
     CalleeSignature as _AxonCalleeSignature,
-    DelegationProofBody as _AxonDelegationProofBody,
+    DelegationEvidence as _AxonDelegationEvidence,
     EntityRef as _AxonEntityRef,
     EntityRefKind as _AxonEntityRefKind,
     InvocationAuthorityProof as _AxonInvocationAuthorityProof,
     ReceiptProofFacts as _AxonReceiptProofFacts,
     ReceiptRef as _AxonReceiptRef,
-    SessionAuthorityBody as _AxonSessionAuthorityBody,
+    SessionEvidence as _AxonSessionEvidence,
     UraProfile as _AxonUraProfile,
 )
 
@@ -33,10 +34,17 @@ from ._runtime_governance import (
     governance_descriptor_provider_for_ability,
 )
 from ._runtime_subjects import is_runtime_governance_read_subject_ura
+from ._runtime_subjects import runtime_governance_read_subject_ura
+from .axon_addressing import authority_ura, device_agent_ura, device_ura, parse_ura
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .invocation_state import InvocationLifecycleState
-from .stream import StreamHandle, StreamTransport
+from .stream import (
+    LeasedStreamHandle,
+    LeasedStreamTransport,
+    StreamHandle,
+    StreamTransport,
+)
 from .signing import (
     PreparedInvocation,
     SignedInvocation,
@@ -83,6 +91,15 @@ class _GovernanceReadTransport(Protocol):
 
 
 @runtime_checkable
+class _LeasedRuntimeTransport(Protocol):
+    """Optional explicit ABI v9 transport; it never replaces owned streams."""
+
+    def open_leased_stream(
+        self, draft_json: bytes
+    ) -> tuple[LeasedStreamTransport, bytes]: ...
+
+
+@runtime_checkable
 class RuntimeRecoveryTransport(Protocol):
     """Optional provider seam for bounded restart recovery."""
 
@@ -103,6 +120,7 @@ class PrepareOptions:
     expires_in_ms: int = 0
     signer_id: str = ""
     policy_ref: str = ""
+    provider_managed_signing: bool = False
 
     def to_json_dict(self) -> dict[str, object]:
         value: dict[str, object] = {}
@@ -113,12 +131,43 @@ class PrepareOptions:
 
         if self.policy_ref:
             value["policy_ref"] = self.policy_ref
+        if self.provider_managed_signing:
+            value["provider_managed_signing"] = True
         return value
 
     def to_json_bytes(self) -> bytes:
         return json.dumps(
             self.to_json_dict(), separators=(",", ":"), sort_keys=True
         ).encode("utf-8")
+
+
+def _signer_bound_prepare_options(
+    options: PrepareOptions,
+    signer: Signer,
+) -> PrepareOptions:
+    """Bind native prepare policy to the exact managed signer handle."""
+
+    if not isinstance(options, PrepareOptions):
+        raise _invalid_runtime("prepare options are required")
+    handle = signer.handle
+    mode = handle.policy.get("mode")
+    policy_ref = handle.policy.get("policy_ref")
+    if mode != "provider_managed_signing":
+        raise _invalid_runtime(
+            "runtime signing requires a provider-managed signer handle"
+        )
+    if not isinstance(policy_ref, str) or not policy_ref:
+        raise _invalid_runtime("managed signer handle policy_ref is required")
+    if options.signer_id and options.signer_id != handle.signer_id:
+        raise _invalid_runtime("prepare signer_id does not match signer handle")
+    if options.policy_ref and options.policy_ref != policy_ref:
+        raise _invalid_runtime("prepare policy_ref does not match signer handle")
+    return replace(
+        options,
+        signer_id=handle.signer_id,
+        policy_ref=policy_ref,
+        provider_managed_signing=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -467,6 +516,12 @@ class _DecodedRuntimeReceipt:
     input_hash_hex: str = ""
     output_hash_hex: str = ""
     parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class _RuntimeCatalogueReadTarget:
+    callee_ura: str
+    subject_ura: str
 
 
 @dataclass(frozen=True)
@@ -1260,6 +1315,68 @@ class RuntimeClient:
             raise _transport_error("open signed stream transport failed", exc) from exc
         return StreamHandle.from_json(stream_transport, open_json)
 
+    def invoke_leased_stream(self, draft: InvocationDraft) -> LeasedStreamHandle:
+        """Open the explicit ABI v9 stream with caller-owned payload leases."""
+
+        transport = self._require_open()
+        if not isinstance(transport, _LeasedRuntimeTransport):
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                message="runtime transport does not expose leased streams",
+            )
+        try:
+            stream_transport, open_json = transport.open_leased_stream(
+                draft.to_json().encode("utf-8")
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("open leased stream transport failed", exc) from exc
+        return LeasedStreamHandle.from_json(stream_transport, open_json)
+
+    def open_signed_leased_stream(
+        self, signed: SignedInvocation
+    ) -> LeasedStreamHandle:
+        transport = self._require_open()
+        if not isinstance(transport, _LeasedRuntimeTransport):
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                message="runtime transport does not expose leased streams",
+            )
+        if not signed.submit_ready():
+            raise _invalid_runtime("signed invocation is not submit-ready")
+        try:
+            stream_transport, open_json = transport.open_leased_stream(
+                signed.to_invocation_draft().to_json().encode("utf-8")
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(
+                "open signed leased stream transport failed", exc
+            ) from exc
+        return LeasedStreamHandle.from_json(stream_transport, open_json)
+
+    def prepare_and_open_stream(
+        self,
+        draft: InvocationDraft,
+        signer: Signer,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> StreamHandle:
+        """Statelessly sign one draft and open its direct server stream."""
+
+        if signer is None:
+            raise _invalid_runtime("signer is required")
+        material = self.prepare_signing_material(
+            draft, _signer_bound_prepare_options(options, signer)
+        )
+        signature = signer.sign_material(material)
+        return self.invoke_stream(replace(draft, caller_signature=signature))
+
     def open_bidi(
         self,
         draft: InvocationDraft,
@@ -1371,7 +1488,9 @@ class RuntimeClient:
 
         if signer is None:
             raise _invalid_runtime("signer is required")
-        prepared, material = self.prepare(draft, options)
+        prepared, material = self.prepare(
+            draft, _signer_bound_prepare_options(options, signer)
+        )
         return signer.sign(prepared)._bind_runtime(self), material
 
     def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
@@ -1612,6 +1731,14 @@ def _admitted_descriptor_ref_request(
                 raise _invalid_runtime_client(
                     f"descriptor_ref provider request {field_name} must not be all-zero"
                 )
+        target = _runtime_catalogue_read_target(
+            callee_ura=callee_ura,
+            subject_ura=subject_ura,
+            ability=ability,
+            provider=provider,
+        )
+        callee_ura = target.callee_ura
+        subject_ura = target.subject_ura
         _admit_descriptor_ref_provider_subject(
             provider=provider,
             callee_ura=callee_ura,
@@ -1630,6 +1757,109 @@ def _admitted_descriptor_ref_request(
     if provider:
         request["provider"] = provider
     return request
+
+
+def _runtime_catalogue_read_target(
+    *,
+    callee_ura: str,
+    subject_ura: str,
+    ability: str,
+    provider: str,
+) -> _RuntimeCatalogueReadTarget:
+    clean_callee = callee_ura.strip()
+    clean_subject = subject_ura.strip()
+    if (
+        provider != ABILITY_DESCRIPTOR_PROVIDER
+        or governance_descriptor_provider_for_ability(ability) != ABILITY_DESCRIPTOR_PROVIDER
+    ):
+        return _RuntimeCatalogueReadTarget(clean_callee, clean_subject)
+    projected_callee = _runtime_catalogue_read_callee_ura(clean_callee)
+    projected_subject = _runtime_catalogue_read_subject_ura(
+        clean_subject, projected_callee
+    )
+    return _RuntimeCatalogueReadTarget(projected_callee, projected_subject)
+
+
+def _runtime_catalogue_read_callee_ura(callee_ura: str) -> str:
+    try:
+        projection = parse_ura(callee_ura.strip())
+    except SDKError as exc:
+        raise _invalid_runtime_client(
+            f"descriptor_ref provider callee_ura must be canonical: {exc}"
+        ) from exc
+    if projection.kind == "device":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_agent_ura(projection.realm, device_id, "runtime-introspection")
+    if projection.kind == "agent":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_agent_ura(projection.realm, device_id, "runtime-introspection")
+    return callee_ura.strip()
+
+
+def _runtime_catalogue_read_subject_ura(subject_ura: str, callee_ura: str) -> str:
+    try:
+        return runtime_governance_read_subject_ura(subject_ura, callee_ura)
+    except SDKError as exc:
+        owner_subject = _runtime_catalogue_resource_owner_subject_ura(
+            subject_ura, callee_ura
+        )
+        if owner_subject:
+            return owner_subject
+        raise _invalid_runtime_client(
+            "descriptor_ref provider ability_descriptor subject_ura must be a runtime governance read subject"
+        ) from exc
+
+
+def _runtime_owner_read_subject_ura(callee_ura: str) -> str:
+    try:
+        projection = parse_ura(callee_ura.strip())
+    except SDKError as exc:
+        raise _invalid_runtime_client(
+            "runtime governance read callee_ura must be canonical"
+        ) from exc
+    if projection.kind == "authority":
+        return authority_ura(projection.realm)
+    if projection.kind == "device":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_ura(projection.realm, device_id)
+    if projection.kind == "agent":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_ura(projection.realm, device_id)
+    raise _invalid_runtime(
+        "runtime governance read callee_ura has no runtime-owner subject"
+    )
+
+
+def _runtime_catalogue_resource_owner_subject_ura(
+    subject_ura: str, callee_ura: str
+) -> str:
+    try:
+        subject = parse_ura(subject_ura.strip())
+    except SDKError:
+        return ""
+    if subject.kind != "resource":
+        return ""
+    owner_id = str(subject.components.get("owner_id", "")).strip()
+    device_id = owner_id.removeprefix("device.")
+    if (
+        not owner_id.startswith("device.")
+        or not device_id.strip()
+        or "/" in device_id
+        or "." in device_id
+    ):
+        return ""
+    owner_subject = device_ura(subject.realm, device_id)
+    try:
+        callee_owner = _runtime_owner_read_subject_ura(callee_ura)
+    except SDKError:
+        return ""
+    if owner_subject != callee_owner:
+        return ""
+    return owner_subject
 
 
 def _admit_descriptor_ref_provider_subject(
@@ -2074,17 +2304,16 @@ def _validate_runtime_receipt_authority_binding_shape(
     field_name: str,
 ) -> None:
     kind = _required_receipt_text(value.get("kind"), f"{field_name}.kind")
-    if kind == "self":
-        _require_runtime_receipt_exact_keys(value, field_name, "kind", "principal_ura")
+    if kind == "self+identity":
+        _require_runtime_receipt_exact_keys(value, field_name, "kind", "authority_ura")
         return
-    if kind == "delegation":
+    if kind == "delegated_by+delegation":
         _require_runtime_receipt_exact_keys(
             value,
             field_name,
             "kind",
+            "authority_ura",
             "issuer_ura",
-            "subject_ura",
-            "caller_ura",
             "audience",
             "scopes",
             "issued_at_ms",
@@ -2092,19 +2321,13 @@ def _validate_runtime_receipt_authority_binding_shape(
             "signature_base64",
         )
         return
-    if kind == "capability":
-        _require_runtime_receipt_exact_keys(value, field_name, "kind", "capability_ura")
-        return
-    if kind == "policy":
-        _require_runtime_receipt_exact_keys(value, field_name, "kind", "policy_ura")
-        return
-    if kind == "session":
+    if kind == "session_of+session":
         _require_runtime_receipt_exact_keys(
             value,
             field_name,
             "kind",
+            "authority_ura",
             "issuer_ura",
-            "subject_ura",
             "session_id",
             "scopes",
             "audiences",
@@ -2347,110 +2570,110 @@ def _validate_runtime_receipt_canonical_proof_facts(
 def _runtime_receipt_authority_binding(
     value: Optional[Mapping[str, object]],
     field_name: str,
-) -> _AxonAuthorityBinding:
+) -> _AxonAuthorityOrBootstrap:
     if value is None:
         raise _invalid_runtime(f"runtime receipt summary is missing {field_name}")
     kind = _required_receipt_text(value.get("kind"), f"{field_name}.kind")
-    if kind == "self":
-        return _AxonAuthorityBinding.self_(
-            _required_receipt_text(
-                value.get("principal_ura"),
-                f"{field_name}.principal_ura",
+    if kind == "self+identity":
+        return _AxonAuthorityOrBootstrap.from_binding(
+            _AxonAuthorityBinding.self_authority(
+                _required_receipt_text(
+                    value.get("authority_ura"),
+                    f"{field_name}.authority_ura",
+                )
             )
         )
-    if kind == "delegation":
-        return _AxonAuthorityBinding.delegated(
-            _AxonDelegationProofBody(
-                issuer_ura=_required_receipt_text(
-                    value.get("issuer_ura"),
-                    f"{field_name}.issuer_ura",
+    if kind == "delegated_by+delegation":
+        return _AxonAuthorityOrBootstrap.from_binding(
+            _AxonAuthorityBinding.delegated_authority(
+                _AxonAgentIdentity(
+                    _required_receipt_text(
+                        value.get("authority_ura"),
+                        f"{field_name}.authority_ura",
+                    ),
+                    _AxonUraProfile.STRICT_V2,
                 ),
-                subject_ura=_required_receipt_text(
-                    value.get("subject_ura"),
-                    f"{field_name}.subject_ura",
-                ),
-                caller_ura=_required_receipt_text(
-                    value.get("caller_ura"),
-                    f"{field_name}.caller_ura",
-                ),
-                audience=_required_receipt_text(
-                    value.get("audience"),
-                    f"{field_name}.audience",
-                ),
-                scopes=_runtime_receipt_text_tuple(
-                    value.get("scopes"),
-                    f"{field_name}.scopes",
-                ),
-                issued_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("issued_at_ms"),
-                    f"{field_name}.issued_at_ms",
-                ),
-                expires_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("expires_at_ms"),
-                    f"{field_name}.expires_at_ms",
-                ),
-                signature=_runtime_receipt_base64(
-                    value.get("signature_base64"),
-                    f"{field_name}.signature_base64",
-                    expected_length=64,
+                _AxonDelegationEvidence(
+                    issuer=_AxonAgentIdentity(
+                        _required_receipt_text(
+                            value.get("issuer_ura"),
+                            f"{field_name}.issuer_ura",
+                        ),
+                        _AxonUraProfile.STRICT_V2,
+                    ),
+                    scopes=_runtime_receipt_text_tuple(
+                        value.get("scopes"),
+                        f"{field_name}.scopes",
+                    ),
+                    audience=_required_receipt_text(
+                        value.get("audience"),
+                        f"{field_name}.audience",
+                    ),
+                    issued_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("issued_at_ms"),
+                        f"{field_name}.issued_at_ms",
+                    ),
+                    expires_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("expires_at_ms"),
+                        f"{field_name}.expires_at_ms",
+                    ),
+                    signature=_runtime_receipt_base64(
+                        value.get("signature_base64"),
+                        f"{field_name}.signature_base64",
+                        expected_length=64,
+                    ),
                 ),
             )
         )
-    if kind == "capability":
-        return _AxonAuthorityBinding.capability(
-            _required_receipt_text(
-                value.get("capability_ura"),
-                f"{field_name}.capability_ura",
-            )
-        )
-    if kind == "policy":
-        return _AxonAuthorityBinding.policy(
-            _required_receipt_text(
-                value.get("policy_ura"),
-                f"{field_name}.policy_ura",
-            )
-        )
-    if kind == "session":
-        return _AxonAuthorityBinding.session(
-            _AxonSessionAuthorityBody(
-                issuer_ura=_required_receipt_text(
-                    value.get("issuer_ura"),
-                    f"{field_name}.issuer_ura",
+    if kind == "session_of+session":
+        return _AxonAuthorityOrBootstrap.from_binding(
+            _AxonAuthorityBinding.session_authority(
+                _AxonAgentIdentity(
+                    _required_receipt_text(
+                        value.get("authority_ura"),
+                        f"{field_name}.authority_ura",
+                    ),
+                    _AxonUraProfile.STRICT_V2,
                 ),
-                subject_ura=_required_receipt_text(
-                    value.get("subject_ura"),
-                    f"{field_name}.subject_ura",
-                ),
-                session_id=_required_receipt_text(
-                    value.get("session_id"),
-                    f"{field_name}.session_id",
-                ),
-                scopes=_runtime_receipt_text_tuple(
-                    value.get("scopes"),
-                    f"{field_name}.scopes",
-                ),
-                audiences=_runtime_receipt_text_tuple(
-                    value.get("audiences"),
-                    f"{field_name}.audiences",
-                ),
-                issued_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("issued_at_ms"),
-                    f"{field_name}.issued_at_ms",
-                ),
-                expires_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("expires_at_ms"),
-                    f"{field_name}.expires_at_ms",
-                ),
-                signature=_runtime_receipt_base64(
-                    value.get("signature_base64"),
-                    f"{field_name}.signature_base64",
-                    expected_length=64,
+                _AxonSessionEvidence(
+                    issuer=_AxonAgentIdentity(
+                        _required_receipt_text(
+                            value.get("issuer_ura"),
+                            f"{field_name}.issuer_ura",
+                        ),
+                        _AxonUraProfile.STRICT_V2,
+                    ),
+                    session_id=_required_receipt_text(
+                        value.get("session_id"),
+                        f"{field_name}.session_id",
+                    ),
+                    scopes=_runtime_receipt_text_tuple(
+                        value.get("scopes"),
+                        f"{field_name}.scopes",
+                    ),
+                    audiences=_runtime_receipt_text_tuple(
+                        value.get("audiences"),
+                        f"{field_name}.audiences",
+                    ),
+                    issued_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("issued_at_ms"),
+                        f"{field_name}.issued_at_ms",
+                    ),
+                    expires_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("expires_at_ms"),
+                        f"{field_name}.expires_at_ms",
+                    ),
+                    signature=_runtime_receipt_base64(
+                        value.get("signature_base64"),
+                        f"{field_name}.signature_base64",
+                        expected_length=64,
+                    ),
                 ),
             )
         )
     if kind == "bootstrap":
-        return _AxonAuthorityBinding.bootstrap(
-            _AxonBootstrapAuthorityBody(
+        return _AxonAuthorityOrBootstrap.from_bootstrap(
+            _AxonBootstrapBinding(
                 principal_ura=_required_receipt_text(
                     value.get("principal_ura"),
                     f"{field_name}.principal_ura",

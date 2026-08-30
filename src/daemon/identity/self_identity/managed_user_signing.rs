@@ -19,6 +19,15 @@ pub struct EnsuredUserRuntimeSigningIdentity {
     pub created: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserRuntimeSigningRotation {
+    pub projection: ManagedSigningKeyProjection,
+    /// `false` means another recovery attempt had already replaced the exact
+    /// rejected key. The caller must reuse that active successor rather than
+    /// advancing the rotation epoch again.
+    pub rotated: bool,
+}
+
 /// Ensure the paired user has one active daemon-custodied signing key.
 ///
 /// Device and Hub runtime owners are provisioned through `KeyringClient::ensure`.
@@ -72,6 +81,80 @@ pub fn prove_user_runtime_signing_projection_custody(
                 "managed user runtime signer custody proof failed for `{user_ura}`: {error}"
             ),
         })
+}
+
+/// Replace the exact active User signer rejected by the Hub revocation set.
+///
+/// This is a compare-and-swap transition over the key-service inventory. The
+/// rejected public key is authority evidence from the failed publication, not
+/// a request to rotate whichever key happens to be active later. If a
+/// concurrent reconnect already rotated it, the newer active projection is
+/// returned unchanged. Either outcome is custody-proved before it is exposed
+/// to the session prelude.
+pub fn rotate_user_runtime_signing_identity_after_revocation(
+    client: &KeyringClient,
+    user_ura: &str,
+    rejected_public_key_b64: &str,
+) -> Result<UserRuntimeSigningRotation, SelfIdentityError> {
+    let user_ura = user_ura.trim();
+    validate_user_ura(user_ura)?;
+    let rejected_public_key = decode_public_key(rejected_public_key_b64.trim().to_string())?;
+    let active = active_user_runtime_signing_identity(client, user_ura)?.ok_or_else(|| {
+        SelfIdentityError::Rejected {
+            kind: "not_found".into(),
+            message: format!("managed user signing key not found for `{user_ura}`"),
+        }
+    })?;
+    let active_public_key = decode_public_key(active.public_key_b64.clone())?;
+
+    if active_public_key != rejected_public_key {
+        prove_user_runtime_signing_projection_custody(client, user_ura, &active)?;
+        return Ok(UserRuntimeSigningRotation {
+            projection: active,
+            rotated: false,
+        });
+    }
+
+    let successor = match client.inventory_rotate(&active.key_id) {
+        Ok(successor) => successor,
+        Err(rotation_error) => {
+            // A competing session attempt may have won after our active-key
+            // read. Re-read once and accept only a different custody-proved
+            // active key; otherwise preserve the original typed error.
+            if let Some(current) = active_user_runtime_signing_identity(client, user_ura)? {
+                let current_public_key = decode_public_key(current.public_key_b64.clone())?;
+                if current_public_key != rejected_public_key {
+                    prove_user_runtime_signing_projection_custody(client, user_ura, &current)?;
+                    return Ok(UserRuntimeSigningRotation {
+                        projection: current,
+                        rotated: false,
+                    });
+                }
+            }
+            return Err(rotation_error);
+        }
+    };
+    validate_user_runtime_signing_projection(&successor, user_ura)?;
+    if successor.rotated_from.as_deref() != Some(active.key_id.as_str())
+        || successor.rotation_epoch
+            != active
+                .rotation_epoch
+                .checked_add(1)
+                .ok_or_else(|| SelfIdentityError::Rejected {
+                    kind: "lifecycle".into(),
+                    message: "managed user signing rotation epoch overflow".into(),
+                })?
+    {
+        return Err(SelfIdentityError::Rejected {
+            kind: "lifecycle".into(),
+            message: "managed user signing rotation returned a non-successor projection".into(),
+        });
+    }
+    prove_user_runtime_signing_projection_custody(client, user_ura, &successor)?;
+    Ok(UserRuntimeSigningRotation {
+        projection: successor,
+        rotated: true,
+    })
 }
 
 fn active_user_runtime_signing_identity(

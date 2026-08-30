@@ -58,6 +58,31 @@ impl RemoteDesktopConsentState {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn rehydrate(
+        grant: RemoteDesktopConsentGrant,
+        value: &Value,
+    ) -> anyhow::Result<Self> {
+        let phase = match value
+            .get("phase")
+            .and_then(Value::as_str)
+            .unwrap_or("active")
+        {
+            "active" => RemoteDesktopConsentPhase::Active,
+            "revoked" => RemoteDesktopConsentPhase::Revoked,
+            "expired" => RemoteDesktopConsentPhase::Expired,
+            other => anyhow::bail!("unsupported RemoteApp recovery consent phase {other:?}"),
+        };
+        let consent_epoch = value
+            .get("consent_epoch")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery consent requires consent_epoch"))?;
+        Ok(Self {
+            grant,
+            phase,
+            consent_epoch,
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) const fn phase(
         &self,
     ) -> RemoteDesktopConsentPhase {
@@ -70,6 +95,10 @@ impl RemoteDesktopConsentState {
 
     pub(in crate::daemon::plugins::remote_desktop) fn grant(&self) -> &RemoteDesktopConsentGrant {
         &self.grant
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn consent_epoch(&self) -> u64 {
+        self.consent_epoch
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn revoke(&mut self) -> bool {

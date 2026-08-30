@@ -17,6 +17,9 @@ from easynet_sdk import (
     is_code,
 )
 from easynet_sdk import AddressingClient
+from easynet_sdk.authority import DELEGATION_METADATA_KEY, DelegationProof
+from easynet_sdk.axon_addressing import AxonAddressingTransport
+from easynet_sdk.runtime_authority import LocalRuntimeAuthorityProvider
 
 from addressing_fake import MemoryAddressingTransport
 from test_runtime import MemoryRuntimeTransport, canonical_runtime_receipt_pair
@@ -170,6 +173,39 @@ class AbilityInvocationClientTests(unittest.TestCase):
             identity.seen_requests,
             [{"descriptor_ref": (DESCRIPTOR_REF)}],
         )
+
+    def test_build_invocation_binds_local_user_authority_metadata(self) -> None:
+        identity = _identity_transport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(MemoryRuntimeTransport()),
+            addressing=AddressingClient(identity),
+            authority=LocalRuntimeAuthorityProvider(
+                AddressingClient(AxonAddressingTransport()),
+                signer_loader=lambda owner_ura: _Signer(),
+                clock_ms=lambda: 10_000,
+                authority_ttl_ms=60_000,
+            ),
+        )
+
+        draft = client.build_invocation(
+            _request_with(
+                caller_ura="easynet:///r/example/user/alice",
+                subject_ura="easynet:///r/example/resource/user.alice/runtime-state/read",
+                descriptor_ref=DESCRIPTOR_REF,
+            )
+        )
+
+        proof = DelegationProof.from_metadata(draft.metadata[DELEGATION_METADATA_KEY])
+        self.assertEqual(proof.caller_ura, "easynet:///r/example/user/alice")
+        self.assertEqual(
+            proof.subject_ura,
+            "easynet:///r/example/resource/user.alice/runtime-state/read",
+        )
+        self.assertEqual(
+            proof.audience,
+            "easynet:///r/example/agent/device.dev-a.runtime-health",
+        )
+        self.assertEqual(proof.scopes, ("observe.health",))
 
     def test_generic_invocation_rejects_governance_read_ability_ura(self) -> None:
         for label, ability_ura, public_name in (
@@ -482,7 +518,15 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertTrue(signed.submit_ready())
         self.assertTrue(material.canonical_bytes_base64)
         self.assertIsNone(runtime.seen_signed)
-        self.assertEqual(runtime.seen_options, {"expires_in_ms": 60000})
+        self.assertEqual(
+            runtime.seen_options,
+            {
+                "expires_in_ms": 60000,
+                "policy_ref": "provider-key-inventory:sha256:test-policy",
+                "provider_managed_signing": True,
+                "signer_id": "signer-alice-key-1",
+            },
+        )
         assert runtime.seen_draft is not None
         self.assertEqual(
             runtime.seen_draft["callee_ura"],
@@ -761,6 +805,12 @@ class ChildDispatchRuntimeTransport(MemoryRuntimeTransport):
 
 def _identity_transport() -> MemoryAddressingTransport:
     return _identity_transport_for(ABILITY_URA, "observe.health")
+
+
+class _Signer:
+    def sign_canonical(self, canonical_bytes: bytes) -> bytes:
+        assert canonical_bytes
+        return bytes(range(64))
 
 
 def _identity_transport_for(

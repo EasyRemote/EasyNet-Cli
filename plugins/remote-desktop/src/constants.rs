@@ -5,6 +5,7 @@
 // Description: Stable ability names, reason codes, and runtime defaults.
 
 pub const ABILITY_CREATE_SESSION: &str = "remote_desktop.create_session";
+pub const ABILITY_FOCUS_TARGET: &str = "remote_desktop.focus_target";
 pub const ABILITY_GRANT_CONSENT: &str = "remote_desktop.grant_consent";
 pub const ABILITY_SHOW_SESSION: &str = "remote_desktop.show_session";
 pub const ABILITY_SET_DESCRIPTION: &str = "remote_desktop.set_description";
@@ -21,6 +22,7 @@ pub const REASON_RESOURCE_TYPE_MISMATCH: &str = "resource_type_mismatch";
 pub const REASON_SESSION_NOT_FOUND: &str = "session_not_found";
 pub const REASON_SESSION_TERMINAL: &str = "session_terminal";
 pub const REASON_SESSION_EXPIRED: &str = "session_expired";
+pub const REASON_TARGET_PERMISSION_REVOKED: &str = "target_permission_revoked";
 pub const REASON_SESSION_TOKEN_REQUIRED: &str = "session_token_required";
 pub const REASON_SESSION_TOKEN_MISMATCH: &str = "session_token_mismatch";
 pub const REASON_SESSION_CALLER_MISMATCH: &str = "session_caller_mismatch";
@@ -32,6 +34,7 @@ pub const REASON_RESOURCE_EXHAUSTED: &str = "resource_exhausted";
 pub const REASON_RESOURCE_UNAVAILABLE: &str = "resource_unavailable";
 pub const REASON_PREVIEW_CLIENT_CLOSED: &str = "preview_client_closed";
 pub const REASON_PREVIEW_CAPTURE_FAILED: &str = "preview_capture_failed";
+pub const REASON_TRANSPORT_SETTLEMENT_FAILED: &str = "transport_settlement_failed";
 
 pub(crate) const DEFAULT_LEASE_TTL_MS: u64 = 30_000;
 pub(crate) const MAX_LEASE_TTL_MS: u64 = 300_000;

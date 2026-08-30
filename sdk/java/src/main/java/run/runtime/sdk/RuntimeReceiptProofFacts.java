@@ -280,21 +280,25 @@ final class RuntimeReceiptProofFacts {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     String kind = requiredString(binding, "kind");
     switch (kind) {
-      case "self" -> {
+      case "self+identity" -> {
+        putString(out, requiredString(binding, "authority_ura"));
+        putString(out, "axon-strict-v2");
         out.write(0x01);
-        putString(out, requiredString(binding, "principal_ura"));
+        out.write(0x01);
       }
-      case "delegation" -> {
+      case "delegated_by+delegation" -> {
+        putString(out, requiredString(binding, "authority_ura"));
+        putString(out, "axon-strict-v2");
+        out.write(0x02);
         out.write(0x02);
         putString(out, requiredString(binding, "issuer_ura"));
-        putString(out, requiredString(binding, "subject_ura"));
-        putString(out, requiredString(binding, "caller_ura"));
-        putString(out, requiredString(binding, "audience"));
+        putString(out, "axon-strict-v2");
         List<String> scopes = requiredStringList(binding.get("scopes"), field + ".scopes");
         putU32(out, scopes.size());
         for (String scope : scopes) {
           putString(out, scope);
         }
+        putString(out, requiredString(binding, "audience"));
         putI64(out, requiredNonNegativeLong(binding.get("issued_at_ms"), field + ".issued_at_ms"));
         putI64(out, requiredNonNegativeLong(binding.get("expires_at_ms"), field + ".expires_at_ms"));
         putBytes(
@@ -305,18 +309,13 @@ final class RuntimeReceiptProofFacts {
                 64,
                 false));
       }
-      case "capability" -> {
+      case "session_of+session" -> {
+        putString(out, requiredString(binding, "authority_ura"));
+        putString(out, "axon-strict-v2");
         out.write(0x03);
-        putString(out, requiredString(binding, "capability_ura"));
-      }
-      case "policy" -> {
-        out.write(0x04);
-        putString(out, requiredString(binding, "policy_ura"));
-      }
-      case "session" -> {
-        out.write(0x05);
+        out.write(0x03);
         putString(out, requiredString(binding, "issuer_ura"));
-        putString(out, requiredString(binding, "subject_ura"));
+        putString(out, "axon-strict-v2");
         putString(out, requiredString(binding, "session_id"));
         List<String> scopes = requiredStringList(binding.get("scopes"), field + ".scopes");
         putU32(out, scopes.size());
@@ -441,29 +440,26 @@ final class RuntimeReceiptProofFacts {
   private static Map<String, Object> requireAuthorityBinding(Object value, String field) {
     Map<String, Object> binding = requireObject(value, field);
     switch (requiredString(binding, "kind")) {
-      case "self" -> requireExactKeys(binding, field, "kind", "principal_ura");
-      case "delegation" ->
+      case "self+identity" -> requireExactKeys(binding, field, "kind", "authority_ura");
+      case "delegated_by+delegation" ->
           requireExactKeys(
               binding,
               field,
               "kind",
+              "authority_ura",
               "issuer_ura",
-              "subject_ura",
-              "caller_ura",
               "audience",
               "scopes",
               "issued_at_ms",
               "expires_at_ms",
               "signature_base64");
-      case "capability" -> requireExactKeys(binding, field, "kind", "capability_ura");
-      case "policy" -> requireExactKeys(binding, field, "kind", "policy_ura");
-      case "session" ->
+      case "session_of+session" ->
           requireExactKeys(
               binding,
               field,
               "kind",
+              "authority_ura",
               "issuer_ura",
-              "subject_ura",
               "session_id",
               "scopes",
               "audiences",

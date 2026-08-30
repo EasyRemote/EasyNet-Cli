@@ -65,6 +65,7 @@ mod tests {
             crate::daemon::ability::names::device_control::PROCESS_EXEC,
             crate::daemon::ability::names::device_control::SHELL_RUN,
             crate::daemon::ability::names::device_control::HTTP_REQUEST,
+            crate::daemon::ability::names::device_control::NET_TUNNEL,
             crate::daemon::ability::names::resources::SKILL_INSTALL,
             crate::daemon::ability::names::resources::SKILL_REMOVE,
             crate::daemon::ability::names::resources::SKILL_UPGRADE,

@@ -232,10 +232,6 @@ func ParseAbilityTail(tail string) (ParsedAbility, error) {
 	return parsedAbilityFromAxon(ability), nil
 }
 
-func DeviceAbilityURA(realm, deviceID, namespace, localName string) string {
-	return axonsdk.DeviceAbilityURA(realm, deviceID, namespace, localName)
-}
-
 func ParseURAParts(raw string) (ParsedURA, error) {
 	parts, err := axonsdk.ParseURAParts(raw)
 	if err != nil {

@@ -108,6 +108,13 @@ lib.runtime_invocation_invoke.argtypes = [
     ctypes.POINTER(ctypes.c_char_p),
 ]
 
+lib.runtime_resolve_descriptor_ref.restype = ctypes.c_int32
+lib.runtime_resolve_descriptor_ref.argtypes = [
+    ctypes.c_uint64,
+    ctypes.c_char_p,
+    ctypes.POINTER(ctypes.c_char_p),
+]
+
 lib.runtime_invocation_stream_open.restype = ctypes.c_int32
 lib.runtime_invocation_stream_open.argtypes = [
     ctypes.c_uint64,
@@ -196,8 +203,10 @@ def seed_hermetic_identity():
     os.makedirs(state_dir, exist_ok=True)
     realm = "cli"
     node_id = "local"
+    user_id = "ffi-smoke-user-id"
     invocation_socket = "~/.easynet/custom-invocation.sock"
     device_ura = f"easynet:///r/{realm}/device/{node_id}"
+    user_ura = f"easynet:///r/{realm}/user/{user_id}"
     credentials_path = os.path.join(state_dir, "credentials.json")
     with open(credentials_path, "w", encoding="utf-8") as f:
         json.dump(
@@ -207,7 +216,7 @@ def seed_hermetic_identity():
                 "hub_endpoint": "https://127.0.0.1:50443",
                 "realm": realm,
                 "username": "ffi-smoke-user",
-                "user_id": "ffi-smoke-user-id",
+                "user_id": user_id,
             },
             f,
             indent=2,
@@ -239,12 +248,13 @@ added_at_unix_ms = 0
     os.environ["HOME"] = smoke_home
     os.environ["EASYNET_REALM_TRUST_PATH"] = trust_path
     os.environ["EASYNET_PAGES_PORT"] = str(18000 + (os.getpid() % 1000))
-    return realm, node_id, f"easynet:///r/{realm}/device/{node_id}"
+    os.environ["TMPDIR"] = smoke_home
+    return realm, node_id, device_ura, user_ura
 
 try:
     # 1. ABI version sanity.
     ver = lib.runtime_abi_version()
-    assert ver == 5, f"unexpected ABI version: {ver}"
+    assert ver == 7, f"unexpected ABI version: {ver}"
     print(f"[ffi-smoke] ABI version: {ver}")
 
     # 2. Daemon lifecycle ABI preflight. Malformed config fails
@@ -272,18 +282,19 @@ try:
     # 3. Start through the lifecycle ABI. Success means both
     # control.sock and daemon.sock are accepting before the function
     # returns.
-    realm, node_id, self_device_ura = seed_hermetic_identity()
+    realm, node_id, self_device_ura, self_user_ura = seed_hermetic_identity()
     config = {
-        "mode": "device",
+        "mode": "edge",
         "realm": realm,
-        "device_id": node_id,
-        "daemon_bin": daemon_bin,
+        "runtime_instance_id": node_id,
+        "runtime_bin": daemon_bin,
         "detached": False,
         "log_path": os.path.join(smoke_home, ".easynet", "ffi-smoke-daemon.log"),
         "env": {
             "HOME": smoke_home,
             "EASYNET_REALM_TRUST_PATH": os.environ["EASYNET_REALM_TRUST_PATH"],
             "EASYNET_PAGES_PORT": os.environ["EASYNET_PAGES_PORT"],
+            "TMPDIR": smoke_home,
         },
     }
     rc = lib.runtime_host_start(json.dumps(config).encode("utf-8"), ctypes.byref(daemon_handle))
@@ -318,27 +329,62 @@ try:
     # a non-default uds_path, so init must consume the advertised
     # Invocation endpoint from control.json instead of guessing
     # parent/daemon.sock.
-    invocation = {
-        "caller_ura": self_device_ura,
-        "callee_ura": self_device_ura,
-        "descriptor_ref": "",
-        "subject_ura": self_device_ura,
-        "nonce_base64": base64.b64encode(bytes(range(1, 17))).decode("ascii"),
-        "causal_context": {"form": "none"},
-        "content_type": "application/json",
-        "args": {"smoke": "ffi-happy-path"},
-    }
-    def descriptor_ref(ability):
-        return (
-            f"easynet:///r/{realm}/ability/"
-            f"device.{node_id}.{ability}@1.0.0"
+    def system_agent_callee(system_agent_id):
+        return f"easynet:///r/{realm}/agent/device.{node_id}.{system_agent_id}"
+
+    def system_agent_id_for_ability(ability):
+        if ability == "observe.health":
+            return "runtime-health"
+        if ability == "session.attach":
+            return "session"
+        if ability == "fs.transfer":
+            return "locomotion"
+        raise AssertionError(f"ffi smoke does not know SystemAgent owner for {ability}")
+
+    def resolve_descriptor_ref(handle, callee_ura, ability, call_mode):
+        request = {
+            "callee_ura": callee_ura,
+            "ability": ability,
+            "call_mode": call_mode,
+            "caller_ura": self_user_ura,
+            "subject_ura": self_device_ura,
+        }
+        out_ptr = ctypes.c_char_p()
+        rc = lib.runtime_resolve_descriptor_ref(
+            handle,
+            json.dumps(request).encode("utf-8"),
+            ctypes.byref(out_ptr),
         )
+        assert_ok(rc, f"runtime_resolve_descriptor_ref {ability}")
+        response = json.loads(cstr_value(out_ptr))
+        descriptor = response.get("descriptor_ref")
+        assert descriptor, response
+        assert "/ability/system-agent." in descriptor, response
+        return descriptor
+
+    def invocation_for(handle, ability, nonce_start, args, call_mode="rpc"):
+        callee_ura = system_agent_callee(system_agent_id_for_ability(ability))
+        return {
+            "caller_ura": self_user_ura,
+            "callee_ura": callee_ura,
+            "descriptor_ref": resolve_descriptor_ref(handle, callee_ura, ability, call_mode),
+            "subject_ura": self_device_ura,
+            "nonce_base64": base64.b64encode(bytes(range(nonce_start, nonce_start + 16))).decode("ascii"),
+            "causal_context": {"form": "none"},
+            "content_type": "application/json",
+            "args": args,
+        }
 
     def resource_ref(path, capability):
-        display_path = os.path.abspath(path).lstrip("/")
+        tmp_root = os.path.abspath(os.environ["TMPDIR"])
+        abs_path = os.path.abspath(path)
+        relative_path = os.path.relpath(abs_path, tmp_root)
+        assert not relative_path.startswith(".."), f"{abs_path} is outside TMPDIR {tmp_root}"
+        assert relative_path not in {"", "."}, f"{abs_path} does not identify a file under TMPDIR"
+        display_path = f"tmp/{relative_path}"
         return {
             "resource_ura": (
-                f"easynet:///r/{realm}/resource/device.{node_id}/fs/{display_path}"
+                f"easynet:///r/{realm}/resource/device.{node_id}/fs/tmp/{relative_path}"
             ),
             "owner_ura": self_device_ura,
             "namespace": "fs",
@@ -349,9 +395,12 @@ try:
         }
 
     def invoke_health(handle, label, nonce_start):
-        request = dict(invocation)
-        request["descriptor_ref"] = descriptor_ref("observe.health")
-        request["nonce_base64"] = base64.b64encode(bytes(range(nonce_start, nonce_start + 16))).decode("ascii")
+        request = invocation_for(
+            handle,
+            "observe.health",
+            nonce_start,
+            {"smoke": "ffi-happy-path"},
+        )
         out_ptr = ctypes.c_char_p()
         rc = lib.runtime_invocation_invoke(
             handle,
@@ -361,17 +410,14 @@ try:
         assert_ok(rc, label)
         response = json.loads(cstr_value(out_ptr))
         assert response["ok"] is True, response
-        assert response["tuple"]["descriptor_ref"] == descriptor_ref("observe.health"), response
+        assert response["tuple"]["descriptor_ref"] == request["descriptor_ref"], response
         assert response["terminal_state"] == "Completed", response
         assert response["output_content_type"] == "application/json", response
         assert response["output_json"]["status"] == "healthy", response
-        assert response["output_json"]["echo"]["smoke"] == "ffi-happy-path", response
+        assert "echo" not in response["output_json"], response
 
     def invoke_json(handle, label, ability, args, nonce_start):
-        request = dict(invocation)
-        request["descriptor_ref"] = descriptor_ref(ability)
-        request["nonce_base64"] = base64.b64encode(bytes(range(nonce_start, nonce_start + 16))).decode("ascii")
-        request["args"] = args
+        request = invocation_for(handle, ability, nonce_start, args)
         out_ptr = ctypes.c_char_p()
         rc = lib.runtime_invocation_invoke(
             handle,
@@ -381,7 +427,7 @@ try:
         assert_ok(rc, label)
         response = json.loads(cstr_value(out_ptr))
         assert response["ok"] is True, response
-        assert response["tuple"]["descriptor_ref"] == descriptor_ref(ability), response
+        assert response["tuple"]["descriptor_ref"] == request["descriptor_ref"], response
         assert response["terminal_state"] == "Completed", response
         assert response["output_content_type"] == "application/json", response
         return response["output_json"]
@@ -402,10 +448,13 @@ try:
             return
         stream_frames.append(json.loads(frame_json.decode("utf-8")))
 
-    stream_invocation = dict(invocation)
-    stream_invocation["descriptor_ref"] = descriptor_ref("session.attach")
-    stream_invocation["nonce_base64"] = base64.b64encode(bytes(range(49, 65))).decode("ascii")
-    stream_invocation["args"] = {"session_id": "ffi-smoke-no-such-session"}
+    stream_invocation = invocation_for(
+        client_from_daemon.value,
+        "session.attach",
+        49,
+        {"session_id": "ffi-smoke-no-such-session"},
+        call_mode="stream",
+    )
     stream_id = ctypes.c_uint64(0)
     assert_ok(
         lib.runtime_invocation_stream_open(
@@ -420,9 +469,12 @@ try:
     assert stream_id.value != 0, "stream open returned OK but stream id is 0"
     wait_until("stream callback terminal frame", lambda: any(frame.get("kind") == "terminal" for frame in stream_frames))
     first_stream = stream_frames[0]
-    assert first_stream["ok"] is True, first_stream
+    assert "ok" not in first_stream, first_stream
+    assert first_stream["kind"] == "terminal", first_stream
     assert any(frame.get("kind") == "terminal" and frame.get("terminal") is True for frame in stream_frames), stream_frames
-    assert first_stream["payload_content_type"] == "application/json", first_stream
+    assert first_stream["admission_receipt"]["state"] == "Admitted", first_stream
+    assert first_stream["terminal_receipt"]["state"] == "Completed", first_stream
+    assert first_stream["payload_content_type"] == "application/octet-stream", first_stream
     assert "event" not in first_stream, first_stream
     assert "content_type" not in first_stream, first_stream
     print("[ffi-smoke] complete Invocation stream happy path delivered receipt-backed terminal frame")
@@ -440,13 +492,16 @@ try:
     download_bytes = b"ffi bidi download proof\n"
     with open(download_path, "wb") as f:
         f.write(download_bytes)
-    bidi_invocation = dict(invocation)
-    bidi_invocation["descriptor_ref"] = descriptor_ref("fs.transfer")
-    bidi_invocation["nonce_base64"] = base64.b64encode(bytes(range(65, 81))).decode("ascii")
-    bidi_invocation["args"] = {
-        "mode": "download",
-        "resource_ref": resource_ref(download_path, "read"),
-    }
+    bidi_invocation = invocation_for(
+        client_from_daemon.value,
+        "fs.transfer",
+        65,
+        {
+            "mode": "download",
+            "resource_ref": resource_ref(download_path, "read"),
+        },
+        call_mode="bidi",
+    )
     bidi_invocation["bidi_streams"] = [
         {"stream_id": 1, "content_type": "application/octet-stream", "ordering": "STRICT"}
     ]
@@ -480,7 +535,7 @@ try:
             any(frame.get("kind") == "data" for frame in bidi_frames)
             and any(
                 frame.get("kind") == "receipt"
-                and frame.get("terminal_receipt", {}).get("state") == "Completed"
+                and (frame.get("terminal_receipt") or {}).get("state") == "Completed"
                 and frame.get("terminal") is True
                 for frame in bidi_frames
             )

@@ -57,10 +57,43 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentGrant 
     approval_actor_ura: String,
     consent_id: String,
     subject_ura: String,
+    input_control_granted: bool,
+    remote_focus_granted: bool,
     approval_receipt: RemoteDesktopConsentReceipt,
 }
 
 impl RemoteDesktopConsentGrant {
+    pub(in crate::daemon::plugins::remote_desktop) fn from_recovery_value(
+        value: &Value,
+    ) -> anyhow::Result<Self> {
+        let grant_scope = value
+            .get("grant_scope")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery consent requires grant_scope"))?;
+        let approval_receipt = value
+            .get("approval_receipt")
+            .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery consent requires approval_receipt"))
+            .and_then(|receipt| {
+                RemoteDesktopConsentReceipt::from_value("remote_desktop.rehydrate", receipt)
+                    .map_err(|err| anyhow::anyhow!(err.to_string()))
+            })?;
+        Ok(Self {
+            policy: POLICY_LOCAL_USER_CONSENT,
+            approval_actor_ura: required_string(value, "approval_actor_ura")?,
+            consent_id: required_string(value, "consent_id")?,
+            subject_ura: required_string(value, "subject_ura")?,
+            input_control_granted: grant_scope
+                .get("input_control")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            remote_focus_granted: grant_scope
+                .get("remote_focus")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            approval_receipt,
+        })
+    }
+
     /// Capture the approval actor and required receipt link from the creation
     /// invocation envelope.
     ///
@@ -84,6 +117,8 @@ impl RemoteDesktopConsentGrant {
                 approval_actor_ura: authorization.caller_ura,
                 consent_id: authorization.consent_id,
                 subject_ura: authorization.subject_ura,
+                input_control_granted: authorization.input_control_granted,
+                remote_focus_granted: authorization.remote_focus_granted,
                 approval_receipt,
             });
         }
@@ -97,11 +132,22 @@ impl RemoteDesktopConsentGrant {
     pub(in crate::daemon::plugins::remote_desktop) fn from_envelope_for_test(
         env: &EnvelopeContext,
     ) -> Self {
+        Self::from_envelope_with_grants_for_test(env, false, false)
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn from_envelope_with_grants_for_test(
+        env: &EnvelopeContext,
+        input_control_granted: bool,
+        remote_focus_granted: bool,
+    ) -> Self {
         Self {
             policy: POLICY_LOCAL_USER_CONSENT,
             approval_actor_ura: env.caller().to_string(),
             consent_id: "test-consent".to_string(),
             subject_ura: env.subject().to_string(),
+            input_control_granted,
+            remote_focus_granted,
             approval_receipt: first_receipt_from_causal_context(
                 "test.ability",
                 env.causal_context(),
@@ -117,15 +163,38 @@ impl RemoteDesktopConsentGrant {
         &self.approval_receipt
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) const fn permits_input_control(&self) -> bool {
+        self.input_control_granted
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn permits_remote_focus(&self) -> bool {
+        self.input_control_granted && self.remote_focus_granted
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "policy": self.policy,
             "approval_actor_ura": self.approval_actor_ura,
             "consent_id": self.consent_id,
             "subject_ura": self.subject_ura,
+            "grant_scope": {
+                "media": true,
+                "input_control": self.input_control_granted,
+                "remote_focus": self.remote_focus_granted,
+            },
             "approval_receipt": self.approval_receipt.to_value(),
         })
     }
+}
+
+fn required_string(value: &Value, field: &'static str) -> anyhow::Result<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("RemoteApp recovery consent requires non-empty {field}"))
 }
 
 /// Return whether `causal_context` contains `expected`.
@@ -215,6 +284,8 @@ mod tests {
             consent_id: "test-consent".to_string(),
             caller_ura: env.caller().to_string(),
             subject_ura: env.subject().to_string(),
+            input_control_granted: false,
+            remote_focus_granted: false,
         }
     }
 

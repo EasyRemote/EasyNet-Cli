@@ -736,6 +736,9 @@ func validateDelegationProof(proof DelegationProof) error {
 	if containsBlankString(proof.Scopes) {
 		return invalidInvocation("delegation authority scopes are required", nil)
 	}
+	if err := validateAuthorityAudienceSelector("delegation authority audience", proof.Audience); err != nil {
+		return err
+	}
 	if proof.ExpiresAtMS <= proof.IssuedAtMS {
 		return invalidInvocation("delegation authority expires_at_ms must be greater than issued_at_ms", nil)
 	}
@@ -783,6 +786,12 @@ func validateSessionAuthority(authority SessionAuthority) error {
 	if containsBlankString(authority.AllowedFollowupAbilities) {
 		return invalidInvocation("session authority allowed follow-up abilities are required", nil)
 	}
+	if err := validateCallableAuthorityTarget("session authority callee_ura", authority.CalleeURA); err != nil {
+		return err
+	}
+	if err := validateAuthorityAudienceSelector("session authority audience", authority.Audience); err != nil {
+		return err
+	}
 	if authority.ExpiresAtMS <= authority.IssuedAtMS {
 		return invalidInvocation("session authority expires_at_ms must be greater than issued_at_ms", nil)
 	}
@@ -798,6 +807,30 @@ func validateSessionAuthority(authority SessionAuthority) error {
 		return err
 	}
 	return nil
+}
+
+func validateCallableAuthorityTarget(label string, targetURA string) error {
+	parts, err := ParseURAParts(strings.TrimSpace(targetURA))
+	if err != nil {
+		return invalidInvocation(label+" must be a canonical Agent, Service, or Authority URA", err)
+	}
+	switch parts.Kind {
+	case URAKindAgent, URAKindService, URAKindAuthority:
+		return nil
+	default:
+		return invalidInvocation(label+" must identify a callable Agent, Service, or Authority principal", nil)
+	}
+}
+
+func validateAuthorityAudienceSelector(label string, audience string) error {
+	selector := strings.TrimSpace(audience)
+	if selector == "*" {
+		return nil
+	}
+	if strings.HasPrefix(selector, "easynet:///r/") && strings.HasSuffix(selector, "/") {
+		return nil
+	}
+	return validateCallableAuthorityTarget(label, selector)
 }
 
 type sessionAuthoritySubject struct {

@@ -54,7 +54,7 @@ use crate::daemon::invocation::bidi::session_wire::{
     call_id_hex, RequestOutcome, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
-    DispatchResult, DispatchStreamEvent,
+    DispatchResult, DispatchStreamChunk, DispatchStreamEvent,
 };
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 
@@ -110,7 +110,11 @@ pub enum EscalationInvocation {
     Canonical(Box<axon_sdk::pb::axon::v1::InvokeRequest>),
     CanonicalStream(Box<axon_sdk::pb::axon::v1::InvokeServerStreamRequest>),
     CanonicalBidi(Box<axon_sdk::pb::axon::v1::InvokeRequest>),
-    DaemonControl { ability_ura: String, args: Vec<u8> },
+    DaemonControl {
+        ability_ura: String,
+        args: Vec<u8>,
+        metadata: HashMap<String, String>,
+    },
 }
 
 /// Reply channel registered for one session-escalated request. Unary product
@@ -425,10 +429,27 @@ impl SessionEscalationHandle {
         args: Vec<u8>,
         timeout: Duration,
     ) -> RequestOutcome {
+        self.escalate_with_timeout_and_metadata(ability, args, HashMap::new(), timeout)
+            .await
+    }
+
+    /// `escalate_with_timeout` plus verified runtime authority metadata for
+    /// daemon-control paths whose subject is user/service bound.
+    pub async fn escalate_with_timeout_and_metadata(
+        &self,
+        ability: String,
+        args: Vec<u8>,
+        metadata: HashMap<String, String>,
+        timeout: Duration,
+    ) -> RequestOutcome {
         let ability_ura = crate::core::ura::hub_ability_ura(&self.session_realm, ability.trim());
         match self
             .escalate_invocation(
-                EscalationInvocation::DaemonControl { ability_ura, args },
+                EscalationInvocation::DaemonControl {
+                    ability_ura,
+                    args,
+                    metadata,
+                },
                 timeout,
             )
             .await
@@ -800,7 +821,13 @@ fn reverse_stream_event(
             true,
         );
     }
-    (DispatchStreamEvent::Chunk(result.payload), false)
+    (
+        DispatchStreamEvent::Chunk(DispatchStreamChunk::new(
+            result.payload,
+            result.result_content_type,
+        )),
+        false,
+    )
 }
 
 fn dispatch_result_from_reverse_result(
@@ -1236,8 +1263,12 @@ async fn send_escalation_request_inner(
                 .await
                 .map_err(|err| err.to_string())
         }
-        EscalationInvocation::DaemonControl { ability_ura, args } => {
-            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
+        EscalationInvocation::DaemonControl {
+            ability_ura,
+            args,
+            metadata,
+        } => {
+            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args, metadata);
             up_tx
                 .send_binary_chunk(frame)
                 .await
@@ -1356,6 +1387,7 @@ fn build_session_request_up_chunk(
     call_id: [u8; 16],
     ability_ura: &str,
     args: &[u8],
+    metadata: HashMap<String, String>,
 ) -> axon_sdk::pb::axon::v1::BinaryChunk {
     use crate::daemon::invocation::bidi::session_wire::{SessionContentEnvelope, SessionDispatch};
     use axon_sdk::pb::axon::v1::BinaryChunk;
@@ -1365,6 +1397,7 @@ fn build_session_request_up_chunk(
         ability_ura: ability_ura.to_string(),
         args: args.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
+        metadata,
     };
     // serde encoding of an owned-fields enum cannot fail here;
     // the unwrap is justified by the typed enum domain.
@@ -1538,6 +1571,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn daemon_control_escalation_carries_runtime_metadata() {
+        let correlation = EscalationCorrelation::new();
+        let (up_tx, mut up_rx) = mpsc::channel::<axon_sdk::pb::axon::v1::InvokeBidiUp>(8);
+        let handle = spawn_escalation_consumer(
+            Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+            "test-realm",
+        );
+
+        let correlation_for_hub = Arc::clone(&correlation);
+        let observed = tokio::spawn(async move {
+            let frame = up_rx.recv().await.expect("one request frame");
+            let chunk = match frame.payload {
+                Some(axon_sdk::pb::axon::v1::invoke_bidi_up::Payload::BinaryChunk(chunk)) => chunk,
+                other => panic!("expected BinaryChunk request, got {other:?}"),
+            };
+            let dispatch: crate::daemon::invocation::bidi::session_wire::SessionDispatch =
+                serde_json::from_slice(&chunk.data).expect("decode request frame");
+            let crate::daemon::invocation::bidi::session_wire::SessionDispatch::Request {
+                call_id,
+                metadata,
+                ..
+            } = dispatch
+            else {
+                panic!("expected SessionDispatch::Request");
+            };
+            correlation_for_hub.complete(
+                call_id,
+                EscalationReply::Control(RequestOutcome::Ok {
+                    result_bytes: b"ok".to_vec(),
+                }),
+            );
+            metadata
+        });
+
+        let outcome = handle
+            .escalate_with_timeout_and_metadata(
+                "federation.advertise_abilities".into(),
+                b"{}".to_vec(),
+                HashMap::from([(
+                    crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY.to_string(),
+                    "signed-delegation".to_string(),
+                )]),
+                Duration::from_secs(2),
+            )
+            .await;
+
+        assert!(matches!(outcome, RequestOutcome::Ok { .. }));
+        let metadata = observed.await.expect("metadata observer");
+        assert_eq!(
+            metadata.get(crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY),
+            Some(&"signed-delegation".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn escalate_surfaces_upstream_timeout_when_no_reply() {
         // Spawn consumer with an up_tx whose receiver we hold but
         // never decode/complete. The dispatch handler must surface
@@ -1687,6 +1776,7 @@ mod tests {
                     ability_ura: "easynet:///r/test/ability/authority.federation.resolve_key"
                         .to_string(),
                     args: b"{}".to_vec(),
+                    metadata: HashMap::new(),
                 },
                 reply: EscalationReplySink::Unary(reply),
             },
@@ -1713,6 +1803,7 @@ mod tests {
                 ability_ura: "easynet:///r/test/ability/authority.federation.resolve_key"
                     .to_string(),
                 args: b"{}".to_vec(),
+                metadata: HashMap::new(),
             },
         )
         .await;

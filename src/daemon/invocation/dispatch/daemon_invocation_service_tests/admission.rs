@@ -466,7 +466,8 @@ async fn hosted_agent_carrier_fixture() -> HostedAgentCarrierFixture {
         hosted_agent_carrier_manifest("fs.transfer"),
         Arc::new(move |_| {
             handler_starts.fetch_add(1, Ordering::SeqCst);
-            let (to_client, _handler_input) = tokio::sync::mpsc::channel(1);
+            let (to_client, _handler_input) =
+                crate::daemon::ability::dispatch::bidi_input_channel(1);
             let (_handler_output, from_client) = tokio::sync::mpsc::channel(1);
             Ok(BidiSource {
                 to_client,

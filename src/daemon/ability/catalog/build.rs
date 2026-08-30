@@ -24,8 +24,8 @@ use crate::daemon::ability::builtins::{
             registrar as ability_deployment_registrar,
         },
         file_edit as fs_edit_ability, file_transfer as file_transfer_ability, files as fs_ability,
-        http as http_request_ability, process as process_exec_ability, session as session_ability,
-        shell as shell_run_ability,
+        http as http_request_ability, net_tunnel as net_tunnel_ability,
+        process as process_exec_ability, session as session_ability, shell as shell_run_ability,
         terminal::{
             attach as terminal_attach_ability, io as terminal_io_ability,
             lifecycle as terminal_lifecycle_ability,
@@ -707,6 +707,10 @@ fn build_registry_with_services_result_inner(
     // every external call uniformly instead of going through
     // a shell.run-wrapped curl.
     http_request_ability::register(&mut reg);
+    // net.tunnel — governed raw TCP data plane for remote forwarding and
+    // SOCKS adapters. The baseline policy is deliberately loopback-only;
+    // resolved destinations and listener binds are revalidated by the daemon.
+    net_tunnel_ability::register(&mut reg);
     // invocation.history.* / invocation.trace.* — read-only audit surfaces over
     // the Axon invocation ledger. The ledger is written by the
     // gRPC invocation service; these handlers only expose persisted
@@ -737,7 +741,7 @@ fn build_registry_with_services_result_inner(
     let pty = Arc::new(PtyService::new());
     let terminal_io = terminal_io_ability::PtyIoService::new();
     terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(terminal_io.clone()));
-    terminal_attach_ability::register(&mut reg, Arc::clone(&pty));
+    terminal_attach_ability::register(&mut reg, Arc::clone(&pty), terminal_io.clone());
     // terminal.input / _read / _resize — unary-RPC data
     // plane. The backend's PTYDriver invokes these for the
     // production HTTP-session terminal flow before the WebSocket

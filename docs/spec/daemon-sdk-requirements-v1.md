@@ -1,7 +1,7 @@
 # Canonical Runtime SDK Requirements
 
 Status: current normative specification
-ABI line: v5
+ABI line: base v7 with feature-detected raw-stream extension v8
 Applies to: Rust implementation, C ABI, Go, Python, Node, Java and Swift
 
 This file keeps its historical path so existing tooling has one stable
@@ -42,12 +42,11 @@ The runtime SDK delegates these operations to Axon. It does not maintain a
 second grammar or signer.
 
 The reproducible cross-repository dependency contract is Axon commit
-`896b35c1c403f23754604822a992d2fbbd14520c`. At that revision the Rust SDK is
-`0.129.22` (the version locked by this repository's `Cargo.lock`) and the
-Python SDK is `0.129.23` (the version required by `sdk/python/pyproject.toml`
-and `sdk/python/uv.lock`). CI must check out that exact revision and fail if
-its HEAD or either SDK version differs. A branch name such as `main` is not a
-dependency version.
+`25a97cc5e32610c3c81f26d085cb34deb50d7230`. At that revision the Rust and
+Python SDKs are both `0.183.3`, matching this repository's `Cargo.lock`,
+`sdk/python/pyproject.toml`, and `sdk/python/uv.lock`. CI must check out that
+exact revision and fail if its HEAD or either SDK version differs. A branch
+name such as `main` is not a dependency version.
 
 ### 2.2 Daemon
 
@@ -372,7 +371,16 @@ REQ-ABI-1: Domain operations do not receive C symbols. Runtime host lifecycle sy
 REQ-ABI-2: Removed v4 domain symbols have no aliases, weak exports, fallback
 lookups or permanent dual track.
 
-REQ-ABI-3: Go/Python native providers resolve only the v6 export list.
+REQ-ABI-3: Go/Python native providers require the base v7 export list. The
+`runtime_invocation_stream_open_v8` raw-stream entry point is additive and must
+be feature-detected; its presence does not change `runtime_abi_version()` from
+7.
+
+REQ-ABI-3a: ABI v9 adds a bounded payload lease to generic server streams. It
+changes only memory ownership: Runtime remains authoritative for Invocation
+sequence, lifecycle, receipts, errors and EOF. A binding may select v9 only
+when its public event API has deterministic retain/release ownership; the
+current owned-byte Go/Python `StreamEvent` APIs remain on v8.
 
 REQ-ABI-4: The header, export list, loader symbol table, release packaging and
 ABI conformance test agree exactly.
@@ -387,7 +395,7 @@ for that exact binding.
 REQ-ABI-6: v6 submitted-invocation handles are one-shot provider resources.
 Unknown, stale, cross-session or post-free submitted handles return
 `ERR_INVALID_HANDLE` for `await`, `cancel`, `events` and `free`. This is the
-v5 public behavior; bindings must not preserve an idempotent-free compatibility
+v7 public behavior; bindings must not preserve an idempotent-free compatibility
 layer because it allows replay-compatible lifecycle authority.
 
 REQ-ABI-7: Submitted-handle cancellation reports the cancel-request lifecycle,
@@ -397,7 +405,7 @@ not a fabricated target terminal state. The JSON object must include
 observed later.
 
 REQ-ABI-8: Unary result JSON exposes the verified terminal fact as
-`terminal_receipt`. The retired `receipt` alias is not part of the v5 provider
+`terminal_receipt`. The retired `receipt` alias is not part of the v7 provider
 ABI because it conflates operational result projection with receipt authority.
 
 REQ-ABI-9: Stream and bidi terminal JSON may treat a frame as canonical

@@ -53,7 +53,7 @@ pub const ABILITY_TERMINAL_CLOSE: &str =
 /// summary semantics so a discovery client sees the same blurb
 /// here as in `meta.list_abilities`.
 pub fn description_create() -> &'static str {
-    "Create an interactive PTY session and return its opaque \
+    "Create a daemon-restart-resilient interactive PTY session and return its opaque \
      session_id. Pair with terminal.attach (data plane) \
      and terminal.close (lifecycle teardown). Part of \
      the baseline-locomotion-v1 profile."
@@ -67,8 +67,8 @@ pub fn description_close() -> &'static str {
 }
 
 pub fn description_list() -> &'static str {
-    "List live PTY sessions owned by this device daemon. Returns \
-     daemon-minted session_id values suitable for terminal.attach, \
+    "List live PTY sessions owned by this device's per-user session supervisor. Returns \
+     supervisor-minted session_id values suitable for terminal.attach, \
      input/read/resize, and close. Equivalent to the PTY-internal list \
      used by the lifecycle subsystem; the `terminal` namespace is the \
      stable operator-facing alias."
@@ -139,7 +139,9 @@ pub fn register(
     reg.register_rpc_with_owner("terminal.create", owner.clone(), create_h);
 
     let svc_for_list = Arc::clone(&pty);
-    let list_h: LocalRpcHandler = Arc::new(move |args: Value| list_handler(&svc_for_list, args));
+    let io_for_list = io.clone();
+    let list_h: LocalRpcHandler =
+        Arc::new(move |args: Value| list_handler(&svc_for_list, io_for_list.as_ref(), args));
     reg.register_rpc_with_owner("terminal.list", owner.clone(), list_h);
 
     let pty_for_close = pty;
@@ -167,7 +169,11 @@ pub fn register(
 fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
     let spec = parse_create_spec(&args)?;
     let id = pty.create(spec)?;
-    Ok(json!({ "session_id": id.as_str() }))
+    Ok(json!({
+        "session_id": id.as_str(),
+        "state": "detached",
+        "epoch": 0,
+    }))
 }
 
 /// `terminal.list` handler.
@@ -176,15 +182,29 @@ fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 ///
 /// Returns: `{ sessions: [{ session_id, status, created_unix_ms, command?,
 /// command_args?, cwd? }] }`.
-fn list_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
+fn list_handler(
+    pty: &Arc<PtyService>,
+    io: Option<&crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
+    args: Value,
+) -> anyhow::Result<Value> {
     require_lifecycle_args(&args, "terminal.list", &[])?;
     let sessions = pty
-        .list()
+        .try_list()?
         .into_iter()
         .map(|session| {
+            let (epoch, active_attachment_id) = io
+                .map(|io| io.attachment_snapshot(pty, &session.id))
+                .unwrap_or((0, None));
+            let status = if active_attachment_id.is_some() {
+                "attached"
+            } else {
+                "detached"
+            };
             json!({
                 "session_id": session.id.as_str(),
-                "status": "active",
+                "status": status,
+                "epoch": epoch,
+                "active_attachment_id": active_attachment_id,
                 "created_unix_ms": session.created_unix_ms,
                 "command": session.command,
                 "command_args": session.command_args,
@@ -257,7 +277,7 @@ fn close_session(
     close_args: TerminalCloseArgs,
 ) -> anyhow::Result<Value> {
     let session_id = PtySessionId::new(&close_args.session_id);
-    let outcome = pty.close(&session_id);
+    let outcome = pty.try_close(&session_id)?;
     // Drop the I/O row AFTER the lifecycle close so the reader
     // thread sees the PTY EOF first (clean exit), then the
     // dropped flag (cooperative stop). Reverse order would race
@@ -542,7 +562,7 @@ mod tests {
         let first_id = first["session_id"].as_str().unwrap().to_string();
         let second_id = second["session_id"].as_str().unwrap().to_string();
 
-        let listed = list_handler(&svc, json!({})).unwrap();
+        let listed = list_handler(&svc, None, json!({})).unwrap();
         let sessions = listed["sessions"].as_array().expect("sessions array");
         let ids = sessions
             .iter()
@@ -551,11 +571,11 @@ mod tests {
         assert_eq!(ids, vec![first_id.as_str(), second_id.as_str()]);
         assert!(sessions
             .iter()
-            .all(|session| session["status"].as_str() == Some("active")));
+            .all(|session| session["status"].as_str() == Some("detached")));
 
         close_handler(&svc, None, json!({"session_id": first_id})).unwrap();
         close_handler(&svc, None, json!({"session_id": second_id})).unwrap();
-        let listed = list_handler(&svc, json!({})).unwrap();
+        let listed = list_handler(&svc, None, json!({})).unwrap();
         assert_eq!(listed["sessions"].as_array().unwrap().len(), 0);
     }
 
@@ -660,7 +680,7 @@ mod tests {
     #[test]
     fn list_rejects_unknown_argument() {
         let svc = fresh_service();
-        let err = list_handler(&svc, json!({"include_closed": true})).unwrap_err();
+        let err = list_handler(&svc, None, json!({"include_closed": true})).unwrap_err();
         assert!(
             format!("{err}").contains("terminal.list: unknown argument `include_closed`"),
             "unexpected error: {err}"

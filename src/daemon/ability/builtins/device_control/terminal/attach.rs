@@ -1,88 +1,49 @@
-// EasyNet CLI — terminal.attach (C-M3c, BIDI)
-// =======================================================
+// EasyNet CLI — terminal.attach (InvokeBidi)
+// ===========================================
 //
 // File: src/daemon/ability/builtins/device_control/terminal/attach.rs
 //
-// Bidi handler that wires one InvokeBidi session to one previously-
-// opened PTY (created via terminal.create, C-M3b). The
-// transport gives us two mpsc::Sender/Receiver halves; the handler
-// glues them to the PTY master fd's blocking reader + writer.
+// Attaches one Invocation to a persistent, supervisor-owned PTY session.
+// Detaching ends this Invocation but not the PTY; reattaching opens a new
+// InvokeBidi call and must present the current attachment epoch.
 //
 // Frame protocol
 // --------------
-//   Args at OpenBidi:  { "session_id": "<uuid-from-create>" }
+//   Args at OpenBidi:
+//     { "session_id": "...", "attachment_id": "...", "expected_epoch": n }
 //
 //   Client → handler (SendBidi.frame):
-//     { "type": "stdin",  "data": "<base64 bytes>" }
+//     application/octet-stream containing raw stdin bytes
 //     { "type": "resize", "cols": u16, "rows": u16 }
+//     { "type": "detach" }
 //
 //   Handler → client (RecvBidi.frame):
-//     { "type": "stdout", "data": "<base64 bytes>" }
+//     { "type": "attached", "session_id": "...", "attachment_id": "...", "epoch": n }
+//     application/octet-stream containing raw stdout/stderr bytes
+//     { "type": "output_gap", "dropped_bytes": n }
+//     { "type": "detached", "session_id": "...", "attachment_id": "...", "epoch": n }
 //     { "type": "exit",   "status": <u32|null> }
 //     { "type": "error",  "message": "<protocol error>" }
 //
-// `exit` is emitted exactly once per session, when the child
-// terminates. `status` is `null` when the wait surfaces no exit
-// code (extremely rare on unix; the OS reaper still claims the
-// child) OR when the master couldn't lend a reader at attach time.
-// `error` is emitted once for malformed client frames; the writer
-// ingress then terminates instead of treating unknown shapes as
-// forward-compatible extensions.
-//
-// The single TerminalBidi per session_id (§I2) is fired by the IPC
-// forwarder, not this handler. The handler signals "session over"
-// by dropping its `to_client` sender, which the forwarder observes
-// as channel EOF and emits TerminalBidi{done}.
-//
-// Layered tasks per session
-// -------------------------
-// Three tokio tasks per attach:
-//
-//   T1. PTY → wire reader (spawn_blocking).
-//       Owns the std::io::Read half of the PTY master. Read syscall
-//       blocks until bytes arrive; the loop wraps each chunk in a
-//       `stdout` frame and `blocking_send`s into the transport's
-//       to_client sender. Exits when read() returns 0 (child closed
-//       the pty) or when the transport sender errors (forwarder
-//       gone).
-//
-//   T2. wire → PTY writer (async loop).
-//       Owns the from_client receiver. Awaits each frame; for
-//       `stdin` frames base64-decodes and `spawn_blocking`s a
-//       writer.write_all + flush; for `resize` frames calls
-//       PtySession.resize. Exits when receiver yields None
-//       (CloseBidi or connection drop) OR a write fails (PTY gone).
-//
-//   T3. exit-watcher (spawn_blocking).
-//       Polls the child's wait() in a tight loop with a small
-//       sleep. When the child exits, emits one `exit` frame then
-//       drops its sender clone, contributing to the to_client
-//       drop quorum that triggers TerminalBidi.
-//
-// All three tasks share the to_client sender; the forwarder sees
-// EOF only after the LAST clone drops. Each task drops its clone
-// on its own exit path; the natural quorum prevents premature
-// session close while one direction is still active.
-//
-// Why spawn_blocking for T1 and the inner write of T2
-// ----------------------------------------------------
-// portable-pty exposes std::io::Read / std::io::Write — synchronous,
-// blocking calls. Putting them on a tokio worker thread (default
-// runtime) would block the runtime. spawn_blocking moves the
-// syscall to the dedicated blocking pool; the async loop awaits
-// the JoinHandle, which is the canonical bridge.
+// The supervisor enforces one active attachment with compare-and-swap epoch
+// semantics. Its bounded output ring survives daemon restart; output_gap makes
+// overflow explicit. The daemon remains the sole Runtime and owns admission,
+// routing, receipts, and the lifetime of each InvokeBidi transport.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
 use std::sync::Arc;
 
-use base64::Engine;
 use serde_json::{json, Map, Value};
 
+use crate::daemon::ability::builtins::device_control::terminal::io::{
+    PtyAttachmentLease, PtyIoService, PtyIoWriteOutcome,
+};
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{
-    AxonAbilityCatalog, BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND,
+    bidi_input_channel, AxonAbilityCatalog, BidiInputFrame, BidiOutputFrame, BidiSource,
+    BIDI_CHANNEL_BOUND,
 };
 use crate::daemon::execution::pty::{PtyService, PtySessionId};
 
@@ -94,9 +55,9 @@ pub const ABILITY_TERMINAL_ATTACH: &str =
 /// the control plane, this is the data plane.
 pub fn description() -> &'static str {
     "Attach to an existing PTY session over InvokeBidi: pump \
-     stdin from the wire to the PTY master, stream stdout / \
-     stderr back as base64-encoded `stdout` frames, surface \
-     child exit as a final `exit` frame. Pair with \
+     raw stdin bytes to the PTY master, stream stdout / \
+     stderr back as native application/octet-stream frames, report bounded-buffer loss as OUTPUT_GAP, \
+     detach with an incremented epoch for later reattach, and surface child exit. Pair with \
      terminal.create (open the session) and \
      terminal.close (terminate it). Part of the \
      baseline-locomotion-v1 profile (AXIOM Tier 2.5)."
@@ -104,17 +65,18 @@ pub fn description() -> &'static str {
 
 /// JSON Schema for the attach input. The InvokeBidi initial
 /// frame carries `session_id`; subsequent inbound frames are
-/// `{type:\"stdin\", data: <base64>}` and `{type:\"resize\", \
-/// cols, rows}` — those are stream-payload schemas, not
+/// raw stdin bytes and `{type:\"resize\", cols, rows}` control frames — these are not
 /// initial-args schemas, so they sit in the
 /// daemon/execution/pty module's docs rather than here.
 pub fn input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["session_id"],
+        "required": ["session_id", "attachment_id", "expected_epoch"],
         "additionalProperties": false,
         "properties": {
-            "session_id": { "type": "string", "minLength": 1 }
+            "session_id": { "type": "string", "minLength": 1 },
+            "attachment_id": { "type": "string", "minLength": 1 },
+            "expected_epoch": { "type": "integer", "minimum": 0 }
         }
     })
 }
@@ -131,7 +93,7 @@ const READ_CHUNK_SIZE: usize = 4096;
 /// burn CPU on idle sessions.
 const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoService) {
     let pty_for_attach = Arc::clone(&pty);
     let handler = Arc::new(move |env, args: Value| {
         let attach_args = TerminalAttachArgs::parse(args)?;
@@ -140,7 +102,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
             attach_args.session_id(),
             "terminal.attach",
         )?;
-        attach_session(&pty_for_attach, attach_args)
+        attach_session(&pty_for_attach, &io, attach_args)
     });
     reg.register_bidi_with_envelope_and_owner(
         "terminal.attach",
@@ -150,20 +112,32 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
 }
 
 #[cfg(test)]
-fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {
-    attach_session(pty, TerminalAttachArgs::parse(args)?)
+fn attach_handler(
+    pty: &Arc<PtyService>,
+    io: &PtyIoService,
+    args: Value,
+) -> anyhow::Result<BidiSource> {
+    attach_session(pty, io, TerminalAttachArgs::parse(args)?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalAttachArgs {
     session_id: String,
+    attachment_id: String,
+    expected_epoch: u64,
 }
 
 impl TerminalAttachArgs {
     fn parse(args: Value) -> anyhow::Result<Self> {
         let object = terminal_attach_args_object(&args)?;
         let session_id = terminal_attach_required_session_id(object)?;
-        Ok(Self { session_id })
+        let attachment_id = terminal_attach_required_nonempty_string(object, "attachment_id")?;
+        let expected_epoch = terminal_attach_required_u64(object, "expected_epoch")?;
+        Ok(Self {
+            session_id,
+            attachment_id,
+            expected_epoch,
+        })
     }
 
     fn session_id(&self) -> &str {
@@ -177,7 +151,7 @@ fn terminal_attach_args_object(args: &Value) -> anyhow::Result<&Map<String, Valu
         .ok_or_else(|| anyhow::anyhow!("terminal.attach: args must be a JSON object"))?;
     let mut unknown = object
         .keys()
-        .filter(|key| key.as_str() != "session_id")
+        .filter(|key| !["session_id", "attachment_id", "expected_epoch"].contains(&key.as_str()))
         .map(String::as_str)
         .collect::<Vec<_>>();
     if !unknown.is_empty() {
@@ -188,6 +162,29 @@ fn terminal_attach_args_object(args: &Value) -> anyhow::Result<&Map<String, Valu
         );
     }
     Ok(object)
+}
+
+fn terminal_attach_required_nonempty_string(
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<String> {
+    let value = args
+        .get(field)
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `{field}` required"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `{field}` must be a string"))?
+        .trim();
+    if value.is_empty() {
+        anyhow::bail!("terminal.attach: `{field}` must not be empty");
+    }
+    Ok(value.to_string())
+}
+
+fn terminal_attach_required_u64(args: &Map<String, Value>, field: &str) -> anyhow::Result<u64> {
+    args.get(field)
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `{field}` required"))?
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `{field}` must be an unsigned integer"))
 }
 
 fn terminal_attach_required_session_id(args: &Map<String, Value>) -> anyhow::Result<String> {
@@ -206,13 +203,20 @@ fn terminal_attach_required_session_id(args: &Map<String, Value>) -> anyhow::Res
 
 fn attach_session(
     pty: &Arc<PtyService>,
+    io: &PtyIoService,
     attach_args: TerminalAttachArgs,
 ) -> anyhow::Result<BidiSource> {
     let session_id = attach_args.session_id;
     let id = PtySessionId::new(&session_id);
-    let session = pty
-        .get(&id)
-        .ok_or_else(|| anyhow::anyhow!("terminal.attach: unknown session_id `{session_id}`"))?;
+    if !pty.try_contains(&id)? {
+        anyhow::bail!("terminal.attach: unknown session_id `{session_id}`");
+    }
+    let lease = io.claim_attachment(
+        pty,
+        &id,
+        &attach_args.attachment_id,
+        attach_args.expected_epoch,
+    )?;
 
     // Channel halves are transport-axis per BidiSource's contract:
     //   xport_to_handler_tx  — IPC pushes here (SendBidi);
@@ -220,23 +224,36 @@ fn attach_session(
     //   xport_from_handler_tx — handler writes here;
     //                           IPC reads via xport_from_handler_rx
     //                           and emits RecvBidi
-    let (xport_to_handler_tx, xport_to_handler_rx) =
-        tokio::sync::mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_to_handler_tx, xport_to_handler_rx) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (xport_from_handler_tx, xport_from_handler_rx) =
         tokio::sync::mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
 
-    // Each of the three tasks (reader / writer / exit-watcher) owns
-    // one sender clone; the §I2 TerminalBidi fires only when the
-    // last sender drops. The original `xport_from_handler_tx` is
-    // moved into the writer below; the other two are clones.
-    spawn_pty_reader(Arc::clone(&session), xport_from_handler_tx.clone());
-    spawn_exit_watcher(
-        Arc::clone(&session),
-        xport_from_handler_tx.clone(),
+    xport_from_handler_tx
+        .try_send(BidiOutputFrame::json(json!({
+            "type": "attached",
+            "attachment_id": lease.attachment_id(),
+            "epoch": lease.attached_epoch(),
+        })))
+        .map_err(|_| anyhow::anyhow!("terminal.attach: output channel closed before attached"))?;
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    spawn_pty_output_pump(
         Arc::clone(pty),
-        id,
+        io.clone(),
+        id.clone(),
+        lease.clone(),
+        cancel_rx,
+        cancel_tx.clone(),
+        xport_from_handler_tx.clone(),
     );
-    spawn_pty_writer(session, xport_to_handler_rx, xport_from_handler_tx);
+    spawn_pty_writer(
+        Arc::clone(pty),
+        io.clone(),
+        id,
+        lease,
+        xport_to_handler_rx,
+        cancel_tx,
+        xport_from_handler_tx,
+    );
 
     Ok(BidiSource {
         to_client: xport_to_handler_tx,
@@ -245,60 +262,86 @@ fn attach_session(
 }
 
 /// T1: PTY master → wire. Blocking read on a dedicated thread
-/// pool, send each chunk as a `stdout` base64 frame.
-fn spawn_pty_reader(
-    session: Arc<crate::daemon::execution::pty::PtySession>,
+/// pool, send each chunk as a raw binary frame.
+fn spawn_pty_output_pump(
+    pty: Arc<PtyService>,
+    io: PtyIoService,
+    id: PtySessionId,
+    lease: PtyAttachmentLease,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    cancel_tx: tokio::sync::watch::Sender<bool>,
     to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
-        // Take the reader handle once; we own it for the task's life.
-        let reader = {
-            let m = session.master.lock().await;
-            match m.try_clone_reader() {
-                Ok(r) => r,
-                Err(_) => {
-                    // PTY can't lend a reader; surface as exit-with-
-                    // unknown so the wire sees a deterministic close.
-                    let _ = to_client
-                        .send(BidiOutputFrame::json(
-                            json!({"type": "exit", "status": Value::Null}),
-                        ))
-                        .await;
-                    return;
-                }
+        loop {
+            if *cancel.borrow() {
+                break;
             }
-        };
-
-        // Loop until EOF or send-failure (forwarder gone). The
-        // async send happens via blocking_send because we're outside
-        // the tokio runtime here. We discard the JoinError on the
-        // outer await: dropping our to_client clone is what the
-        // forwarder needs to fire §I2; the panic-vs-clean-exit
-        // distinction doesn't matter to that contract.
-        let _ = tokio::task::spawn_blocking(move || {
-            // Re-bind as mut: `move` doesn't add mutability, and
-            // `Read::read` needs `&mut self`.
-            let mut reader = reader;
-            let mut buf = vec![0u8; READ_CHUNK_SIZE];
-            use std::io::Read;
-            loop {
-                let n = match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF
-                    Ok(n) => n,
-                    Err(_) => break, // PTY gone
-                };
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+            let io_for_read = io.clone();
+            let pty_for_read = Arc::clone(&pty);
+            let id_for_read = id.clone();
+            let outcome = tokio::task::spawn_blocking(move || {
+                io_for_read.read_bytes(
+                    &pty_for_read,
+                    &id_for_read,
+                    EXIT_POLL_INTERVAL,
+                    READ_CHUNK_SIZE,
+                )
+            })
+            .await;
+            let Ok(Ok(outcome)) = outcome else {
+                let _ = to_client
+                    .send(BidiOutputFrame::json(json!({
+                        "type": "error",
+                        "code": "SESSION_IO_FAILED",
+                        "message": "terminal output pump failed",
+                    })))
+                    .await;
+                break;
+            };
+            if outcome.dropped_bytes > 0
+                && to_client
+                    .send(BidiOutputFrame::json(json!({
+                        "type": "output_gap",
+                        "code": "OUTPUT_GAP",
+                        "dropped_bytes": outcome.dropped_bytes,
+                    })))
+                    .await
+                    .is_err()
+            {
+                break;
+            }
+            let closed = outcome.closed;
+            let had_data = !outcome.data.is_empty();
+            if had_data {
                 if to_client
-                    .blocking_send(BidiOutputFrame::json(
-                        json!({"type": "stdout", "data": encoded}),
+                    .send(BidiOutputFrame::binary(
+                        outcome.data,
+                        "application/octet-stream",
                     ))
+                    .await
                     .is_err()
                 {
-                    break; // forwarder gone
+                    break;
                 }
             }
-        })
-        .await;
+            if closed && !had_data {
+                let status = child_exit_status(&pty, &id);
+                let _ = to_client
+                    .send(BidiOutputFrame::json(
+                        json!({"type": "exit", "status": status}),
+                    ))
+                    .await;
+                let _ = cancel_tx.send(true);
+                let _ = pty.try_close(&id);
+                io.drop_session(&id);
+                break;
+            }
+            if cancel.has_changed().unwrap_or(true) && *cancel.borrow_and_update() {
+                break;
+            }
+        }
+        drop(lease);
     });
 }
 
@@ -307,24 +350,15 @@ fn spawn_pty_reader(
 /// the resize fast path (for resize). Exits when the receiver
 /// yields None.
 fn spawn_pty_writer(
-    session: Arc<crate::daemon::execution::pty::PtySession>,
-    mut from_client: tokio::sync::mpsc::Receiver<Value>,
+    pty: Arc<PtyService>,
+    io: PtyIoService,
+    id: PtySessionId,
+    lease: PtyAttachmentLease,
+    mut from_client: tokio::sync::mpsc::Receiver<BidiInputFrame>,
+    cancel: tokio::sync::watch::Sender<bool>,
     to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
-        // Take the writer once; portable-pty's take_writer can only
-        // be called once per master, so we hold it for the loop.
-        let writer = {
-            let m = session.master.lock().await;
-            match m.take_writer() {
-                Ok(w) => w,
-                Err(_) => return, // can't write → drop sender → exit
-            }
-        };
-        // Wrap in Arc<Mutex> so spawn_blocking calls can move it
-        // back and forth across the await points.
-        let writer = std::sync::Arc::new(std::sync::Mutex::new(writer));
-
         while let Some(frame) = from_client.recv().await {
             let frame = match TerminalAttachClientFrame::parse(frame) {
                 Ok(frame) => frame,
@@ -340,36 +374,47 @@ fn spawn_pty_writer(
             };
             match frame {
                 TerminalAttachClientFrame::Stdin(bytes) => {
-                    let writer_clone = std::sync::Arc::clone(&writer);
-                    // spawn_blocking returns the inner io::Result so
-                    // a closed PTY is observable. A repeated write
-                    // failure means the child is gone — break the
-                    // loop, drop our sender, let T3's exit frame +
-                    // §I2 quorum close the session cleanly.
-                    let write_outcome = tokio::task::spawn_blocking(move || {
-                        use std::io::Write;
-                        let mut w = writer_clone.lock().expect("pty writer lock");
-                        w.write_all(&bytes).and_then(|()| w.flush())
+                    let io_for_write = io.clone();
+                    let pty_for_write = Arc::clone(&pty);
+                    let id_for_write = id.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        io_for_write.write_bytes(&pty_for_write, &id_for_write, &bytes)
                     })
-                    .await;
-                    match write_outcome {
-                        Ok(Ok(())) => {}
-                        // Either the spawn_blocking task panicked OR
-                        // write_all/flush returned Err — both mean
-                        // the PTY is no longer usable. Stop pumping.
+                    .await
+                    {
+                        Ok(Ok(PtyIoWriteOutcome::Written(_))) => {}
                         _ => break,
                     }
                 }
                 TerminalAttachClientFrame::Resize { cols, rows } => {
-                    let _ = session.resize(cols, rows).await;
+                    if pty.resize_session(&id, cols, rows).await.is_err() {
+                        break;
+                    }
+                }
+                TerminalAttachClientFrame::Detach => {
+                    let epoch = lease.release();
+                    let _ = to_client
+                        .send(BidiOutputFrame::json(json!({
+                            "type": "detached",
+                            "attachment_id": lease.attachment_id(),
+                            "epoch": epoch,
+                        })))
+                        .await;
+                    break;
+                }
+                TerminalAttachClientFrame::CloseInput => {
+                    let io_for_write = io.clone();
+                    let pty_for_write = Arc::clone(&pty);
+                    let id_for_write = id.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        io_for_write.write_bytes(&pty_for_write, &id_for_write, &[0x04])
+                    })
+                    .await;
                 }
             }
         }
-        // Loop exit: receiver returned None (CloseBidi from client,
-        // or connection drop), or a write to the PTY failed. Drop
-        // our to_client clone by falling out of scope; the §I2
-        // TerminalBidi fires once the reader and waiter also drop
-        // their clones.
+        lease.release();
+        let _ = cancel.send(true);
     });
 }
 
@@ -377,23 +422,26 @@ fn spawn_pty_writer(
 enum TerminalAttachClientFrame {
     Stdin(Vec<u8>),
     Resize { cols: u16, rows: u16 },
+    Detach,
+    CloseInput,
 }
 
 impl TerminalAttachClientFrame {
-    fn parse(frame: Value) -> anyhow::Result<Self> {
+    fn parse(frame: BidiInputFrame) -> anyhow::Result<Self> {
+        if frame.content_type == "application/octet-stream" {
+            return Ok(Self::Stdin(frame.payload));
+        }
+        if frame.content_type != "application/json" {
+            anyhow::bail!(
+                "terminal control frame must use application/json, got {:?}",
+                frame.content_type
+            );
+        }
+        let frame: Value = serde_json::from_slice(&frame.payload)
+            .map_err(|error| anyhow::anyhow!("terminal control frame is not JSON: {error}"))?;
         let object = terminal_attach_client_frame_object(&frame)?;
         let frame_type = terminal_attach_required_frame_type(object)?;
         match frame_type {
-            "stdin" => {
-                terminal_attach_reject_unknown_frame_fields(object, &["type", "data"])?;
-                let data = terminal_attach_required_frame_string(object, "data")?;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|error| {
-                        anyhow::anyhow!("stdin `data` base64 decode failed: {error}")
-                    })?;
-                Ok(Self::Stdin(bytes))
-            }
             "resize" => {
                 terminal_attach_reject_unknown_frame_fields(object, &["type", "cols", "rows"])?;
                 let cols = terminal_attach_required_frame_u16(object, "cols")?;
@@ -402,6 +450,14 @@ impl TerminalAttachClientFrame {
                     anyhow::bail!("resize `cols` and `rows` must be > 0");
                 }
                 Ok(Self::Resize { cols, rows })
+            }
+            "detach" => {
+                terminal_attach_reject_unknown_frame_fields(object, &["type"])?;
+                Ok(Self::Detach)
+            }
+            "close_input" => {
+                terminal_attach_reject_unknown_frame_fields(object, &["type"])?;
+                Ok(Self::CloseInput)
             }
             other => anyhow::bail!("unsupported frame type `{other}`"),
         }
@@ -459,60 +515,26 @@ fn terminal_attach_reject_unknown_frame_fields(
     Ok(())
 }
 
-/// T3: exit-watcher. Polls the child's wait() and emits one `exit`
-/// frame when the child terminates. The frame carries the exit
-/// status when waitable; null when the child was reaped externally.
-fn spawn_exit_watcher(
-    session: Arc<crate::daemon::execution::pty::PtySession>,
-    to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
-    pty: Arc<PtyService>,
-    id: PtySessionId,
-) {
-    tokio::spawn(async move {
-        // We can't hold the child Mutex across an await, so the loop
-        // wakes every EXIT_POLL_INTERVAL and tries try_wait inside a
-        // short critical section.
-        loop {
-            let status = {
-                let mut g = match session.child.lock() {
-                    Ok(g) => g,
-                    Err(_) => return, // poisoned → caller side gave up
-                };
-                let Some(child) = g.as_mut() else {
-                    // Child slot is empty — close raced with us.
-                    return;
-                };
-                match child.try_wait() {
-                    // Some(Some(code)) → child exited with `code`.
-                    // Some(None)       → wait error; treat as exited
-                    //                    with unknown status (null on
-                    //                    the wire, not a sentinel int
-                    //                    that collides with legal codes).
-                    // None             → still alive; keep polling.
-                    Ok(Some(s)) => Some(Some(s.exit_code())),
-                    Ok(None) => None,
-                    Err(_) => Some(None),
-                }
-            };
-            if let Some(code) = status {
-                let status_value = match code {
-                    Some(c) => json!(c),
-                    None => Value::Null,
-                };
-                let _ = to_client
-                    .send(BidiOutputFrame::json(
-                        json!({"type": "exit", "status": status_value}),
-                    ))
-                    .await;
-                // Best-effort cleanup: remove the session row so a
-                // future close sees ack=false (idempotent). Failure
-                // here is benign — close handler also removes the row.
-                let _ = pty.close(&id);
-                return;
-            }
-            tokio::time::sleep(EXIT_POLL_INTERVAL).await;
-        }
-    });
+fn child_exit_status(pty: &Arc<PtyService>, id: &PtySessionId) -> Value {
+    if let Some(status) = pty.supervised_exit_status(id) {
+        return status
+            .ok()
+            .flatten()
+            .map_or(Value::Null, |value| json!(value));
+    }
+    let Some(session) = pty.get(id) else {
+        return Value::Null;
+    };
+    let Ok(mut child) = session.child.lock() else {
+        return Value::Null;
+    };
+    let Some(child) = child.as_mut() else {
+        return Value::Null;
+    };
+    match child.try_wait() {
+        Ok(Some(status)) => json!(status.exit_code()),
+        Ok(None) | Err(_) => Value::Null,
+    }
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -520,9 +542,11 @@ fn spawn_exit_watcher(
 pub fn attach_input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["session_id"],
+        "required": ["session_id", "attachment_id", "expected_epoch"],
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
+            "attachment_id": {"type": "string", "minLength": 1},
+            "expected_epoch": {"type": "integer", "minimum": 0},
         },
         "additionalProperties": false,
     })
@@ -531,9 +555,9 @@ pub fn attach_input_schema() -> Value {
 pub fn attach_description() -> &'static str {
     "Attach an InvokeBidi session to a previously-opened PTY \
      (created via terminal.create). Client→handler frames: \
-     {type:\"stdin\",data:b64} or {type:\"resize\",cols,rows}. \
-     Handler→client frames: {type:\"stdout\",data:b64} and a final \
-     {type:\"exit\",status} when the child terminates."
+     application/octet-stream stdin, {type:\"resize\",cols,rows}, \
+     {type:\"detach\"}, or {type:\"close_input\"}. Handler→client \
+     frames include raw stdout, attached, detached, error, and exit."
 }
 
 #[cfg(test)]
@@ -547,8 +571,34 @@ mod tests {
         Arc::new(PtyService::new())
     }
 
+    fn attach_args(session_id: &str) -> Value {
+        attach_args_at(session_id, "test-attachment", 0)
+    }
+
+    fn attach_args_at(session_id: &str, attachment_id: &str, expected_epoch: u64) -> Value {
+        json!({
+            "session_id": session_id,
+            "attachment_id": attachment_id,
+            "expected_epoch": expected_epoch,
+        })
+    }
+
     fn metadata_test_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    async fn send_stdin(sender: &crate::daemon::ability::dispatch::BidiInputSender, bytes: &[u8]) {
+        sender
+            .send_frame(
+                BidiInputFrame::new(bytes.to_vec()).with_content_type("application/octet-stream"),
+            )
+            .await
+            .expect("send raw PTY stdin");
+    }
+
+    fn json_input(value: Value) -> BidiInputFrame {
+        BidiInputFrame::new(serde_json::to_vec(&value).expect("serialize control"))
+            .with_content_type("application/json")
     }
 
     fn shell_command() -> String {
@@ -591,7 +641,11 @@ mod tests {
             };
             match tokio::time::timeout(rem, rx.recv()).await {
                 Ok(Some(f)) => {
-                    let f = f.into_json_value().expect("pty emits JSON frames");
+                    let f = if f.content_type == "application/octet-stream" {
+                        json!({"type": "stdout", "data": f.payload})
+                    } else {
+                        f.into_json_value().expect("PTY control JSON frame")
+                    };
                     let is_exit = f.get("type").and_then(Value::as_str) == Some("exit");
                     out.push(f);
                     if is_exit {
@@ -608,7 +662,7 @@ mod tests {
     #[tokio::test]
     async fn registration_makes_attach_dispatchable() {
         let mut reg = metadata_test_catalog();
-        register(&mut reg, fresh_service());
+        register(&mut reg, fresh_service(), PtyIoService::new());
         assert!(
             reg.resolve_bidi_with_env(ABILITY_TERMINAL_ATTACH).is_some(),
             "attach must register as a BIDI handler, not RPC/Stream"
@@ -622,7 +676,8 @@ mod tests {
     #[tokio::test]
     async fn attach_to_unknown_session_id_fails_with_clear_error() {
         let svc = fresh_service();
-        let err = attach_handler(&svc, json!({"session_id": "not-a-session"})).unwrap_err();
+        let err =
+            attach_handler(&svc, &PtyIoService::new(), attach_args("not-a-session")).unwrap_err();
         let msg = format!("{err}");
         assert!(
             msg.contains("unknown session_id"),
@@ -633,14 +688,14 @@ mod tests {
     #[tokio::test]
     async fn attach_missing_session_id_arg_rejects_at_parse() {
         let svc = fresh_service();
-        let err = attach_handler(&svc, json!({})).unwrap_err();
+        let err = attach_handler(&svc, &PtyIoService::new(), json!({})).unwrap_err();
         assert!(format!("{err}").contains("session_id"));
     }
 
     #[tokio::test]
     async fn attach_rejects_non_object_args_before_lookup() {
         let svc = fresh_service();
-        let err = attach_handler(&svc, Value::Null).unwrap_err();
+        let err = attach_handler(&svc, &PtyIoService::new(), Value::Null).unwrap_err();
         let message = err.to_string();
         assert!(
             message.contains("args must be a JSON object"),
@@ -657,6 +712,7 @@ mod tests {
         let svc = fresh_service();
         let err = attach_handler(
             &svc,
+            &PtyIoService::new(),
             json!({"session_id": "not-a-session", "legacy_mode": true}),
         )
         .unwrap_err();
@@ -674,7 +730,12 @@ mod tests {
     #[tokio::test]
     async fn attach_rejects_wrong_typed_session_id_before_lookup() {
         let svc = fresh_service();
-        let err = attach_handler(&svc, json!({"session_id": 42})).unwrap_err();
+        let err = attach_handler(
+            &svc,
+            &PtyIoService::new(),
+            json!({"session_id": 42, "attachment_id": "a", "expected_epoch": 0}),
+        )
+        .unwrap_err();
         let message = err.to_string();
         assert!(
             message.contains("`session_id` must be a string"),
@@ -689,7 +750,12 @@ mod tests {
     #[tokio::test]
     async fn attach_rejects_blank_session_id_before_lookup() {
         let svc = fresh_service();
-        let err = attach_handler(&svc, json!({"session_id": "   "})).unwrap_err();
+        let err = attach_handler(
+            &svc,
+            &PtyIoService::new(),
+            json!({"session_id": "   ", "attachment_id": "a", "expected_epoch": 0}),
+        )
+        .unwrap_err();
         let message = err.to_string();
         assert!(
             message.contains("`session_id` must not be empty"),
@@ -713,18 +779,12 @@ mod tests {
             ..PtyCreateSpec::default()
         };
         let id = svc.create(spec).expect("spawn /bin/sh");
+        let io = PtyIoService::new();
+        let source = attach_handler(&svc, &io, attach_args(id.as_str())).expect("attach");
 
-        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        send_stdin(&source.to_client, b"echo hi\n").await;
 
-        // Send one stdin frame: `echo hi\n`. Base64-encoded.
-        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo hi\n");
-        source
-            .to_client
-            .send(json!({"type": "stdin", "data": data_b64}))
-            .await
-            .expect("send stdin frame");
-
-        // Drain frames; concatenate every base64-decoded `stdout`
+        // Drain frames; concatenate every raw `stdout`
         // payload. A real shell may emit a prompt + the typed line
         // echo + the command output + the next prompt, so we just
         // assert "hi" appears somewhere in the cumulative bytes.
@@ -734,11 +794,8 @@ mod tests {
             drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
         for f in &frames {
             if f.get("type").and_then(Value::as_str) == Some("stdout") {
-                if let Some(b64) = f.get("data").and_then(Value::as_str) {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .unwrap_or_default();
-                    accum.extend_from_slice(&bytes);
+                if let Some(bytes) = f.get("data").and_then(Value::as_array) {
+                    accum.extend(bytes.iter().map(|value| value.as_u64().unwrap() as u8));
                 }
             }
         }
@@ -765,19 +822,15 @@ mod tests {
             ..PtyCreateSpec::default()
         };
         let id = svc.create(spec).expect("spawn /bin/sh");
-        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let io = PtyIoService::new();
+        let source = attach_handler(&svc, &io, attach_args(id.as_str())).expect("attach");
 
         source
             .to_client
             .send(json!({"type": "resize", "cols": 200, "rows": 60}))
             .await
             .expect("send resize");
-        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo postresize\n");
-        source
-            .to_client
-            .send(json!({"type": "stdin", "data": data_b64}))
-            .await
-            .expect("send stdin");
+        send_stdin(&source.to_client, b"echo postresize\n").await;
 
         let mut from_handler = source.from_client;
         let mut accum = Vec::new();
@@ -785,11 +838,8 @@ mod tests {
             drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
         for f in &frames {
             if f.get("type").and_then(Value::as_str) == Some("stdout") {
-                if let Some(b64) = f.get("data").and_then(Value::as_str) {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .unwrap_or_default();
-                    accum.extend_from_slice(&bytes);
+                if let Some(bytes) = f.get("data").and_then(Value::as_array) {
+                    accum.extend(bytes.iter().map(|value| value.as_u64().unwrap() as u8));
                 }
             }
         }
@@ -800,6 +850,63 @@ mod tests {
         );
 
         svc.close(&id);
+    }
+
+    #[tokio::test]
+    async fn detach_releases_epoch_and_reattach_reuses_the_same_pty_writer() {
+        let svc = fresh_service();
+        let io = PtyIoService::new();
+        let id = svc
+            .create(PtyCreateSpec {
+                command: Some(shell_command()),
+                ..PtyCreateSpec::default()
+            })
+            .expect("spawn /bin/sh");
+        let first = attach_handler(&svc, &io, attach_args_at(id.as_str(), "attachment-a", 0))
+            .expect("first attach");
+
+        let conflict = attach_handler(&svc, &io, attach_args_at(id.as_str(), "attachment-b", 1))
+            .expect_err("one active attachment per session");
+        assert!(conflict.to_string().contains("SESSION_ALREADY_ATTACHED"));
+
+        first
+            .to_client
+            .send(json!({"type": "detach"}))
+            .await
+            .expect("request detach");
+        let mut first_output = first.from_client;
+        let first_frames =
+            drain_handler_emit(&mut first_output, 8, std::time::Duration::from_secs(2)).await;
+        assert!(first_frames.iter().any(|frame| {
+            frame.get("type").and_then(Value::as_str) == Some("detached")
+                && frame.get("epoch").and_then(Value::as_u64) == Some(2)
+        }));
+
+        let stale = attach_handler(
+            &svc,
+            &io,
+            attach_args_at(id.as_str(), "attachment-stale", 0),
+        )
+        .expect_err("stale epoch must not reclaim the PTY");
+        assert!(stale.to_string().contains("ATTACHMENT_STALE"));
+
+        let second = attach_handler(&svc, &io, attach_args_at(id.as_str(), "attachment-b", 2))
+            .expect("reattach");
+        send_stdin(&second.to_client, b"echo reattached\n").await;
+        let mut second_output = second.from_client;
+        let frames =
+            drain_handler_emit(&mut second_output, 32, std::time::Duration::from_secs(3)).await;
+        let mut output = Vec::new();
+        for frame in frames {
+            if frame.get("type").and_then(Value::as_str) == Some("stdout") {
+                if let Some(data) = frame.get("data").and_then(Value::as_array) {
+                    output.extend(data.iter().map(|value| value.as_u64().unwrap() as u8));
+                }
+            }
+        }
+        assert!(String::from_utf8_lossy(&output).contains("reattached"));
+        svc.close(&id);
+        io.drop_session(&id);
     }
 
     #[tokio::test]
@@ -816,7 +923,8 @@ mod tests {
             ..PtyCreateSpec::default()
         };
         let id = svc.create(spec).expect("spawn /usr/bin/true");
-        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let io = PtyIoService::new();
+        let source = attach_handler(&svc, &io, attach_args(id.as_str())).expect("attach");
 
         // Wait for an exit frame within a generous deadline (exit-
         // watcher polls every 100ms; the child may need a tick or
@@ -845,7 +953,8 @@ mod tests {
             ..PtyCreateSpec::default()
         };
         let id = svc.create(spec).expect("spawn /bin/sh");
-        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let io = PtyIoService::new();
+        let source = attach_handler(&svc, &io, attach_args(id.as_str())).expect("attach");
         let to_handler = source.to_client;
         let mut from_handler = source.from_client;
 
@@ -867,9 +976,11 @@ mod tests {
             "unknown client frames must produce a visible protocol error; got {frames:?}"
         );
 
-        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo afterjunk\n");
         if to_handler
-            .send(json!({"type": "stdin", "data": data_b64}))
+            .send_frame(
+                BidiInputFrame::new(b"echo afterjunk\n".to_vec())
+                    .with_content_type("application/octet-stream"),
+            )
             .await
             .is_ok()
         {
@@ -879,11 +990,8 @@ mod tests {
             let mut accum = Vec::new();
             for frame in &frames {
                 if frame.get("type").and_then(Value::as_str) == Some("stdout") {
-                    if let Some(b64) = frame.get("data").and_then(Value::as_str) {
-                        let bytes = base64::engine::general_purpose::STANDARD
-                            .decode(b64)
-                            .unwrap_or_default();
-                        accum.extend_from_slice(&bytes);
+                    if let Some(bytes) = frame.get("data").and_then(Value::as_array) {
+                        accum.extend(bytes.iter().map(|value| value.as_u64().unwrap() as u8));
                     }
                 }
             }
@@ -899,7 +1007,7 @@ mod tests {
 
     #[test]
     fn client_frame_parser_rejects_non_object_frames() {
-        let err = TerminalAttachClientFrame::parse(Value::Null).unwrap_err();
+        let err = TerminalAttachClientFrame::parse(json_input(Value::Null)).unwrap_err();
         assert!(
             format!("{err}").contains("frame must be a JSON object"),
             "unexpected error: {err}"
@@ -907,26 +1015,22 @@ mod tests {
     }
 
     #[test]
-    fn client_frame_parser_rejects_unknown_stdin_fields() {
-        let err = TerminalAttachClientFrame::parse(json!({
-            "type": "stdin",
-            "data": "aGk=",
-            "legacy_mode": true
-        }))
-        .unwrap_err();
-        assert!(
-            format!("{err}").contains("unsupported frame field(s): legacy_mode"),
-            "unexpected error: {err}"
-        );
+    fn client_frame_parser_preserves_all_raw_stdin_bytes() {
+        let bytes = (0_u8..=u8::MAX).collect::<Vec<_>>();
+        let parsed = TerminalAttachClientFrame::parse(
+            BidiInputFrame::new(bytes.clone()).with_content_type("application/octet-stream"),
+        )
+        .expect("raw stdin frame");
+        assert_eq!(parsed, TerminalAttachClientFrame::Stdin(bytes));
     }
 
     #[test]
     fn client_frame_parser_rejects_bad_resize_dimensions() {
-        let err = TerminalAttachClientFrame::parse(json!({
+        let err = TerminalAttachClientFrame::parse(json_input(json!({
             "type": "resize",
             "cols": 0,
             "rows": 24
-        }))
+        })))
         .unwrap_err();
         assert!(
             format!("{err}").contains("must be > 0"),

@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,17 @@ import (
 )
 
 const MaxStreamBufferedEvents = 1024
+
+var canonicalRuntimeStreamStates = map[string]struct{}{
+	"Accepted":   {},
+	"Admitted":   {},
+	"Dispatched": {},
+	"Running":    {},
+	"Completed":  {},
+	"Failed":     {},
+	"TimedOut":   {},
+	"Cancelled":  {},
+}
 
 // StreamState is the Runtime Core server-stream state.
 type StreamState string
@@ -29,6 +41,26 @@ type StreamTransport interface {
 	Recv(ctx context.Context) ([]byte, error)
 	Cancel(ctx context.Context, reason string) ([]byte, error)
 	Close(ctx context.Context) error
+}
+
+type rawStreamPacket struct {
+	legacyMetadataJSON   []byte
+	sequence             uint64
+	kind                 string
+	state                string
+	terminal             bool
+	transportTerminal    bool
+	elapsedMS            uint64
+	payloadContentType   string
+	payload              []byte
+	admissionReceiptJSON []byte
+	terminalReceiptJSON  []byte
+	errorJSON            []byte
+}
+
+type streamRawTransport interface {
+	RawStreamEnabled() bool
+	RecvRaw(ctx context.Context) (rawStreamPacket, error)
 }
 
 // StreamTransportFunc adapts functions into a StreamTransport.
@@ -61,17 +93,18 @@ func (f StreamTransportFunc) Close(ctx context.Context) error {
 
 // StreamHandle is the public ordered stream event state object.
 type StreamHandle struct {
-	mu            sync.Mutex
-	streamID      string
-	transport     StreamTransport
-	runtimeState  StreamState
-	carrierState  carrierState
-	events        []StreamEvent
-	lastSequence  uint64
-	terminalSeen  bool
-	terminalEvent *StreamTerminalEvent
-	maxBuffered   int
-	receiving     bool
+	mu                   sync.Mutex
+	streamID             string
+	transport            StreamTransport
+	runtimeState         StreamState
+	carrierState         carrierState
+	events               []StreamEvent
+	lastSequence         uint64
+	acknowledgedSequence uint64
+	terminalSeen         bool
+	terminalEvent        *StreamTerminalEvent
+	maxBuffered          int
+	receiving            bool
 }
 
 // StreamEvent is an SDK stream event projection.
@@ -83,6 +116,7 @@ type StreamEvent struct {
 	transportTerminal    bool
 	payloadContentType   string
 	payloadBase64        string
+	payloadBytes         []byte
 	payloadJSON          json.RawMessage
 	elapsedMS            int64
 	errorJSON            json.RawMessage
@@ -196,6 +230,43 @@ func (s *StreamHandle) Events() []StreamEvent {
 	return append([]StreamEvent(nil), s.events...)
 }
 
+// AcknowledgeThrough releases retained event history through sequence after a
+// consumer has durably projected or delivered those frames. Runtime ordering
+// and terminal state remain unchanged; this only advances the SDK's bounded
+// observation window so long-running media streams do not retain every
+// payload or fail after MaxBufferedEvents frames.
+func (s *StreamHandle) AcknowledgeThrough(sequence uint64) error {
+	if s == nil {
+		return invalidRuntimeClient("stream handle is not initialized")
+	}
+	if sequence == 0 {
+		return invalidRuntimePayload("acknowledged stream sequence must be positive", nil)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sequence <= s.acknowledgedSequence {
+		return nil
+	}
+	if sequence > s.lastSequence {
+		return invalidRuntimePayload("cannot acknowledge an unobserved stream sequence", nil)
+	}
+	consumed := 0
+	for consumed < len(s.events) && s.events[consumed].sequence <= sequence {
+		// Clear payload and receipt references before shrinking so the backing
+		// array cannot keep acknowledged media buffers alive.
+		s.events[consumed] = StreamEvent{}
+		consumed++
+	}
+	copy(s.events, s.events[consumed:])
+	remaining := len(s.events) - consumed
+	for index := remaining; index < len(s.events); index++ {
+		s.events[index] = StreamEvent{}
+	}
+	s.events = s.events[:remaining]
+	s.acknowledgedSequence = sequence
+	return nil
+}
+
 func (s *StreamHandle) MaxBufferedEvents() int {
 	if s == nil {
 		return 0
@@ -249,7 +320,21 @@ func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
 	transport := s.transport
 	s.mu.Unlock()
 
-	raw, err := transport.Recv(ctx)
+	var event StreamEvent
+	var err error
+	if rawTransport, ok := transport.(streamRawTransport); ok && rawTransport.RawStreamEnabled() {
+		var packet rawStreamPacket
+		packet, err = rawTransport.RecvRaw(ctx)
+		if err == nil {
+			event, err = NewStreamEventFromRawPacket(packet)
+		}
+	} else {
+		var raw []byte
+		raw, err = transport.Recv(ctx)
+		if err == nil {
+			event, err = NewStreamEventFromJSON(raw)
+		}
+	}
 	if err != nil {
 		s.mu.Lock()
 		s.receiving = false
@@ -263,7 +348,6 @@ func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
 		}
 		return StreamEvent{}, transportRuntimeError("stream recv transport failed", err)
 	}
-	event, err := NewStreamEventFromJSON(raw)
 	s.mu.Lock()
 	s.receiving = false
 	if err != nil {
@@ -463,7 +547,14 @@ func (e StreamEvent) PayloadContentType() string {
 }
 
 func (e StreamEvent) PayloadBase64() string {
+	if e.payloadBase64 == "" && len(e.payloadBytes) != 0 {
+		return base64.StdEncoding.EncodeToString(e.payloadBytes)
+	}
 	return e.payloadBase64
+}
+
+func (e StreamEvent) PayloadBytes() []byte {
+	return append([]byte(nil), e.payloadBytes...)
 }
 
 func (e StreamEvent) PayloadJSON() json.RawMessage {
@@ -620,6 +711,10 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	if !isValidStreamEventKind(dto.Kind) {
 		return StreamEvent{}, invalidRuntimePayload(fmt.Sprintf("unsupported stream event kind: %s", dto.Kind), nil)
 	}
+	payloadBytes, err := streamPayloadBase64Bytes(dto.PayloadBase64)
+	if err != nil {
+		return StreamEvent{}, err
+	}
 	return StreamEvent{
 		sequence:             dto.Sequence,
 		kind:                 dto.Kind,
@@ -628,12 +723,122 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		transportTerminal:    dto.TransportTerminal,
 		payloadContentType:   dto.PayloadContentType,
 		payloadBase64:        dto.PayloadBase64,
+		payloadBytes:         payloadBytes,
 		payloadJSON:          append(json.RawMessage(nil), dto.PayloadJSON...),
 		elapsedMS:            dto.ElapsedMS,
 		errorJSON:            append(json.RawMessage(nil), dto.Error...),
 		admissionReceiptJSON: append(json.RawMessage(nil), dto.AdmissionReceipt...),
 		terminalReceiptJSON:  append(json.RawMessage(nil), dto.TerminalReceipt...),
 	}, nil
+}
+
+func NewStreamEventFromRawPacket(packet rawStreamPacket) (StreamEvent, error) {
+	if packet.sequence == 0 {
+		return StreamEvent{}, invalidRuntimePayload("binary stream frame sequence must be positive", nil)
+	}
+	if _, ok := canonicalRuntimeStreamStates[packet.state]; !ok {
+		return StreamEvent{}, invalidRuntimePayload("binary stream frame state is not canonical: "+packet.state, nil)
+	}
+	if !canonicalBinaryStreamKind(packet.kind) {
+		return StreamEvent{}, invalidRuntimePayload("binary stream frame kind is not canonical: "+packet.kind, nil)
+	}
+	admissionReceipt, err := decodeBinaryStreamSidecar(packet.admissionReceiptJSON, "admission_receipt")
+	if err != nil {
+		return StreamEvent{}, err
+	}
+	terminalReceipt, err := decodeBinaryStreamSidecar(packet.terminalReceiptJSON, "terminal_receipt")
+	if err != nil {
+		return StreamEvent{}, err
+	}
+	errorJSON, err := decodeBinaryStreamSidecar(packet.errorJSON, "error")
+	if err != nil {
+		return StreamEvent{}, err
+	}
+	var payloadJSON json.RawMessage
+	if len(packet.payload) != 0 && stringsContainsFold(packet.payloadContentType, "json") {
+		if !json.Valid(packet.payload) {
+			return StreamEvent{}, invalidRuntimePayload("decode raw JSON stream payload", nil)
+		}
+		payloadJSON = json.RawMessage(packet.payload)
+	}
+	return StreamEvent{
+		sequence:             packet.sequence,
+		kind:                 packet.kind,
+		state:                packet.state,
+		terminal:             packet.terminal,
+		transportTerminal:    packet.transportTerminal,
+		payloadContentType:   packet.payloadContentType,
+		payloadBytes:         packet.payload,
+		payloadJSON:          payloadJSON,
+		elapsedMS:            int64(packet.elapsedMS),
+		errorJSON:            errorJSON,
+		admissionReceiptJSON: admissionReceipt,
+		terminalReceiptJSON:  terminalReceipt,
+	}, nil
+}
+
+func canonicalBinaryStreamKind(kind string) bool {
+	switch kind {
+	case "data", "terminal", "error", "cancelled", "timeout", "receipt_verification_error":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeBinaryStreamSidecar(raw []byte, field string) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode binary stream %s sidecar: %v", field, err), err)
+	}
+	if object == nil {
+		return nil, invalidRuntimePayload("binary stream "+field+" sidecar must be an object", nil)
+	}
+	return json.RawMessage(raw), nil
+}
+
+func streamPayloadBase64Bytes(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode payload_base64: %v", err), err)
+	}
+	return decoded, nil
+}
+
+func stringsContainsFold(value string, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	if len(value) < len(needle) {
+		return false
+	}
+	for start := 0; start+len(needle) <= len(value); start++ {
+		match := true
+		for offset := range needle {
+			a := value[start+offset]
+			b := needle[offset]
+			if 'A' <= a && a <= 'Z' {
+				a += 'a' - 'A'
+			}
+			if 'A' <= b && b <= 'Z' {
+				b += 'a' - 'A'
+			}
+			if a != b {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidStreamEventKind(kind string) bool {

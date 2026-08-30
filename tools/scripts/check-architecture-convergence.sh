@@ -51,7 +51,7 @@ required_roots = (
     cli_root / "src/daemon/ability/builtins/automation",
     cli_root / "src/daemon/ability/builtins/agents/chat.rs",
     cli_root / "sdk",
-    axon_root / "core/runtime-rs/src/services/invocation",
+    axon_root / "core/runtime-rs/src",
     axon_root / "sdk/rust/src",
 )
 missing = [str(path) for path in required_roots if not path.exists()]
@@ -515,7 +515,16 @@ families = {
     "Mission": production_files(
         cli_root / "src/daemon/ability/builtins/automation", {".rs"}
     ),
-    "Chat": [cli_root / "src/daemon/ability/builtins/agents/chat.rs"],
+    # Chat deliberately separates implementation factories from transactional
+    # Invocation registration. `chat.rs` owns execution semantics while
+    # HotAgentRegistrar commits descriptor, authority, implementation and
+    # LocalRuntime bindings atomically. Audit both halves as one production
+    # family so moving registration out of the handler module does not look
+    # like a missing Invocation entry point.
+    "Chat": [
+        cli_root / "src/daemon/ability/builtins/agents/chat.rs",
+        cli_root / "src/daemon/axon_bridge/hot_agent_registrar.rs",
+    ],
 }
 family_anchors = {
     "EAL": re.compile(
@@ -597,11 +606,16 @@ if not all(owner_contract):
         "InvocationCore must own proof emission and terminal side effects",
     )
 
-axon_invocation = axon_root / "core/runtime-rs/src/services/invocation"
+axon_invocation_candidates = (
+    axon_root / "core/runtime-rs/src/services/invocation",
+    axon_root / "core/runtime-rs/src/services",
+)
 receipt_factory = axon_root / "sdk/rust/src/invocation/receipt_provider.rs"
 terminal_scan_files = production_files(cli_root / "src/daemon/invocation", {".rs"})
-if axon_invocation.exists():
-    terminal_scan_files += production_files(axon_invocation, {".rs"})
+for axon_invocation_root in axon_invocation_candidates:
+    if axon_invocation_root.exists():
+        terminal_scan_files += production_files(axon_invocation_root, {".rs"})
+        break
 writer_name = re.compile(
     r"\bfn\s+(?:build|emit|mint|write|persist|commit)_[A-Za-z0-9_]*terminal[A-Za-z0-9_]*receipt[A-Za-z0-9_]*\s*\("
 )
@@ -3087,6 +3101,20 @@ for path in production_files(cli_root / "src/daemon", {".rs"}):
     text = source(path)
     for pattern, detail in manual_tuple_patterns:
         for match in pattern.finditer(text):
+            # `session.open` control frames are not Invocation envelopes. This
+            # focused adapter projects already-authenticated carrier identity
+            # into the authority-metadata verifier only; it never signs,
+            # hashes, routes, or dispatches the partial protobuf value. Keep
+            # the exemption function-bounded so ordinary production paths
+            # remain forbidden from assembling canonical Invocation tuples.
+            session_control = rust_method_body(
+                text, "verify_session_control_authority_metadata"
+            )
+            if session_control is not None:
+                session_control_offset, session_control_body = session_control
+                session_control_end = session_control_offset + len(session_control_body)
+                if session_control_offset <= match.start() <= session_control_end:
+                    continue
             add(
                 "R16D_CANONICAL_ENVELOPE_OWNER_FORK",
                 path,
@@ -9278,14 +9306,20 @@ if session_prelude.exists():
                     line_number(text, offset),
                     "paired user signer source must load the runtime caller signer for the paired User URA",
                 )
-            if "paired_user_resolve_key_args(&user_ura, presented_pubkey_b64)" not in body:
+            if not re.search(
+                r"paired_user_resolve_key_args\(\s*&?user_ura\s*,\s*&?signer_public_key_b64\s*\)",
+                body,
+            ):
                 add(
                     "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
                     session_prelude,
                     line_number(text, offset),
                     "paired user trust sync must pin resolve_key with the presented local user pubkey",
                 )
-            if "resolved_public_keys(&response.result).map_err" not in body:
+            if not re.search(
+                r"resolved_public_keys\(\s*&?resolve_response\.result\s*\)\s*\.map_err",
+                body,
+            ):
                 add(
                     "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
                     session_prelude,
@@ -16182,12 +16216,16 @@ if route_resolver_rs.exists():
     raw_text = route_resolver_rs.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
-            "RouteOwnerKind::LegacyDeviceProfileProjection",
-            "route selectors must quarantine Device-owned abilities as legacy projections",
+            "RouteOwnerKind::DevicePlacement",
+            "route selectors must represent Device input as placement, not as an Ability owner",
         ),
         (
-            "Device-owned Ability URAs and descriptor refs are migration read-models only",
-            "route data sources must reject explicit Device-owned selectors while allowing Device placement plus a public ability to resolve through the registry",
+            "device_placement_route_selector_from_query",
+            "Device placement plus public ability must be projected before AbilitySelector parsing",
+        ),
+        (
+            "Device is execution substrate",
+            "route data sources must reject explicit Device-owned Ability selectors while allowing Device placement plus a public ability to resolve through the registry",
         ),
         (
             "system_agent_ability_online_resolves_final_local_execution_route",
@@ -17283,6 +17321,55 @@ daemon_invocation_service_tests_rs = (
 daemon_invocation_service_unary_tests_rs = (
     cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
 )
+federation_discover_cli_rs = cli_root / "src/cli/commands/federation_discover.rs"
+if federation_discover_cli_rs.exists():
+    raw_text = federation_discover_cli_rs.read_text(
+        encoding="utf-8", errors="replace"
+    )
+    for token, detail in (
+        (
+            "read_federated_directory_for_current_user(",
+            "federation discover CLI must default paired product reads to the current User scope",
+        ),
+        (
+            "pub operator_audit: bool",
+            "unfiltered federation discover must require an explicit operator-audit CLI flag",
+        ),
+        (
+            'conflicts_with = "local_user_id"',
+            "operator-audit and explicit User scopes must be mutually exclusive",
+        ),
+        (
+            "paired_user_scope_is_the_default",
+            "federation discover CLI tests must prove the privacy-preserving default scope",
+        ),
+    ):
+        if token not in raw_text:
+            add(
+                "R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE",
+                federation_discover_cli_rs,
+                1,
+                detail,
+            )
+if remote_invoke_rs.exists():
+    raw_text = remote_invoke_rs.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "federation.discover operator/audit scope requires a local Authority runtime",
+            "operator/audit tuple construction must reject non-Authority local runtimes before I/O",
+        ),
+        (
+            "federation_discover_operator_scope_rejects_device_runtime_before_io",
+            "operator/audit scope tests must prove a Device cannot become an operator principal",
+        ),
+    ):
+        if token not in raw_text:
+            add(
+                "R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE",
+                remote_invoke_rs,
+                1,
+                detail,
+            )
 if unary_dispatcher_rs.exists():
     text = source(unary_dispatcher_rs)
     raw_text = unary_dispatcher_rs.read_text(encoding="utf-8", errors="replace")

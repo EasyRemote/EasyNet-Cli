@@ -260,6 +260,9 @@ pub struct AbilityManifest {
     /// Optional fixed subject URA used only by an explicit subject contract.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     subject_contract_ura: Option<String>,
+    /// Optional data-plane profile for governed bidi abilities.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    bidi_wire_kind: Option<AbilityBidiWireKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_seconds: Option<u64>,
     input_schema: Value,
@@ -339,11 +342,31 @@ pub enum AbilityDedicatedSurface {
     None,
     Terminal,
     FileTransfer,
+    Tunnel,
     Media,
     RemoteDesktop,
     Voice,
     Browser,
     Pages,
+}
+
+/// Bidi data-plane frame profile advertised by descriptor metadata.
+///
+/// This refines `call_mode = bidi`; it is not a separate Invocation semantic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityBidiWireKind {
+    JsonFrames,
+    MetadataJsonPlusBinary,
+}
+
+impl AbilityBidiWireKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::JsonFrames => "json_frames",
+            Self::MetadataJsonPlusBinary => "metadata_json_plus_binary",
+        }
+    }
 }
 
 impl AbilityDedicatedSurface {
@@ -352,6 +375,7 @@ impl AbilityDedicatedSurface {
             Self::None => "none",
             Self::Terminal => "terminal",
             Self::FileTransfer => "file_transfer",
+            Self::Tunnel => "tunnel",
             Self::Media => "media",
             Self::RemoteDesktop => "remote_desktop",
             Self::Voice => "voice",
@@ -637,9 +661,8 @@ pub enum AbilityExec {
     /// CLI. It preserves the MCP `tools/call` response shape and
     /// avoids routing through shell or chat translation.
     Mcp(McpExec),
-    /// Invoke an external warm host over a framed Unix-socket transport.
-    /// The daemon opens `host_socket`, sends one request line, then reads
-    /// JSON frames until an explicit terminal. `admission_action` selects
+    /// Invoke an external warm host over a versioned Unix-socket transport.
+    /// `admission_action` selects
     /// the canonical call geometry: `invoke` requires exactly one result
     /// frame and `stream` preserves the complete server-stream. The wire
     /// protocol is the single source of truth in `HostStreamExec`'s doc
@@ -649,9 +672,9 @@ pub enum AbilityExec {
 
 /// Configuration for the `host_stream` executor.
 ///
-/// **Wire protocol (newline-delimited UTF-8 JSON over `host_socket`),
-/// the single source of truth for both the daemon executor and the
-/// external host:**
+/// `protocol` selects one exact wire contract. `json_lines_v1` is the original
+/// newline-delimited UTF-8 JSON contract below. `binary_v1` is the raw-payload
+/// contract decoded by the daemon-owned host-stream transport module.
 ///
 /// ```text
 /// daemon → host:  {"request":{"fn":"<function>","args":{...},"call_id":"<id>"}}
@@ -680,6 +703,17 @@ pub struct HostStreamExec {
     pub host_socket: String,
     /// The resident function name to invoke on the host.
     pub function: String,
+    /// Exact resident-host wire protocol.
+    #[serde(default)]
+    pub protocol: HostStreamProtocol,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostStreamProtocol {
+    #[default]
+    JsonLinesV1,
+    BinaryV1,
 }
 
 impl HostStreamExec {
@@ -902,6 +936,7 @@ impl AbilityManifest {
             dedicated_surface: None,
             subject_contract_kind: None,
             subject_contract_ura: None,
+            bidi_wire_kind: None,
             timeout_seconds: None,
             input_schema,
             output_schema: None,
@@ -1059,6 +1094,17 @@ impl AbilityManifest {
         Ok(self)
     }
 
+    /// Declare the concrete bidi data-plane frame profile product clients
+    /// must use for this descriptor.
+    pub fn with_bidi_wire_kind(
+        mut self,
+        bidi_wire_kind: AbilityBidiWireKind,
+    ) -> anyhow::Result<Self> {
+        self.bidi_wire_kind = Some(bidi_wire_kind);
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Override the default `None` timeout. Returns `self` for the
     /// builder-style chain a caller of `new(...)` might use.
     pub fn with_timeout_seconds(mut self, seconds: u64) -> anyhow::Result<Self> {
@@ -1137,6 +1183,10 @@ impl AbilityManifest {
 
     pub fn subject_contract_ura(&self) -> Option<&str> {
         self.subject_contract_ura.as_deref()
+    }
+
+    pub fn bidi_wire_kind(&self) -> Option<AbilityBidiWireKind> {
+        self.bidi_wire_kind
     }
 
     /// Effective governed interface version. Absent manifest field means the

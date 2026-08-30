@@ -26,7 +26,9 @@ fn main() -> anyhow::Result<()> {
     };
 
     let backend: Arc<dyn easynet_cli::daemon::ability::builtins::resources::media::camera_snapshot::SnapshotBackend> =
-        Arc::new(easynet_cli::daemon::ability::builtins::resources::media::camera_snapshot::NokhwaBackend);
+        Arc::new(
+            easynet_cli::daemon::ability::builtins::resources::media::camera_snapshot::NokhwaBackend::default(),
+        );
 
     eprintln!("opening default camera (index 0)...");
     let frame = backend

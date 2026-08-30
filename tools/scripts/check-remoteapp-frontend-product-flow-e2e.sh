@@ -1,0 +1,584 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+FRONTEND_ROOT="${CHECK_REMOTEAPP_FRONTEND_PRODUCT_FLOW_FRONTEND_ROOT:-$ROOT/../EasyNet/Frontend}"
+HARNESS="$ROOT/tools/scripts/frontend-remoteapp-product-flow-e2e.sh"
+BROWSER_LIFECYCLE="$ROOT/tools/scripts/frontend-remoteapp-browser-lifecycle-e2e.sh"
+EVIDENCE_PROVENANCE="$ROOT/tools/scripts/remoteapp-evidence-provenance.py"
+CROSS_DEVICE_SMOKE="$ROOT/tools/scripts/remoteapp-cross-device-product-smoke.sh"
+PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
+TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+DECODED_FRAME="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+VIEW_ONLY_INPUT="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+HUB_API_PREFLIGHT="$ROOT/tools/scripts/hub-api-readiness-preflight.sh"
+FRONTEND_UI_TEST="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.test.tsx"
+FRONTEND_UI="$FRONTEND_ROOT/src/components/easynet/DeviceMediaAccess.tsx"
+FRONTEND_SHARE_PICKER="$FRONTEND_ROOT/src/components/easynet/ShareContentPicker.tsx"
+FRONTEND_STORE="$FRONTEND_ROOT/src/store/media-channel-store.ts"
+FRONTEND_STORE_TEST="$FRONTEND_ROOT/src/store/media-channel-store.test.ts"
+FRONTEND_PROTOCOL="$FRONTEND_ROOT/src/lib/api/remote-desktop-protocol.ts"
+FRONTEND_BROWSER_RUNNER="$FRONTEND_ROOT/scripts/remoteapp-browser-lifecycle.mjs"
+REMOTEAPP_NETWORK="$ROOT/plugins/remote-desktop/src/network.rs"
+REMOTEAPP_TRANSPORT_VIEW="$ROOT/plugins/remote-desktop/src/view_transport.rs"
+BUILTIN_PLUGIN_PACKAGE="$ROOT/src/daemon/plugins/package.rs"
+REMOTEAPP_REGISTRATION="$ROOT/plugins/remote-desktop/src/registration.rs"
+BROWSER_REGISTRATION="$ROOT/plugins/browser/src/registration.rs"
+AUDIT="$ROOT/docs/design/remoteapp-product-readiness-audit-2026-08-22.md"
+PLAN="$ROOT/pr/20260822-remoteapp-product-closure/02-evidence-audit.md"
+
+fail() {
+  printf 'check-remoteapp-frontend-product-flow-e2e: %s\n' "$1" >&2
+  exit 1
+}
+
+require() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  rg -q -- "$pattern" "$path" || fail "$message"
+}
+
+reject() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  if rg -q -- "$pattern" "$path"; then
+    fail "$message"
+  fi
+}
+
+line_of() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  local line
+  line="$(rg -n -- "$pattern" "$path" | head -n 1 | cut -d: -f1 || true)"
+  [[ -n "$line" ]] || fail "$message"
+  printf '%s\n' "$line"
+}
+
+require_order() {
+  local before_pattern="$1"
+  local after_pattern="$2"
+  local path="$3"
+  local message="$4"
+  local before_line
+  local after_line
+  before_line="$(line_of "$before_pattern" "$path" "$message")"
+  after_line="$(line_of "$after_pattern" "$path" "$message")"
+  (( before_line < after_line )) || fail "$message"
+}
+
+[[ -f "$HARNESS" ]] || fail "missing frontend RemoteApp product-flow E2E harness"
+[[ -x "$HARNESS" ]] || fail "frontend RemoteApp product-flow E2E harness must be executable"
+[[ -f "$BROWSER_LIFECYCLE" ]] || fail "missing frontend RemoteApp Browser/Tauri lifecycle E2E verifier"
+[[ -x "$BROWSER_LIFECYCLE" ]] || fail "frontend RemoteApp Browser/Tauri lifecycle E2E verifier must be executable"
+[[ -f "$EVIDENCE_PROVENANCE" ]] || fail "missing RemoteApp evidence provenance boundary"
+[[ -f "$CROSS_DEVICE_SMOKE" ]] || fail "missing RemoteApp cross-device product smoke gate"
+[[ -x "$CROSS_DEVICE_SMOKE" ]] || fail "RemoteApp cross-device product smoke gate must be executable"
+[[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
+[[ -f "$TARGET_FRESHNESS" ]] || fail "missing host target picker freshness E2E harness"
+[[ -f "$DECODED_FRAME" ]] || fail "missing host decoded-frame E2E harness"
+[[ -f "$VIEW_ONLY_INPUT" ]] || fail "missing host view-only input safety E2E harness"
+[[ -f "$HUB_API_PREFLIGHT" ]] || fail "missing Hub API readiness preflight harness"
+[[ -f "$FRONTEND_UI_TEST" ]] || fail "missing frontend RemoteApp UI flow test"
+[[ -f "$FRONTEND_UI" ]] || fail "missing frontend RemoteApp UI component"
+[[ -f "$FRONTEND_STORE" ]] || fail "missing frontend RemoteApp media channel store"
+[[ -f "$FRONTEND_STORE_TEST" ]] || fail "missing frontend RemoteApp media channel store test"
+[[ -f "$FRONTEND_PROTOCOL" ]] || fail "missing frontend RemoteApp protocol projection"
+[[ -f "$FRONTEND_BROWSER_RUNNER" ]] || fail "missing real frontend RemoteApp browser lifecycle runner"
+[[ -f "$REMOTEAPP_NETWORK" ]] || fail "missing RemoteApp network route model"
+[[ -f "$REMOTEAPP_TRANSPORT_VIEW" ]] || fail "missing RemoteApp transport view projection"
+[[ -f "$BUILTIN_PLUGIN_PACKAGE" ]] || fail "missing builtin plugin package adapter"
+[[ -f "$REMOTEAPP_REGISTRATION" ]] || fail "missing RemoteApp builtin registration"
+[[ -f "$BROWSER_REGISTRATION" ]] || fail "missing Browser builtin registration"
+[[ -f "$AUDIT" ]] || fail "missing RemoteApp product readiness audit"
+[[ -f "$PLAN" ]] || fail "missing RemoteApp product closure evidence plan"
+
+bash "$HARNESS" --self-test >/dev/null
+bash "$BROWSER_LIFECYCLE" --self-test >/dev/null
+bash "$CROSS_DEVICE_SMOKE" --self-test >/dev/null
+bash "$HUB_API_PREFLIGHT" --self-test >/dev/null
+bash "$TARGET_FRESHNESS" --self-test --target-kind window >/dev/null
+bash "$TARGET_FRESHNESS" --self-test --target-kind application >/dev/null
+require 'with_bidi_wire_kind\(plugin_bidi_wire_kind_to_descriptor\(bidi_wire_kind\)\)' "$BUILTIN_PLUGIN_PACKAGE" \
+  'builtin plugin registry manifests must preserve their typed bidi wire contract'
+require 'attach_registry_manifest_preserves_metadata_binary_bidi_wire_kind' "$REMOTEAPP_REGISTRATION" \
+  'RemoteApp registration must test the live registry manifest metadata-binary projection'
+require 'manifest\.bidi_wire_kind\(\)' "$BROWSER_REGISTRATION" \
+  'Browser registration must test the live registry manifest JSON-frame projection'
+require 'real_browser_tauri_lifecycle' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require real frontend lifecycle proof mode'
+require 'component_mock.*False|component_mock.*false' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must reject component-mock evidence'
+require 'real_backend_runtime.*True|real_backend_runtime.*true' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require a real backend/runtime'
+require 'product_complete_claim.*False|product_complete_claim.*false' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must reject product-complete claims'
+require 'remoteapp-evidence-provenance.py' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must use the shared provenance boundary'
+require 'evidence_origin.*contract_self_test' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier self-test must identify contract-only evidence'
+require 'expected_origin = "contract_self_test" if mode == "self-test" else "live_runner"' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require live-runner provenance in run mode'
+require 'target_picker_opened' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require target picker evidence'
+require 'permission_status_checked' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require permission_status preflight evidence'
+require 'remote_desktop\.permission_status' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind permission preflight to remote_desktop.permission_status'
+require 'permission_requested' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must validate optional permission request evidence'
+require 'remote_desktop\.request_permission' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind permission request to remote_desktop.request_permission'
+require 'consent_granted' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require consent grant evidence'
+require 'remote_desktop\.grant_consent' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind consent to remote_desktop.grant_consent'
+require 'session_created' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require session creation evidence'
+require 'remote_desktop\.create_session' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind creation to remote_desktop.create_session'
+require 'webrtc_transport_connected' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require production WebRTC transport evidence'
+require 'remote_desktop\.set_description' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind production WebRTC signaling to remote_desktop.set_description'
+require 'watch_events_streaming' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require watch_events evidence'
+require 'remote_desktop\.watch_events' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind event watch to remote_desktop.watch_events'
+require 'media_presented' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require rendered media evidence'
+require 'media_pipeline_support_visible' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require visible media pipeline support evidence'
+require 'pipeline video_only' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require video-only media pipeline visibility'
+require 'bounded_queue_drop_stale_frames' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require stale-frame drop policy visibility'
+require 'remoteapp_media_adaptation_e2e_artifact_missing' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require missing media-adaptation E2E blocker visibility'
+require 'input_control_attempted_or_policy_blocked' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require input/control or policy-block evidence'
+require 'session_ended' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require session end evidence'
+require 'remote_desktop\.end_session' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must bind end to remote_desktop.end_session'
+require 'terminal_receipt_visible' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require visible terminal receipt evidence'
+require 'permission_status_checked must be host-local and not target-scoped' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must keep permission_status host-local'
+require 'permission_requested must be host-local and not target-scoped' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must keep request_permission host-local'
+require '--run requires --evidence-json or --runner-cmd' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require real runner output in --run mode'
+require 'EASYNET_REMOTEAPP_BROWSER_LIFECYCLE_E2E' "$BROWSER_LIFECYCLE" \
+  'Browser/Tauri lifecycle verifier must require an explicit live-run gate'
+require 'playwright-core' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must drive a real browser automation runtime'
+require 'RTCPeerConnection' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe a real WebRTC peer connection'
+require 'requestVideoFrameCallback' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe a decoded browser media frame'
+require 'remote_desktop\.set_description' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe the production WebRTC signaling ability'
+require 'remote_desktop\.watch_events' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe the session event stream'
+require 'remote_desktop\.report_client_state' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must observe authenticated client transport reporting'
+require 'observedInvocationTuples' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must bind network evidence to complete Invocation identities'
+require 'EASYNET_REMOTEAPP_BROWSER_REQUIRE_HOST_INPUT_EFFECTS' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must distinguish diagnostic view-only runs from product input-effect acceptance'
+require 'post-focus input authority projection' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must re-read target input authority after focus recovery'
+require 'focused_view_only' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must classify a focused but policy-blocked target without waiting for an impossible applied input frame'
+require 'host input effects required but post-focus input policy blocked' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle product acceptance must fail when focus recovery does not yield target-bound input authority'
+require 'provider_device_ura' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must keep the provider Device as execution host rather than callee'
+require 'selectedCandidatePairId' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must read the selected ICE pair from RTCStats'
+require 'candidate_pair_id: selectedPair\.candidate_pair_id' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must bind rendered media to the selected candidate pair'
+require "evidence_origin: 'live_runner'" "$FRONTEND_BROWSER_RUNNER" \
+  'Browser lifecycle runner must identify actual runner evidence'
+reject 'remote_desktop\.attach' "$FRONTEND_BROWSER_RUNNER" \
+  'Browser production lifecycle runner must not substitute the diagnostic attach ability for WebRTC signaling'
+require '/api/v1/health' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must probe the canonical backend health endpoint'
+require '"connection_state": connection\.get\("state"\)' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must preserve runtime connection state diagnostics'
+require '"connection_failure": connection\.get\("failure"\)' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must preserve runtime credential failure diagnostics'
+require '"hub_endpoint": connection\.get\("hub_endpoint"\)' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must preserve paired Hub endpoint diagnostics'
+require 'details\["preflight_error"\]' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must record runtime-status preflight errors in evidence'
+require 'Docker daemon is not reachable' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must classify Docker-daemon unreachability explicitly'
+require 'write_report "failed" "Hub API health is not reachable"' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must write a standard report for failed health probes'
+require 'does not start Docker' "$HUB_API_PREFLIGHT" \
+  'Hub API readiness preflight must stay read-only and never start Docker implicitly'
+
+require 'npx tsc --noEmit' "$HARNESS" \
+  'product-flow harness must run frontend TypeScript checks'
+require 'npm test -- src/components/easynet/DeviceMediaAccess\.test\.tsx' "$HARNESS" \
+  'product-flow harness must run DeviceMediaAccess RemoteApp UI flow coverage'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$HARNESS" \
+  'product-flow harness must include the real Browser/Tauri lifecycle verifier'
+require 'run_frontend_browser_lifecycle' "$HARNESS" \
+  'product-flow harness must expose a Browser/Tauri lifecycle runner step'
+require 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' "$HARNESS" \
+  'product-flow harness must execute Browser/Tauri lifecycle evidence as a product-flow gate'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_EVIDENCE_JSON' "$HARNESS" \
+  'product-flow harness must accept Browser/Tauri lifecycle evidence JSON'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_BROWSER_LIFECYCLE_RUNNER_CMD' "$HARNESS" \
+  'product-flow harness must accept a Browser/Tauri lifecycle runner command'
+require 'frontend Browser/Tauri lifecycle evidence is required' "$HARNESS" \
+  'product-flow --run must fail closed when Browser/Tauri lifecycle evidence is missing'
+require 'remoteapp-cross-device-product-smoke\.sh' "$HARNESS" \
+  'product-flow harness must include the cross-device product smoke gate'
+require 'run_cross_device_product_smoke' "$HARNESS" \
+  'product-flow harness must expose a cross-device product smoke step'
+require 'run_step cross-device-product-smoke run_cross_device_product_smoke' "$HARNESS" \
+  'product-flow harness must execute cross-device smoke evidence as a product-flow gate'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_EVIDENCE_JSON' "$HARNESS" \
+  'product-flow harness must accept cross-device smoke evidence JSON'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E_CROSS_DEVICE_SMOKE_RUN' "$HARNESS" \
+  'product-flow harness must accept an explicit cross-device smoke run gate'
+require 'cross-device product smoke evidence is required' "$HARNESS" \
+  'product-flow --run must fail closed when cross-device smoke evidence is missing'
+require 'validate_cross_device_smoke_report' "$HARNESS" \
+  'product-flow must validate supplied cross-device smoke reports'
+require 'frontend_flow_summary' "$HARNESS" \
+  'product-flow harness must emit frontend product journey summaries'
+require 'evidence_origin.*live_runner' "$HARNESS" \
+  'product-flow harness must identify live report and step artifacts'
+require 'hub_api_ready' "$HARNESS" \
+  'product-flow summary must expose Hub API readiness'
+require 'product_runtime_ready' "$HARNESS" \
+  'product-flow summary must expose product runtime readiness'
+require 'ui_flow_exercised' "$HARNESS" \
+  'product-flow summary must expose UI flow coverage'
+require 'browser_lifecycle_verified' "$HARNESS" \
+  'product-flow summary must expose Browser/Tauri lifecycle coverage'
+require 'cross_device_distinct_devices' "$HARNESS" \
+  'product-flow summary must expose distinct-device cross-device coverage'
+require 'window_target_picker_fresh' "$HARNESS" \
+  'product-flow summary must expose window target-picker freshness'
+require 'application_target_picker_fresh' "$HARNESS" \
+  'product-flow summary must expose application target-picker freshness'
+require 'host-target-picker-freshness-application' "$HARNESS" \
+  'product-flow target_kind=both must execute a distinct application freshness step'
+require 'run_step host-target-picker-freshness-application "\$TARGET_FRESHNESS"' "$HARNESS" \
+  'product-flow target_kind=both must execute the application freshness verifier'
+require 'window_frame_rendered' "$HARNESS" \
+  'product-flow summary must expose window decoded-frame coverage'
+require 'application_frame_rendered' "$HARNESS" \
+  'product-flow summary must expose application decoded-frame coverage'
+require 'window_view_only_input_checked' "$HARNESS" \
+  'product-flow summary must expose window input-policy coverage'
+require 'application_view_only_input_checked' "$HARNESS" \
+  'product-flow summary must expose application input-policy coverage'
+require 'end_session_lifecycle_verified' "$HARNESS" \
+  'product-flow summary must expose end-session lifecycle coverage'
+require 'distinct_device_uras_observed is not true' "$HARNESS" \
+  'product-flow must reject local-provider-only cross-device smoke reports'
+require 'local_provider_boundary_only is not false' "$HARNESS" \
+  'product-flow must reject local provider boundary cross-device reports'
+require 'cross_device_hub_routing is not true' "$HARNESS" \
+  'product-flow must require cross-device Hub routing evidence'
+require 'synthetic_stream_bidi_carrier is not true' "$HARNESS" \
+  'product-flow must require synthetic stream/bidi carrier evidence'
+require 'hub-api-readiness-preflight\.sh' "$HARNESS" \
+  'product-flow harness must invoke Hub API readiness preflight'
+require 'run_step hub-api-readiness-preflight run_hub_api_readiness_preflight' "$HARNESS" \
+  'product-flow harness must execute Hub API readiness as the first product-flow gate'
+require 'run_product_runtime_readiness_preflight' "$HARNESS" \
+  'product-flow harness must run an explicit product runtime readiness preflight'
+require 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' "$HARNESS" \
+  'product-flow harness must execute runtime readiness before frontend and host evidence'
+require 'runtime status --json' "$HARNESS" \
+  'product-flow runtime readiness preflight must inspect easynet runtime status'
+require 'daemon\.control_accepting is not true' "$HARNESS" \
+  'product-flow runtime readiness preflight must require daemon control readiness'
+require 'daemon\.invocation_accepting is not true' "$HARNESS" \
+  'product-flow runtime readiness preflight must require daemon invocation readiness'
+require 'connection\.failure=' "$HARNESS" \
+  'product-flow runtime readiness preflight must report connection failure codes'
+require 'hub_api_endpoint=' "$HARNESS" \
+  'product-flow runtime readiness preflight must report the Hub API endpoint used for credential verification'
+require_order 'run_step hub-api-readiness-preflight run_hub_api_readiness_preflight' 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' "$HARNESS" \
+  'product-flow must check Hub API before daemon runtime readiness'
+require_order 'run_step product-runtime-readiness-preflight run_product_runtime_readiness_preflight' 'run_step frontend-typecheck run_frontend_tsc' "$HARNESS" \
+  'product-flow report order must put runtime readiness before frontend checks'
+require_order 'run_step frontend-remoteapp-ui-flow run_frontend_ui_flow' 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' "$HARNESS" \
+  'product-flow must run component UI coverage before live Browser/Tauri lifecycle evidence'
+require_order 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' 'run_step cross-device-product-smoke run_cross_device_product_smoke' "$HARNESS" \
+  'product-flow must run Browser/Tauri lifecycle evidence before cross-device smoke evidence'
+require_order 'run_step cross-device-product-smoke run_cross_device_product_smoke' 'run_step host-permission-subject' "$HARNESS" \
+  'product-flow must execute cross-device evidence before host-only probes'
+require_order 'run_step frontend-browser-lifecycle run_frontend_browser_lifecycle' 'run_step host-permission-subject' "$HARNESS" \
+  'product-flow must execute Browser/Tauri lifecycle evidence before host-only probes'
+require 'host-remoteapp-permission-subject-e2e\.sh' "$HARNESS" \
+  'product-flow harness must invoke host permission subject E2E'
+require '--require-screen-capture-granted' "$HARNESS" \
+  'product-flow harness must require granted screen-capture permission before decoded-frame E2E'
+require 'host-remoteapp-target-picker-freshness-e2e\.sh' "$HARNESS" \
+  'product-flow harness must invoke live target picker freshness E2E'
+require '--target-kind window' "$HARNESS" \
+  'product-flow harness must request an explicit window freshness proof'
+require '--target-kind application' "$HARNESS" \
+  'product-flow harness must request an explicit application freshness proof'
+require 'window_id_plus_owner_pid' "$TARGET_FRESHNESS" \
+  'target-picker freshness must bind native window identity and owner process'
+require 'application_identity_plus_owner_pid_and_window_set' "$TARGET_FRESHNESS" \
+  'target-picker freshness must bind application identity, owner process, and exact window set'
+require 'resolved_window_ids' "$TARGET_FRESHNESS" \
+  'application freshness evidence must include the resolved native window set'
+require 'front_to_back_surfaces' "$TARGET_FRESHNESS" \
+  'application freshness evidence must preserve front-to-back surface membership'
+require 'display_scoped.*False|display_scoped.*false' "$TARGET_FRESHNESS" \
+  'application freshness evidence must remain process-scoped rather than display-scoped'
+require 'host-remoteapp-decoded-frame-e2e\.sh' "$HARNESS" \
+  'product-flow harness must invoke decoded-frame WebRTC E2E'
+require 'host-remoteapp-view-only-input-safety-e2e\.sh' "$HARNESS" \
+  'product-flow harness must invoke view-only input safety E2E'
+require 'ability list --format json' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must resolve public RemoteApp Ability URAs from the catalogue'
+require 'ATTACH_ABILITY_URA' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must invoke remote_desktop.attach through a full Ability URA'
+require 'ATTACH_CAUSAL_CONTEXT_JSON' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must build explicit attach causal context from session approval receipt'
+require 'approval_receipt' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must chain attach to the session approval receipt'
+require '--causal-context-json "\$ATTACH_CAUSAL_CONTEXT_JSON"' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must pass approval receipt causal context to ability bidi'
+reject 'ability bidi remote_desktop\.attach' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must not pass a short ability name to ability bidi'
+reject '--causal-root' "$VIEW_ONLY_INPUT" \
+  'view-only input harness must not open remote_desktop.attach as a root invocation'
+require '--sentinel-fixture' "$HARNESS" \
+  'product-flow harness must use sentinel fixtures for app/window evidence'
+require '--pre-media-resource-refresh' "$HARNESS" \
+  'product-flow harness must refresh media resources before decoded-frame evidence'
+require '--target-kind "\$kind"' "$HARNESS" \
+  'product-flow harness must parameterize decoded-frame/view-only evidence by target kind'
+require 'EASYNET_FRONTEND_REMOTEAPP_PRODUCT_E2E' "$HARNESS" \
+  'product-flow harness must require an explicit run gate'
+require 'write_json_report "skipped"' "$HARNESS" \
+  'product-flow harness must write a skipped report instead of pretending product evidence exists'
+require 'write_json_report "failed" "step \$name failed"' "$HARNESS" \
+  'product-flow harness must write a top-level failed report when a product-flow step fails'
+require '"failed_step"' "$HARNESS" \
+  'product-flow harness report must identify the failed step'
+require '"steps": steps' "$HARNESS" \
+  'product-flow harness report must aggregate step results'
+require '"step_order": step_order' "$HARNESS" \
+  'product-flow harness report must preserve execution-order step semantics'
+require '"stderr_excerpt"' "$HARNESS" \
+  'product-flow harness report must preserve bounded stderr excerpts for failure triage'
+require 'does not claim product completion' "$HARNESS" \
+  'product-flow harness must explicitly avoid product-complete claims'
+
+require 'runs the remote desktop UI flow from target picker through session end' "$FRONTEND_UI_TEST" \
+  'frontend component test must cover picker-to-session-end user flow'
+require 'watch_events' "$FRONTEND_UI_TEST" \
+  'frontend UI flow test must prove watch_events is part of the session lifecycle'
+require 'to_client_ice_server_value' "$REMOTEAPP_NETWORK" \
+  'RemoteApp network route model must project browser-consumable ICE server config'
+require 'DirectWebRtcClientIceServerProjection' "$REMOTEAPP_NETWORK" \
+  'RemoteApp network route model must keep client ICE server projection as a typed product object'
+require '"client_ice_servers": self\.client_ice_servers\.clone\(\)' "$REMOTEAPP_TRANSPORT_VIEW" \
+  'RemoteApp transport view must expose browser client_ice_servers'
+require 'client_ice_server_projection_includes_browser_turn_credentials' "$REMOTEAPP_NETWORK" \
+  'RemoteApp network tests must prove browser TURN credentials are projected to authorized session views'
+require 'client_ice_servers' "$FRONTEND_PROTOCOL" \
+  'frontend protocol projection must parse daemon-projected RemoteApp ICE server config'
+require 'webrtcIceServers: remoteDesktopIceServersFromValue\(transport\?\.client_ice_servers\)' "$FRONTEND_PROTOCOL" \
+  'frontend RemoteApp view must derive browser ICE servers from the session transport view'
+require 'iceServers: view\.webrtcIceServers' "$FRONTEND_STORE" \
+  'frontend WebRTC startup must use session-projected ICE servers'
+reject 'iceServers: \[\]' "$FRONTEND_STORE" \
+  'frontend RemoteApp WebRTC startup must not hard-code an empty ICE server list'
+require 'remoteDesktopRouteStatusLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected network route state'
+require 'transportRouteState' "$FRONTEND_UI" \
+  'frontend RemoteApp route UI must derive from daemon transportRouteState'
+require 'route host_only · no NAT/relay' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove host-only RemoteApp routes are visible as not NAT/relay ready'
+require 'frame\.target_geometry_revision !== expectedRevision' "$FRONTEND_PROTOCOL" \
+  'frontend RemoteApp input gating must reject stale or missing pointer target geometry revisions before send'
+require 'remoteDesktopInputScopeLabel\(session\)' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected input scope and pointer/keyboard enablement'
+require 'input scope display_global · pointer\+keyboard' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove display-global pointer/keyboard enablement is visible in session details'
+require 'input scope display_global · no controls' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove blocked input scope is visible as no controls'
+require 'remoteDesktopPermissionActionRecommended\(session\)' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must offer permission recovery from daemon input permission blockers'
+require 'offers permission recovery when daemon input injection is unavailable' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove input-injection blockers expose Request permission recovery'
+require 'rdRequestPermission' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Request permission recovery executes the store action'
+require 'onCheckPermission' "$FRONTEND_UI" \
+  'frontend RemoteApp panel must wire permission_status preflight into the share picker'
+require 'Check permissions' "$FRONTEND_SHARE_PICKER" \
+  'frontend share picker must expose a non-prompting RemoteApp permission preflight action'
+require 'remote_desktop\.permission_status' "$FRONTEND_UI_TEST" \
+  'frontend UI flow tests must prove permission_status is part of the pre-share authorization flow'
+require 'keeps the remote desktop picker open after denied permission preflight' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove denied permission_status does not eject the user from the picker'
+require 'configures browser WebRTC with session-projected RemoteApp ICE servers' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove RTCPeerConnection receives session-projected ICE servers'
+require 'turn:turn\.example\.test:3478\?transport=udp' "$FRONTEND_STORE_TEST" \
+  'frontend store test must cover TURN relay ICE server config, not only host/direct mode'
+require 'fails closed before sending stale RemoteApp pointer geometry revisions' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove stale pointer target geometry revisions do not reach the data channel'
+require 'target_geometry_revision: 6' "$FRONTEND_STORE_TEST" \
+  'frontend stale pointer test must use an explicit stale geometry revision'
+require 'RemoteDesktopAudioSupport' "$FRONTEND_PROTOCOL" \
+  'frontend protocol projection must type daemon RemoteApp audio product state'
+require 'RemoteDesktopMediaPipelineSupport' "$FRONTEND_PROTOCOL" \
+  'frontend protocol projection must type daemon RemoteApp media pipeline support state'
+require 'mediaPipelineSupport: remoteDesktopMediaPipelineSupportFromResult\(result\)' "$FRONTEND_PROTOCOL" \
+  'frontend RemoteApp view must consume daemon media_pipeline_support projection'
+require 'remoteapp_media_adaptation_e2e_artifact_missing' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove missing media-adaptation E2E remains visible as a product blocker'
+require 'remoteDesktopMediaPipelineLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected media pipeline support'
+require 'pipeline capability video_only · h264 · bounded_queue_drop_stale_frames' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove media pipeline support is visible in session details'
+require 'audioReady: readiness\.audio_ready === true' "$FRONTEND_PROTOCOL" \
+  'frontend production readiness must parse audio readiness separately from video readiness'
+require 'audio blocked ·' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove session details surface the effective host-audio blocker'
+require 'remoteDesktopMediaQualityLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render a media quality summary from session stats'
+require 'rtpSenderBackpressureDrops' "$FRONTEND_UI" \
+  'frontend media quality summary must account for RTP sender backpressure drops'
+require 'media 18000kbps · 52\.5fps · route direct · drops 15 · backpressure 3' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove media bitrate, FPS, route, drops, and backpressure are visible in session details'
+require 'remoteDesktopTargetStatusLabel' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must render daemon-projected target recovery state in session details'
+require 'remoteDesktopTargetRecoveryMessage' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must consume canonical target recovery projection instead of inventing UI-only target state'
+require 'latestTargetDiagnostic' "$FRONTEND_UI" \
+  'frontend RemoteApp target status must be derived from daemon latestTargetDiagnostic'
+require 'frontendAction' "$FRONTEND_UI" \
+  'frontend RemoteApp target status must surface daemon frontendAction recovery guidance'
+require 'remoteDesktopTargetRecoveryAction' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must derive executable recovery actions from daemon target diagnostics'
+require 'onRefreshRemoteTargets' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must expose a refresh-targets action for daemon refresh_targets guidance'
+require 'Refresh targets' "$FRONTEND_UI" \
+  'frontend RemoteApp action row must offer a Refresh targets CTA for lost application/window targets'
+require 'surfaces daemon remote desktop target recovery state in session details' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove session details surface target recovery state'
+require 'target lost · target_not_found · refresh_targets' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove lost window/application targets expose reason and recovery action'
+require 'refreshRemoteTargets' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must bind the lost-target recovery button to a refresh callback'
+require 'toHaveBeenCalledTimes\(1\)' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove the Refresh targets CTA executes the recovery callback'
+require 'Retry session' "$FRONTEND_UI" \
+  'frontend RemoteApp UI must expose an executable Retry session CTA for daemon retry_session guidance'
+require 'remoteDesktopRetrySessionRecommended' "$FRONTEND_UI" \
+  'frontend RemoteApp retry CTA must be gated by explicit retry-session state'
+require 'executes daemon-requested retry on the existing remote desktop session' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session executes same-session recovery'
+require 'expect\(rdRetry\)\.toHaveBeenCalledWith' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must bind Retry session to the store recovery state machine'
+require 'expect\(rdEnd\)\.not\.toHaveBeenCalled' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session does not terminate the recoverable session'
+require 'expect\(rdCreate\)\.not\.toHaveBeenCalled' "$FRONTEND_UI_TEST" \
+  'frontend UI tests must prove Retry session does not mint a replacement session'
+require 'retryRemoteDesktopSessionTransport' "$FRONTEND_STORE" \
+  'frontend store must own one transport-retry state machine for device resume and user retry'
+require 'rdRetry: async' "$FRONTEND_STORE" \
+  'frontend store must expose same-session transport retry as a domain operation'
+require 'preserves one remote desktop session across device resume and explicit retry' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove device resume and user retry preserve one session'
+require 'transport_epoch: 4' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove explicit retry advances to a newer transport epoch'
+require 'remoteDesktopRetryGeneration' "$FRONTEND_STORE" \
+  'frontend retry must use a monotonic generation fence rather than session identity alone'
+require 'fences a stale transport retry when the device goes offline during session lookup' "$FRONTEND_STORE_TEST" \
+  'frontend tests must prove offline invalidates an in-flight session lookup'
+require 'does not resurrect a retry transport closed while WebRTC negotiation is in flight' "$FRONTEND_STORE_TEST" \
+  'frontend tests must prove offline invalidates an in-flight WebRTC negotiation'
+require 'entry\.loading \|\| \(entry\.session && !remoteDesktopSessionTerminal\(entry\.session\)\)' "$FRONTEND_STORE" \
+  'frontend store must allow create_session after a retained terminal session receipt'
+require 'allows creating a new remote desktop session after a terminal receipt is retained' "$FRONTEND_STORE_TEST" \
+  'frontend store tests must prove terminal receipts do not block new create_session'
+
+require 'frontend-remoteapp-product-flow-e2e\.sh' "$AUDIT" \
+  'product readiness audit must mention the product-flow E2E harness'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$AUDIT" \
+  'product readiness audit must mention the Browser/Tauri lifecycle evidence verifier'
+require 'runnable product-flow harness entrypoint' "$AUDIT" \
+  'product readiness audit must classify the harness as an entrypoint, not proof of completion'
+require 'Live Browser/Tauri E2E artifact with real backend/runtime' "$AUDIT" \
+  'product readiness audit must retain real Browser/Tauri full-flow evidence as still required'
+require 'visible terminal receipt' "$AUDIT" \
+  'product readiness audit must require visible terminal receipt evidence'
+require 'visible `media_pipeline_support`' "$AUDIT" \
+  'product readiness audit must require visible media_pipeline_support evidence'
+require 'target recovery' "$AUDIT" \
+  'product readiness audit must record frontend target recovery projection evidence'
+require 'route state' "$AUDIT" \
+  'product readiness audit must record frontend route-state visibility evidence'
+require 'media quality' "$AUDIT" \
+  'product readiness audit must record frontend media-quality visibility evidence'
+require 'media_pipeline_support' "$AUDIT" \
+  'product readiness audit must record frontend media-pipeline support visibility evidence'
+require 'Retry session' "$AUDIT" \
+  'product readiness audit must record executable retry-session evidence'
+require 'target-kind-derived.*display_global' "$AUDIT" \
+  'product readiness audit must record display-global input-scope evidence'
+require 'target_local.*input scope' "$AUDIT" \
+  'product readiness audit must record target-local input-scope evidence'
+require 'Accessibility/input-injection permission' "$AUDIT" \
+  'product readiness audit must record input-permission recovery evidence'
+require 'permission_status preflight' "$AUDIT" \
+  'product readiness audit must record frontend permission preflight evidence'
+require 'Denied `permission_status` now remains picker-local' "$PLAN" \
+  'product closure plan must record denied permission preflight picker retention'
+require 'RemoteApp interactive desktop product: incomplete' "$AUDIT" \
+  'product readiness audit must keep product status incomplete'
+reject 'RemoteApp interactive desktop product: complete' "$AUDIT" \
+  'product readiness audit must not claim product completion'
+
+require 'frontend-remoteapp-product-flow-e2e\.sh' "$PLAN" \
+  'product closure plan must mention the product-flow E2E harness'
+require 'frontend-remoteapp-browser-lifecycle-e2e\.sh' "$PLAN" \
+  'product closure plan must mention the Browser/Tauri lifecycle evidence verifier'
+require 'explicit --run report remains required' "$PLAN" \
+  'product closure plan must require an explicit run report before using harness evidence'
+require 'Frontend full lifecycle E2E across Browser/Tauri surfaces' "$PLAN" \
+  'product closure plan must retain Browser/Tauri full lifecycle gap'
+require 'visible media pipeline support' "$PLAN" \
+  'product closure plan must retain visible media pipeline support as live Browser/Tauri evidence'
+require 'target lost · target_not_found · refresh_targets' "$PLAN" \
+  'product closure plan must record the target recovery UI evidence'
+require 'Refresh targets' "$PLAN" \
+  'product closure plan must record the executable target recovery CTA evidence'
+require 'route host_only · no NAT/relay' "$PLAN" \
+  'product closure plan must record route-state UI evidence'
+require 'media 18000kbps · 52\.5fps · route direct · drops 15 · backpressure 3' "$PLAN" \
+  'product closure plan must record media-quality summary UI evidence'
+require 'media_pipeline_support' "$PLAN" \
+  'product closure plan must record frontend media-pipeline support visibility evidence'
+require 'Retry session' "$PLAN" \
+  'product closure plan must record executable retry-session UI evidence'
+require 'input scope display_global' "$PLAN" \
+  'product closure plan must record input-scope visibility evidence'
+require 'Accessibility/input-injection permission' "$PLAN" \
+  'product closure plan must record input-permission recovery evidence'
+require 'permission_status' "$PLAN" \
+  'product closure plan must record frontend permission preflight evidence'
+
+printf 'check-remoteapp-frontend-product-flow-e2e: ok\n'

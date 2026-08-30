@@ -16,22 +16,12 @@
 //     "resource_ref": { ... RFC-005 filesystem ResourceRef ... } }
 //
 // Frames the handler RECEIVES (from_client):
-//   * upload mode:
-//       {"type":"chunk", "data":"<base64>"}    — file body bytes
-//       {"type":"eof"}                         — stop accepting input
-//   * download mode:
-//       {"type":"eof"}                         — caller acknowledges
-//                                                 ready, handler starts
-//                                                 streaming. If the
-//                                                 caller never sends
-//                                                 eof we still proceed
-//                                                 once the args are
-//                                                 parsed; the eof is
-//                                                 a fast-path hint.
+//   * upload mode: application/octet-stream frames containing file bytes.
+//     Closing the upstream half is EOF.
+//   * download mode: no input frames are required.
 //
 // Frames the handler EMITS (to_client):
-//   * download mode:
-//       {"type":"chunk", "data":"<base64>"}    — file body bytes
+//   * download mode: application/octet-stream frames containing file bytes.
 //   * either mode (terminal):
 //       {"type":"complete", "sha256":"<hex>",
 //        "bytes": <int>}                       — success
@@ -55,9 +45,8 @@
 //   from filling the disk.
 // * Atomicity for upload: writes go to `<resolved-target>.partial.<nonce>`
 //   and rename atomically to the ResourceRef target on success. A
-//   mid-transfer abort leaves the partial visible (caller cleans up
-//   on retry) rather than overwriting an existing file with truncated
-//   data.
+//   mid-transfer abort removes the private staging file and never
+//   overwrites an existing file with truncated data.
 // * Read-only for download: opening succeeds when the file is
 //   readable; missing-file surfaces as `{type:"error", code:
 //   "not_found"}` so the backend renders 404-shaped UX.
@@ -65,18 +54,19 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, BidiOutputFrame, BidiSource};
+use crate::daemon::ability::dispatch::{
+    bidi_input_channel, AxonAbilityCatalog, BidiInputFrame, BidiOutputFrame, BidiSource,
+};
 use crate::daemon::resources::files::{
     self as filesystem, FilesystemResourceCapability, ResolvedFilesystemPath,
 };
@@ -140,13 +130,21 @@ fn open_handler_with_provider(
     //   xport_from_handler_tx — handler writes here;
     //                          IPC reads xport_from_handler_rx
     //                          and emits RecvBidi
-    let (xport_to_handler_tx, xport_to_handler_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_to_handler_tx, xport_to_handler_rx) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (xport_from_handler_tx, xport_from_handler_rx) =
         mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
 
     match parsed.mode {
-        Mode::Upload => spawn_upload(parsed.target, xport_to_handler_rx, xport_from_handler_tx),
-        Mode::Download => spawn_download(parsed.target, xport_from_handler_tx),
+        Mode::Upload => spawn_upload(
+            parsed.target,
+            parsed.overwrite,
+            parsed.max_bytes,
+            parsed.expected_sha256,
+            parsed.expected_bytes,
+            xport_to_handler_rx,
+            xport_from_handler_tx,
+        ),
+        Mode::Download => spawn_download(parsed.target, parsed.max_bytes, xport_from_handler_tx),
     }
 
     Ok(BidiSource {
@@ -165,6 +163,10 @@ enum Mode {
 struct ParsedArgs {
     mode: Mode,
     target: TransferTarget,
+    overwrite: bool,
+    max_bytes: u64,
+    expected_sha256: Option<String>,
+    expected_bytes: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -205,8 +207,61 @@ impl ParsedArgs {
         let target = filesystem
             .resolve_filesystem_path_without_existing_target(args, capability)
             .map(TransferTarget::from_resolved)?;
-        Ok(Self { mode, target })
+        let overwrite = optional_bool(args, "overwrite")?.unwrap_or(false);
+        let max_bytes = optional_u64(args, "max_bytes")?.unwrap_or(FILE_TRANSFER_BYTE_CAP);
+        if max_bytes == 0 || max_bytes > FILE_TRANSFER_BYTE_CAP {
+            anyhow::bail!("`max_bytes` must be between 1 and {FILE_TRANSFER_BYTE_CAP}");
+        }
+        let expected_sha256 = args
+            .get("expected_sha256")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| {
+                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                    .map(str::to_ascii_lowercase)
+                    .ok_or_else(|| anyhow::anyhow!("`expected_sha256` must be 64 hex characters"))
+            })
+            .transpose()?;
+        let expected_bytes = optional_u64(args, "expected_bytes")?;
+        if mode == Mode::Download
+            && (overwrite || expected_sha256.is_some() || expected_bytes.is_some())
+        {
+            anyhow::bail!(
+                "download mode does not accept overwrite, expected_sha256, or expected_bytes"
+            );
+        }
+        Ok(Self {
+            mode,
+            target,
+            overwrite,
+            max_bytes,
+            expected_sha256,
+            expected_bytes,
+        })
     }
+}
+
+fn optional_bool(args: &Value, field: &str) -> anyhow::Result<Option<bool>> {
+    args.get(field)
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| anyhow::anyhow!("`{field}` must be a boolean"))
+        })
+        .transpose()
+}
+
+fn optional_u64(args: &Value, field: &str) -> anyhow::Result<Option<u64>> {
+    args.get(field)
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("`{field}` must be an unsigned integer"))
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -234,7 +289,11 @@ fn test_filesystem() -> filesystem::FilesystemResourceProvider {
 /// `{type:"complete"}`. On error, emit `{type:"error"}` and bail.
 fn spawn_upload(
     target: TransferTarget,
-    mut from_client: mpsc::Receiver<Value>,
+    overwrite: bool,
+    max_bytes: u64,
+    expected_sha256: Option<String>,
+    expected_bytes: Option<u64>,
+    mut from_client: mpsc::Receiver<BidiInputFrame>,
     to_client: mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
@@ -265,12 +324,17 @@ fn spawn_upload(
         // uploads to the same target (last-writer-wins on rename).
         let staging = staging_path(&path);
         let parent = staging.parent().unwrap_or(Path::new("."));
-        if let Err(e) = std::fs::create_dir_all(parent) {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
             emit_error(&to_client, "io_error", &format!("create staging dir: {e}")).await;
             return;
         }
 
-        let mut file = match std::fs::File::create(&staging) {
+        let mut file = match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+            .await
+        {
             Ok(f) => f,
             Err(e) => {
                 emit_error(&to_client, "io_error", &format!("open staging: {e}")).await;
@@ -292,7 +356,7 @@ fn spawn_upload(
                         break;
                     }
                     Err(_) => {
-                        let _ = std::fs::remove_file(&staging);
+                        let _ = tokio::fs::remove_file(&staging).await;
                         emit_error(
                             &to_client,
                             "idle_timeout",
@@ -308,24 +372,23 @@ fn spawn_upload(
             match UploadClientFrame::parse(frame) {
                 Ok(UploadClientFrame::Chunk(bytes)) => {
                     total = total.saturating_add(bytes.len() as u64);
-                    if total > FILE_TRANSFER_BYTE_CAP {
+                    if total > max_bytes {
                         emit_error(
                             &to_client,
                             "byte_cap_exceeded",
-                            &format!("upload exceeds {} byte cap", FILE_TRANSFER_BYTE_CAP),
+                            &format!("upload exceeds {max_bytes} byte limit"),
                         )
                         .await;
-                        let _ = std::fs::remove_file(&staging);
+                        let _ = tokio::fs::remove_file(&staging).await;
                         return;
                     }
-                    if let Err(e) = file.write_all(&bytes) {
+                    if let Err(e) = file.write_all(&bytes).await {
                         emit_error(&to_client, "io_error", &format!("write: {e}")).await;
-                        let _ = std::fs::remove_file(&staging);
+                        let _ = tokio::fs::remove_file(&staging).await;
                         return;
                     }
                     hasher.update(&bytes);
                 }
-                Ok(UploadClientFrame::Eof) => break,
                 Err(error) => {
                     emit_error(
                         &to_client,
@@ -333,7 +396,7 @@ fn spawn_upload(
                         &format!("upload frame rejected: {error}"),
                     )
                     .await;
-                    let _ = std::fs::remove_file(&staging);
+                    let _ = tokio::fs::remove_file(&staging).await;
                     return;
                 }
             }
@@ -342,20 +405,57 @@ fn spawn_upload(
         // Sync to disk before the rename so a crash between the
         // last byte written and the rename does NOT silently
         // promote a partial file to the target name.
-        if let Err(e) = file.sync_all() {
+        if let Err(e) = file.sync_all().await {
             emit_error(&to_client, "io_error", &format!("fsync: {e}")).await;
-            let _ = std::fs::remove_file(&staging);
+            let _ = tokio::fs::remove_file(&staging).await;
             return;
         }
         drop(file);
 
-        if let Err(e) = std::fs::rename(&staging, &path) {
-            emit_error(&to_client, "io_error", &format!("atomic rename: {e}")).await;
-            let _ = std::fs::remove_file(&staging);
+        let sha = hex_lower(&hasher.finalize());
+        if expected_bytes.is_some_and(|expected| expected != total) {
+            emit_error(
+                &to_client,
+                "size_mismatch",
+                &format!("expected {expected_bytes:?} bytes, received {total}"),
+            )
+            .await;
+            let _ = tokio::fs::remove_file(&staging).await;
+            return;
+        }
+        if expected_sha256
+            .as_deref()
+            .is_some_and(|expected| expected != sha)
+        {
+            emit_error(
+                &to_client,
+                "hash_mismatch",
+                &format!("expected sha256 {expected_sha256:?}, received {sha}"),
+            )
+            .await;
+            let _ = tokio::fs::remove_file(&staging).await;
             return;
         }
 
-        let sha = hex_lower(&hasher.finalize());
+        let commit = if overwrite {
+            tokio::fs::rename(&staging, &path).await
+        } else {
+            match tokio::fs::hard_link(&staging, &path).await {
+                Ok(()) => tokio::fs::remove_file(&staging).await,
+                Err(error) => Err(error),
+            }
+        };
+        if let Err(e) = commit {
+            let code = if !overwrite && e.kind() == std::io::ErrorKind::AlreadyExists {
+                "destination_exists"
+            } else {
+                "atomic_commit_failed"
+            };
+            emit_error(&to_client, code, &format!("atomic commit: {e}")).await;
+            let _ = tokio::fs::remove_file(&staging).await;
+            return;
+        }
+
         let _ = to_client
             .send(BidiOutputFrame::terminal_json(json!({
                 "type": "complete",
@@ -371,73 +471,33 @@ fn spawn_upload(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum UploadClientFrame {
     Chunk(Vec<u8>),
-    Eof,
 }
 
 impl UploadClientFrame {
-    fn parse(frame: Value) -> anyhow::Result<Self> {
-        let object = upload_frame_object(&frame)?;
-        let frame_type = upload_required_frame_string(object, "type")?;
-        match frame_type {
-            "chunk" => {
-                reject_unknown_upload_frame_fields(object, &["type", "data"])?;
-                let data_b64 = upload_required_frame_string(object, "data")?;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data_b64)
-                    .map_err(|error| anyhow::anyhow!("chunk `data` base64 decode: {error}"))?;
-                Ok(Self::Chunk(bytes))
-            }
-            "eof" => {
-                reject_unknown_upload_frame_fields(object, &["type"])?;
-                Ok(Self::Eof)
-            }
-            other => anyhow::bail!("unsupported frame type `{other}`"),
+    fn parse(frame: BidiInputFrame) -> anyhow::Result<Self> {
+        if frame.content_type != "application/octet-stream" {
+            anyhow::bail!(
+                "upload data frame must use application/octet-stream, got {:?}",
+                frame.content_type
+            );
         }
+        Ok(Self::Chunk(frame.payload))
     }
-}
-
-fn upload_frame_object(frame: &Value) -> anyhow::Result<&Map<String, Value>> {
-    frame
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("frame must be a JSON object"))
-}
-
-fn upload_required_frame_string<'a>(
-    frame: &'a Map<String, Value>,
-    key: &str,
-) -> anyhow::Result<&'a str> {
-    frame
-        .get(key)
-        .ok_or_else(|| anyhow::anyhow!("`{key}` required"))?
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("`{key}` must be a string"))
-}
-
-fn reject_unknown_upload_frame_fields(
-    frame: &Map<String, Value>,
-    allowed_keys: &[&str],
-) -> anyhow::Result<()> {
-    let mut unknown = frame
-        .keys()
-        .filter(|key| !allowed_keys.contains(&key.as_str()))
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    if !unknown.is_empty() {
-        unknown.sort_unstable();
-        anyhow::bail!("unsupported frame field(s): {}", unknown.join(", "));
-    }
-    Ok(())
 }
 
 /// Download pump: open the file, stream chunks, hash on the fly.
 /// On EOF emit `{type:"complete"}`. On error emit
 /// `{type:"error"}` and bail.
-fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFrame>) {
+fn spawn_download(
+    target: TransferTarget,
+    max_bytes: u64,
+    to_client: mpsc::Sender<BidiOutputFrame>,
+) {
     tokio::spawn(async move {
         let display_path = target.display_path;
         let path = target.path;
 
-        let metadata = match std::fs::metadata(&path) {
+        let metadata = match tokio::fs::metadata(&path).await {
             Ok(m) => m,
             Err(e) => {
                 let code = if e.kind() == std::io::ErrorKind::NotFound {
@@ -471,14 +531,14 @@ fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFram
             .await;
             return;
         }
-        if metadata.len() > FILE_TRANSFER_BYTE_CAP {
+        if metadata.len() > max_bytes {
             emit_target_error(
                 &to_client,
                 "byte_cap_exceeded",
                 &format!(
                     "file size {} exceeds {} byte cap",
                     metadata.len(),
-                    FILE_TRANSFER_BYTE_CAP
+                    max_bytes
                 ),
                 &display_path,
             )
@@ -486,64 +546,58 @@ fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFram
             return;
         }
 
-        // Read on a blocking thread (std::fs is sync) and forward
-        // chunks via blocking_send. Same pattern pty_attach uses.
-        // Clone the sender into the blocking task so the
-        // post-task error path below still has a handle.
-        let chunk_sender = to_client.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::io::Result<(u64, Vec<u8>)> {
-            let mut file = std::fs::File::open(&path)?;
-            let mut hasher = Sha256::new();
-            let mut buf = vec![0u8; DOWNLOAD_CHUNK_BYTES];
-            let mut total: u64 = 0;
-            loop {
-                let n = match file.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) => return Err(e),
-                };
-                let chunk = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
-                if chunk_sender
-                    .blocking_send(BidiOutputFrame::json(
-                        json!({"type": "chunk", "data": chunk}),
-                    ))
-                    .is_err()
-                {
-                    // Forwarder gone. Bail without an error frame
-                    // — there's no one listening anyway.
-                    return Ok((total, Vec::new()));
+        let mut file = match tokio::fs::File::open(&path).await {
+            Ok(file) => file,
+            Err(error) => {
+                emit_error(&to_client, "io_error", &format!("open: {error}")).await;
+                return;
+            }
+        };
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_BYTES];
+        let mut total = 0_u64;
+        loop {
+            let read = match file.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) => {
+                    emit_error(&to_client, "io_error", &format!("read: {error}")).await;
+                    return;
                 }
-                hasher.update(&buf[..n]);
-                total = total.saturating_add(n as u64);
+            };
+            hasher.update(&buffer[..read]);
+            total = total.saturating_add(read as u64);
+            if total > max_bytes {
+                emit_target_error(
+                    &to_client,
+                    "byte_cap_exceeded",
+                    &format!("file grew beyond {max_bytes} byte cap while streaming"),
+                    &display_path,
+                )
+                .await;
+                return;
             }
-            Ok((total, hasher.finalize().to_vec()))
-        })
-        .await;
-
-        match result {
-            Ok(Ok((total, digest))) if !digest.is_empty() => {
-                let sha = hex_lower_bytes(&digest);
-                let _ = to_client
-                    .send(BidiOutputFrame::terminal_json(json!({
-                        "type": "complete",
-                        "sha256": sha,
-                        "bytes": total,
-                        "display_path": display_path,
-                        "resource_ref_revalidated": true,
-                    })))
-                    .await;
-            }
-            Ok(Ok(_)) => {
-                // forwarder gone mid-stream — silent return is
-                // the right policy.
-            }
-            Ok(Err(e)) => {
-                emit_error(&to_client, "io_error", &format!("read: {e}")).await;
-            }
-            Err(e) => {
-                emit_error(&to_client, "internal", &format!("blocking task: {e}")).await;
+            if to_client
+                .send(BidiOutputFrame::binary(
+                    buffer[..read].to_vec(),
+                    "application/octet-stream",
+                ))
+                .await
+                .is_err()
+            {
+                return;
             }
         }
+        let sha = hex_lower(&hasher.finalize());
+        let _ = to_client
+            .send(BidiOutputFrame::terminal_json(json!({
+                "type": "complete",
+                "sha256": sha,
+                "bytes": total,
+                "display_path": display_path,
+                "resource_ref_revalidated": true,
+            })))
+            .await;
     });
 }
 
@@ -635,6 +689,14 @@ pub fn input_schema() -> Value {
         "properties": {
             "mode": {"type": "string", "enum": ["upload", "download"]},
             "resource_ref": crate::daemon::resources::files::resource_ref_schema(),
+            "overwrite": {"type": "boolean"},
+            "max_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": FILE_TRANSFER_BYTE_CAP,
+            },
+            "expected_sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+            "expected_bytes": {"type": "integer", "minimum": 0},
         },
     })
 }
@@ -643,7 +705,7 @@ pub fn description() -> &'static str {
     "Bidirectional file transfer between the operator and this \
      device's filesystem through a revalidated RFC-005 filesystem \
      ResourceRef. mode=\"upload\" requires write capability and \
-     streams client→file with atomic rename + SHA-256; \
+     streams client→file with atomic commit, explicit overwrite, and expected size/SHA-256 verification; \
      mode=\"download\" requires read capability and streams \
      file→client with on-the-fly hashing. Per-call byte cap 1 GiB."
 }
@@ -672,12 +734,30 @@ mod tests {
             let remaining = deadline.checked_duration_since(tokio::time::Instant::now());
             let Some(remaining) = remaining else { break };
             match tokio::time::timeout(remaining, rx.recv()).await {
-                Ok(Some(v)) => out.push(v.into_json_value().expect("file transfer emits JSON")),
+                Ok(Some(v)) if v.content_type == "application/json" => {
+                    out.push(v.into_json_value().expect("file transfer JSON frame"));
+                }
+                Ok(Some(v)) => out.push(json!({
+                    "type": "binary",
+                    "data": v.payload,
+                })),
                 Ok(None) => break,
                 Err(_) => break,
             }
         }
         out
+    }
+
+    async fn send_upload_chunk(
+        sender: &crate::daemon::ability::dispatch::BidiInputSender,
+        bytes: &[u8],
+    ) {
+        sender
+            .send_frame(
+                BidiInputFrame::new(bytes.to_vec()).with_content_type("application/octet-stream"),
+            )
+            .await
+            .expect("send raw upload chunk");
     }
 
     #[test]
@@ -757,12 +837,8 @@ mod tests {
         let to_handler = source.to_client;
         let mut from_handler = source.from_client;
 
-        let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        to_handler
-            .send(json!({"type": "chunk", "data": chunk_b64}))
-            .await
-            .unwrap();
-        to_handler.send(json!({"type": "eof"})).await.unwrap();
+        send_upload_chunk(&to_handler, bytes).await;
+        drop(to_handler);
 
         let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_secs(3)).await;
         let complete = frames
@@ -798,11 +874,7 @@ mod tests {
         let mut from_handler = source.from_client;
 
         // Push the first chunk but NOT eof.
-        let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(b"first");
-        to_handler
-            .send(json!({"type": "chunk", "data": chunk_b64}))
-            .await
-            .unwrap();
+        send_upload_chunk(&to_handler, b"first").await;
         // Give the writer a moment to land the chunk on the
         // staging file.
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -814,10 +886,69 @@ mod tests {
         );
 
         // Now finalize.
-        to_handler.send(json!({"type": "eof"})).await.unwrap();
+        drop(to_handler);
         let _ = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
         assert!(path.exists(), "target must exist after eof + complete");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_requires_explicit_overwrite_and_preserves_existing_destination() {
+        let path = temp_path("existing.bin");
+        std::fs::write(&path, b"original").unwrap();
+        let source = open_handler(json!({
+            "mode": "upload",
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
+        }))
+        .unwrap();
+        let to_handler = source.to_client;
+        let mut from_handler = source.from_client;
+        send_upload_chunk(&to_handler, b"replacement").await;
+        drop(to_handler);
+        let frames = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
+        assert!(frames
+            .iter()
+            .any(|frame| frame["code"] == "destination_exists"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_hash_mismatch_never_commits_staging_file() {
+        let path = temp_path("hash-mismatch.bin");
+        let source = open_handler(json!({
+            "mode": "upload",
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
+            "expected_bytes": 3,
+            "expected_sha256": "00".repeat(32),
+        }))
+        .unwrap();
+        let to_handler = source.to_client;
+        let mut from_handler = source.from_client;
+        send_upload_chunk(&to_handler, b"abc").await;
+        drop(to_handler);
+        let frames = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
+        assert!(frames.iter().any(|frame| frame["code"] == "hash_mismatch"));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_honors_caller_narrowed_max_bytes() {
+        let path = temp_path("narrow-limit.bin");
+        let source = open_handler(json!({
+            "mode": "upload",
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
+            "max_bytes": 2,
+        }))
+        .unwrap();
+        let to_handler = source.to_client;
+        let mut from_handler = source.from_client;
+        send_upload_chunk(&to_handler, b"abc").await;
+        let frames = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
+        assert!(frames
+            .iter()
+            .any(|frame| frame["code"] == "byte_cap_exceeded"));
+        assert!(!path.exists());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -841,8 +972,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn upload_bad_base64_emits_typed_error() {
-        let path = temp_path("badb64.bin");
+    async fn upload_rejects_json_data_frames() {
+        let path = temp_path("json-frame.bin");
         let source = open_handler(json!({
             "mode": "upload",
             "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
@@ -851,14 +982,14 @@ mod tests {
         let to_handler = source.to_client;
         let mut from_handler = source.from_client;
         to_handler
-            .send(json!({"type": "chunk", "data": "@@@not-base64@@@"}))
+            .send(json!({"type": "chunk", "data": "not-a-data-plane-frame"}))
             .await
             .unwrap();
         let frames = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
         let err = frames
             .iter()
             .find(|f| f["type"] == "error")
-            .expect("error frame for bad base64");
+            .expect("error frame for JSON data");
         assert_eq!(err["code"], "bad_frame");
         // Target must NOT exist (staging cleaned up).
         assert!(!path.exists());
@@ -887,14 +1018,14 @@ mod tests {
         // the original.
         let mut accum = Vec::new();
         for f in &frames {
-            if f["type"] == "chunk" {
-                if let Some(b64) = f["data"].as_str() {
-                    accum.extend_from_slice(
-                        &base64::engine::general_purpose::STANDARD
-                            .decode(b64)
-                            .unwrap(),
-                    );
-                }
+            if f["type"] == "binary" {
+                accum.extend(
+                    f["data"]
+                        .as_array()
+                        .expect("raw binary test projection")
+                        .iter()
+                        .map(|value| value.as_u64().expect("byte") as u8),
+                );
             }
         }
         assert_eq!(accum, bytes, "download bytes must equal source file");
@@ -991,17 +1122,18 @@ mod tests {
         assert!(
             error["message"]
                 .as_str()
-                .is_some_and(|message| message.contains("unsupported frame type")),
+                .is_some_and(|message| message.contains("application/octet-stream")),
             "unexpected error frame: {error:?}"
         );
 
-        let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(b"abc");
         if to_handler
-            .send(json!({"type": "chunk", "data": chunk_b64}))
+            .send_frame(
+                BidiInputFrame::new(b"abc".to_vec()).with_content_type("application/octet-stream"),
+            )
             .await
             .is_ok()
         {
-            let _ = to_handler.send(json!({"type": "eof"})).await;
+            drop(to_handler);
             let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_millis(500)).await;
             assert!(
                 !frames.iter().any(|frame| frame["type"] == "complete"),
@@ -1016,38 +1148,24 @@ mod tests {
     }
 
     #[test]
-    fn upload_frame_parser_rejects_non_object_frames() {
-        let err = UploadClientFrame::parse(Value::Null).unwrap_err();
+    fn upload_frame_parser_rejects_json_frames() {
+        let err = UploadClientFrame::parse(
+            BidiInputFrame::new(b"null".to_vec()).with_content_type("application/json"),
+        )
+        .unwrap_err();
         assert!(
-            format!("{err}").contains("frame must be a JSON object"),
+            format!("{err}").contains("application/octet-stream"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn upload_frame_parser_rejects_unknown_chunk_fields() {
-        let err = UploadClientFrame::parse(json!({
-            "type": "chunk",
-            "data": "YWJj",
-            "legacy_mode": true
-        }))
-        .unwrap_err();
-        assert!(
-            format!("{err}").contains("unsupported frame field(s): legacy_mode"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn upload_frame_parser_rejects_eof_payload_fields() {
-        let err = UploadClientFrame::parse(json!({
-            "type": "eof",
-            "data": ""
-        }))
-        .unwrap_err();
-        assert!(
-            format!("{err}").contains("unsupported frame field(s): data"),
-            "unexpected error: {err}"
-        );
+    fn upload_frame_parser_preserves_all_byte_values() {
+        let bytes = (0_u8..=u8::MAX).collect::<Vec<_>>();
+        let parsed = UploadClientFrame::parse(
+            BidiInputFrame::new(bytes.clone()).with_content_type("application/octet-stream"),
+        )
+        .expect("raw frame");
+        assert_eq!(parsed, UploadClientFrame::Chunk(bytes));
     }
 }

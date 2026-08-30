@@ -30,7 +30,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
@@ -444,6 +444,9 @@ struct AbilityBundle {
     public_name: String,
     /// Namespace segment (`er`) when the manifest declares one.
     namespace: AbilityNamespace,
+    /// Target-tmp archive staged specifically for one deploy transition.
+    /// Directory inputs and arbitrary filesystem archives are never deleted.
+    staged_archive_path: Option<PathBuf>,
 }
 
 impl AbilityBundle {
@@ -455,6 +458,7 @@ impl AbilityBundle {
             filesystem.resolve_filesystem_path(args, FilesystemResourceCapability::Read)?;
         let path = resolved.local_path;
         let display_path = resolved.display_path;
+        let staged_archive_path = managed_deploy_staging_archive(&path, &display_path);
         let (manifest_path, raw_manifest_bytes) = if path.is_dir() {
             let manifest_file = path.join("ability.json");
             if !manifest_file.is_file() {
@@ -487,6 +491,19 @@ impl AbilityBundle {
             public_name: manifest.name().to_string(),
             namespace,
             manifest,
+            staged_archive_path,
+        })
+    }
+
+    fn remove_staged_archive(&mut self) -> anyhow::Result<()> {
+        let Some(path) = self.staged_archive_path.take() else {
+            return Ok(());
+        };
+        std::fs::remove_file(&path).map_err(|error| {
+            anyhow::anyhow!(
+                "ability.deploy: remove consumed staging archive {:?}: {error}",
+                self.display_path
+            )
         })
     }
 
@@ -496,6 +513,18 @@ impl AbilityBundle {
     fn wire_key(&self) -> String {
         self.namespace.wire_key(&self.public_name)
     }
+}
+
+fn managed_deploy_staging_archive(path: &Path, display_path: &str) -> Option<PathBuf> {
+    let relative = display_path.strip_prefix("tmp/easynet-ability-deploy/")?;
+    if relative.is_empty()
+        || relative.contains('/')
+        || !relative.ends_with(".tar.gz")
+        || !path.is_file()
+    {
+        return None;
+    }
+    Some(path.to_path_buf())
 }
 
 fn read_root_ability_json_from_archive(path: &Path, display_path: &str) -> anyhow::Result<Vec<u8>> {
@@ -618,7 +647,8 @@ fn deploy_ability_handler_with_clock(
         .require_local_mutation("ability.deploy")?;
 
     // ── manifest materialization ────────────────────────────────────
-    let bundle = AbilityBundle::from_resource_ref(&args, &filesystem)?;
+    let mut bundle = AbilityBundle::from_resource_ref(&args, &filesystem)?;
+    bundle.remove_staged_archive()?;
     let key = bundle.wire_key();
     let ability_ura = crate::core::ura::owner_ability_ura(&deployed_owner_ura, &key)
         .ok_or_else(|| anyhow::anyhow!("ability.deploy: cannot derive ability_ura"))?;
@@ -1224,7 +1254,7 @@ mod tests {
             .resource_ref_for_local_path(&archive_path, FilesystemResourceCapability::Read)
             .unwrap();
 
-        let bundle = AbilityBundle::from_resource_ref(
+        let mut bundle = AbilityBundle::from_resource_ref(
             &json!({ "resource_ref": resource_ref }),
             &filesystem_provider(),
         )
@@ -1233,6 +1263,49 @@ mod tests {
         assert_eq!(bundle.public_name, "weather");
         assert_eq!(bundle.namespace.as_str(), "er");
         assert!(bundle.manifest_path.ends_with("!/ability.json"));
+        bundle.remove_staged_archive().unwrap();
+        assert!(
+            archive_path.exists(),
+            "arbitrary archive inputs must remain caller-owned"
+        );
+    }
+
+    #[test]
+    fn deploy_ability_removes_consumed_target_tmp_staging_archive() {
+        let _home = provision_local_device_credentials();
+        let staging_dir = std::env::temp_dir().join("easynet-ability-deploy");
+        std::fs::create_dir_all(&staging_dir).unwrap();
+        let archive_path = staging_dir.join(format!("{}.tar.gz", uuid::Uuid::new_v4().simple()));
+        let raw = br#"{"schema_version":"1","name":"weather","namespace":"er","description":"w",
+            "input_schema":{"type":"object"},
+            "exec":{"kind":"host_stream","host_socket":"/tmp/er-host.sock","function":"er.weather"}}"#;
+        {
+            let file = std::fs::File::create(&archive_path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(raw.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "ability.json", &raw[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(&archive_path, FilesystemResourceCapability::Read)
+            .unwrap();
+        let mut bundle = AbilityBundle::from_resource_ref(
+            &json!({ "resource_ref": resource_ref }),
+            &filesystem_provider(),
+        )
+        .expect("target tmp staging archive should parse");
+
+        bundle
+            .remove_staged_archive()
+            .expect("consumed target tmp staging archive should be removable");
+
+        assert!(!archive_path.exists());
     }
 
     #[test]

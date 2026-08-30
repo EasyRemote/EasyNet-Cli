@@ -189,8 +189,16 @@ impl StreamDispatcher {
         };
         let forwarded_request = stream_request_as_invoke_request(request);
         require_complete_signed_remote_request(&forwarded_request)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&forwarded_request, &selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
+            self.sessions.device_trust_sync.as_ref(),
+            &selected_route.execution_host_ura,
+            "InvokeStream HubSession",
+        )
+        .await?;
         crate::op_event!(
             component = daemon_invocation,
             kind = canonical_invoke_stream_hub_session_selected_route,
@@ -397,7 +405,8 @@ impl StreamDispatcher {
             payload_ref: request.payload_ref.clone(),
             ..axon_sdk::pb::axon::v1::InvokeRequest::default()
         };
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let forwarded_binding =
+            ForwardedInvocationBinding::for_selected_route(&forwarded_request, &selected_route)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
             receipt_resolver.as_ref(),
@@ -629,6 +638,7 @@ async fn project_forwarded_remote_stream(
                         invocation_id: receipt.invocation_id.clone(),
                         state: axon_sdk::invocation::InvocationState::Running,
                         payload: Vec::new(),
+                        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                         sequence,
                         terminal: false,
                         admission_receipt: Some(receipt),
@@ -655,7 +665,7 @@ async fn project_forwarded_remote_stream(
                         }
                     }
                 }
-                DispatchStreamEvent::Chunk(payload) => {
+                DispatchStreamEvent::Chunk(chunk) => {
                     if let Err(status) = finalization.observe_data() {
                         let _ = tx.send(Err(status)).await;
                         break;
@@ -671,7 +681,8 @@ async fn project_forwarded_remote_stream(
                     let chunk = remote_stream_chunk(RemoteStreamChunkParts {
                         invocation_id,
                         state: axon_sdk::invocation::InvocationState::Running,
-                        payload,
+                        payload: chunk.payload,
+                        content_type: default_stream_content_type(chunk.content_type),
                         sequence,
                         terminal: false,
                         admission_receipt: None,
@@ -738,6 +749,7 @@ async fn project_forwarded_remote_stream(
                         invocation_id: finalized.terminal_receipt.invocation_id.clone(),
                         state: finalized.terminal_state,
                         payload: finalized.output,
+                        content_type: default_stream_content_type(finalized.output_content_type),
                         sequence,
                         terminal: true,
                         admission_receipt: None,
@@ -1472,6 +1484,7 @@ struct RemoteStreamChunkParts {
     invocation_id: String,
     state: axon_sdk::invocation::InvocationState,
     payload: Vec<u8>,
+    content_type: String,
     sequence: u64,
     terminal: bool,
     admission_receipt: Option<axon_sdk::pb::axon::v1::InvocationReceipt>,
@@ -1488,7 +1501,7 @@ fn remote_stream_chunk(parts: RemoteStreamChunkParts) -> InvokeStreamChunk {
         }),
         invocation_id: parts.invocation_id,
         state: parts.state.to_wire_i32(),
-        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        content_type: parts.content_type,
         payload: parts.payload,
         sequence: parts.sequence,
         terminal: parts.terminal,
@@ -1550,6 +1563,26 @@ mod tests {
         assert!(chunk.error.is_none());
     }
 
+    #[test]
+    fn forwarded_remote_stream_chunk_preserves_typed_payload_content_type() {
+        let chunk = remote_stream_chunk(RemoteStreamChunkParts {
+            invocation_id: "invocation-typed".to_string(),
+            state: InvocationState::Running,
+            payload: vec![0, 0, 0, 1, 0x67],
+            content_type: "video/h264".to_string(),
+            sequence: 3,
+            terminal: false,
+            admission_receipt: None,
+            terminal_receipt: None,
+            error: None,
+        });
+
+        assert_eq!(chunk.payload, vec![0, 0, 0, 1, 0x67]);
+        assert_eq!(chunk.content_type, "video/h264");
+        assert_eq!(chunk.sequence, 3);
+        assert!(!chunk.terminal);
+    }
+
     fn forwarded_request_for_timeout_test() -> InvokeRequest {
         let descriptor_ref = "easynet:///r/test/ability/device.target.media.synthetic_stream@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
         InvokeRequest {
@@ -1588,9 +1621,10 @@ mod tests {
     async fn forwarded_remote_stream_times_out_without_terminal_event() {
         let pending = PendingStreamDispatchMap::new();
         let handle = pending.register_pending_for("easynet:///r/test/device/target");
-        let binding =
-            ForwardedInvocationBinding::from_request(&forwarded_request_for_timeout_test())
-                .expect("forwarded binding");
+        let binding = ForwardedInvocationBinding::for_delegated_request(
+            &forwarded_request_for_timeout_test(),
+        )
+        .expect("forwarded binding");
 
         let response = project_forwarded_remote_stream(
             RemoteStreamEventSource::Presence {
@@ -1626,9 +1660,10 @@ mod tests {
         let handle = pending.register_pending_for("easynet:///r/test/device/target");
         let call_id = handle.call_id();
         let (carrier_tx, mut carrier_rx) = mpsc::channel(2);
-        let binding =
-            ForwardedInvocationBinding::from_request(&forwarded_request_for_timeout_test())
-                .expect("forwarded binding");
+        let binding = ForwardedInvocationBinding::for_delegated_request(
+            &forwarded_request_for_timeout_test(),
+        )
+        .expect("forwarded binding");
 
         let response = project_forwarded_remote_stream(
             RemoteStreamEventSource::Presence {

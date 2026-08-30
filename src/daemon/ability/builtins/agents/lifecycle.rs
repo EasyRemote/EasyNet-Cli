@@ -1401,6 +1401,7 @@ fn validate_quarantined_agent_root(
             quarantine.display()
         );
     }
+    #[cfg(unix)]
     if let Some(handle) = open_root {
         let handle_metadata = handle.metadata()?;
         if !expected_identity.matches_metadata(&handle_metadata) {
@@ -1409,6 +1410,8 @@ fn validate_quarantined_agent_root(
             );
         }
     }
+    #[cfg(not(unix))]
+    let _ = open_root;
     if matches!(validation, QuarantineValidation::FullIdentity) {
         let directory = AgentDirectory::open(quarantine).map_err(|error| {
             anyhow::anyhow!(
@@ -3607,7 +3610,6 @@ mod tests {
             let plan = match crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &request.agent_ura,
                 &host_device_ura,
-                Some(&credentials.node_id),
                 &request.descriptors,
             ) {
                 Ok(plan) => plan,
@@ -3941,7 +3943,6 @@ mod tests {
             crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 agent_ura,
                 &host_device_ura,
-                Some("dev-1"),
                 &descriptors,
             )
             .unwrap();
@@ -4594,7 +4595,6 @@ mod tests {
             let plan = crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &agent_ura,
                 &host_device_ura,
-                Some("dev-1"),
                 &descriptors,
             )
             .expect("registration becomes durably pending before the Hub call");
@@ -4670,7 +4670,6 @@ mod tests {
             let plan = crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &agent_ura,
                 &crate::core::ura::device_ura("localhost", "dev-1"),
-                Some("dev-1"),
                 &descriptors,
             )
             .unwrap();
@@ -4760,7 +4759,6 @@ mod tests {
             let plan = crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
                 &agent_ura,
                 &crate::core::ura::device_ura("localhost", "dev-1"),
-                Some("dev-1"),
                 &descriptors,
             )
             .unwrap();

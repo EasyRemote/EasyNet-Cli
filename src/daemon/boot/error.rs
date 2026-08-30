@@ -97,7 +97,6 @@ pub enum DaemonError {
     WaitChild { pid: u32, source: std::io::Error },
     #[error("daemon invocation transport is not reachable at {endpoint}")]
     InvocationEndpointDown { endpoint: PathBuf },
-    #[cfg(feature = "axon-pb")]
     #[error(
         "daemon discovery at {control} did not advertise invocation_endpoint; daemon is not ready"
     )]

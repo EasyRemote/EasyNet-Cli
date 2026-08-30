@@ -79,7 +79,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     ),
     (r"(bidi|duplex)", "bidi"),
     (
-        r"(stream|contentchunk|contentsegment|contentprovider|contentsession|segmenter)",
+        r"(stream|leasedpayload|contentchunk|contentsegment|contentprovider|contentsession|segmenter)",
         "stream",
     ),
     (
@@ -154,6 +154,10 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     (
         r"(invocationhandle|invocationresult|invocationcancel|invocationterminalstate|finalizedinvocation|invocationsnapshot|invocationlimits|invocationusage|runtimeclient|invoke|callmode|localruntime|abilityregistry|abilitycontext|invocationcore|invocationstate|invocationcontrol|invocationevent|invocation.*tool|messageinbox|messageack|inboundmessage|inboxfull|toolschema|emitextras|terminalstates|valideventtypes|newinvocationid|handle$|messaging|easynetaxoninvocation|axonsdkinvocation|^invocation$)",
         "unary_invoke",
+    ),
+    (
+        r"(authority(binding|evidence|relation|orbootstrap)|bootstrap(binding|json)|delegationevidence|sessionevidence|authorityorbootstrapjson|canonical(authority|bootstrap|delegation|session).*bytes|.*proofhash)",
+        "receipt_verification",
     ),
     (
         r"(sdkerror|axonerror|errorcode|errorclass|retryhint|failure|errorstage|err[a-z]|mapprotocode)",

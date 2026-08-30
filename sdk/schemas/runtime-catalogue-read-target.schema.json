@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.easynet.local/sdk/runtime-catalogue-read-target.schema.json",
+  "title": "Runtime catalogue read target projection fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "cases"],
+  "properties": {
+    "profile": {
+      "const": "runtime-catalogue-read-target.v1"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "callee_ura",
+          "subject_ura",
+          "ability",
+          "provider",
+          "expected_callee_ura",
+          "expected_subject_ura"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "callee_ura": {
+            "type": "string",
+            "pattern": "^easynet:///"
+          },
+          "subject_ura": {
+            "type": "string",
+            "pattern": "^easynet:///"
+          },
+          "ability": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider": {
+            "enum": ["ability_descriptor", "receipt_history"]
+          },
+          "expected_callee_ura": {
+            "type": "string",
+            "pattern": "^easynet:///"
+          },
+          "expected_subject_ura": {
+            "type": "string",
+            "pattern": "^easynet:///"
+          }
+        }
+      }
+    }
+  }
+}

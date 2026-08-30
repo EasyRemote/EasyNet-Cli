@@ -4,8 +4,8 @@
 #
 # Builds `libeasynet_cli` and the complete daemon process set, then runs the tagged Go SDK
 # live smoke against a hermetic daemon. The test exercises daemon lifecycle,
-# generic C ABI v7 Runtime Core health, unary, stream, and typed terminal
-# failure through public Go SDK objects.
+# base C ABI v7 Runtime Core health, unary, stream, and typed terminal failure,
+# plus a real ABI v9 leased payload through public Go SDK objects.
 
 set -euo pipefail
 
@@ -28,9 +28,18 @@ if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
   grep -q "TestGoSDKLiveDaemonSmoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "runtime_live_smoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
-  grep -q "generic C ABI v7" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "base C ABI v7 boundary" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "ABI v9 LeasedStreamHandle received raw daemon payload" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q '"resource.watch_remote_targets"' "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "ActiveSignerForSubject" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "abilityClient.OpenLeasedStream" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "typed terminal failure decoded" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "RuntimeEventClient read live daemon handle events" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "goLiveSmokeSystemAgentCallee" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "WithCallerURA(userURA)" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "WithCalleeURA(calleeURA)" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  awk 'BEGIN { needle = "WithCalleeURA(deviceURA)" } index($0, needle) { found = 1 } END { exit found ? 1 : 0 }' "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  awk 'BEGIN { needle = "CalleeURA:  deviceURA" } index($0, needle) { found = 1 } END { exit found ? 1 : 0 }' "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   echo "go-sdk-live-smoke self-test ok"
   exit 0
 fi

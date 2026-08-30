@@ -25,7 +25,7 @@ do
   fi
 done
 
-for state in 'Agent' 'Ability' 'Device' 'Resource' 'Session' 'Continuation' 'StateObject'; do
+for state in 'CallableActor' 'Ability' 'Device' 'Resource' 'Session' 'Continuation' 'StateObject'; do
   if ! rg -n "^[[:space:]]*$state," "$WIRE" >/dev/null; then
     fail "EntityRefKindResolution is missing state: $state"
   fi
@@ -35,8 +35,14 @@ if ! rg -n 'EntityRefKindResolution::from_ura\(&ura\)\?\.protobuf_kind\(\)' "$WI
   fail "try_entity_ref must project protobuf kind through EntityRefKindResolution"
 fi
 
-if ! rg -n 'URAKind::Authority\) => Ok\(Self::Agent\)' "$WIRE" >/dev/null; then
-  fail "Hub/Authority URAs must project to Axon's generic Agent EntityRef kind"
+for actor_kind in Agent Service Authority; do
+  if ! rg -n "URAKind::$actor_kind\\) => Ok\\(Self::CallableActor\\)" "$WIRE" >/dev/null; then
+    fail "$actor_kind URAs must project to Axon's generic Agent EntityRef kind through CallableActor"
+  fi
+done
+
+if ! rg -n 'Self::CallableActor => EntityRefKind::Agent' "$WIRE" >/dev/null; then
+  fail "CallableActor must project to Axon's generic Agent EntityRef kind"
 fi
 
 if rg -n 'subject_ref_kind_unsupported:Hub' "$WIRE"; then

@@ -162,6 +162,52 @@ func TestManagedSigningClientConformsToRuntimeKeyServiceProtocol(t *testing.T) {
 	}
 }
 
+func TestManagedSigningClientSelectsCanonicalActiveSignerForSubject(t *testing.T) {
+	const (
+		purpose    = "user_signing.cli"
+		subjectURA = "easynet:///r/acme/user/alice"
+	)
+	publicA := ed25519.NewKeyFromSeed(bytesOf(7, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	publicZ := ed25519.NewKeyFromSeed(bytesOf(8, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	publicOther := ed25519.NewKeyFromSeed(bytesOf(9, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	fixture := func(keyID string, publicKey ed25519.PublicKey, boundSubject string) map[string]any {
+		entry := managedSigningKeyFixture(keyID, publicKey, "active", 0, "", boundSubject)
+		entry["purpose"] = purpose
+		entry["signer_policy_ref"] = canonicalManagedSignerPolicyRef(purpose, boundSubject, keyID, publicKey)
+		return entry
+	}
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
+		assertManagedSigningRequest(t, request, map[string]any{
+			"method": "inventory.list", "purpose": purpose, "status": "active",
+			"limit": float64(ManagedSigningDefaultPageLimit),
+		})
+		return map[string]any{
+			"result": "inventory_keys",
+			"entries": []any{
+				fixture("managed-key-z", publicZ, subjectURA),
+				fixture("managed-key-a", publicA, subjectURA),
+				fixture("managed-key-other", publicOther, "easynet:///r/acme/user/bob"),
+			},
+			"next_cursor": nil,
+		}
+	})
+	client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
+	if err != nil {
+		t.Fatalf("NewManagedSigningClient: %v", err)
+	}
+	signer, err := client.ActiveSignerForSubject(subjectURA, purpose)
+	if err != nil {
+		t.Fatalf("ActiveSignerForSubject: %v", err)
+	}
+	if signer.KeyID() != "managed-key-a" {
+		t.Fatalf("active signer key = %q, want lexicographically first candidate", signer.KeyID())
+	}
+	_, err = client.ActiveSignerForSubject("easynet:///r/acme/user/missing", purpose)
+	if !IsCode(err, ErrCallerSignerUnavailable) {
+		t.Fatalf("missing active signer error = %v, want %s", err, ErrCallerSignerUnavailable)
+	}
+}
+
 func TestManagedSigningClientProjectsTypedLifecycleRejection(t *testing.T) {
 	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		assertNoPrivateKeyRequestFields(t, request)

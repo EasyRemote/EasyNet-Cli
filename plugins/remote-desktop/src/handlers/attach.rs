@@ -7,7 +7,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::dispatch::{
-    BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
+    bidi_input_channel, BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
 };
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_ATTACH_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
@@ -29,45 +29,67 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     args: Value,
 ) -> anyhow::Result<BidiSource> {
     let session_id = require_str(&args, "session_id", ABILITY_ATTACH_SESSION)?.to_string();
-    let (target_binding, options, input_policy, encoding, stop_tx, stop_rx) = {
-        plugin
-            .session_store()
-            .with_sessions(|sessions| -> anyhow::Result<_> {
-                let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    RemoteDesktopError::SessionNotFound {
-                        ability: ABILITY_ATTACH_SESSION,
-                        session_id: session_id.clone(),
-                    }
-                })?;
-                ensure_session_access(&plugin, ABILITY_ATTACH_SESSION, &env, &args, session)?;
-                let target_binding = session.target_binding().clone();
-                let options = parse_attach_capture_options(&args, session)?;
-                let encoding = parse_attach_encoding(&args)?;
-                let input_policy = EffectiveRemoteDesktopInputPolicy::for_binding(
-                    session.input_policy(),
-                    &target_binding,
-                );
-                let (stop_tx, stop_rx) = watch::channel(false);
-                if let Some(old_stop) = session.attach_preview_transport(stop_tx.clone()) {
-                    let _ = old_stop.send(true);
-                }
-                Ok((
-                    target_binding,
-                    options,
-                    input_policy,
-                    encoding,
-                    stop_tx,
-                    stop_rx,
-                ))
-            })?
-    };
+    let target_snapshot_executor = plugin.target_snapshot_executor();
+    let session_store = plugin.session_store();
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    let (
+        target_binding,
+        options,
+        input_policy,
+        encoding,
+        preview_epoch,
+        stop_tx,
+        stop_rx,
+        old_stop,
+    ) = session_store.with_target_operation_session(
+        &session_id,
+        |session| -> anyhow::Result<_> {
+            let session = session.ok_or_else(|| RemoteDesktopError::SessionNotFound {
+                ability: ABILITY_ATTACH_SESSION,
+                session_id: session_id.clone(),
+            })?;
+            ensure_session_access(&plugin, ABILITY_ATTACH_SESSION, &env, &args, session)?;
+            let target_binding = session.target_binding().clone();
+            let options = parse_attach_capture_options(&args, session)?;
+            let encoding = parse_attach_encoding(&args)?;
+            let input_policy = EffectiveRemoteDesktopInputPolicy::for_binding(
+                session.input_policy(),
+                &target_binding,
+                Arc::clone(&target_snapshot_executor),
+            );
+            let (stop_tx, stop_rx) = watch::channel(false);
+            let (preview_epoch, old_stop) = session
+                .attach_preview_transport(stop_tx.clone())
+                .expect("live admitted session accepts diagnostic preview");
+            Ok((
+                target_binding,
+                options,
+                input_policy,
+                encoding,
+                preview_epoch,
+                stop_tx,
+                stop_rx,
+                old_stop,
+            ))
+        },
+    )?;
+    plugin.transport_manager().activate_preview(
+        session_id.clone(),
+        preview_epoch,
+        stop_tx.clone(),
+        completion_rx,
+    );
+    if let Some(old_stop) = old_stop {
+        let _ = old_stop.send(true);
+    }
 
-    let (xport_to_handler_tx, xport_to_handler_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_to_handler_tx, xport_to_handler_rx) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (xport_from_handler_tx, xport_from_handler_rx) =
         mpsc::channel::<BidiOutputFrame>(plugin.config().max_frame_queue());
     spawn_bidi_capture_worker(BidiCaptureWorkerConfig {
         session_store: plugin.session_store(),
-        session_id,
+        session_id: session_id.clone(),
+        preview_epoch,
         backend: plugin.screen_backend(),
         target_binding,
         options,
@@ -75,9 +97,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         input_policy,
         from_client: xport_to_handler_rx,
         to_client: xport_from_handler_tx,
-        stop_tx,
+        stop_tx: stop_tx.clone(),
         stop_rx,
         max_frame_queue_depth: plugin.config().max_frame_queue(),
+        completion_tx,
     });
     Ok(BidiSource {
         to_client: xport_to_handler_tx,
@@ -88,7 +111,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::sync::{mpsc as std_mpsc, Mutex};
+    use std::time::{Duration, Instant};
 
     use serde_json::json;
     use tokio::sync::broadcast;
@@ -112,21 +136,57 @@ mod tests {
         RemoteDesktopSession, RemoteDesktopSessionInit, RemoteDesktopState,
     };
     use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
-    use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver,
-    };
+    use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
     use crate::daemon::plugins::remote_desktop::test_support::{
-        env_for, seed_display, test_consent_causal_context, test_lock, test_plugin,
-        test_runtime_limits, TestRemoteAppTargetBindingVerifier,
-    };
-    use crate::daemon::plugins::{
-        DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
-        PluginRequirementSet,
+        env_for, reset_store, seed_display, test_catalog_with_screen_backend,
+        test_consent_causal_context, test_lock, test_plugin, test_runtime_limits,
+        TestRemoteAppTargetBindingVerifier,
     };
 
     #[derive(Debug)]
     struct FailingScreenBackend;
+
+    #[derive(Debug)]
+    struct BlockingScreenBackend {
+        started: Mutex<Option<std_mpsc::Sender<()>>>,
+        release: Mutex<std_mpsc::Receiver<()>>,
+    }
+
+    impl ScreenSnapshotBackend for BlockingScreenBackend {
+        fn capture_jpeg(
+            &self,
+            _entry: &ResourceEntry,
+            _options: &ScreenCaptureOptions,
+        ) -> anyhow::Result<EncodedFrame> {
+            if let Some(started) = self
+                .started
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                let _ = started.send(());
+            }
+            self.release
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|error| anyhow::anyhow!("release blocking capture: {error}"))?;
+            Ok(EncodedFrame {
+                jpeg_bytes: vec![0xff, 0xd8, 0xff, 0xd9],
+                width: 1,
+                height: 1,
+            })
+        }
+
+        fn open_stream(
+            &self,
+            _entry: ResourceEntry,
+            _options: ScreenCaptureOptions,
+        ) -> anyhow::Result<broadcast::Receiver<Value>> {
+            anyhow::bail!("stream not used by blocking preview test")
+        }
+    }
 
     impl ScreenSnapshotBackend for FailingScreenBackend {
         fn capture_jpeg(
@@ -144,41 +204,6 @@ mod tests {
         ) -> anyhow::Result<broadcast::Receiver<Value>> {
             anyhow::bail!("synthetic stream failure")
         }
-    }
-
-    fn registry_with_screen_backend(backend: Arc<dyn ScreenSnapshotBackend>) -> AxonAbilityCatalog {
-        let limits = test_runtime_limits();
-        let mut builder = PluginContributionBuilder::new(
-            "easynet.remote_desktop",
-            "0.1.0",
-            PluginKind::Builtin,
-            limits,
-            PluginRequirementSet::default(),
-            Vec::new(),
-        );
-        crate::daemon::plugins::remote_desktop::registration::contribute_with_platform_services(
-            &mut builder,
-            backend,
-            Arc::new(TestRemoteAppTargetBindingVerifier),
-            limits,
-        )
-        .expect("remote desktop contribution");
-        let contribution = builder
-            .finish()
-            .expect("remote desktop contribution finish");
-        let contributions = PluginContributionSet::new(vec![contribution]);
-        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-            None,
-        );
-        let mut reg = AxonAbilityCatalog::new_test_runtime_for_device_authority(
-            runtime,
-            "easynet:///r/acme/device/01DEV",
-        );
-        DaemonPluginBinder::static_catalog(&mut reg)
-            .bind_set(&contributions)
-            .expect("bind remote desktop contribution");
-        reg
     }
 
     fn grant_consent_ticket(dispatcher: &AxonAbilityCatalog, subject: &str) -> String {
@@ -204,6 +229,25 @@ mod tests {
             .to_string()
     }
 
+    fn bidi_open_failure(result: anyhow::Result<BidiSource>) -> String {
+        match result {
+            Err(error) => error.to_string(),
+            Ok(mut source) => tokio::runtime::Runtime::new()
+                .expect("bidi failure observer runtime")
+                .block_on(async move {
+                    let frame =
+                        tokio::time::timeout(Duration::from_secs(2), source.from_client.recv())
+                            .await
+                            .expect("rejected bidi invocation reaches terminal outcome")
+                            .expect("rejected bidi invocation emits terminal error")
+                            .into_json_value()
+                            .expect("bidi terminal failure is JSON");
+                    assert_eq!(frame["type"], json!("error"));
+                    frame.to_string()
+                }),
+        }
+    }
+
     #[test]
     fn attach_bidi_emits_synthetic_frame_and_closes_on_request() {
         let _lock = test_lock();
@@ -213,7 +257,7 @@ mod tests {
             let ura = seed_display(&mut file, "remote-desktop-bidi-display");
             resources::save(&file).unwrap();
 
-            let reg = registry_with_screen_backend(Arc::new(SyntheticScreenBackend));
+            let reg = test_catalog_with_screen_backend(Arc::new(SyntheticScreenBackend));
             let dispatcher = Arc::new(reg);
             let create_target = InvocationTarget {
                 scope: TargetScope::Local,
@@ -475,12 +519,13 @@ mod tests {
                 .into_json_value()
                 .unwrap();
             assert_eq!(error["type"], json!("error"));
-            assert!(
-                tokio::time::timeout(Duration::from_millis(100), bidi.from_client.recv())
-                    .await
-                    .is_err(),
-                "terminal error must not be followed by a duplicate closed frame"
-            );
+            match tokio::time::timeout(Duration::from_millis(100), bidi.from_client.recv()).await {
+                Err(_) | Ok(None) => {}
+                Ok(Some(frame)) => panic!(
+                    "terminal error must not be followed by another frame: {:?}",
+                    frame.into_json_value()
+                ),
+            }
 
             plugin.session_store().with_sessions(|sessions| {
                 let session = sessions.get("rd-capture-failed").unwrap();
@@ -497,6 +542,95 @@ mod tests {
     }
 
     #[test]
+    fn attach_reserves_preview_ownership_before_worker_can_race_session_close() {
+        let _lock = test_lock();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let _g = crate::cli::commands::test_support::HomeGuard::new();
+            let (started_tx, started_rx) = std_mpsc::channel();
+            let (release_tx, release_rx) = std_mpsc::channel();
+            let plugin = RemoteDesktopPlugin::with_target_binding_verifier(
+                Arc::new(BlockingScreenBackend {
+                    started: Mutex::new(Some(started_tx)),
+                    release: Mutex::new(release_rx),
+                }),
+                Arc::new(TestRemoteAppTargetBindingVerifier),
+                test_runtime_limits().into(),
+            );
+            reset_store(&plugin);
+            let mut file = ResourcesFile::default();
+            let ura = seed_display(&mut file, "remote-desktop-attach-close-race-display");
+            resources::save(&file).unwrap();
+            let env = env_for(&ura);
+            let created =
+                crate::daemon::plugins::remote_desktop::test_support::create_test_session(
+                    Arc::clone(&plugin),
+                    env.clone(),
+                    json!({
+                        "session_id": "rd-attach-close-race",
+                        "mode": "view_only",
+                        "lease_ttl_ms": 5000,
+                    }),
+                )
+                .expect("test session creates");
+            let token = created["session_token"]
+                .as_str()
+                .expect("create_session returns token")
+                .to_string();
+            let _bidi = handle(
+                Arc::clone(&plugin),
+                env.clone(),
+                json!({
+                    "session_id": "rd-attach-close-race",
+                    "session_token": token.clone(),
+                }),
+            )
+            .expect("attach starts owned preview");
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("preview capture worker starts");
+
+            let closing_plugin = Arc::clone(&plugin);
+            let close = std::thread::spawn(move || {
+                crate::daemon::plugins::remote_desktop::handlers::end_session::handle(
+                    closing_plugin,
+                    env,
+                    json!({
+                        "session_id": "rd-attach-close-race",
+                        "session_token": token,
+                        "reason": "test_attach_close_race",
+                    }),
+                )
+            });
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let closing = plugin.session_store().with_sessions(|sessions| {
+                    sessions
+                        .get("rd-attach-close-race")
+                        .is_some_and(|session| session.is_terminating() && !session.is_terminal())
+                });
+                if closing {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "end_session did not enter Closing while preview capture was blocked"
+                );
+                std::thread::yield_now();
+            }
+
+            release_tx
+                .send(())
+                .expect("blocked preview capture is released");
+            let ended = close
+                .join()
+                .expect("end_session thread exits")
+                .expect("end_session completes after owned worker exits");
+            assert_eq!(ended["state"], json!("closed"));
+            assert_eq!(ended["end_reason"], json!("test_attach_close_race"));
+        });
+    }
+
+    #[test]
     fn attach_bidi_rejects_subject_mismatch() {
         let _lock = test_lock();
         let _g = crate::cli::commands::test_support::HomeGuard::new();
@@ -505,7 +639,7 @@ mod tests {
         let other_ura = seed_display(&mut file, "remote-desktop-bidi-other-display");
         resources::save(&file).unwrap();
 
-        let reg = registry_with_screen_backend(Arc::new(SyntheticScreenBackend));
+        let reg = test_catalog_with_screen_backend(Arc::new(SyntheticScreenBackend));
         let dispatcher = Arc::new(reg);
         let created = dispatcher
             .execute_rpc(InvocationTarget {
@@ -531,26 +665,24 @@ mod tests {
             .unwrap();
         let token = created["session_token"].as_str().unwrap().to_string();
 
-        let err = dispatcher
-            .execute_bidi(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_ATTACH_SESSION.to_string(),
-                normalized_args: json!({
-                    "session_id": "rd-bidi-subject-mismatch",
-                    "session_token": token,
-                }),
-                call_mode: CallMode::Bidi,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                    other_ura,
+        let failure = bidi_open_failure(dispatcher.execute_bidi(InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ABILITY_ATTACH_SESSION.to_string(),
+            normalized_args: json!({
+                "session_id": "rd-bidi-subject-mismatch",
+                "session_token": token,
+            }),
+            call_mode: CallMode::Bidi,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                other_ura,
+            ),
+            causal_context:
+                crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                    test_consent_causal_context(),
                 ),
-                causal_context:
-                    crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
-                        test_consent_causal_context(),
-                    ),
-                request_metadata: std::collections::HashMap::new(),
-            })
-            .unwrap_err();
-        assert!(err.to_string().contains("does not match session subject"));
+            request_metadata: std::collections::HashMap::new(),
+        }));
+        assert!(failure.contains("does not match session subject"));
     }
 
     #[test]
@@ -561,7 +693,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-bidi-missing-subject-display");
         resources::save(&file).unwrap();
 
-        let reg = registry_with_screen_backend(Arc::new(SyntheticScreenBackend));
+        let reg = test_catalog_with_screen_backend(Arc::new(SyntheticScreenBackend));
         let dispatcher = Arc::new(reg);
         let created = dispatcher
             .execute_rpc(InvocationTarget {
@@ -587,8 +719,7 @@ mod tests {
             .unwrap();
         let token = created["session_token"].as_str().unwrap().to_string();
 
-        let err = dispatcher
-            .execute_bidi(InvocationTarget {
+        let failure = bidi_open_failure(dispatcher.execute_bidi(InvocationTarget {
                 scope: TargetScope::Local,
                 ability: ABILITY_ATTACH_SESSION.to_string(),
                 normalized_args: json!({
@@ -599,8 +730,7 @@ mod tests {
                 subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
                 causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(test_consent_causal_context()),
                 request_metadata: std::collections::HashMap::new(),
-            })
-            .unwrap_err();
-        assert!(err.to_string().contains("does not match session subject"));
+            }));
+        assert!(failure.contains("does not match session subject"));
     }
 }

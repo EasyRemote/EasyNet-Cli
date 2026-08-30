@@ -11,10 +11,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::daemon::ability::dispatch::{BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND};
+use crate::daemon::ability::dispatch::{
+    bidi_input_channel, BidiInputFrame, BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND,
+};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::sidecar::io::{
     collect_stderr, duration_millis, spawn_stderr_reader, wait_child_with_timeout,
@@ -60,7 +61,7 @@ pub(super) fn open_bidi_session(
         },
     )?;
 
-    let (input_tx, input_rx) = mpsc::channel(BIDI_CHANNEL_BOUND);
+    let (input_tx, input_rx) = bidi_input_channel(BIDI_CHANNEL_BOUND);
     let (output_tx, output_rx) = mpsc::channel(BIDI_CHANNEL_BOUND);
     let terminal = SidecarTerminalGuard::new();
     spawn_bidi_writer(program.to_path_buf(), stdin, call_id.clone(), input_rx);
@@ -141,10 +142,14 @@ fn spawn_bidi_writer(
     program: PathBuf,
     mut stdin: ChildStdin,
     call_id: String,
-    mut input_rx: mpsc::Receiver<Value>,
+    mut input_rx: mpsc::Receiver<BidiInputFrame>,
 ) {
     tokio::spawn(async move {
         while let Some(frame) = input_rx.recv().await {
+            let frame = match serde_json::from_slice(&frame.payload) {
+                Ok(frame) => frame,
+                Err(_) => return,
+            };
             let request = SidecarRequestFrame::BidiInput {
                 call_id: call_id.clone(),
                 frame,
