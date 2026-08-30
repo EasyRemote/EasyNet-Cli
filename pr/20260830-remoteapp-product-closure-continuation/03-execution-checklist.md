@@ -57,3 +57,27 @@
 - [ ] Migrate the Windows process-scoped application observer fixture to the
       canonical process-instance invariant so the authoritative platform branch
       passes the full main-crate filter matrix.
+- [x] Preserve `AppWindowObservation`'s cross-platform optional PID contract
+      when the authoritative xcap process-instance branch narrows PID to a
+      concrete value.
+- [x] Preserve `anyhow::Error` diagnostics when Linux process-instance
+      verification maps platform errors into the stable `TargetInvalidated`
+      backend failure taxonomy.
+- [x] Register daemon exact unary routes through Axon's typed atomic batch
+      boundary so JSON results such as `namespace.resolve` retain their
+      terminal content type.
+- [x] Eliminate every Rust compiler warning in the canonical macOS default
+      test build without lint suppression, and retain a warning-free Linux
+      arm64 native-media backend build.
+- [x] Prove the non-native-media RemoteApp feature matrix still compiles so
+      conditionally compiled fallback code is not mistaken for obsolete code.
+- [x] Reproduce the live macOS blank-session failure from daemon evidence and
+      identify `VTSessionSetProperty` `-12900` as the media-host terminal cause
+      after ICE and PeerConnection reached connected.
+- [x] Prove the fragmentable-NAL VideoToolbox contract initializes on the
+      physical macOS encoder without requiring unsupported slice-byte tuning.
+- [x] Run the corrected debug Runtime process set and execute the real browser
+      lifecycle runner through live target discovery and permission admission.
+- [ ] Install the corrected media-host through the canonical developer
+      deployment, grant Screen Recording to its stable installed identity, and
+      rerun the browser Remote Desktop create/render/end flow.

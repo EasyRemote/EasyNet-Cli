@@ -117,6 +117,13 @@ const REASON_ACTIVE_MEDIA_SESSION_AUDIO_UNAVAILABLE: &str =
 const REASON_PROCESS_TREE_AUDIO_FILTER_UNVERIFIED: &str = "process_tree_audio_filter_unverified";
 
 pub fn run() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    return run_macos_application();
+    #[cfg(not(target_os = "macos"))]
+    run_protocol()
+}
+
+fn run_protocol() -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         let parent_liveness_fd = start_parent_liveness_watchdog()?;
@@ -244,6 +251,114 @@ pub fn run() -> anyhow::Result<()> {
     }
     #[cfg(not(any(unix, windows)))]
     anyhow::bail!("RemoteApp media host is unavailable on this platform")
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_application() -> anyhow::Result<()> {
+    let _application = initialize_macos_application()?;
+
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::Builder::new()
+        .name("easynet-rd-media-protocol".into())
+        .spawn(move || {
+            let _ = result_tx.send(run_protocol());
+        })?;
+    let result = loop {
+        match result_rx.recv_timeout(Duration::from_millis(10)) {
+            Ok(result) => break result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                pump_macos_application_events(0.01);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                break Err(anyhow::anyhow!(
+                    "RemoteApp media host protocol worker disconnected"
+                ));
+            }
+        }
+    };
+    worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("RemoteApp media host protocol worker panicked"))?;
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn initialize_macos_application(
+) -> anyhow::Result<objc2::rc::Retained<objc2_app_kit::NSApplication>> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let main_thread = MainThreadMarker::new().ok_or_else(|| {
+        anyhow::anyhow!("RemoteApp media host must initialize AppKit on the main thread")
+    })?;
+    let application = NSApplication::sharedApplication(main_thread);
+    application.finishLaunching();
+    Ok(application)
+}
+
+#[cfg(target_os = "macos")]
+fn pump_macos_application_events(seconds: f64) {
+    use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop};
+
+    let mode = unsafe { kCFRunLoopDefaultMode };
+    let _ = CFRunLoop::run_in_mode(mode, seconds, true);
+}
+
+#[cfg(target_os = "macos")]
+pub fn run_screen_capture_permission_application() -> anyhow::Result<()> {
+    let _application = initialize_macos_application()?;
+    if platform_screen_capture_permission_granted() {
+        return Ok(());
+    }
+
+    let _ = platform_request_screen_capture_permission();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline && !platform_screen_capture_permission_granted() {
+        pump_macos_application_events(0.05);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn run_launch_services_bootstrap(socket: std::ffi::OsString) -> anyhow::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    use easynet_remoteapp_native_protocol::macos_launch_services::{
+        receive_file_descriptors, FILE_DESCRIPTOR_COUNT,
+    };
+
+    let socket = std::path::PathBuf::from(socket);
+    anyhow::ensure!(
+        socket.is_absolute(),
+        "LaunchServices bootstrap socket must be absolute"
+    );
+    let stream = UnixStream::connect(&socket)
+        .map_err(|error| anyhow::anyhow!("connect LaunchServices bootstrap: {error}"))?;
+    let descriptors = receive_file_descriptors(&stream)
+        .map_err(|error| anyhow::anyhow!("receive LaunchServices bootstrap: {error}"))?;
+    anyhow::ensure!(
+        descriptors.len() == FILE_DESCRIPTOR_COUNT,
+        "LaunchServices bootstrap descriptor count mismatch"
+    );
+    for (descriptor, target) in descriptors.iter().take(3).zip([0, 1, 2]) {
+        if unsafe { libc::dup2(descriptor.as_raw_fd(), target) } == -1 {
+            return Err(anyhow::anyhow!(
+                "install LaunchServices stdio descriptor: {}",
+                io::Error::last_os_error()
+            ));
+        }
+    }
+    for (name, descriptor) in [
+        (PARENT_LIVENESS_FD_ENV, &descriptors[3]),
+        (VIDEO_LANE_FD_ENV, &descriptors[4]),
+        (AUDIO_LANE_FD_ENV, &descriptors[5]),
+        (VIDEO_SHARED_LANE_FD_ENV, &descriptors[6]),
+        (AUDIO_SHARED_LANE_FD_ENV, &descriptors[7]),
+    ] {
+        std::env::set_var(name, descriptor.as_raw_fd().to_string());
+    }
+    run()
 }
 
 fn run_capture_probe_request(

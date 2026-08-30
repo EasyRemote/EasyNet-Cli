@@ -22,18 +22,38 @@
 // Architectural Position:
 // - RemoteDesktop plugin transport strategy shared by every host-audio adapter.
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 use webrtc::media_stream::Track;
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 use crate::daemon::plugins::remote_desktop::media::audio::{
     AudioCaptureEvent, AudioSink, CapturedAudioChunk, RemoteAppOpusEncoder,
 };
@@ -41,13 +61,21 @@ use crate::daemon::plugins::remote_desktop::media::audio::{
     REMOTEAPP_AUDIO_CHANNELS, REMOTEAPP_AUDIO_CODEC, REMOTEAPP_AUDIO_PAYLOAD_CONTENT_TYPE,
     REMOTEAPP_AUDIO_SAMPLE_RATE_HZ,
 };
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_encoded_audio::{
     BoundedPendingWrites, EncodedAudioPacket, EncodedAudioWriter, EncodedAudioWriterSnapshot,
     ENCODED_AUDIO_QUEUE_DEPTH,
 };
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 pub(super) const AUDIO_CAPTURE_QUEUE_DEPTH: usize = 4;
 
 #[derive(Debug, Clone)]
@@ -215,7 +243,11 @@ impl RemoteAppAudioStats {
 
 // In-process audio pipeline, superseded by the remoteapp media host for all
 // production media profiles; retained for the webrtc_audio pipeline tests.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 pub(super) struct RemoteAppAudioPipeline {
     track: Arc<TrackLocalStaticSample>,
     ssrc: u32,
@@ -230,7 +262,11 @@ pub(super) struct RemoteAppAudioPipeline {
     capture_source: Option<&'static str>,
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 impl RemoteAppAudioPipeline {
     pub(super) async fn new(
         track: &Arc<TrackLocalStaticSample>,

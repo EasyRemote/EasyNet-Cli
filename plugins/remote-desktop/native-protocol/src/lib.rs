@@ -12,6 +12,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub mod capture_probe;
+#[cfg(target_os = "macos")]
+pub mod macos_launch_services;
 pub mod media_capabilities;
 pub mod media_session;
 pub mod screen_capture_permission;

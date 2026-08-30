@@ -1,6 +1,6 @@
 [package]
 name = "easynet-remoteapp-media-host"
-version = "0.148.60"
+version = "0.149.10"
 edition = "2021"
 publish = false
 description = "Private killable native media process for EasyNet RemoteApp."
@@ -52,8 +52,9 @@ windows-sys = { version = "0.61", features = [
 block2 = "0.6"
 dispatch2 = "0.3"
 objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication"] }
 objc2-core-audio-types = "0.3"
-objc2-core-foundation = "0.3"
+objc2-core-foundation = { version = "0.3", features = ["CFDate", "CFRunLoop"] }
 objc2-core-media = "0.3"
 objc2-core-video = "0.3"
 objc2-foundation = "0.3"

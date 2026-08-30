@@ -6,8 +6,8 @@
 // response validation stays with each caller and the private protocol crate.
 
 use std::ffi::OsString;
-use std::io::{self, Read};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::io::{self, Read, Write};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
@@ -37,6 +37,10 @@ use std::sync::atomic::AtomicU64;
 ))]
 use std::sync::{Mutex, MutexGuard};
 
+#[cfg(target_os = "macos")]
+use easynet_remoteapp_native_protocol::macos_launch_services::{
+    send_file_descriptors, ARG as MACOS_LAUNCH_SERVICES_ARG,
+};
 #[cfg(all(
     feature = "native-media",
     any(target_os = "linux", target_os = "macos", target_os = "windows")
@@ -133,7 +137,7 @@ impl Drop for WindowsKillOnCloseJob {
 pub(super) struct NativeHostProcess<Response> {
     id: u64,
     child: Child,
-    stdin: Option<ChildStdin>,
+    stdin: Option<Box<dyn Write + Send>>,
     responses: Receiver<Result<Response, FrameError>>,
     protocol_violation: Arc<AtomicBool>,
     stdout_reader: Option<JoinHandle<()>>,
@@ -155,7 +159,11 @@ where
         extra_environment: &[(OsString, OsString)],
     ) -> io::Result<Self> {
         let executable = sibling_executable(executable_name)?;
-        let mut command = Command::new(executable);
+        #[cfg(target_os = "macos")]
+        if executable_name == super::MEDIA_HOST_EXECUTABLE {
+            return spawn_macos_one_shot_media_host(id, executable, thread_label);
+        }
+        let mut command = Command::new(&executable);
         command
             .env_clear()
             .stdin(Stdio::piped())
@@ -222,7 +230,7 @@ where
         Ok(Self {
             id,
             child,
-            stdin: Some(stdin),
+            stdin: Some(Box::new(stdin)),
             responses,
             protocol_violation,
             stdout_reader: Some(stdout_reader),
@@ -284,6 +292,154 @@ where
             thread::park_timeout(remaining.min(Duration::from_millis(5)));
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_macos_one_shot_media_host<Response>(
+    id: u64,
+    executable: std::path::PathBuf,
+    thread_label: &str,
+) -> io::Result<NativeHostProcess<Response>>
+where
+    Response: DeserializeOwned + Send + 'static,
+{
+    use std::os::fd::AsRawFd;
+
+    let (child_stdin, parent_stdin) = macos_pipe()?;
+    let (parent_stdout, child_stdout) = macos_pipe()?;
+    let (parent_stderr, child_stderr) = macos_pipe()?;
+    let (child_liveness, parent_liveness) = macos_pipe()?;
+    let null = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")?;
+    let descriptors = [
+        child_stdin.as_raw_fd(),
+        child_stdout.as_raw_fd(),
+        child_stderr.as_raw_fd(),
+        child_liveness.as_raw_fd(),
+        null.as_raw_fd(),
+        null.as_raw_fd(),
+        null.as_raw_fd(),
+        null.as_raw_fd(),
+    ];
+    let child = spawn_macos_launch_services_app(&executable, &descriptors, &[])?;
+    drop((
+        child_stdin,
+        child_stdout,
+        child_stderr,
+        child_liveness,
+        null,
+    ));
+
+    let (response_tx, responses) = mpsc::sync_channel(1);
+    let protocol_violation = Arc::new(AtomicBool::new(false));
+    let violation_for_reader = Arc::clone(&protocol_violation);
+    let stdout_name = format!("easynet-rd-{thread_label}-{id}-stdout");
+    let stdout_reader = thread::Builder::new()
+        .name(stdout_name)
+        .spawn(move || read_responses(parent_stdout, response_tx, violation_for_reader))?;
+    let stderr_name = format!("easynet-rd-{thread_label}-{id}-stderr");
+    let stderr_reader = match thread::Builder::new()
+        .name(stderr_name)
+        .spawn(move || read_capped_diagnostics(parent_stderr, STDERR_MAX_BYTES))
+    {
+        Ok(reader) => reader,
+        Err(error) => {
+            let mut child = child;
+            terminate_spawn_failure(&mut child, Some(stdout_reader));
+            return Err(error);
+        }
+    };
+    Ok(NativeHostProcess {
+        id,
+        child,
+        stdin: Some(Box::new(parent_stdin)),
+        responses,
+        protocol_violation,
+        stdout_reader: Some(stdout_reader),
+        stderr_reader: Some(stderr_reader),
+        parent_liveness: Some(parent_liveness),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_pipe() -> io::Result<(std::fs::File, std::fs::File)> {
+    use std::os::fd::FromRawFd;
+
+    let mut descriptors = [-1_i32; 2];
+    if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe {
+        (
+            std::fs::File::from_raw_fd(descriptors[0]),
+            std::fs::File::from_raw_fd(descriptors[1]),
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_macos_launch_services_app(
+    executable: &std::path::Path,
+    descriptors: &[std::os::fd::RawFd],
+    extra_environment: &[(OsString, OsString)],
+) -> io::Result<Child> {
+    let app = executable
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
+        .ok_or_else(|| io::Error::other("media host executable is not inside an app bundle"))?;
+    let bootstrap = tempfile::tempdir()?;
+    let socket = bootstrap.path().join("bootstrap.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket)?;
+    listener.set_nonblocking(true)?;
+    let mut command = Command::new("/usr/bin/open");
+    command.arg("-W").arg("-n").arg("-g");
+    for (name, value) in extra_environment {
+        let mut assignment = name.clone();
+        assignment.push("=");
+        assignment.push(value);
+        command.arg("--env").arg(assignment);
+    }
+    command
+        .arg(app)
+        .arg("--args")
+        .arg(MACOS_LAUNCH_SERVICES_ARG)
+        .arg(&socket)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "media host app did not connect to LaunchServices bootstrap",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        }
+    };
+    if let Err(error) = send_file_descriptors(&stream, descriptors) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    Ok(child)
 }
 
 /// Execute one exact request/response exchange against a plugin-private host.
@@ -371,7 +527,7 @@ impl<Response> Drop for NativeHostProcess<Response> {
 pub(super) struct MediaHostProcess {
     id: u64,
     child: Child,
-    stdin: Option<ChildStdin>,
+    stdin: Option<Box<dyn Write + Send>>,
     conversation: Arc<Mutex<MediaConversationValidator>>,
     control: Receiver<Result<Option<MediaHostEvent>, FrameError>>,
     video: Arc<VideoEventMailbox>,
@@ -427,7 +583,7 @@ impl MediaHostProcess {
             MediaConversationValidator::new(fence.clone())
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?,
         ));
-        let mut command = Command::new(executable);
+        let mut command = Command::new(&executable);
         command
             .env_clear()
             .stdin(Stdio::piped())
@@ -559,6 +715,29 @@ impl MediaHostProcess {
             generation_nonce,
         )
         .map_err(shared_lane_io_error)?;
+        #[cfg(target_os = "macos")]
+        let (child_stdin, parent_stdin) = macos_pipe()?;
+        #[cfg(target_os = "macos")]
+        let (parent_stdout, child_stdout) = macos_pipe()?;
+        #[cfg(target_os = "macos")]
+        let (parent_stderr, child_stderr) = macos_pipe()?;
+        #[cfg(target_os = "macos")]
+        let child_result = {
+            use std::os::fd::AsRawFd;
+
+            let descriptors = [
+                child_stdin.as_raw_fd(),
+                child_stdout.as_raw_fd(),
+                child_stderr.as_raw_fd(),
+                parent_liveness_read_fd,
+                video_lane.child_write.as_raw_fd(),
+                audio_lane.child_write.as_raw_fd(),
+                video_shared.as_raw_fd(),
+                audio_shared.as_raw_fd(),
+            ];
+            spawn_macos_launch_services_app(&executable, &descriptors, extra_environment)
+        };
+        #[cfg(not(target_os = "macos"))]
         let child_result = command.spawn();
         #[cfg(unix)]
         unsafe {
@@ -568,6 +747,8 @@ impl MediaHostProcess {
         drop(video_lane.child_write);
         #[cfg(unix)]
         drop(audio_lane.child_write);
+        #[cfg(target_os = "macos")]
+        drop((child_stdin, child_stdout, child_stderr));
         let mut child = child_result?;
         #[cfg(windows)]
         let kill_on_close_job = match assign_kill_on_close_job(&child) {
@@ -578,18 +759,27 @@ impl MediaHostProcess {
                 return Err(error);
             }
         };
-        let stdin = child.stdin.take().ok_or_else(|| {
+        #[cfg(target_os = "macos")]
+        let stdin: Box<dyn Write + Send> = Box::new(parent_stdin);
+        #[cfg(not(target_os = "macos"))]
+        let stdin: Box<dyn Write + Send> = Box::new(child.stdin.take().ok_or_else(|| {
             terminate_spawn_failure(&mut child, None);
             io::Error::other("media host command lane unavailable")
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
+        })?);
+        #[cfg(target_os = "macos")]
+        let stdout: Box<dyn Read + Send> = Box::new(parent_stdout);
+        #[cfg(not(target_os = "macos"))]
+        let stdout: Box<dyn Read + Send> = Box::new(child.stdout.take().ok_or_else(|| {
             terminate_spawn_failure(&mut child, None);
             io::Error::other("media host control lane unavailable")
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
+        })?);
+        #[cfg(target_os = "macos")]
+        let stderr: Box<dyn Read + Send> = Box::new(parent_stderr);
+        #[cfg(not(target_os = "macos"))]
+        let stderr: Box<dyn Read + Send> = Box::new(child.stderr.take().ok_or_else(|| {
             terminate_spawn_failure(&mut child, None);
             io::Error::other("media host stderr unavailable")
-        })?;
+        })?);
         let protocol_violation = Arc::new(AtomicBool::new(false));
         let (control_tx, control) = mpsc::sync_channel(MEDIA_CONTROL_QUEUE_DEPTH);
         let (audio_tx, audio) = mpsc::sync_channel(MEDIA_AUDIO_QUEUE_DEPTH);
@@ -828,7 +1018,7 @@ impl Drop for MediaHostProcess {
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 fn read_bounded_media_events(
-    mut reader: std::process::ChildStdout,
+    mut reader: impl Read,
     lane: MediaLane,
     sender: SyncSender<Result<Option<MediaHostEvent>, FrameError>>,
     conversation: Arc<Mutex<MediaConversationValidator>>,
@@ -1489,21 +1679,18 @@ pub(super) fn sibling_executable(name: &str) -> io::Result<std::path::PathBuf> {
     let directory = current
         .parent()
         .ok_or_else(|| io::Error::other("current executable has no directory for native host"))?;
-    let binary = if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    };
     #[allow(unused_mut)]
-    let mut candidate = directory.join(binary);
+    let mut candidate = sibling_executable_in(directory, name);
     #[cfg(test)]
     if !candidate.is_file() && directory.file_name().is_some_and(|name| name == "deps") {
         if let Some(profile_directory) = directory.parent() {
-            candidate = profile_directory.join(if cfg!(windows) {
-                format!("{name}.exe")
-            } else {
-                name.to_string()
-            });
+            candidate = sibling_executable_in(profile_directory, name);
+            #[cfg(target_os = "macos")]
+            if !candidate.is_file() && name == super::MEDIA_HOST_EXECUTABLE {
+                // Unit/integration tests execute Cargo's directly built helper;
+                // production daemon builds never compile this branch.
+                candidate = profile_directory.join(name);
+            }
         }
     }
     if !candidate.is_file() {
@@ -1516,6 +1703,22 @@ pub(super) fn sibling_executable(name: &str) -> io::Result<std::path::PathBuf> {
         ));
     }
     Ok(candidate)
+}
+
+fn sibling_executable_in(directory: &std::path::Path, name: &str) -> std::path::PathBuf {
+    #[cfg(target_os = "macos")]
+    if name == super::MEDIA_HOST_EXECUTABLE {
+        return directory
+            .join(format!("{name}.app"))
+            .join("Contents")
+            .join("MacOS")
+            .join(name);
+    }
+    directory.join(if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    })
 }
 
 fn project_os_bootstrap_environment(_command: &mut Command) {
@@ -1662,6 +1865,24 @@ mod tests {
     #[derive(Debug, Serialize, Deserialize)]
     struct TestResponse {
         request_id: u64,
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn media_host_sibling_resolves_to_the_application_executable() {
+        let directory = std::path::Path::new("/opt/easynet/bin");
+        assert_eq!(
+            sibling_executable_in(directory, super::super::MEDIA_HOST_EXECUTABLE),
+            directory
+                .join("easynet-remoteapp-media-host.app")
+                .join("Contents")
+                .join("MacOS")
+                .join("easynet-remoteapp-media-host")
+        );
+        assert_eq!(
+            sibling_executable_in(directory, "easynet-remoteapp-native-host"),
+            directory.join("easynet-remoteapp-native-host")
+        );
     }
 
     #[test]

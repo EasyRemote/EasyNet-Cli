@@ -31,6 +31,11 @@
   is reconciled. Inventory omission never replaces a session's bound subject.
 - Permission verification pending pauses transport while lease and event
   supervision continue for the same session.
+- A macOS backend may advertise production readiness only when its required
+  VideoToolbox properties are supported by the physical encoder. Optional
+  encoder tuning must not turn `kVTPropertyNotSupportedErr` into a terminal
+  session failure, and the WebRTC packetizer must own standards-compliant FU-A
+  fragmentation when the encoder cannot enforce a slice-byte limit.
 
 ## Evidence
 

@@ -758,8 +758,8 @@ fn capture_unavailable(error: impl std::fmt::Display) -> BackendFailure {
     )
 }
 
-fn target_invalidated(detail: impl Into<String>) -> BackendFailure {
-    BackendFailure::new(FailureReason::TargetInvalidated, detail)
+fn target_invalidated(detail: impl std::fmt::Display) -> BackendFailure {
+    BackendFailure::new(FailureReason::TargetInvalidated, detail.to_string())
 }
 
 fn internal(detail: impl Into<String>) -> BackendFailure {
@@ -784,5 +784,13 @@ mod tests {
             (true, true)
         );
         assert_eq!(inspect_annex_b(&[0, 0, 1, 0x41, 1]), (false, false));
+    }
+
+    #[test]
+    fn target_invalidation_preserves_platform_error_diagnostics() {
+        let failure = target_invalidated(anyhow::anyhow!("process instance changed"));
+
+        assert_eq!(failure.reason, FailureReason::TargetInvalidated);
+        assert_eq!(failure.detail, "process instance changed");
     }
 }

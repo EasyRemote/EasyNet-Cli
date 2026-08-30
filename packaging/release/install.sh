@@ -68,7 +68,11 @@ main() {
     echo "    easynet-daemon               → $INSTALL_DIR/"
     echo "    easynet-keyring              → $INSTALL_DIR/"
     echo "    easynet-remoteapp-native-host → $INSTALL_DIR/"
-    echo "    easynet-remoteapp-media-host → $INSTALL_DIR/"
+    if [ "$OS" = "Darwin" ]; then
+        echo "    easynet-remoteapp-media-host.app → $INSTALL_DIR/"
+    else
+        echo "    easynet-remoteapp-media-host → $INSTALL_DIR/"
+    fi
     echo "    libeasynet_cli.$LIB_EXT      → $LIB_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo "    easynet_cli.h                → $INCLUDE_DIR/"
@@ -197,7 +201,8 @@ download_and_install() {
     # control + InvocationServer sidecar), and `easynet-keyring`
     # (device-signing vault sidecar), and
     # `easynet-remoteapp-native-host` (plugin-private target observer), and
-    # `easynet-remoteapp-media-host` (killable native media generation host).
+    # `easynet-remoteapp-media-host` on Linux or its signed `.app` bundle on
+    # macOS (killable native media generation host).
     # Treat them as required
     # artefacts: if the tarball is missing one, the release is
     # malformed and the installer should fail loudly.
@@ -205,8 +210,16 @@ download_and_install() {
     mv "${TMPDIR}/easynet-daemon" "${INSTALL_DIR}/easynet-daemon"
     mv "${TMPDIR}/easynet-keyring" "${INSTALL_DIR}/easynet-keyring"
     mv "${TMPDIR}/easynet-remoteapp-native-host" "${INSTALL_DIR}/easynet-remoteapp-native-host"
-    mv "${TMPDIR}/easynet-remoteapp-media-host" "${INSTALL_DIR}/easynet-remoteapp-media-host"
-    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring" "${INSTALL_DIR}/easynet-remoteapp-native-host" "${INSTALL_DIR}/easynet-remoteapp-media-host"
+    if [ "$OS" = "Darwin" ]; then
+        rm -f "${INSTALL_DIR}/easynet-remoteapp-media-host"
+        rm -rf "${INSTALL_DIR}/easynet-remoteapp-media-host.app"
+        mv "${TMPDIR}/easynet-remoteapp-media-host.app" "${INSTALL_DIR}/easynet-remoteapp-media-host.app"
+        chmod +x "${INSTALL_DIR}/easynet-remoteapp-media-host.app/Contents/MacOS/easynet-remoteapp-media-host"
+    else
+        mv "${TMPDIR}/easynet-remoteapp-media-host" "${INSTALL_DIR}/easynet-remoteapp-media-host"
+        chmod +x "${INSTALL_DIR}/easynet-remoteapp-media-host"
+    fi
+    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring" "${INSTALL_DIR}/easynet-remoteapp-native-host"
 
     # Install the generic C ABI contract alongside the runtime artefacts.
     # Language bindings compile against the header; release/CI tooling uses

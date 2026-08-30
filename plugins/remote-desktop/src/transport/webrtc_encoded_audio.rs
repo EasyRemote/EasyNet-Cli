@@ -197,17 +197,6 @@ impl EncodedAudioWriter {
         self.state.snapshot()
     }
 
-    #[cfg(any(
-        test,
-        not(all(
-            feature = "native-media",
-            any(target_os = "linux", target_os = "macos")
-        ))
-    ))]
-    pub(super) fn abort(&self) {
-        self.task.abort();
-    }
-
     pub(super) async fn shutdown_discard(mut self) {
         self.pending.clear();
         self.task.abort();

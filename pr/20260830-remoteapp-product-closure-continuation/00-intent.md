@@ -32,3 +32,13 @@ weaken those requirements.
 - Do not replace live platform/network evidence with cross-compilation or
   synthetic fixtures.
 - Do not stage or commit unrelated concurrent worktree changes.
+
+## 2026-08-30 macOS production-flow incident
+
+Restore the concrete browser Remote Desktop flow after a live macOS session
+reached connected ICE/PeerConnection state but the installed media-host failed
+VideoToolbox initialization with `kVTPropertyNotSupportedErr` (`-12900`). The
+source fix must be proven against the physical encoder, installed through the
+canonical developer deployment, and exercised through the browser product
+flow. A closed session whose media process never initialized is not a working
+RemoteApp result.

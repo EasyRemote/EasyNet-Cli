@@ -21,7 +21,11 @@
 // - RemoteDesktop plugin media codec layer, shared by macOS ScreenCaptureKit
 //   and Windows/Linux host-audio adapters.
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 use std::sync::Arc;
 #[cfg(test)]
 use std::time::Duration;
@@ -31,7 +35,15 @@ use opus::{Application, Bitrate, Channels, Encoder};
 
 pub(crate) const REMOTEAPP_AUDIO_SAMPLE_RATE_HZ: u32 = 48_000;
 pub(crate) const REMOTEAPP_AUDIO_CHANNELS: usize = 2;
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 pub(crate) const REMOTEAPP_AUDIO_CODEC: &str = "opus";
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 pub(crate) const REMOTEAPP_AUDIO_PAYLOAD_CONTENT_TYPE: &str = "audio/opus";
 // The in-process capture/encode pipeline below is superseded by the
 // remoteapp media host for every production media profile; only the
@@ -55,9 +67,17 @@ pub(crate) struct CapturedAudioChunk {
     pub(crate) samples: Vec<f32>,
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 pub(crate) type AudioCaptureEvent = Result<CapturedAudioChunk, String>;
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 pub(crate) type AudioSink = Arc<dyn Fn(AudioCaptureEvent) + Send + Sync>;
 
 #[cfg(test)]

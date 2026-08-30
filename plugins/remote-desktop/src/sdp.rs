@@ -565,6 +565,31 @@ mod tests {
     }
 
     #[test]
+    fn h264_offer_projects_explicit_level_4_2_browser_receive_capability() {
+        let offer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=recvonly\r\n\
+                     a=rtpmap:102 H264/90000\r\n\
+                     a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;\
+                     profile-level-id=42e01f;max-recv-level=e02a\r\n";
+        let limits = remote_offer_h264_receive_limits(offer).unwrap();
+        assert_eq!(limits.level(), H264Level::Level4_2);
+        let (options, bitrate) = limits
+            .constrain(
+                &crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions {
+                    fps: 60,
+                    resolution: Some(crate::daemon::ability::builtins::resources::media::screen_snapshot::VideoResolution { width: 1920, height: 1080 }),
+                    resize_mode: crate::daemon::ability::builtins::resources::media::screen_snapshot::CaptureResizeMode::FitWithin,
+                    region: None,
+                },
+                50_000,
+            )
+            .unwrap();
+        assert_eq!(options.resolution.unwrap().width, 1920);
+        assert_eq!(options.resolution.unwrap().height, 1080);
+        assert_eq!(options.fps, 60);
+        assert_eq!(bitrate, 50_000);
+    }
+
+    #[test]
     fn h264_offer_rejects_high_profile_and_malformed_receive_extensions() {
         let high = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=recvonly\r\n\
                     a=rtpmap:102 H264/90000\r\n\

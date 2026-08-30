@@ -420,11 +420,31 @@ fn direct_webrtc_hosted_failure_projection(
 mod tests {
     use super::*;
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use easynet_remoteapp_native_protocol::media_session::FailureReason;
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use serde_json::json;
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 
     #[test]
@@ -459,6 +479,10 @@ mod tests {
         assert!(execution.should_stop());
     }
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     #[test]
     fn hosted_target_failure_preserves_frontend_recovery_context() {
         let binding = ResourceEntryTargetResolver
@@ -503,6 +527,10 @@ mod tests {
         assert_eq!(failure.context["binding_epoch"], json!(1));
     }
 
+    #[cfg(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
     #[test]
     fn hosted_non_target_failure_stays_pipeline_failure() {
         let binding = ResourceEntryTargetResolver

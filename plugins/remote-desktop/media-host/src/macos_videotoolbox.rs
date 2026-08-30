@@ -415,6 +415,7 @@ impl VideoToolboxEncoder {
         bitrate_kbps: u32,
         keyframe_interval: u32,
         fps_hint: u32,
+        max_access_unit_bytes: u32,
         max_nal_unit_bytes: u32,
         wakeup: Option<EncoderWakeup>,
         max_in_flight_frames: usize,
@@ -465,6 +466,7 @@ impl VideoToolboxEncoder {
             bitrate_kbps,
             keyframe_interval,
             fps_hint,
+            max_access_unit_bytes,
             max_nal_unit_bytes,
         )?;
         let status = unsafe { session.prepare_to_encode_frames() };
@@ -551,6 +553,7 @@ fn configure_realtime_h264(
     bitrate_kbps: u32,
     keyframe_interval: u32,
     fps_hint: u32,
+    max_access_unit_bytes: u32,
     max_nal_unit_bytes: u32,
 ) -> anyhow::Result<()> {
     use objc2_core_foundation::{CFNumber, CFType};
@@ -595,12 +598,19 @@ fn configure_realtime_h264(
     )?;
 
     set_average_bitrate(session, bitrate_kbps)?;
-    let max_nal = CFNumber::new_i32(i32::try_from(max_nal_unit_bytes)?);
-    set_property(
-        session,
-        unsafe { kVTCompressionPropertyKey_MaxH264SliceBytes },
-        max_nal.as_ref(),
-    )?;
+    // Only require a slice limit when the media contract promises NALs
+    // smaller than a complete access unit. The macOS contract deliberately
+    // permits full-size NALs because VideoToolbox does not implement this
+    // property on every hardware encoder; WebRTC then performs standard FU-A
+    // fragmentation instead of failing encoder initialization.
+    if max_nal_unit_bytes < max_access_unit_bytes {
+        let max_nal = CFNumber::new_i32(i32::try_from(max_nal_unit_bytes)?);
+        set_property(
+            session,
+            unsafe { kVTCompressionPropertyKey_MaxH264SliceBytes },
+            max_nal.as_ref(),
+        )?;
+    }
     if fps_hint > 0 {
         let fps = fps_hint.min(240) as i32;
         let _ = set_property_i32(
@@ -923,6 +933,29 @@ fn cmtime_to_ms(t: CMTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a physical macOS VideoToolbox encoder"]
+    fn physical_encoder_accepts_fragmentable_nal_contract() {
+        let max_access_unit_bytes =
+            u32::try_from(easynet_remoteapp_native_protocol::media_session::MAX_PAYLOAD_BYTES)
+                .expect("protocol payload bound fits u32");
+        let encoder = VideoToolboxEncoder::new_with_wakeup_and_limits(
+            640,
+            480,
+            2_000,
+            30,
+            30,
+            max_access_unit_bytes,
+            max_access_unit_bytes,
+            None,
+            2,
+            2,
+        )
+        .expect("fragmentable NAL contract must initialize VideoToolbox");
+
+        assert_eq!(encoder.stats().configured_bitrate_kbps, 2_000);
+    }
 
     #[test]
     fn avcc_two_nals_become_annexb() {

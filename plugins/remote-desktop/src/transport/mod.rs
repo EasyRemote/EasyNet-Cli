@@ -14,28 +14,19 @@ mod manager;
 mod media_source;
 mod terminal;
 mod webrtc;
-#[cfg(any(
-    test,
-    not(all(
-        feature = "native-media",
-        any(target_os = "linux", target_os = "macos", target_os = "windows")
-    ))
-))]
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 mod webrtc_audio;
-#[cfg(any(
-    test,
-    not(all(
-        feature = "native-media",
-        any(target_os = "linux", target_os = "macos", target_os = "windows")
-    ))
-))]
+#[cfg(not(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
 mod webrtc_baseline_media;
-#[cfg(any(
-    test,
-    all(
-        feature = "native-media",
-        any(target_os = "linux", target_os = "macos", target_os = "windows")
-    )
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 mod webrtc_encoded_audio;
 mod webrtc_endpoint;

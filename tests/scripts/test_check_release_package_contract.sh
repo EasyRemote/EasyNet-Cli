@@ -18,6 +18,7 @@ make_sandbox() {
     cp "$REPO_ROOT/packaging/release/build-release-tarball.sh" "$sandbox/packaging/release/build-release-tarball.sh"
     cp "$REPO_ROOT/packaging/release/constrain-c-abi-exports.sh" "$sandbox/packaging/release/constrain-c-abi-exports.sh"
     cp "$REPO_ROOT/packaging/release/macos-sign-runtime.sh" "$sandbox/packaging/release/macos-sign-runtime.sh"
+    cp "$REPO_ROOT/packaging/release/macos-stage-remoteapp-media-host.sh" "$sandbox/packaging/release/macos-stage-remoteapp-media-host.sh"
     cp "$REPO_ROOT/packaging/release/build-windows-cli.ps1" "$sandbox/packaging/release/build-windows-cli.ps1"
     cp "$REPO_ROOT/packaging/release/e2e-release-flow.sh" "$sandbox/packaging/release/e2e-release-flow.sh"
     cp "$REPO_ROOT/packaging/release/e2e-release-install.sh" "$sandbox/packaging/release/e2e-release-install.sh"
@@ -61,6 +62,22 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "dev installer missing keyring build should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/run\.easynet\.daemon/run.easynet.unstable-daemon/g' \
+    "$SB/packaging/release/dev-install-local.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "dev installer unstable macOS daemon signing identifier should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/security find-identity -v -p codesigning/security find-identity -v -p generic-password/' \
+    "$SB/packaging/release/dev-install-local.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "dev installer missing automatic macOS signing identity discovery should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's/easynet-remoteapp-native-host/missing-native-host/g' \

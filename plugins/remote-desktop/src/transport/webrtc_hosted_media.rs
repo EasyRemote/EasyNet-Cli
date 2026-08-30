@@ -26,6 +26,19 @@ use webrtc::media_stream::Track;
 /// single-NAL packetization path.
 const H264_PACKETIZATION_NAL_BYTES: u32 = 1_160;
 
+fn native_encoder_nal_bound(max_access_unit_bytes: u32) -> u32 {
+    // VideoToolbox does not universally implement
+    // kVTCompressionPropertyKey_MaxH264SliceBytes. macOS must therefore allow
+    // the WebRTC H.264 payloader to fragment native encoder NALs with FU-A.
+    // OpenH264-backed hosts keep the single-packet bound and its zero-copy
+    // packetization fast path.
+    if cfg!(target_os = "macos") {
+        max_access_unit_bytes
+    } else {
+        H264_PACKETIZATION_NAL_BYTES
+    }
+}
+
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION;
 use crate::daemon::plugins::remote_desktop::media::adaptation::{
     effective_fps_for_bitrate, effective_fps_for_writer_service, AdaptiveBitrateController,
@@ -1289,6 +1302,7 @@ fn video_config(
         width > 0 && height > 0,
         "RemoteApp negotiated coded dimensions must remain positive after even alignment"
     );
+    let max_access_unit_bytes = u32::try_from(MAX_PAYLOAD_BYTES).unwrap_or(u32::MAX);
     Ok(VideoConfig {
         codec: VideoCodec::H264AnnexB,
         width,
@@ -1297,8 +1311,8 @@ fn video_config(
         bitrate_kbps: config.bitrate_kbps,
         keyframe_interval_frames: config.keyframe_interval_frames,
         max_pending_frames: u32::try_from(config.max_frame_queue_depth.min(3)).unwrap_or(3),
-        max_access_unit_bytes: u32::try_from(MAX_PAYLOAD_BYTES).unwrap_or(u32::MAX),
-        max_nal_unit_bytes: H264_PACKETIZATION_NAL_BYTES,
+        max_access_unit_bytes,
+        max_nal_unit_bytes: native_encoder_nal_bound(max_access_unit_bytes),
         h264_profile_idc: 66,
         h264_level_idc: config.h264_level.level_idc(),
     })
@@ -1418,7 +1432,10 @@ mod tests {
         assert_eq!(video.fps, 30);
         assert_eq!(video.bitrate_kbps, 4_800);
         assert_eq!(video.max_pending_frames, 3);
-        assert_eq!(video.max_nal_unit_bytes, H264_PACKETIZATION_NAL_BYTES);
+        assert_eq!(
+            video.max_nal_unit_bytes,
+            native_encoder_nal_bound(video.max_access_unit_bytes)
+        );
         assert_eq!(video.h264_profile_idc, 66);
         assert_eq!(video.h264_level_idc, 31);
     }

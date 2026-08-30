@@ -115,9 +115,10 @@ trap cleanup EXIT
 # Detect platform with the same matrix packaging/release/install.sh::detect_platform
 # uses, so the LIB_EXT / native subdir match what the real installer
 # would have written.
-case "$(uname -s)" in
-    Linux)  lib_ext="so" ;;
-    Darwin) lib_ext="dylib" ;;
+host_os="$(uname -s)"
+case "$host_os" in
+    Linux)  lib_ext="so"; remoteapp_media_host_artifact="easynet-remoteapp-media-host" ;;
+    Darwin) lib_ext="dylib"; remoteapp_media_host_artifact="easynet-remoteapp-media-host.app" ;;
     *) echo "e2e-release-install.sh: unsupported OS" >&2; exit 1 ;;
 esac
 
@@ -146,7 +147,7 @@ for required in \
     easynet-daemon \
     easynet-keyring \
     easynet-remoteapp-native-host \
-    easynet-remoteapp-media-host \
+    "$remoteapp_media_host_artifact" \
     "libeasynet_cli.${lib_ext}" \
     "libaxon_dendrite_bridge.${lib_ext}" \
     include/easynet_cli.h \
@@ -157,7 +158,7 @@ for required in \
     docs/spec/ffi-abi-v8.md \
     docs/spec/ffi-abi-v9.md
 do
-    if [ ! -f "$extract_dir/$required" ]; then
+    if [ ! -e "$extract_dir/$required" ]; then
         echo "[FAIL] tarball missing required artefact: $required" >&2
         exit 1
     fi
@@ -177,8 +178,13 @@ mv "$extract_dir/easynet"        "$install_dir/easynet"
 mv "$extract_dir/easynet-daemon" "$install_dir/easynet-daemon"
 mv "$extract_dir/easynet-keyring" "$install_dir/easynet-keyring"
 mv "$extract_dir/easynet-remoteapp-native-host" "$install_dir/easynet-remoteapp-native-host"
-mv "$extract_dir/easynet-remoteapp-media-host" "$install_dir/easynet-remoteapp-media-host"
-chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon" "$install_dir/easynet-keyring" "$install_dir/easynet-remoteapp-native-host" "$install_dir/easynet-remoteapp-media-host"
+mv "$extract_dir/$remoteapp_media_host_artifact" "$install_dir/$remoteapp_media_host_artifact"
+if [ "$host_os" = "Darwin" ]; then
+    remoteapp_media_host_executable="$install_dir/$remoteapp_media_host_artifact/Contents/MacOS/easynet-remoteapp-media-host"
+else
+    remoteapp_media_host_executable="$install_dir/$remoteapp_media_host_artifact"
+fi
+chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon" "$install_dir/easynet-keyring" "$install_dir/easynet-remoteapp-native-host" "$remoteapp_media_host_executable"
 mv "$extract_dir/libeasynet_cli.${lib_ext}" "$lib_dir/libeasynet_cli.${lib_ext}"
 mv "$extract_dir/libaxon_dendrite_bridge.${lib_ext}" "$native_dir/"
 mv "$extract_dir/include/easynet_cli.h" "$include_dir/easynet_cli.h"
@@ -212,7 +218,7 @@ for assert in \
     "$install_dir/easynet-daemon:executable" \
     "$install_dir/easynet-keyring:executable" \
     "$install_dir/easynet-remoteapp-native-host:executable" \
-    "$install_dir/easynet-remoteapp-media-host:executable" \
+    "$remoteapp_media_host_executable:executable" \
     "$lib_dir/libeasynet_cli.${lib_ext}:exists" \
     "$native_dir/libaxon_dendrite_bridge.${lib_ext}:exists" \
     "$include_dir/easynet_cli.h:exists" \
@@ -378,7 +384,7 @@ echo "  lib_dir:     $lib_dir"
 echo "  include_dir: $include_dir"
 echo "  doc_dir:     $doc_dir"
 echo "  env file:    $env_file"
-echo "  binaries:    easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, easynet-remoteapp-media-host"
+echo "  binaries:    easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, $remoteapp_media_host_artifact"
 echo "  libraries:   libeasynet_cli.${lib_ext}, libaxon_dendrite_bridge.${lib_ext}"
 echo "  c abi:       easynet_cli.h + exports.v7/v8/v9 (generic ABI v7 with raw-stream and buffer-lease extensions)"
 echo "  forbidden:   axon-runtime (absent ✓)"

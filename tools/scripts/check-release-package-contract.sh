@@ -76,8 +76,19 @@ if require_file "packaging/release/build-release-tarball.sh"; then
         require_literal "packaging/release/build-release-tarball.sh" "$literal"
     done
     require_literal "packaging/release/build-release-tarball.sh" 'bash "$script_dir/macos-sign-runtime.sh" --stage-dir "$stage_dir"'
+    require_literal "packaging/release/build-release-tarball.sh" 'bash "$script_dir/macos-stage-remoteapp-media-host.sh"'
     require_literal "packaging/release/build-release-tarball.sh" 'bash "$script_dir/constrain-c-abi-exports.sh"'
     require_literal "packaging/release/build-release-tarball.sh" 'EASYNET_FFI_DYLIB="$stage_dir/libeasynet_cli.${lib_ext}"'
+fi
+
+if require_file "packaging/release/macos-stage-remoteapp-media-host.sh"; then
+    for literal in \
+        "plugins/remote-desktop/media-host/Info.plist" \
+        "easynet-remoteapp-media-host.app" \
+        "Contents/MacOS/easynet-remoteapp-media-host"
+    do
+        require_literal "packaging/release/macos-stage-remoteapp-media-host.sh" "$literal"
+    done
 fi
 
 if require_file "packaging/release/constrain-c-abi-exports.sh"; then
@@ -128,6 +139,8 @@ if require_file "packaging/release/dev-install-local.sh"; then
         "easynet-keyring" \
         "easynet-remoteapp-native-host" \
         "easynet-remoteapp-media-host" \
+        "run.easynet.daemon" \
+        "security find-identity -v -p codesigning" \
         '$keyring_bin' \
         '"$install_dir/easynet-keyring"'
     do

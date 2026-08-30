@@ -276,7 +276,7 @@ async fn send_bidi_output_or_stop(
     }
 }
 
-#[cfg(all(target_os = "macos", not(test)))]
+#[cfg(all(target_os = "macos", feature = "native-media", not(test)))]
 fn capture_binding_diagnostic_jpeg(
     _backend: Arc<dyn ScreenSnapshotBackend>,
     target_binding: &RemoteAppTargetBinding,
@@ -289,7 +289,7 @@ fn capture_binding_diagnostic_jpeg(
     )
 }
 
-#[cfg(all(target_os = "macos", test))]
+#[cfg(all(target_os = "macos", any(test, not(feature = "native-media"))))]
 fn capture_binding_diagnostic_jpeg(
     backend: Arc<dyn ScreenSnapshotBackend>,
     target_binding: &RemoteAppTargetBinding,
@@ -754,8 +754,10 @@ fn spawn_latest_frame_forwarder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "macos"))]
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[cfg(not(target_os = "macos"))]
     use tokio::sync::broadcast;
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
@@ -763,11 +765,13 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::ResourceEntryTargetResolver;
     use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
 
+    #[cfg(not(target_os = "macos"))]
     #[derive(Debug)]
     struct CountingScreenBackend {
         calls: Arc<AtomicUsize>,
     }
 
+    #[cfg(not(target_os = "macos"))]
     impl ScreenSnapshotBackend for CountingScreenBackend {
         fn capture_jpeg(
             &self,
@@ -791,6 +795,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn display_binding_for_test() -> RemoteAppTargetBinding {
         let entry = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/device.01DEV/streams/display.test"

@@ -1216,7 +1216,7 @@ impl ResolvedCaptureTargetProof {
         })
     }
 
-    #[cfg(any(test, feature = "native-media"))]
+    #[cfg(feature = "native-media")]
     pub(in crate::daemon::plugins::remote_desktop) fn native_dimensions(
         &self,
     ) -> Option<(usize, usize)> {
@@ -1371,7 +1371,13 @@ impl ResolvedCaptureTargetProof {
         Ok(())
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg(any(
+        test,
+        all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        )
+    ))]
     fn matches_committed_identity(&self, committed: &Self) -> bool {
         self.backend == committed.backend
             && self.target_kind == committed.target_kind
@@ -1385,7 +1391,13 @@ impl ResolvedCaptureTargetProof {
             && self.app_surface_layout == committed.app_surface_layout
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg(any(
+        test,
+        all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        )
+    ))]
     fn native_app_identity_expectation(&self) -> NativeAppIdentityExpectation<'_> {
         NativeAppIdentityExpectation {
             expected_pid: self.pid,
@@ -2104,7 +2116,13 @@ impl RemoteAppTargetBinding {
         Ok(())
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg(any(
+        test,
+        all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        )
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn validate_reverified_capture_proof(
         &self,
         ability: &'static str,

@@ -267,7 +267,6 @@ pub struct CaptureEligibleSurface {
     minimized: bool,
     layer: Option<i64>,
     alpha: Option<f64>,
-    on_screen: Option<bool>,
 }
 
 impl CaptureEligibleSurface {
@@ -278,18 +277,20 @@ impl CaptureEligibleSurface {
             minimized,
             layer: None,
             alpha: None,
-            on_screen: None,
         }
     }
 
-    pub const fn macos(width: u32, height: u32, layer: i64, alpha: f64, on_screen: bool) -> Self {
+    /// A macOS window that ScreenCaptureKit can address independently of the
+    /// currently active Space. `SCContentFilter` supports desktop-independent
+    /// windows, so `isOnScreen` is presentation metadata rather than capture
+    /// eligibility.
+    pub const fn macos_shareable(width: u32, height: u32, layer: i64, alpha: f64) -> Self {
         Self {
             width,
             height,
             minimized: false,
             layer: Some(layer),
             alpha: Some(alpha),
-            on_screen: Some(on_screen),
         }
     }
 
@@ -303,10 +304,6 @@ impl CaptureEligibleSurface {
             }
             && match self.alpha {
                 Some(alpha) => alpha > 0.01,
-                None => true,
-            }
-            && match self.on_screen {
-                Some(on_screen) => on_screen,
                 None => true,
             }
     }
@@ -452,13 +449,12 @@ mod tests {
     use super::CaptureEligibleSurface;
 
     #[test]
-    fn capture_eligibility_rejects_empty_minimized_offscreen_or_overlay_surfaces() {
+    fn capture_eligibility_rejects_empty_minimized_or_overlay_surfaces() {
         assert!(CaptureEligibleSurface::xcap(1280, 720, false).is_eligible());
         assert!(!CaptureEligibleSurface::xcap(0, 720, false).is_eligible());
         assert!(!CaptureEligibleSurface::xcap(1280, 720, true).is_eligible());
-        assert!(CaptureEligibleSurface::macos(1280, 720, 0, 1.0, true).is_eligible());
-        assert!(!CaptureEligibleSurface::macos(1280, 720, 1, 1.0, true).is_eligible());
-        assert!(!CaptureEligibleSurface::macos(1280, 720, 0, 0.0, true).is_eligible());
-        assert!(!CaptureEligibleSurface::macos(1280, 720, 0, 1.0, false).is_eligible());
+        assert!(CaptureEligibleSurface::macos_shareable(1280, 720, 0, 1.0).is_eligible());
+        assert!(!CaptureEligibleSurface::macos_shareable(1280, 720, 1, 1.0).is_eligible());
+        assert!(!CaptureEligibleSurface::macos_shareable(1280, 720, 0, 0.0).is_eligible());
     }
 }

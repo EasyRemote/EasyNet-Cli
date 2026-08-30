@@ -93,3 +93,42 @@ and the absence/order of unexpected process-owned eligible windows. Ignoring
 new uncommitted surfaces is safe for leakage but is not enough to prove the
 session's application window-set epoch remains current; target tracking and the
 media-process pre-capture guard must converge on one explicit policy.
+
+## 2026-08-30 — Keep aggregate observations cross-platform optional
+
+`AppWindowObservation.pid` remains optional because macOS enumeration can
+legitimately lack an owner PID. The authoritative xcap branch filters out rows
+without a canonical process instance, so it projects the narrowed PID as
+`Some(pid)` instead of weakening the shared aggregate type or restoring an
+advisory PID fallback.
+
+## 2026-08-30 — Format platform errors at the backend-failure boundary
+
+Linux target invalidation accepts diagnostic values through `Display`, matching
+the macOS backend boundary. This lets `anyhow::Error` retain its diagnostic text
+when it is classified as `TargetInvalidated`; the internal `BackendFailure`
+continues to own sanitization and bounded string storage.
+
+## 2026-08-30 — Type exact unary route terminals at registration
+
+Daemon exact unary providers return JSON bytes by contract. Their atomic boot
+registration must therefore use Axon's typed batch surface and declare
+`application/json` before terminalization. The Go SDK remains strict and does
+not infer JSON from an `application/octet-stream` payload.
+
+## 2026-08-30 — Treat warning-free builds as configuration ownership
+
+RemoteApp fallback modules and fixtures compile only in the feature/platform
+matrix that owns their production call sites and tests. Native-media tests do
+not force unrelated fallback implementations into the crate. Genuinely unused
+helpers are removed instead of retained behind `allow(dead_code)`; the fallback
+feature matrix is compiled explicitly before and after the change so this does
+not erase supported behavior.
+
+## 2026-08-30 — Let WebRTC fragment native macOS H.264 NAL units
+
+VideoToolbox's maximum H.264 slice-byte property is not supported by every
+physical encoder. The macOS media contract therefore permits a NAL up to the
+bounded access-unit size and delegates RTP FU-A fragmentation to the WebRTC
+packetizer. This preserves the bounded payload contract without making an
+optional hardware tuning property a session-terminating prerequisite.

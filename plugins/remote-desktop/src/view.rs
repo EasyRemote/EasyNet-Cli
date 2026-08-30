@@ -281,16 +281,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
 }
 
 #[cfg(test)]
-pub(in crate::daemon::plugins::remote_desktop) fn serialize_session_with_token(
-    session: &RemoteDesktopSession,
-) -> Value {
-    serialize_session_with_token_and_audio_runtime(
-        session,
-        &HostAudioRuntimeSnapshot::for_test(true, true, true, true, None),
-    )
-}
-
-#[cfg(test)]
 mod tests {
     use serde_json::json;
 

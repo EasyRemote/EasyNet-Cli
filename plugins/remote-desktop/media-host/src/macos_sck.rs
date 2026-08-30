@@ -821,6 +821,7 @@ fn build_encoder(video: &VideoConfig) -> Result<VideoToolboxEncoder, BackendFail
         video.bitrate_kbps,
         video.keyframe_interval_frames,
         video.fps,
+        video.max_access_unit_bytes,
         video.max_nal_unit_bytes,
         None,
         video.max_pending_frames as usize,
@@ -1059,12 +1060,11 @@ fn screen_capture_eligible_window(
     let Some(alpha) = surfaces.alpha_for(unsafe { window.windowID() }) else {
         return false;
     };
-    CaptureEligibleSurface::macos(
+    CaptureEligibleSurface::macos_shareable(
         width,
         height,
         unsafe { window.windowLayer() } as i64,
         alpha,
-        unsafe { window.isOnScreen() },
     )
     .is_eligible()
 }

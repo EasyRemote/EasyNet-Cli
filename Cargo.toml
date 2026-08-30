@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "0.148.60"
+version = "0.149.10"
 edition = "2021"
 description = "Device runtime and CLI for publishing and invoking governed abilities over EasyNet."
 authors = ["Silan Hu <silan.hu@u.nus.edu>"]
@@ -435,6 +435,8 @@ optional = true
 [dependencies.hyper-util]
 version = "0.1"
 optional = true
+[dependencies.tempfile]
+version = "3"
 
 # Native Apple media dependencies. The objc2 foundation/core crates are
 # unconditional on macOS because `camera.snapshot` uses AVFoundation. The
@@ -482,11 +484,6 @@ tower = "0.5"
 # tonic 0.12's UDS-over-`connect_with_connector` recipe.
 hyper-util = "0.1"
 
-# Tests for the McpClientService spawn a real subprocess against a
-# script written into a tempdir; tempfile gives us auto-cleanup so
-# a panicked test doesn't leak the dir.
-tempfile = "3"
-
 # PR-N1 commit 7/N integration test: generates a self-signed CA +
 # leaf cert pair for two daemon binaries to share at test time.
 # Dev-only — production daemons receive cert/key paths from
@@ -510,6 +507,10 @@ optional = true
 [build-dependencies.prost-build]
 version = "0.13"
 optional = true
+
+[[example]]
+name = "snapshot-probe"
+required-features = ["native-media"]
 
 # tonic runtime dependency for Invocation server/client plumbing and
 # `tonic::Status`. The generated Axon message/stub types now come from

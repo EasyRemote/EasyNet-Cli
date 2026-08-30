@@ -11,7 +11,7 @@
 #   easynet-daemon                       — long-running daemon
 #   easynet-keyring                      — device-signing vault helper
 #   easynet-remoteapp-native-host        — killable Remote Desktop native helper
-#   easynet-remoteapp-media-host         — killable native media generation host
+#   easynet-remoteapp-media-host[.app]   — killable native media generation host
 #   libeasynet_cli.{dylib|so}            — executable generic C ABI v7/v8/v9 provider
 #   libaxon_dendrite_bridge.{dylib|so}   — dendrite SDK shared library
 #   include/easynet_cli.h                — libeasynet_cli generic C ABI header
@@ -188,7 +188,17 @@ cp "$cli_bin"    "$stage_dir/easynet"
 cp "$daemon_bin" "$stage_dir/easynet-daemon"
 cp "$keyring_bin" "$stage_dir/easynet-keyring"
 cp "$remoteapp_native_host_bin" "$stage_dir/easynet-remoteapp-native-host"
-cp "$remoteapp_media_host_bin" "$stage_dir/easynet-remoteapp-media-host"
+if [ "$host_os" = "Darwin" ]; then
+    bash "$script_dir/macos-stage-remoteapp-media-host.sh" \
+        --binary "$remoteapp_media_host_bin" \
+        --output-dir "$stage_dir" >/dev/null
+    staged_remoteapp_media_host="easynet-remoteapp-media-host.app"
+    staged_remoteapp_media_host_executable="$stage_dir/$staged_remoteapp_media_host/Contents/MacOS/easynet-remoteapp-media-host"
+else
+    cp "$remoteapp_media_host_bin" "$stage_dir/easynet-remoteapp-media-host"
+    staged_remoteapp_media_host="easynet-remoteapp-media-host"
+    staged_remoteapp_media_host_executable="$stage_dir/$staged_remoteapp_media_host"
+fi
 cp "$c_abi_lib" "$stage_dir/libeasynet_cli.${lib_ext}"
 cp "$bridge_lib" "$stage_dir/libaxon_dendrite_bridge.${lib_ext}"
 mkdir -p "$stage_dir/include" "$stage_dir/docs/spec"
@@ -203,7 +213,7 @@ cp "$abi_spec_v9" "$stage_dir/docs/spec/ffi-abi-v9.md"
 # Strip symbols on release builds to match what production tarballs
 # look like; debug profile keeps symbols for stack traces.
 if [ "$build_profile" = "release" ] && command -v strip >/dev/null 2>&1; then
-    strip "$stage_dir/easynet" "$stage_dir/easynet-daemon" "$stage_dir/easynet-keyring" "$stage_dir/easynet-remoteapp-native-host" "$stage_dir/easynet-remoteapp-media-host" "$stage_dir/libeasynet_cli.${lib_ext}" 2>/dev/null || true
+    strip "$stage_dir/easynet" "$stage_dir/easynet-daemon" "$stage_dir/easynet-keyring" "$stage_dir/easynet-remoteapp-native-host" "$staged_remoteapp_media_host_executable" "$stage_dir/libeasynet_cli.${lib_ext}" 2>/dev/null || true
 fi
 
 bash "$script_dir/constrain-c-abi-exports.sh" \
@@ -222,25 +232,27 @@ fi
 
 # tar -C into the staging dir so the tarball entries are flat
 # (`easynet`, not `tmp/easynet-release-stage-XXX/easynet`).
-tar -czf "$out_file" -C "$stage_dir" \
-    easynet \
-    easynet-daemon \
-    easynet-keyring \
-    easynet-remoteapp-native-host \
-    easynet-remoteapp-media-host \
-    "libeasynet_cli.${lib_ext}" \
-    "libaxon_dendrite_bridge.${lib_ext}" \
-    include/easynet_cli.h \
-    include/easynet_cli.exports.v7 \
-    include/easynet_cli.exports.v8 \
-    include/easynet_cli.exports.v9 \
-    docs/spec/ffi-abi-v7.md \
-    docs/spec/ffi-abi-v8.md \
+release_entries=(
+    easynet
+    easynet-daemon
+    easynet-keyring
+    easynet-remoteapp-native-host
+    "$staged_remoteapp_media_host"
+    "libeasynet_cli.${lib_ext}"
+    "libaxon_dendrite_bridge.${lib_ext}"
+    include/easynet_cli.h
+    include/easynet_cli.exports.v7
+    include/easynet_cli.exports.v8
+    include/easynet_cli.exports.v9
+    docs/spec/ffi-abi-v7.md
+    docs/spec/ffi-abi-v8.md
     docs/spec/ffi-abi-v9.md
+)
+tar -czf "$out_file" -C "$stage_dir" "${release_entries[@]}"
 
 echo
 echo "[OK] release tarball ready"
 echo "  path:    $out_file"
-echo "  shape:   easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, easynet-remoteapp-media-host, libeasynet_cli.${lib_ext}, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, include/easynet_cli.exports.v7, include/easynet_cli.exports.v8, include/easynet_cli.exports.v9, docs/spec/ffi-abi-v7.md, docs/spec/ffi-abi-v8.md, docs/spec/ffi-abi-v9.md"
+echo "  shape:   easynet, easynet-daemon, easynet-keyring, easynet-remoteapp-native-host, $staged_remoteapp_media_host, libeasynet_cli.${lib_ext}, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, include/easynet_cli.exports.v7, include/easynet_cli.exports.v8, include/easynet_cli.exports.v9, docs/spec/ffi-abi-v7.md, docs/spec/ffi-abi-v8.md, docs/spec/ffi-abi-v9.md"
 echo "  axon-runtime: NOT shipped (production-shape contract)"
 echo "  size:    $(wc -c < "$out_file" | awk '{printf "%.1f MiB", $1/1024/1024}')"

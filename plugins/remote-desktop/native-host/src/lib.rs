@@ -118,13 +118,10 @@ fn apply_fault_injection() -> anyhow::Result<()> {
 
 #[cfg(feature = "native-media")]
 fn sample_platform_target_observations() -> TargetObservationSample {
-    #[cfg(target_os = "macos")]
-    if !screen_capture_permission_granted() {
-        return TargetObservationSample::permission_revoked(
-            "macOS Screen Recording permission is no longer granted",
-            now_ms(),
-        );
-    }
+    // Screen Recording authorization belongs to the media-host application that
+    // owns ScreenCaptureKit. This observer has a distinct macOS code identity;
+    // preflighting TCC here would report its own authorization and incorrectly
+    // invalidate an authorized media-host session.
     match sample_xcap_target_observations() {
         Ok(observation) => observation,
         Err(error) => TargetObservationSample::snapshot_failed(
@@ -216,15 +213,6 @@ fn sample_xcap_target_observations() -> anyhow::Result<TargetObservationSample> 
         .filter_map(|monitor| monitor.id().ok().map(u64::from))
         .collect::<BTreeSet<_>>();
     Ok(TargetObservationSample::host_snapshot(windows, display_ids))
-}
-
-#[cfg(all(target_os = "macos", feature = "native-media"))]
-fn screen_capture_permission_granted() -> bool {
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGPreflightScreenCaptureAccess() -> bool;
-    }
-    unsafe { CGPreflightScreenCaptureAccess() }
 }
 
 #[cfg(all(target_os = "macos", feature = "native-media"))]

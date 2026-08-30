@@ -3,7 +3,8 @@
 # overwrite the system-installed binaries in place. Same shape as
 # `packaging/release/install.sh` lays down — `easynet`, `easynet-daemon`,
 # `easynet-keyring`, `easynet-remoteapp-native-host`, and
-# `easynet-remoteapp-media-host` in /usr/local/bin,
+# `easynet-remoteapp-media-host` (Linux) or its signed `.app` bundle (macOS)
+# in /usr/local/bin,
 # `libaxon_dendrite_bridge.{dylib|so}` in
 # ~/.easynet/dendrite-bridge/native — but pulls bytes from `cargo build`
 # instead of the production tarball server.
@@ -28,7 +29,7 @@
 # Out of scope (intentional)
 # --------------------------
 # - cross-compile (we install for the host; cross goes through docker)
-# - signing / notarisation
+# - notarisation
 # - shell-rc rewrites (packaging/release/install.sh handles EASYNET_DENDRITE_BRIDGE_LIB
 #   on first install; this script assumes you have a working install
 #   already and just want to overwrite bytes)
@@ -75,7 +76,8 @@ done
 
 # Platform / paths — mirror packaging/release/install.sh exactly so the dev install lands
 # in the same place a production install would.
-case "$(uname -s)" in
+host_os="$(uname -s)"
+case "$host_os" in
     Darwin) lib_ext="dylib" ;;
     Linux)  lib_ext="so" ;;
     *)
@@ -145,6 +147,49 @@ for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$remoteapp_native_host_bin"
     fi
 done
 
+remoteapp_media_host_artifact="$remoteapp_media_host_bin"
+if [ "$host_os" = "Darwin" ]; then
+    remoteapp_media_host_artifact="$(bash "$script_dir/macos-stage-remoteapp-media-host.sh" \
+        --binary "$remoteapp_media_host_bin" \
+        --output-dir "$cli_root/target/$build_profile")"
+    resolve_macos_codesign_identity() {
+        if [ -n "${EASYNET_MACOS_CODESIGN_IDENTITY:-}" ]; then
+            printf '%s\n' "$EASYNET_MACOS_CODESIGN_IDENTITY"
+            return 0
+        fi
+        command -v security >/dev/null 2>&1 || return 1
+        local identities identity_count
+        identities="$(security find-identity -v -p codesigning 2>/dev/null \
+            | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' \
+            | sort -u)"
+        identity_count="$(printf '%s\n' "$identities" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+        [ "$identity_count" = "1" ] || return 1
+        printf '%s\n' "$identities"
+    }
+    signing_identity="$(resolve_macos_codesign_identity || true)"
+    if [ "$do_install" -eq 1 ] && [ -z "$signing_identity" ]; then
+        echo "dev-install-local.sh: no unique Developer ID Application identity found; set EASYNET_MACOS_CODESIGN_IDENTITY explicitly" >&2
+        exit 1
+    fi
+    if [ -n "$signing_identity" ]; then
+        sign_dev_privacy_artifact() {
+            local path="$1"
+            local identifier="$2"
+            local details
+            codesign --force --options runtime --timestamp=none \
+                --identifier "$identifier" --sign "$signing_identity" "$path"
+            codesign --verify --strict --verbose=2 "$path"
+            details="$(codesign -dv --verbose=4 "$path" 2>&1)"
+            grep -Fqx "Identifier=$identifier" <<<"$details" || {
+                echo "dev-install-local.sh: $path has the wrong signing identifier; expected $identifier" >&2
+                exit 1
+            }
+        }
+        sign_dev_privacy_artifact "$daemon_bin" run.easynet.daemon
+        sign_dev_privacy_artifact "$remoteapp_media_host_artifact" run.easynet.remoteapp.media-host
+    fi
+fi
+
 if [ "$do_install" -eq 0 ]; then
     echo ""
     echo "  ✓ Build complete. Artefacts:"
@@ -152,7 +197,7 @@ if [ "$do_install" -eq 0 ]; then
     echo "      $daemon_bin"
     echo "      $keyring_bin"
     echo "      $remoteapp_native_host_bin"
-    echo "      $remoteapp_media_host_bin"
+    echo "      $remoteapp_media_host_artifact"
     [ -f "$bridge_lib" ] && echo "      $bridge_lib"
     echo ""
     echo "  Run directly without installing:"
@@ -180,7 +225,14 @@ $SUDO install -m 755 "$cli_bin"    "$install_dir/easynet"
 $SUDO install -m 755 "$daemon_bin" "$install_dir/easynet-daemon"
 $SUDO install -m 755 "$keyring_bin" "$install_dir/easynet-keyring"
 $SUDO install -m 755 "$remoteapp_native_host_bin" "$install_dir/easynet-remoteapp-native-host"
-$SUDO install -m 755 "$remoteapp_media_host_bin" "$install_dir/easynet-remoteapp-media-host"
+if [ "$host_os" = "Darwin" ]; then
+    $SUDO rm -f "$install_dir/easynet-remoteapp-media-host"
+    $SUDO rm -rf "$install_dir/easynet-remoteapp-media-host.app"
+    $SUDO cp -R "$remoteapp_media_host_artifact" "$install_dir/easynet-remoteapp-media-host.app"
+    $SUDO chmod 755 "$install_dir/easynet-remoteapp-media-host.app/Contents/MacOS/easynet-remoteapp-media-host"
+else
+    $SUDO install -m 755 "$remoteapp_media_host_bin" "$install_dir/easynet-remoteapp-media-host"
+fi
 
 if [ -f "$bridge_lib" ]; then
     # native_dir lives under the real user's $HOME, not root's — so

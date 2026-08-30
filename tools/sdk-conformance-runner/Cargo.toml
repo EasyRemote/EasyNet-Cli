@@ -1,6 +1,6 @@
 [package]
 name = "sdk-conformance-runner"
-version = "0.148.60"
+version = "0.149.10"
 edition = "2021"
 publish = false
 

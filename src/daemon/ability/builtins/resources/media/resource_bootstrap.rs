@@ -705,7 +705,7 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             app_name.clone(),
             AppWindowObservation {
                 window_id: id,
-                pid,
+                pid: Some(pid),
                 title: title.as_deref(),
                 area,
                 focused: focused == Some(true),
@@ -1248,7 +1248,7 @@ mod macos_screen_targets {
             let Some(on_screen) = get_bool(dict, keys.onscreen.as_ptr()) else {
                 continue;
             };
-            if !super::CaptureEligibleSurface::macos(width, height, layer, alpha, on_screen)
+            if !super::CaptureEligibleSurface::macos_shareable(width, height, layer, alpha)
                 .is_eligible()
             {
                 continue;
@@ -1311,6 +1311,7 @@ mod macos_screen_targets {
                     "platform_backend": "core_graphics_cgwindowlist",
                     "window_id": window_id,
                     "pid": pid,
+                    "is_on_screen": on_screen,
                     "display_id": display_id,
                     "display_ids": display_ids,
                     "bundle_id": bundle_id,

@@ -192,3 +192,98 @@ Exact commands and results will be appended as they execute.
   `product_complete_claim=false`, and missing the signed campaign plus all 19
   required live reports. This is authoritative non-completion evidence, not a
   source failure.
+
+## Linux xcap PID projection fix — 2026-08-30
+
+- `cargo check --locked --target aarch64-unknown-linux-gnu -p easynet
+  --no-default-features --features axon-pb,native-media,remote-desktop`: pass in
+  the canonical `easynet-cli-linux-native-build:bookworm-arm64` image (3m 11s).
+- `rustfmt --edition 2021 --check
+  src/daemon/ability/builtins/resources/media/resource_bootstrap.rs`: pass.
+- `git diff --check`: pass.
+
+## Linux media-host error adaptation fix — 2026-08-30
+
+- `cargo test --locked --target aarch64-unknown-linux-gnu -p
+  easynet-remoteapp-media-host
+  target_invalidation_preserves_platform_error_diagnostics`: pass in the
+  canonical `easynet-cli-linux-native-build:bookworm-arm64` image (1/1).
+- The test-profile build compiles the Linux xcap module and therefore covers the
+  original `anyhow::Error` to `BackendFailure` type mismatch.
+- `rustfmt --edition 2021 --check
+  plugins/remote-desktop/media-host/src/linux_x11.rs`: pass.
+- `git diff --check`: pass.
+
+## Exact unary route JSON terminal fix — 2026-08-30
+
+- Axon `ability_crud_bulk register_typed_many`: pass, 2/2, covering typed
+  content preservation and atomic duplicate rejection.
+- `cargo test --locked -p easynet --features axon-pb
+  invoke_dispatches_namespace_resolve_to_typed_answer`: pass, 1/1. The test
+  asserts the real daemon `InvokeResponse.result_content_type` is
+  `application/json` before decoding the typed directory answer.
+- Scoped `rustfmt --check` and `git diff --check`: pass.
+
+## Rust warning baseline — 2026-08-30
+
+- `cargo test --locked -p easynet --features axon-pb --no-run`: pass with 19
+  warnings, all under RemoteApp modules compiled only because `cfg(test)`
+  overlaps the native-media production configuration.
+- Canonical Linux arm64 `cargo check --locked --target
+  aarch64-unknown-linux-gnu -p easynet --no-default-features --features
+  axon-pb,native-media,remote-desktop`: pass with zero warnings.
+- Warning remediation must align module/item compilation with the production
+  feature matrix or delete genuinely obsolete helpers; adding lint allowances
+  is not accepted as evidence.
+
+## Rust warning closure — 2026-08-30
+
+- `cargo test --locked -p easynet --features axon-pb --no-run`: pass with zero
+  warnings after compiling every default test and integration-test target.
+- Canonical Linux arm64 `cargo check --locked --target
+  aarch64-unknown-linux-gnu -p easynet --no-default-features --features
+  axon-pb,native-media,remote-desktop`: pass with zero warnings in the exact
+  `dev-backend.sh` builder image; the final-source incremental rerun passed in
+  19.37s (the preceding clean-source run took 2m 22s).
+- `cargo check --locked -p easynet --no-default-features --features
+  axon-pb,remote-desktop`: pass with zero warnings. Its baseline initially
+  exposed two invalid native-media references and four feature-owned dead-code
+  warnings; all are closed.
+- `cargo test --locked -p easynet --no-default-features --features
+  axon-pb,remote-desktop --no-run`: pass with zero warnings. The native-only
+  `snapshot-probe` example now declares `required-features = ["native-media"]`.
+- Focused non-native baseline-media tests: 9/9 pass.
+- Default RemoteApp unit filter initially passed 538/542. After building the
+  sibling native/media-host binaries, both process-boundary failures pass in
+  focused reruns. Two target-observer geometry assertions remain red with
+  `GeometryStale` and are unrelated to the warning/configuration changes. The
+  entire filter compiled with zero warnings.
+- Scoped `rustfmt --check` and `git diff --check`: pass.
+
+## macOS VideoToolbox live-flow incident — 2026-08-30
+
+- Runtime evidence for session `rdp-6dfc80b2edde84a8f3dca0a1` shows direct
+  WebRTC ICE and PeerConnection both reached `connected` before the media-host
+  failed with `EncoderUnavailable: create VideoToolbox encoder:
+  VTSessionSetProperty failed: OSStatus=-12900`.
+- The installed `/usr/local/bin/easynet-remoteapp-media-host` predates the
+  current source build, so the screenshot exercised stale executable state.
+- `cargo test --locked -p easynet-remoteapp-media-host
+  physical_encoder_accepts_fragmentable_nal_contract -- --ignored --nocapture`:
+  pass on the physical macOS VideoToolbox encoder (1/1).
+- `cargo test --locked -p easynet-remoteapp-media-host`: pass (22 passed, one
+  physical test intentionally ignored by the ordinary suite).
+- `cargo test --locked -p easynet --lib webrtc_hosted_media::tests`: pass
+  (9/9), including the negotiated native NAL bound and transport contract.
+- The corrected debug Runtime is online and admitted, and the real browser
+  runner passed authentication, live target discovery, and both permission
+  invocations. It stopped before session admission because the canonical media
+  host truthfully reported Screen Recording `granted=false`; evidence is
+  `/private/tmp/easynet-remoteapp-vt-fix.TL7UCE/evidence.json`.
+- Direct one-shot protocol probes independently report `granted=false` for both
+  `/usr/local/bin/easynet-remoteapp-media-host` and the corrected debug helper.
+  This is a host TCC precondition, not a frontend projection failure.
+- Browser create/render/end evidence remains pending until the corrected binary
+  is installed through `packaging/release/dev-install-local.sh --debug` with
+  administrator authority and Screen Recording is granted to that installed
+  executable identity.

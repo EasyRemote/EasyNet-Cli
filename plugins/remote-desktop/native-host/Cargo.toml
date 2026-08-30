@@ -1,6 +1,6 @@
 [package]
 name = "easynet-remoteapp-native-host"
-version = "0.148.60"
+version = "0.149.10"
 edition = "2021"
 publish = false
 description = "Private killable native execution host for the EasyNet Remote Desktop plugin."

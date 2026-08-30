@@ -16,6 +16,7 @@ TARGET="${EASYNET_CLI_LINUX_TARGET:-}"
 MEDIA_PROFILE="${EASYNET_CLI_MEDIA_PROFILE:-headless}"
 BUILDER="${EASYNET_CLI_ARTIFACT_BUILDER:-auto}"
 BUILD_PROFILE="${EASYNET_CLI_BUILD_PROFILE:-release}"
+CARGO_BUILD_JOBS="${EASYNET_CLI_CARGO_BUILD_JOBS:-}"
 NATIVE_BUILD_DOCKERFILE="$REPO_ROOT/packaging/docker/build/linux-native/Dockerfile"
 SELF_TEST=0
 
@@ -39,6 +40,8 @@ Environment:
   EASYNET_CLI_MEDIA_PROFILE     Same as --media-profile.
   EASYNET_CLI_ARTIFACT_BUILDER  Same as --builder.
   EASYNET_CLI_BUILD_PROFILE     Same as --build-profile.
+  EASYNET_CLI_CARGO_BUILD_JOBS  Concurrent Cargo rustc jobs inside the Docker
+                                builder. Defaults to 4 for dev and 2 for release.
   EASYNET_AXON_ROOT             Sibling EasyNet-Axon repository root.
   CARGO_BIN                     Cargo executable. Defaults to PATH lookup, then
                                 common rustup installation paths.
@@ -251,13 +254,19 @@ case "$BUILD_PROFILE" in
   release)
     CARGO_PROFILE_ARGS=(--release)
     CARGO_PROFILE_DIR="release"
+    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+    CARGO_INCREMENTAL=0
     ;;
   dev)
     CARGO_PROFILE_ARGS=()
     CARGO_PROFILE_DIR="debug"
+    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+    CARGO_INCREMENTAL=1
     ;;
   *) die "unsupported build profile: $BUILD_PROFILE (expected release or dev)" ;;
 esac
+[[ "$CARGO_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] \
+  || die "EASYNET_CLI_CARGO_BUILD_JOBS must be a positive integer"
 
 [[ -d "$BRIDGE_ROOT" ]] || die "EasyNet-Axon dendrite bridge not found: $BRIDGE_ROOT"
 [[ -d "$REPO_ROOT/ability-descriptors/system" ]] || die "missing system ability descriptors"
@@ -374,11 +383,11 @@ else
     --env "CLI_MEDIA_FEATURE=$MEDIA_FEATURE"
     --env "CLI_BUILD_PROFILE=$BUILD_PROFILE"
     --env "CLI_PROFILE_DIR=$CARGO_PROFILE_DIR"
-    --env CARGO_BUILD_JOBS=1
+    --env "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
     --env CARGO_PROFILE_RELEASE_CODEGEN_UNITS=32
     --env CARGO_PROFILE_DEV_DEBUG=0
     --env CARGO_PROFILE_DEV_CODEGEN_UNITS=1024
-    --env CARGO_INCREMENTAL=0
+    --env "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
     --env 'RUSTFLAGS=-C linker=clang -C link-arg=-fuse-ld=lld'
   )
 

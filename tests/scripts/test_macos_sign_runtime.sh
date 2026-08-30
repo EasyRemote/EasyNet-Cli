@@ -15,11 +15,12 @@ for artifact in \
     libeasynet_cli.dylib \
     easynet-keyring \
     easynet-remoteapp-native-host \
-    easynet-remoteapp-media-host \
     easynet-daemon \
     easynet; do
     : > "$stage/$artifact"
 done
+mkdir -p "$stage/easynet-remoteapp-media-host.app/Contents/MacOS"
+: > "$stage/easynet-remoteapp-media-host.app/Contents/MacOS/easynet-remoteapp-media-host"
 
 cat > "$mock_bin/uname" <<'SH'
 #!/usr/bin/env bash
@@ -35,7 +36,7 @@ case "$name" in
   libeasynet_cli.dylib) identifier=run.easynet.runtime-c-abi ;;
   easynet-keyring) identifier=run.easynet.keyring ;;
   easynet-remoteapp-native-host) identifier=run.easynet.remoteapp.native-host ;;
-  easynet-remoteapp-media-host) identifier=run.easynet.remoteapp.media-host ;;
+  easynet-remoteapp-media-host.app) identifier=run.easynet.remoteapp.media-host ;;
   easynet-daemon) identifier=run.easynet.daemon ;;
   easynet) identifier=run.easynet.cli ;;
   *) exit 2 ;;

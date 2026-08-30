@@ -1,6 +1,6 @@
 [package]
 name = "easynet-remoteapp-native-protocol"
-version = "0.148.60"
+version = "0.149.10"
 edition = "2021"
 publish = false
 description = "Private bounded IPC contract shared by the EasyNet RemoteApp daemon client and native host."
@@ -13,6 +13,9 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dependencies]
 memmap2 = "0.9"
 tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

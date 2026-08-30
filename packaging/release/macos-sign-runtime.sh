@@ -60,7 +60,7 @@ artifacts=(
     "libeasynet_cli.dylib"
     "easynet-keyring"
     "easynet-remoteapp-native-host"
-    "easynet-remoteapp-media-host"
+    "easynet-remoteapp-media-host.app"
     "easynet-daemon"
     "easynet"
 )
@@ -102,7 +102,7 @@ verify_artifact() {
 for index in "${!artifacts[@]}"; do
     path="$stage_dir/${artifacts[$index]}"
     identifier="${identifiers[$index]}"
-    [[ -f "$path" ]] || {
+    [[ -e "$path" ]] || {
         echo "macos-sign-runtime.sh: required staged artifact missing: $path" >&2
         exit 1
     }
