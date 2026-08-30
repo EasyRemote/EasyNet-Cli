@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use serde::de::DeserializeOwned;
@@ -634,6 +634,32 @@ pub struct CaptureRecord<'a> {
     pub preview: String,
 }
 
+/// Commit an already-finalized media file without materialising it in memory.
+/// The source must be a regular file on the same filesystem as Context state;
+/// ownership transfers through one atomic rename.
+pub struct CaptureFileRecord<'a> {
+    pub device: &'a str,
+    pub ability: &'a str,
+    pub ext: &'a str,
+    pub source_path: &'a Path,
+    pub content_type: &'a str,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub preview: String,
+}
+
+struct CaptureRecordMetadata<'a> {
+    device: &'a str,
+    ability: &'a str,
+    ext: &'a str,
+    content_type: &'a str,
+    width: Option<u32>,
+    height: Option<u32>,
+    duration_ms: Option<u64>,
+    preview: String,
+}
+
 pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry> {
     let CaptureRecord {
         device,
@@ -647,13 +673,78 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
         preview,
     } = record;
 
-    if !safe_path_segment(ability) {
-        anyhow::bail!("record_capture: ability {ability:?} is not a safe folder name");
+    let (entry, destination) = prepare_capture_record(
+        CaptureRecordMetadata {
+            device,
+            ability,
+            ext,
+            content_type,
+            width,
+            height,
+            duration_ms,
+            preview,
+        },
+        bytes.len() as u64,
+    )?;
+    commit_capture_artifact(entry, &destination, |path| {
+        fs::write(path, bytes).with_context(|| format!("write capture artifact {}", path.display()))
+    })
+}
+
+pub fn record_capture_file(record: CaptureFileRecord<'_>) -> anyhow::Result<CaptureEntry> {
+    let metadata = fs::symlink_metadata(record.source_path).with_context(|| {
+        format!(
+            "record_capture_file: inspect source {}",
+            record.source_path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        anyhow::bail!(
+            "record_capture_file: source {} must be a regular file",
+            record.source_path.display()
+        );
     }
-    if !safe_path_segment(ext) {
-        anyhow::bail!("record_capture: extension {ext:?} is not a safe file suffix");
+    let (entry, destination) = prepare_capture_record(
+        CaptureRecordMetadata {
+            device: record.device,
+            ability: record.ability,
+            ext: record.ext,
+            content_type: record.content_type,
+            width: record.width,
+            height: record.height,
+            duration_ms: record.duration_ms,
+            preview: record.preview,
+        },
+        metadata.len(),
+    )?;
+    commit_capture_artifact(entry, &destination, |path| {
+        fs::rename(record.source_path, path).with_context(|| {
+            format!(
+                "atomically move capture artifact {} to {}",
+                record.source_path.display(),
+                path.display()
+            )
+        })
+    })
+}
+
+fn prepare_capture_record(
+    record: CaptureRecordMetadata<'_>,
+    byte_size: u64,
+) -> anyhow::Result<(CaptureEntry, PathBuf)> {
+    if !safe_path_segment(record.ability) {
+        anyhow::bail!(
+            "record_capture: ability {:?} is not a safe folder name",
+            record.ability
+        );
     }
-    let device_identity = crate::core::ura::parse_ura(device)
+    if !safe_path_segment(record.ext) {
+        anyhow::bail!(
+            "record_capture: extension {:?} is not a safe file suffix",
+            record.ext
+        );
+    }
+    let device_identity = crate::core::ura::parse_ura(record.device)
         .map_err(|error| anyhow::anyhow!("record_capture: device URA is invalid: {error}"))?;
     if device_identity.kind != crate::core::ura::URAKind::Device {
         anyhow::bail!(
@@ -663,26 +754,54 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
     }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now();
-    // Timestamp prefix keeps `ls` of the folder chronologically sorted
-    // — the folder itself is a user-facing surface (Context page).
-    let file = format!("{}-{}.{}", now.format("%Y%m%dT%H%M%S"), &id[..8], ext);
-    let dir = captures_dir().join(ability);
+    let file = format!(
+        "{}-{}.{}",
+        now.format("%Y%m%dT%H%M%S"),
+        &id[..8],
+        record.ext
+    );
+    let dir = captures_dir().join(record.ability);
     fs::create_dir_all(&dir)?;
-    fs::write(dir.join(&file), bytes)?;
     let entry = CaptureEntry {
         id,
         timestamp: now.to_rfc3339(),
-        device: device.to_string(),
-        ability: ability.to_string(),
+        device: record.device.to_string(),
+        ability: record.ability.to_string(),
         file,
-        content_type: content_type.to_string(),
-        byte_size: bytes.len() as u64,
-        width,
-        height,
-        duration_ms,
-        preview,
+        content_type: record.content_type.to_string(),
+        byte_size,
+        width: record.width,
+        height: record.height,
+        duration_ms: record.duration_ms,
+        preview: record.preview,
     };
     validate_capture_entry(&entry)?;
+    let destination = dir.join(&entry.file);
+    Ok((entry, destination))
+}
+
+fn commit_capture_artifact<F>(
+    entry: CaptureEntry,
+    destination: &Path,
+    install: F,
+) -> anyhow::Result<CaptureEntry>
+where
+    F: FnOnce(&Path) -> anyhow::Result<()>,
+{
+    install(destination)?;
+    if let Err(index_error) = append_capture_entry(&entry) {
+        if let Err(rollback_error) = fs::remove_file(destination) {
+            anyhow::bail!(
+                "commit capture index failed: {index_error:#}; rollback {} failed: {rollback_error}",
+                destination.display()
+            );
+        }
+        return Err(index_error);
+    }
+    Ok(entry)
+}
+
+fn append_capture_entry(entry: &CaptureEntry) -> anyhow::Result<()> {
     let mut line = serde_json::to_string(&entry)?;
     line.push('\n');
     use std::io::Write;
@@ -691,7 +810,7 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
         .append(true)
         .open(captures_log_path())?;
     f.write_all(line.as_bytes())?;
-    Ok(entry)
+    Ok(())
 }
 
 /// Newest-first capture entries owned by one canonical device, optionally
@@ -1088,6 +1207,73 @@ mod tests {
             preview: "p".into(),
         })
         .is_err());
+    }
+
+    #[test]
+    fn capture_file_commit_moves_finalized_media_without_buffering() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let source_dir = state_dir()
+            .join("captures")
+            .join("camera-recording-sessions");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("session.mov.tmp");
+        std::fs::write(&source, b"finalized-movie").unwrap();
+
+        let entry = record_capture_file(CaptureFileRecord {
+            device: "easynet:///r/localhost/device/d1",
+            ability: "camera.record_stop",
+            ext: "mov",
+            source_path: &source,
+            content_type: "video/quicktime",
+            width: Some(1280),
+            height: Some(720),
+            duration_ms: Some(1_500),
+            preview: "Native camera recording".into(),
+        })
+        .unwrap();
+
+        assert!(!source.exists(), "file ownership must transfer to Context");
+        let destination = captures_dir().join("camera.record_stop").join(&entry.file);
+        assert_eq!(std::fs::read(destination).unwrap(), b"finalized-movie");
+        assert_eq!(entry.byte_size, 15);
+        assert_eq!(entry.content_type, "video/quicktime");
+    }
+
+    #[test]
+    fn capture_file_commit_removes_unindexed_artifact_on_index_failure() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let source_dir = state_dir()
+            .join("captures")
+            .join("camera-recording-sessions");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("session.mov.tmp");
+        std::fs::write(&source, b"finalized-movie").unwrap();
+        std::fs::create_dir_all(captures_log_path()).unwrap();
+
+        let error = record_capture_file(CaptureFileRecord {
+            device: "easynet:///r/localhost/device/d1",
+            ability: "camera.record_stop",
+            ext: "mov",
+            source_path: &source,
+            content_type: "video/quicktime",
+            width: None,
+            height: None,
+            duration_ms: Some(1_500),
+            preview: "Native camera recording".into(),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Is a directory"), "{error:#}");
+        assert!(
+            !source.exists(),
+            "failed commit must not retain the source temp file"
+        );
+        let destination_dir = captures_dir().join("camera.record_stop");
+        let destination_count = std::fs::read_dir(destination_dir).unwrap().count();
+        assert_eq!(
+            destination_count, 0,
+            "unindexed artifact must be rolled back"
+        );
     }
 
     #[test]

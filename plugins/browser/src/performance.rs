@@ -436,7 +436,14 @@ async fn first_stream_frame(source: StreamSource) -> Value {
                 .expect("viewport finite stream closed")
                 .expect("viewport finite stream error")
         }
-        StreamSource::TypedFinite(_) => {
+        StreamSource::BackpressuredLive(mut receiver) => {
+            tokio::time::timeout(BENCHMARK_TIMEOUT, receiver.recv())
+                .await
+                .expect("timed out waiting for viewport backpressured live frame")
+                .expect("viewport backpressured live stream closed")
+                .expect("viewport backpressured live stream error")
+        }
+        StreamSource::TypedFinite(_) | StreamSource::TypedBackpressuredLive(_) => {
             panic!("browser viewport benchmark requires JSON stream frames")
         }
     }

@@ -510,6 +510,34 @@ func TestStreamHandleEnforcesBufferBound(t *testing.T) {
 	}
 }
 
+func TestStreamHandleAcknowledgementReleasesBufferCapacity(t *testing.T) {
+	transport := &memoryStreamTransport{events: []string{
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false,"payload_base64":"Y2FtZXJhLTE="}`,
+		`{"sequence":2,"kind":"data","state":"Open","terminal":false,"payload_base64":"Y2FtZXJhLTI="}`,
+	}}
+	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"camera","state":"Opening","max_buffered_events":1}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+	first, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next first: %v", err)
+	}
+	if err := stream.AcknowledgeThrough(first.Sequence()); err != nil {
+		t.Fatalf("AcknowledgeThrough: %v", err)
+	}
+	if events := stream.Events(); len(events) != 0 {
+		t.Fatalf("acknowledged history retained %d events", len(events))
+	}
+	second, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next second after acknowledgement: %v", err)
+	}
+	if string(second.PayloadBytes()) != "camera-2" {
+		t.Fatalf("second payload = %q", second.PayloadBytes())
+	}
+}
+
 func TestStreamEventRejectsNegativeElapsed(t *testing.T) {
 	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"data","state":"Open","terminal":false,"elapsed_ms":-1}`))
 	if err == nil {

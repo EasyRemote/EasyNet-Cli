@@ -93,7 +93,6 @@ use crate::daemon::invocation::dispatch::governance_read_route::require_selected
 use crate::daemon::invocation::dispatch::invocation_wire::{
     callee_ura_from_envelope, descriptor_ref_from_invocation_target, encode_json_payload,
     function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
-    FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
 use crate::daemon::invocation::routing::route_resolver::{
@@ -208,6 +207,7 @@ pub(crate) fn rpc_dispatch_outcome_response(
         invocation_id,
         state,
         payload_bytes,
+        payload_content_type,
         error,
         admission_receipt,
         terminal_receipt,
@@ -244,7 +244,7 @@ pub(crate) fn rpc_dispatch_outcome_response(
             )
         }
     };
-    let result_content_type = rpc_result_content_type(&payload_bytes).to_string();
+    let result_content_type = payload_content_type;
     (
         Ok(Response::new(InvokeResponse {
             header: invocation_id.map(|request_id| ResponseHeader {
@@ -266,14 +266,6 @@ pub(crate) fn rpc_dispatch_outcome_response(
     )
 }
 
-fn rpc_result_content_type(payload: &[u8]) -> &'static str {
-    if payload.is_empty() {
-        "application/octet-stream"
-    } else {
-        FEDERATION_RESULT_CONTENT_TYPE
-    }
-}
-
 #[cfg(test)]
 mod rpc_dispatch_outcome_response_tests {
     use super::*;
@@ -291,6 +283,7 @@ mod rpc_dispatch_outcome_response_tests {
                 invocation_id: None,
                 state: InvocationState::Failed,
                 payload_bytes: Vec::new(),
+                payload_content_type: "application/octet-stream".to_string(),
                 error: Some(error),
                 admission_receipt: None,
                 terminal_receipt: None,

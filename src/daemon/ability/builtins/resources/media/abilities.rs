@@ -113,9 +113,10 @@ const ABILITIES: &[AbilityRow] = &[
     },
     AbilityRow {
         name: ABILITY_CAMERA_SUBSCRIBE,
-        description: "Subscribe to a camera resource. Returns a server-pushed \
-                      stream of video BinaryChunk frames at the requested fps / \
-                      resolution / codec. Subject MUST be a camera resource_ura.",
+        description: "Subscribe to a camera resource. Emits bounded latest-frame \
+                      image/jpeg payload bytes at the requested fps and resolution; \
+                      sequence and terminal lifecycle remain Runtime metadata. \
+                      Subject MUST be a camera resource_ura.",
         input_schema: video_subscribe_args_no_region,
         call_mode: CallMode::Stream,
         receipt_semantics: operational_receipt,
@@ -215,7 +216,7 @@ fn record_stop_receipt() -> ReceiptSemantics {
 }
 
 fn recording_transition(ability: &str) -> ReceiptSemantics {
-    ReceiptSemantics::state_transition(format!("{ability}@v1"), TransitionClass::Operational)
+    ReceiptSemantics::state_transition(format!("{ability}@v2"), TransitionClass::Operational)
         .expect("static media transition IDs satisfy RFC-006")
 }
 
@@ -359,7 +360,7 @@ fn video_subscribe_args_no_region() -> Value {
         "properties": {
             "fps":        { "type": "integer", "minimum": 1, "maximum": 60 },
             "resolution": { "type": "string" },
-            "codec":      { "type": "string", "enum": ["h264", "raw", "vp9"] }
+            "codec":      { "type": "string", "enum": ["jpeg"] }
         }
     })
 }
@@ -398,7 +399,7 @@ fn camera_record_start_args() -> Value {
         "properties": {
             "fps":             { "type": "integer", "minimum": 1, "maximum": 60 },
             "resolution":      { "type": "string" },
-            "codec":           { "type": "string", "enum": ["mjpeg"] },
+            "codec":           { "type": "string", "enum": ["h264", "mjpeg"] },
             "max_duration_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
             "max_bytes":       { "type": "integer", "minimum": 1048576, "maximum": 268435456 }
         }
@@ -579,7 +580,7 @@ mod tests {
             let transition = semantics.transition().expect("state transition");
             assert_eq!(
                 transition.transition_id(),
-                format!("{ability}@v1"),
+                format!("{ability}@v2"),
                 "transition identity must not be inferred from Rpc transport"
             );
             assert_eq!(

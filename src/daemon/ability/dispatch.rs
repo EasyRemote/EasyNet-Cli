@@ -21,8 +21,9 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Context as _;
 pub use axon_sdk::invocation::BidiInputFrame;
 use axon_sdk::invocation::{
-    make_ability, AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions, AxonError,
-    AxonErrorKind, CallMode as AxonCallMode, ErrorCode, ErrorStage, LocalRuntime, SecurityClass,
+    make_ability, make_typed_ability, AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions,
+    AbilityOutput, AxonError, AxonErrorKind, CallMode as AxonCallMode, ErrorCode, ErrorStage,
+    LocalRuntime, SecurityClass, TypedAbilityFn,
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
@@ -561,6 +562,11 @@ pub struct RuntimeBindingFacts {
 pub type LocalRpcHandlerWithEnvelope =
     Arc<dyn Fn(EnvelopeContext, Value) -> anyhow::Result<Value> + Send + Sync>;
 
+/// Envelope-aware unary handler for non-JSON results. The exact payload bytes
+/// and media type enter Axon terminalization as one canonical value.
+pub type LocalTypedRpcHandlerWithEnvelope =
+    Arc<dyn Fn(EnvelopeContext, Value) -> anyhow::Result<AbilityOutput> + Send + Sync>;
+
 /// What a stream-mode ability handler may return.
 ///
 /// Three shapes:
@@ -587,6 +593,15 @@ pub type LocalRpcHandlerWithEnvelope =
 ///     for disk-backed or computed results that must not be materialised
 ///     as one in-memory snapshot and must not use lossy broadcast.
 ///
+///   * `BackpressuredLive(rx)` — bounded point-to-point live production.
+///     Unlike `Live`, there is no broadcast replay queue whose stale frames
+///     must be drained. Realtime producers decide their own coalescing/drop
+///     policy before sending one JSON value into this bounded carrier.
+
+///   * `TypedBackpressuredLive(rx)` — the same bounded live lifecycle for
+///     raw payloads. Media producers use this path so bytes reach Axon without
+///     JSON/base64 projection.
+///
 /// The `From` impls let handlers return either a `Vec<Value>` or a
 /// `broadcast::Receiver<Value>` directly via `.into()`.
 #[derive(Debug)]
@@ -595,10 +610,12 @@ pub enum StreamSource {
     Live(broadcast::Receiver<Value>),
     SnapshotThenLive(Vec<Value>, broadcast::Receiver<Value>),
     Finite(tokio::sync::mpsc::Receiver<anyhow::Result<Value>>),
+    BackpressuredLive(tokio::sync::mpsc::Receiver<anyhow::Result<Value>>),
     /// Bounded, backpressured finite production of typed raw payloads. This is
     /// the data-plane shape for media and other non-JSON frames; lifecycle and
     /// terminal ownership remain with the Axon stream runtime.
     TypedFinite(tokio::sync::mpsc::Receiver<anyhow::Result<StreamOutputFrame>>),
+    TypedBackpressuredLive(tokio::sync::mpsc::Receiver<anyhow::Result<StreamOutputFrame>>),
 }
 
 /// One non-terminal server-stream payload with its exact media type.
@@ -647,7 +664,9 @@ impl StreamSource {
             StreamSource::Live(_) => Vec::new(),
             StreamSource::SnapshotThenLive(s, _) => s,
             StreamSource::Finite(_) => Vec::new(),
+            StreamSource::BackpressuredLive(_) => Vec::new(),
             StreamSource::TypedFinite(_) => Vec::new(),
+            StreamSource::TypedBackpressuredLive(_) => Vec::new(),
         }
     }
 }
@@ -809,6 +828,7 @@ struct RuntimeHandlerSet {
     stream: Option<LocalStreamHandler>,
     bidi: Option<LocalBidiHandler>,
     rpc_with_env: Option<LocalRpcHandlerWithEnvelope>,
+    typed_rpc_with_env: Option<LocalTypedRpcHandlerWithEnvelope>,
     stream_with_env: Option<LocalStreamHandlerWithEnvelope>,
     bidi_with_env: Option<LocalBidiHandlerWithEnvelope>,
 }
@@ -819,13 +839,16 @@ impl RuntimeHandlerSet {
             && self.stream.is_none()
             && self.bidi.is_none()
             && self.rpc_with_env.is_none()
+            && self.typed_rpc_with_env.is_none()
             && self.stream_with_env.is_none()
             && self.bidi_with_env.is_none()
     }
 
     fn modes(&self) -> AbilityCallModes {
         AbilityCallModes {
-            rpc: self.rpc.is_some() || self.rpc_with_env.is_some(),
+            rpc: self.rpc.is_some()
+                || self.rpc_with_env.is_some()
+                || self.typed_rpc_with_env.is_some(),
             stream: self.stream.is_some() || self.stream_with_env.is_some(),
             bidi: self.bidi.is_some() || self.bidi_with_env.is_some(),
         }
@@ -836,7 +859,9 @@ impl RuntimeHandlerSet {
             rpc: usize::from(self.rpc.is_some()),
             stream: usize::from(self.stream.is_some()),
             bidi: usize::from(self.bidi.is_some()),
-            rpc_with_env: usize::from(self.rpc_with_env.is_some()),
+            rpc_with_env: usize::from(
+                self.rpc_with_env.is_some() || self.typed_rpc_with_env.is_some(),
+            ),
             stream_with_env: usize::from(self.stream_with_env.is_some()),
             bidi_with_env: usize::from(self.bidi_with_env.is_some()),
         }
@@ -856,6 +881,9 @@ impl RuntimeHandlerSet {
         if self.rpc_with_env.is_some() {
             slots.push(HandlerSlotKind::RpcWithEnvelope);
         }
+        if self.typed_rpc_with_env.is_some() {
+            slots.push(HandlerSlotKind::TypedRpcWithEnvelope);
+        }
         if self.stream_with_env.is_some() {
             slots.push(HandlerSlotKind::StreamWithEnvelope);
         }
@@ -868,9 +896,12 @@ impl RuntimeHandlerSet {
     fn remove_mode(&mut self, call_mode: DescriptorCallMode) -> bool {
         match call_mode {
             DescriptorCallMode::Rpc => {
-                let removed = self.rpc.is_some() || self.rpc_with_env.is_some();
+                let removed = self.rpc.is_some()
+                    || self.rpc_with_env.is_some()
+                    || self.typed_rpc_with_env.is_some();
                 self.rpc = None;
                 self.rpc_with_env = None;
+                self.typed_rpc_with_env = None;
                 removed
             }
             DescriptorCallMode::Stream => {
@@ -895,6 +926,9 @@ impl RuntimeHandlerSet {
             StaticRegistrationHandler::Bidi(handler) => self.bidi = Some(handler),
             StaticRegistrationHandler::RpcWithEnvelope(handler) => {
                 self.rpc_with_env = Some(handler)
+            }
+            StaticRegistrationHandler::TypedRpcWithEnvelope(handler) => {
+                self.typed_rpc_with_env = Some(handler)
             }
             StaticRegistrationHandler::StreamWithEnvelope(handler) => {
                 self.stream_with_env = Some(handler);
@@ -1133,6 +1167,28 @@ fn rpc_env_handler_to_ability_fn(
     })
 }
 
+fn typed_rpc_env_handler_to_ability_fn(
+    handler: LocalTypedRpcHandlerWithEnvelope,
+    runtime_host: Option<RuntimeHandlerContext>,
+) -> TypedAbilityFn {
+    make_typed_ability(move |ctx| {
+        let handler = Arc::clone(&handler);
+        let runtime_host = runtime_host.clone();
+        async move {
+            let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
+            let env = envelope_context_from_axon(&ctx, runtime_host).await?;
+            tokio::task::spawn_blocking(move || handler(env, value))
+                .await
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: typed env handler join error: {err}"
+                    ))
+                })?
+                .map_err(|err| project_handler_failure(err, "local_runtime_adapter: typed env rpc"))
+        }
+    })
+}
+
 /// Project an envelope-aware unary handler into the `(AbilityFn,
 /// AbilityOptions)` pair used by registrars that own their runtime
 /// transaction. The runtime invocation envelope remains the authority for
@@ -1155,6 +1211,43 @@ pub(crate) fn rpc_env_ability_with_options(
 async fn emit_json_progress(ctx: &Arc<AbilityContext>, value: Value) -> Result<(), AxonError> {
     let payload = json_value_to_payload(&value).map_err(|e| *e)?;
     ctx.emit_progress(payload, "application/json").await
+}
+
+async fn emit_json_mpsc_progress(
+    ctx: &Arc<AbilityContext>,
+    mut receiver: tokio::sync::mpsc::Receiver<anyhow::Result<Value>>,
+    producer_label: &'static str,
+) -> Result<(), AxonError> {
+    while let Some(frame) = receiver.recv().await {
+        let frame = frame.map_err(|err| {
+            AxonError::internal(format!(
+                "local_runtime_adapter: {producer_label} stream producer failed: {err:#}"
+            ))
+        })?;
+        emit_json_progress(ctx, frame).await?;
+    }
+    Ok(())
+}
+
+async fn emit_typed_mpsc_progress(
+    ctx: &Arc<AbilityContext>,
+    mut receiver: tokio::sync::mpsc::Receiver<anyhow::Result<StreamOutputFrame>>,
+    producer_label: &'static str,
+) -> Result<(), AxonError> {
+    while let Some(frame) = receiver.recv().await {
+        let frame = frame.map_err(|err| {
+            AxonError::internal(format!(
+                "local_runtime_adapter: {producer_label} stream producer failed: {err:#}"
+            ))
+        })?;
+        if frame.content_type.trim().is_empty() {
+            return Err(AxonError::invalid_argument(
+                "local_runtime_adapter: typed stream frame content_type is empty",
+            ));
+        }
+        ctx.emit_progress(frame.payload, frame.content_type).await?;
+    }
+    Ok(())
 }
 
 async fn emit_stream_source(
@@ -1194,30 +1287,13 @@ async fn emit_stream_source(
                 }
             }
         }
-        StreamSource::Finite(mut rx) => {
-            while let Some(frame) = rx.recv().await {
-                let frame = frame.map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: finite stream producer failed: {err:#}"
-                    ))
-                })?;
-                emit_json_progress(&ctx, frame).await?;
-            }
+        StreamSource::Finite(rx) => emit_json_mpsc_progress(&ctx, rx, "finite").await?,
+        StreamSource::BackpressuredLive(rx) => {
+            emit_json_mpsc_progress(&ctx, rx, "backpressured live").await?
         }
-        StreamSource::TypedFinite(mut rx) => {
-            while let Some(frame) = rx.recv().await {
-                let frame = frame.map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: typed finite stream producer failed: {err:#}"
-                    ))
-                })?;
-                if frame.content_type.trim().is_empty() {
-                    return Err(AxonError::invalid_argument(
-                        "local_runtime_adapter: typed stream frame content_type is empty",
-                    ));
-                }
-                ctx.emit_progress(frame.payload, frame.content_type).await?;
-            }
+        StreamSource::TypedFinite(rx) => emit_typed_mpsc_progress(&ctx, rx, "typed finite").await?,
+        StreamSource::TypedBackpressuredLive(rx) => {
+            emit_typed_mpsc_progress(&ctx, rx, "typed backpressured live").await?
         }
     }
     Ok(Vec::new())
@@ -1418,7 +1494,7 @@ fn runtime_handler_set_to_ability_fn(
             >,
         >,
     >,
-) -> AbilityFn {
+) -> TypedAbilityFn {
     let runtime_host = RuntimeHandlerContext {
         runtime,
         host_device_ura,
@@ -1430,6 +1506,9 @@ fn runtime_handler_set_to_ability_fn(
     let rpc_env_fn = handlers
         .rpc_with_env
         .map(|handler| rpc_env_handler_to_ability_fn(handler, Some(runtime_host.clone())));
+    let typed_rpc_env_fn = handlers
+        .typed_rpc_with_env
+        .map(|handler| typed_rpc_env_handler_to_ability_fn(handler, Some(runtime_host.clone())));
     let stream_env_fn = handlers
         .stream_with_env
         .map(|handler| stream_env_handler_to_ability_fn(handler, Some(runtime_host.clone())));
@@ -1437,7 +1516,11 @@ fn runtime_handler_set_to_ability_fn(
         .bidi_with_env
         .map(|handler| bidi_env_handler_to_ability_fn(handler, runtime_host));
 
-    make_ability(move |ctx| {
+    if let Some(handler) = typed_rpc_env_fn {
+        return handler;
+    }
+
+    make_typed_ability(move |ctx| {
         let mode = ctx.call_mode;
         let name = name.clone();
         let handler = match mode {
@@ -1446,13 +1529,22 @@ fn runtime_handler_set_to_ability_fn(
             AxonCallMode::Bidi => bidi_env_fn.clone().or_else(|| bidi_fn.clone()),
         };
         async move {
-            match handler {
-                Some(handler) => handler(ctx).await,
+            let payload = match handler {
+                Some(handler) => handler(ctx).await?,
                 None => Err(AxonError::invalid_argument(format!(
                     "local_runtime_adapter: ability {name} does not support {} mode",
                     mode.as_str()
-                ))),
-            }
+                )))?,
+            };
+            let content_type = match mode {
+                // Local RPC handlers have a Value-shaped public contract and
+                // json_value_to_payload is their sole success encoder. Tag the
+                // terminal at that owned boundary instead of making consumers
+                // inspect bytes produced by Axon's legacy byte-only adapter.
+                AxonCallMode::Rpc => "application/json",
+                AxonCallMode::Stream | AxonCallMode::Bidi => "application/octet-stream",
+            };
+            AbilityOutput::new(payload, content_type)
         }
     })
 }
@@ -3571,6 +3663,7 @@ struct DynamicAbilitySnapshot {
     stream: Option<LocalStreamHandler>,
     bidi: Option<LocalBidiHandler>,
     rpc_with_env: Option<LocalRpcHandlerWithEnvelope>,
+    typed_rpc_with_env: Option<LocalTypedRpcHandlerWithEnvelope>,
     stream_with_env: Option<LocalStreamHandlerWithEnvelope>,
     bidi_with_env: Option<LocalBidiHandlerWithEnvelope>,
 }
@@ -3582,6 +3675,7 @@ impl DynamicAbilitySnapshot {
             stream: handlers.stream,
             bidi: handlers.bidi,
             rpc_with_env: handlers.rpc_with_env,
+            typed_rpc_with_env: handlers.typed_rpc_with_env,
             stream_with_env: handlers.stream_with_env,
             bidi_with_env: handlers.bidi_with_env,
         }
@@ -3593,6 +3687,7 @@ impl DynamicAbilitySnapshot {
             stream: self.stream,
             bidi: self.bidi,
             rpc_with_env: self.rpc_with_env,
+            typed_rpc_with_env: self.typed_rpc_with_env,
             stream_with_env: self.stream_with_env,
             bidi_with_env: self.bidi_with_env,
         }
@@ -3603,6 +3698,7 @@ impl DynamicAbilitySnapshot {
             || self.stream.is_some()
             || self.bidi.is_some()
             || self.rpc_with_env.is_some()
+            || self.typed_rpc_with_env.is_some()
             || self.stream_with_env.is_some()
             || self.bidi_with_env.is_some()
     }
@@ -3620,6 +3716,9 @@ impl DynamicAbilitySnapshot {
         }
         if self.rpc_with_env.is_some() {
             slots.push(HandlerSlotKind::RpcWithEnvelope);
+        }
+        if self.typed_rpc_with_env.is_some() {
+            slots.push(HandlerSlotKind::TypedRpcWithEnvelope);
         }
         if self.stream_with_env.is_some() {
             slots.push(HandlerSlotKind::StreamWithEnvelope);
@@ -3672,6 +3771,7 @@ enum HandlerSlotKind {
     Stream,
     Bidi,
     RpcWithEnvelope,
+    TypedRpcWithEnvelope,
     StreamWithEnvelope,
     BidiWithEnvelope,
 }
@@ -3679,7 +3779,9 @@ enum HandlerSlotKind {
 impl HandlerSlotKind {
     fn call_mode(self) -> DescriptorCallMode {
         match self {
-            Self::Rpc | Self::RpcWithEnvelope => DescriptorCallMode::Rpc,
+            Self::Rpc | Self::RpcWithEnvelope | Self::TypedRpcWithEnvelope => {
+                DescriptorCallMode::Rpc
+            }
             Self::Stream | Self::StreamWithEnvelope => DescriptorCallMode::Stream,
             Self::Bidi | Self::BidiWithEnvelope => DescriptorCallMode::Bidi,
         }
@@ -3691,6 +3793,7 @@ impl HandlerSlotKind {
             Self::Stream => "stream",
             Self::Bidi => "bidi",
             Self::RpcWithEnvelope => "rpc_with_env",
+            Self::TypedRpcWithEnvelope => "typed_rpc_with_env",
             Self::StreamWithEnvelope => "stream_with_env",
             Self::BidiWithEnvelope => "bidi_with_env",
         }
@@ -3706,6 +3809,7 @@ enum StaticRegistrationHandler {
     Stream(LocalStreamHandler),
     Bidi(LocalBidiHandler),
     RpcWithEnvelope(LocalRpcHandlerWithEnvelope),
+    TypedRpcWithEnvelope(LocalTypedRpcHandlerWithEnvelope),
     StreamWithEnvelope(LocalStreamHandlerWithEnvelope),
     BidiWithEnvelope(LocalBidiHandlerWithEnvelope),
 }
@@ -3719,7 +3823,9 @@ enum StaticRegistrationOutcome {
 impl StaticRegistrationHandler {
     fn call_mode(&self) -> DescriptorCallMode {
         match self {
-            Self::Rpc(_) | Self::RpcWithEnvelope(_) => DescriptorCallMode::Rpc,
+            Self::Rpc(_) | Self::RpcWithEnvelope(_) | Self::TypedRpcWithEnvelope(_) => {
+                DescriptorCallMode::Rpc
+            }
             Self::Stream(_) | Self::StreamWithEnvelope(_) => DescriptorCallMode::Stream,
             Self::Bidi(_) | Self::BidiWithEnvelope(_) => DescriptorCallMode::Bidi,
         }
@@ -3731,6 +3837,7 @@ impl StaticRegistrationHandler {
             Self::Stream(_) => HandlerSlotKind::Stream,
             Self::Bidi(_) => HandlerSlotKind::Bidi,
             Self::RpcWithEnvelope(_) => HandlerSlotKind::RpcWithEnvelope,
+            Self::TypedRpcWithEnvelope(_) => HandlerSlotKind::TypedRpcWithEnvelope,
             Self::StreamWithEnvelope(_) => HandlerSlotKind::StreamWithEnvelope,
             Self::BidiWithEnvelope(_) => HandlerSlotKind::BidiWithEnvelope,
         }
@@ -5319,7 +5426,7 @@ impl AxonAbilityCatalog {
     fn replace_runtime_ability(
         &self,
         control_plane_key: &ControlPlaneAbilityKey,
-        ability_fn: AbilityFn,
+        ability_fn: TypedAbilityFn,
         options: AbilityOptions,
     ) -> anyhow::Result<()> {
         let Some(runtime) = self.runtime.as_ref() else {
@@ -5327,7 +5434,7 @@ impl AxonAbilityCatalog {
         };
         let name = control_plane_key.ability();
         let runtime_key = control_plane_key.runtime_key()?;
-        let result = block_on_runtime_sync(runtime.replace_ability(
+        let result = block_on_runtime_sync(runtime.replace_typed_ability(
             runtime_key.clone(),
             ability_fn,
             options,
@@ -5902,6 +6009,28 @@ impl AxonAbilityCatalog {
                 ability,
                 owner,
                 StaticRegistrationHandler::RpcWithEnvelope(handler),
+            )
+            .with_manifest(manifest)
+            .with_receipt_semantics(receipt_semantics),
+        );
+    }
+
+    /// Register an envelope-aware unary handler whose success value is a raw
+    /// typed payload. JSON handlers continue to use
+    /// `register_rpc_with_envelope_and_spec_and_semantics`.
+    pub fn register_typed_rpc_with_envelope_and_spec_and_semantics(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        receipt_semantics: ReceiptSemantics,
+        handler: LocalTypedRpcHandlerWithEnvelope,
+    ) {
+        self.register_static_or_panic(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::TypedRpcWithEnvelope(handler),
             )
             .with_manifest(manifest)
             .with_receipt_semantics(receipt_semantics),
@@ -7023,6 +7152,30 @@ impl AxonAbilityCatalog {
         })
     }
 
+    #[cfg(test)]
+    pub fn execute_rpc_result(
+        &self,
+        target: InvocationTarget,
+    ) -> anyhow::Result<crate::daemon::invocation::dispatch::local_runtime_invoker::LocalRpcResult>
+    {
+        if target.call_mode != CallMode::Rpc {
+            anyhow::bail!("execute_rpc_result requires Rpc call_mode");
+        }
+        if let TargetScope::Remote { node } = &target.scope {
+            anyhow::bail!("local Axon runtime cannot execute remote target `{node}`");
+        }
+        let runtime = self
+            .runtime()
+            .ok_or_else(|| anyhow::anyhow!("AxonAbilityCatalog has no LocalRuntime attached"))?;
+        let target = self
+            .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Rpc)
+            .map_err(|err| anyhow::anyhow!("{err}; local Axon runtime loopback path"))?;
+        crate::daemon::invocation::dispatch::local_runtime_invoker::invoke_local_rpc_sync_result(
+            runtime, target,
+        )
+        .map_err(anyhow::Error::msg)
+    }
+
     /// Test-only convenience wrapper that opens the stream through
     /// `LocalRuntime`, matching the daemon path.
     #[cfg(test)]
@@ -7135,8 +7288,12 @@ fn runtime_stream_source(
                         }
                     };
 
-                let mut snapshot = Vec::new();
-                let (tx, rx) = broadcast::channel(BIDI_CHANNEL_BOUND);
+                enum BufferedFrames {
+                    Json(Vec<Value>),
+                    Typed(Vec<StreamOutputFrame>),
+                }
+
+                let mut buffered: Option<BufferedFrames> = None;
                 loop {
                     match tokio::time::timeout(
                         std::time::Duration::from_millis(100),
@@ -7146,18 +7303,60 @@ fn runtime_stream_source(
                     {
                         Ok(Some(Ok(frame))) => {
                             if !frame.payload.is_empty() {
-                                match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(
-                                    &frame,
-                                ) {
-                                    Ok(value) => snapshot.push(value),
-                                    Err(err) => {
-                                        let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                                let is_json = frame.content_type.is_empty()
+                                    || frame.content_type.contains("json");
+                                match (&mut buffered, is_json) {
+                                    (None, true) => {
+                                        match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(&frame) {
+                                            Ok(value) => buffered = Some(BufferedFrames::Json(vec![value])),
+                                            Err(err) => {
+                                                let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    (None, false) => buffered = Some(BufferedFrames::Typed(vec![
+                                        StreamOutputFrame::new(frame.payload, frame.content_type),
+                                    ])),
+                                    (Some(BufferedFrames::Json(frames)), true) => {
+                                        match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(&frame) {
+                                            Ok(value) => frames.push(value),
+                                            Err(err) => {
+                                                let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    (Some(BufferedFrames::Typed(frames)), false) => frames.push(
+                                        StreamOutputFrame::new(frame.payload, frame.content_type),
+                                    ),
+                                    _ => {
+                                        let _ = ready_tx.send(Err(anyhow::anyhow!(
+                                            "stream changed between JSON and typed payloads"
+                                        )));
                                         return;
                                     }
                                 }
                             }
                             if frame.terminal {
-                                let _ = ready_tx.send(Ok(StreamSource::Snapshot(snapshot)));
+                                let source = match buffered.take() {
+                                    Some(BufferedFrames::Json(frames)) => {
+                                        StreamSource::Snapshot(frames)
+                                    }
+                                    Some(BufferedFrames::Typed(frames)) => {
+                                        let (tx, rx) = tokio::sync::mpsc::channel(
+                                            frames.len().max(1),
+                                        );
+                                        for frame in frames {
+                                            tx.try_send(Ok(frame))
+                                                .expect("typed snapshot channel is pre-sized");
+                                        }
+                                        drop(tx);
+                                        StreamSource::TypedFinite(rx)
+                                    }
+                                    None => StreamSource::Snapshot(Vec::new()),
+                                };
+                                let _ = ready_tx.send(Ok(source));
                                 return;
                             }
                         }
@@ -7166,36 +7365,95 @@ fn runtime_stream_source(
                             return;
                         }
                         Ok(None) => {
-                            let _ = ready_tx.send(Ok(StreamSource::Snapshot(snapshot)));
+                            let source = match buffered.take() {
+                                Some(BufferedFrames::Json(frames)) => {
+                                    StreamSource::Snapshot(frames)
+                                }
+                                Some(BufferedFrames::Typed(frames)) => {
+                                    let (tx, rx) = tokio::sync::mpsc::channel(
+                                        frames.len().max(1),
+                                    );
+                                    for frame in frames {
+                                        tx.try_send(Ok(frame))
+                                            .expect("typed snapshot channel is pre-sized");
+                                    }
+                                    drop(tx);
+                                    StreamSource::TypedFinite(rx)
+                                }
+                                None => StreamSource::Snapshot(Vec::new()),
+                            };
+                            let _ = ready_tx.send(Ok(source));
                             return;
                         }
                         Err(_) => {
-                            let source = if snapshot.is_empty() {
-                                StreamSource::Live(rx)
-                            } else {
-                                StreamSource::SnapshotThenLive(snapshot, rx)
-                            };
-                            if ready_tx.send(Ok(source)).is_err() {
-                                return;
+                            match buffered.take() {
+                                Some(BufferedFrames::Typed(frames)) => {
+                                    let (tx, rx) =
+                                        tokio::sync::mpsc::channel(BIDI_CHANNEL_BOUND);
+                                    for frame in frames {
+                                        tx.try_send(Ok(frame)).expect(
+                                            "typed live prelude fits the bounded channel",
+                                        );
+                                    }
+                                    if ready_tx
+                                        .send(Ok(StreamSource::TypedBackpressuredLive(rx)))
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                    while let Some(frame_result) = handle.next_frame().await {
+                                        let Ok(frame) = frame_result else {
+                                            break;
+                                        };
+                                        if !frame.payload.is_empty()
+                                            && tx
+                                                .send(Ok(StreamOutputFrame::new(
+                                                    frame.payload,
+                                                    frame.content_type,
+                                                )))
+                                                .await
+                                                .is_err()
+                                        {
+                                            break;
+                                        }
+                                        if frame.terminal {
+                                            break;
+                                        }
+                                    }
+                                    return;
+                                }
+                                json => {
+                                    let snapshot = match json {
+                                        Some(BufferedFrames::Json(frames)) => frames,
+                                        None => Vec::new(),
+                                        Some(BufferedFrames::Typed(_)) => unreachable!(),
+                                    };
+                                    let (tx, rx) = broadcast::channel(BIDI_CHANNEL_BOUND);
+                                    let source = if snapshot.is_empty() {
+                                        StreamSource::Live(rx)
+                                    } else {
+                                        StreamSource::SnapshotThenLive(snapshot, rx)
+                                    };
+                                    if ready_tx.send(Ok(source)).is_err() {
+                                        return;
+                                    }
+                                    while let Some(frame_result) = handle.next_frame().await {
+                                        let Ok(frame) = frame_result else {
+                                            break;
+                                        };
+                                        if !frame.payload.is_empty() {
+                                            if let Ok(value) = crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(&frame) {
+                                                let _ = tx.send(value);
+                                            }
+                                        }
+                                        if frame.terminal {
+                                            break;
+                                        }
+                                    }
+                                    return;
+                                }
                             }
-                            break;
                         }
-                    }
-                }
-
-                while let Some(frame_result) = handle.next_frame().await {
-                    let Ok(frame) = frame_result else {
-                        break;
-                    };
-                    if !frame.payload.is_empty() {
-                        if let Ok(value) =
-                            crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(&frame)
-                        {
-                            let _ = tx.send(value);
-                        }
-                    }
-                    if frame.terminal {
-                        break;
                     }
                 }
             });

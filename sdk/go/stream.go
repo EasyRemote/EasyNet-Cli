@@ -93,17 +93,18 @@ func (f StreamTransportFunc) Close(ctx context.Context) error {
 
 // StreamHandle is the public ordered stream event state object.
 type StreamHandle struct {
-	mu            sync.Mutex
-	streamID      string
-	transport     StreamTransport
-	runtimeState  StreamState
-	carrierState  carrierState
-	events        []StreamEvent
-	lastSequence  uint64
-	terminalSeen  bool
-	terminalEvent *StreamTerminalEvent
-	maxBuffered   int
-	receiving     bool
+	mu                   sync.Mutex
+	streamID             string
+	transport            StreamTransport
+	runtimeState         StreamState
+	carrierState         carrierState
+	events               []StreamEvent
+	lastSequence         uint64
+	acknowledgedSequence uint64
+	terminalSeen         bool
+	terminalEvent        *StreamTerminalEvent
+	maxBuffered          int
+	receiving            bool
 }
 
 // StreamEvent is an SDK stream event projection.
@@ -227,6 +228,43 @@ func (s *StreamHandle) Events() []StreamEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]StreamEvent(nil), s.events...)
+}
+
+// AcknowledgeThrough releases retained event history through sequence after a
+// consumer has durably projected or delivered those frames. Runtime ordering
+// and terminal state remain unchanged; this only advances the SDK's bounded
+// observation window so long-running media streams do not retain every
+// payload or fail after MaxBufferedEvents frames.
+func (s *StreamHandle) AcknowledgeThrough(sequence uint64) error {
+	if s == nil {
+		return invalidRuntimeClient("stream handle is not initialized")
+	}
+	if sequence == 0 {
+		return invalidRuntimePayload("acknowledged stream sequence must be positive", nil)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sequence <= s.acknowledgedSequence {
+		return nil
+	}
+	if sequence > s.lastSequence {
+		return invalidRuntimePayload("cannot acknowledge an unobserved stream sequence", nil)
+	}
+	consumed := 0
+	for consumed < len(s.events) && s.events[consumed].sequence <= sequence {
+		// Clear payload and receipt references before shrinking so the backing
+		// array cannot keep acknowledged media buffers alive.
+		s.events[consumed] = StreamEvent{}
+		consumed++
+	}
+	copy(s.events, s.events[consumed:])
+	remaining := len(s.events) - consumed
+	for index := remaining; index < len(s.events); index++ {
+		s.events[index] = StreamEvent{}
+	}
+	s.events = s.events[:remaining]
+	s.acknowledgedSequence = sequence
+	return nil
 }
 
 func (s *StreamHandle) MaxBufferedEvents() int {

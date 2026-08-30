@@ -1,6 +1,6 @@
 schema_version = "3"
 name = "camera.record_start"
-descriptor_version = "1.0.0"
+descriptor_version = "2.0.0"
 description = "Start a bounded recording session for a camera resource. Subject MUST be a camera resource_ura. Returns a recording_session_id that must be passed to camera.record_stop."
 exposure = "task"
 dedicated_surface = "media"
@@ -17,7 +17,7 @@ denied_agents = []
 output_receipt_schema_json = "{}"
 hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
 receipt_semantics = "state_transition"
-transition_id = "camera.record_start@v1"
+transition_id = "camera.record_start@v2"
 transition_class = "operational"
 
 [input_schema]
@@ -26,7 +26,7 @@ additionalProperties = false
 
 [input_schema.properties.codec]
 type = "string"
-enum = ["mjpeg"]
+enum = ["h264", "mjpeg"]
 
 [input_schema.properties.fps]
 type = "integer"

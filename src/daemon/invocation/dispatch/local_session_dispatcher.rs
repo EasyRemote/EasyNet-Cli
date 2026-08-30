@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::descriptor_binding::RuntimeBoundAbility;
-use super::invocation_wire::{callee_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE};
+use super::invocation_wire::callee_ura_from_envelope;
 #[cfg(test)]
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
@@ -181,6 +181,12 @@ struct PendingRemoteBidiInput {
     content_type: String,
     payload: Vec<u8>,
     eof: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemoteBidiInputDelivery {
+    Delivered,
+    HandlerClosed,
 }
 
 enum RemoteBidiSession {
@@ -590,10 +596,11 @@ impl LocalAxonSessionDispatcher {
             .as_ref()
             .map(axon_sdk::invocation::wire::error_to_wire);
         let (admission_receipt, terminal_receipt) = unary_checkpoints_to_session_wire(&outcome)?;
+        let result_content_type = outcome.payload_content_type.clone();
         let reply = PbDispatchResult {
             call_id,
             payload: outcome.payload_bytes,
-            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            result_content_type,
             terminal: true,
             admission_receipt,
             terminal_receipt,
@@ -1955,22 +1962,19 @@ impl LocalAxonSessionDispatcher {
         }
 
         let dispatcher_for_input = self.clone();
-        let outbound_for_input = outbound.clone();
         tokio::spawn(async move {
             while let Some(pending) = input_rx.recv().await {
                 let eof = pending.eof;
-                if dispatcher_for_input
+                let delivery = dispatcher_for_input
                     .send_remote_bidi_input_to_handler(
                         call_id,
                         &handler_in_tx,
                         pending.content_type,
                         pending.payload,
                         eof,
-                        &outbound_for_input,
                     )
-                    .await
-                    .is_err()
-                {
+                    .await;
+                if delivery == RemoteBidiInputDelivery::HandlerClosed {
                     break;
                 }
                 if eof {
@@ -2241,8 +2245,7 @@ impl LocalAxonSessionDispatcher {
         content_type: String,
         payload: Vec<u8>,
         eof: bool,
-        outbound: &SessionUpSender,
-    ) -> Result<(), SessionDispatchError> {
+    ) -> RemoteBidiInputDelivery {
         let send_result = if payload.is_empty() {
             Ok(())
         } else {
@@ -2259,17 +2262,22 @@ impl LocalAxonSessionDispatcher {
                 // Some bidi abilities legitimately finish before consuming a
                 // best-effort EOF frame; terminal authority remains the
                 // handler's receipt chain, not EOF delivery.
-                return Ok(());
+                return RemoteBidiInputDelivery::HandlerClosed;
             }
-            return Self::send_bidi_control_failure(
-                outbound,
-                call_id,
-                "BIDI_INPUT_CLOSED",
-                format!("remote bidi call_id={call_id} input channel closed"),
-            )
-            .await;
+            // The handler's input side is gone. That is not a call-terminal
+            // event: the output pump owns finalization and will surface the
+            // handler's canonical receipt (success or failure). A synthetic
+            // wire failure here races ahead of that receipt and the remote
+            // bridge then rejects the call with an opaque transport error in
+            // place of the handler's real one.
+            crate::op_event!(
+                component = local_session_dispatcher,
+                kind = remote_bidi_input_dropped_after_handler_close,
+                call_id = call_id,
+            );
+            return RemoteBidiInputDelivery::HandlerClosed;
         }
-        Ok(())
+        RemoteBidiInputDelivery::Delivered
     }
 }
 
@@ -2984,7 +2992,7 @@ mod tests {
     ) {
         runtime
             .register_ability_with_options(
-                runtime_ability_for(TEST_DEVICE_URA, ability),
+                runtime_ability_for(TEST_LOCOMOTION_SYSTEM_AGENT_URA, ability),
                 handler,
                 options,
             )
@@ -3061,7 +3069,7 @@ mod tests {
             axon_sdk::invocation::CallMode::Rpc | axon_sdk::invocation::CallMode::Bidi => "invoke",
         };
         let descriptor_ref = explicit_test_descriptor_ref_with_action(
-            TEST_DEVICE_URA,
+            TEST_LOCOMOTION_SYSTEM_AGENT_URA,
             ability,
             TEST_DESCRIPTOR_VERSION,
             admission_action,
@@ -3097,7 +3105,7 @@ mod tests {
             signed_ability,
             args,
             mode,
-            TEST_DEVICE_URA,
+            TEST_LOCOMOTION_SYSTEM_AGENT_URA,
             TEST_DEVICE_URA,
         )
     }
@@ -3535,7 +3543,7 @@ mod tests {
         );
         let signed_ability =
             crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-                TEST_DEVICE_URA,
+                TEST_LOCOMOTION_SYSTEM_AGENT_URA,
                 "test.echo",
                 &descriptor_binding_for_version(TEST_DESCRIPTOR_VERSION_V2),
             )
@@ -3845,7 +3853,7 @@ mod tests {
         .await;
 
         let descriptor_ref = explicit_test_descriptor_ref_with_action(
-            TEST_DEVICE_URA,
+            TEST_LOCOMOTION_SYSTEM_AGENT_URA,
             "terminal.create",
             TEST_DESCRIPTOR_VERSION,
             crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
