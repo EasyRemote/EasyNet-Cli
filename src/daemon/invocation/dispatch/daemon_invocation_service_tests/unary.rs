@@ -706,6 +706,7 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
         ))
         .await
         .expect("namespace.resolve dispatch returns Ok");
+    assert_eq!(resp.get_ref().result_content_type, "application/json");
     let body: serde_json::Value = parse_response_body(resp);
 
     assert_eq!(

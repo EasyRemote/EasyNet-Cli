@@ -29,9 +29,9 @@
 use std::sync::Arc;
 
 use axon_sdk::invocation::{
-    make_ability, AbilityCallModes, AbilityOptions, AbilityRegistration, AxonError, AxonErrorKind,
-    BidiInputFrame, CallMode, ErrorCode, ErrorStage, LocalRuntime, SecurityClass,
-    StreamingInvocationHandle,
+    make_ability, make_typed_ability, AbilityCallModes, AbilityOptions, AbilityOutput,
+    AbilityRegistration, AxonError, AxonErrorKind, BidiInputFrame, CallMode, ErrorCode, ErrorStage,
+    LocalRuntime, SecurityClass, StreamingInvocationHandle, TypedAbilityRegistration,
 };
 use axon_sdk::pb::axon::v1::{
     Envelope, EnvelopeOpen, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
@@ -296,17 +296,20 @@ impl DaemonRouteRuntimeAdapter {
                     route.name(),
                 )?;
                 let route_provider = provider.clone();
-                let function = make_ability(move |context| {
+                let function = make_typed_ability(move |context| {
                     let provider = route_provider.clone();
-                    async move { provider.invoke(route, context).await }
+                    async move {
+                        let payload = provider.invoke(route, context).await?;
+                        AbilityOutput::new(payload, "application/json")
+                    }
                 });
                 registrations.push(
-                    AbilityRegistration::new(ability_ura, function)
+                    TypedAbilityRegistration::new(ability_ura, function)
                         .with_options(route_registration_options(catalog, owner_ura, route)?),
                 );
             }
         }
-        self.runtime.register_many(registrations).await
+        self.runtime.register_typed_many(registrations).await
     }
 
     /// Atomically install the complete exact server-stream route family. The
