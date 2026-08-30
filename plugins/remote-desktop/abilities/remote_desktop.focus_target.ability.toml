@@ -1,7 +1,7 @@
 schema_version = "3"
 name = "remote_desktop.focus_target"
 descriptor_version = "1.0.0"
-description = "Activate and verify the exact application/window bound to an interactive remote desktop session. The envelope subject remains the selected Resource URA."
+description = "Activate and verify the exact application/window bound to an interactive remote desktop session. The envelope subject MUST remain the selected Resource URA, and the request MUST carry the current consent and target epochs."
 exposure = "operator"
 dedicated_surface = "remote_desktop"
 subject_contract_kind = "dedicated-surface"
@@ -15,7 +15,7 @@ scope_agents_kind = "any"
 scope_agents_uras = []
 denied_agents = []
 output_receipt_schema_json = "{}"
-hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
 receipt_semantics = "operational"
 
 [input_schema]
@@ -23,21 +23,15 @@ type = "object"
 required = ["session_id", "session_token", "expected_consent_epoch", "expected_binding_epoch", "expected_target_identity_epoch", "expected_target_geometry_revision", "expected_target_focus_epoch"]
 additionalProperties = false
 
-[input_schema.properties.session_id]
-type = "string"
-
-[input_schema.properties.session_token]
-type = "string"
+[input_schema.properties.expected_binding_epoch]
+type = "integer"
+minimum = 1
 
 [input_schema.properties.expected_consent_epoch]
 type = "integer"
 minimum = 1
 
-[input_schema.properties.expected_binding_epoch]
-type = "integer"
-minimum = 1
-
-[input_schema.properties.expected_target_identity_epoch]
+[input_schema.properties.expected_target_focus_epoch]
 type = "integer"
 minimum = 1
 
@@ -45,6 +39,12 @@ minimum = 1
 type = "integer"
 minimum = 1
 
-[input_schema.properties.expected_target_focus_epoch]
+[input_schema.properties.expected_target_identity_epoch]
 type = "integer"
 minimum = 1
+
+[input_schema.properties.session_id]
+type = "string"
+
+[input_schema.properties.session_token]
+type = "string"

@@ -719,15 +719,6 @@ impl AppSurfaceLayoutProof {
         Self::from_canonical_surfaces(front_to_back_surfaces)
     }
 
-    #[cfg(target_os = "macos")]
-    pub(in crate::daemon::plugins::remote_desktop) fn front_to_back_window_ids(
-        &self,
-    ) -> impl Iterator<Item = u64> + '_ {
-        self.front_to_back_surfaces
-            .iter()
-            .map(|surface| surface.window_id)
-    }
-
     pub(in crate::daemon::plugins::remote_desktop) fn layout_epoch(&self) -> u64 {
         self.layout_epoch
     }
@@ -1022,18 +1013,6 @@ impl AppWindowSetProof {
         self
     }
 
-    #[cfg(target_os = "macos")]
-    pub(in crate::daemon::plugins::remote_desktop) fn missing_window_ids(
-        &self,
-        observed_window_ids: &[u64],
-    ) -> Vec<u64> {
-        self.resolved_window_ids
-            .iter()
-            .copied()
-            .filter(|window_id| !observed_window_ids.contains(window_id))
-            .collect()
-    }
-
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "display_id": self.display_id,
@@ -1167,6 +1146,7 @@ impl ResolvedCaptureTargetProof {
         self
     }
 
+    #[cfg(any(test, feature = "native-media"))]
     pub(in crate::daemon::plugins::remote_desktop) fn with_process_instance_id(
         mut self,
         process_instance_id: Option<String>,
@@ -1186,7 +1166,13 @@ impl ResolvedCaptureTargetProof {
         self
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn reverified_with_native_dimensions(
         mut self,
         native_dimensions: Option<(usize, usize)>,
@@ -1230,6 +1216,7 @@ impl ResolvedCaptureTargetProof {
         })
     }
 
+    #[cfg(any(test, feature = "native-media"))]
     pub(in crate::daemon::plugins::remote_desktop) fn native_dimensions(
         &self,
     ) -> Option<(usize, usize)> {
@@ -1532,18 +1519,13 @@ impl NativeAppIdentityMatch {
         self.matched
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) const fn any_expected_field_seen(self) -> bool {
         self.any_expected_field_seen
     }
 }
 
 impl NativeTargetLocator {
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(in crate::daemon::plugins::remote_desktop) fn primary_display(&self) -> bool {
-        self.primary_display
-    }
-
     pub(in crate::daemon::plugins::remote_desktop) fn display_id(&self) -> Option<u64> {
         self.display_id
     }
@@ -1561,6 +1543,7 @@ impl NativeTargetLocator {
     }
 
     #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg(any(test, feature = "native-media"))]
     pub(in crate::daemon::plugins::remote_desktop) fn app_identity(&self) -> Option<&str> {
         self.app_identity.as_deref()
     }

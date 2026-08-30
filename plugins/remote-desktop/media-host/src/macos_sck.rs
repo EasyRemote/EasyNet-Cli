@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchRetained};
+use easynet_remoteapp_native_platform::{CaptureEligibleSurface, MacosWindowSurfaceSnapshot};
 use easynet_remoteapp_native_protocol::media_session::{
     CaptureBackend, CaptureProof, EventBody, FailureReason, MediaStats, NativeTargetPlan,
     StartContract, TargetKind, VideoConfig,
@@ -880,8 +881,14 @@ fn resolve_target(target: &NativeTargetPlan) -> Result<ResolvedTarget, BackendFa
     let content = shareable_content()?;
     match target.kind {
         TargetKind::Display => resolve_display(&content, target),
-        TargetKind::Window => resolve_window(&content, target),
-        TargetKind::Application => resolve_application(&content, target),
+        TargetKind::Window => {
+            let surfaces = MacosWindowSurfaceSnapshot::capture().map_err(capture_unavailable)?;
+            resolve_window(&content, &surfaces, target)
+        }
+        TargetKind::Application => {
+            let surfaces = MacosWindowSurfaceSnapshot::capture().map_err(capture_unavailable)?;
+            resolve_application(&content, &surfaces, target)
+        }
     }
 }
 
@@ -917,6 +924,7 @@ fn resolve_display(
 
 fn resolve_window(
     content: &SCShareableContent,
+    surfaces: &MacosWindowSurfaceSnapshot,
     target: &NativeTargetPlan,
 ) -> Result<ResolvedTarget, BackendFailure> {
     let expected = target
@@ -932,6 +940,11 @@ fn resolve_window(
     if matching_id.next().is_some() {
         return Err(target_invalidated(format!(
             "ScreenCaptureKit window id {expected} is ambiguous"
+        )));
+    }
+    if !screen_capture_eligible_window(&window, surfaces) {
+        return Err(target_invalidated(format!(
+            "ScreenCaptureKit window {expected} is not capture eligible"
         )));
     }
     let owner = unsafe { window.owningApplication() }.ok_or_else(|| {
@@ -951,6 +964,7 @@ fn resolve_window(
 
 fn resolve_application(
     content: &SCShareableContent,
+    surfaces: &MacosWindowSurfaceSnapshot,
     target: &NativeTargetPlan,
 ) -> Result<ResolvedTarget, BackendFailure> {
     let contract = target
@@ -978,9 +992,10 @@ fn resolve_application(
     let observed = windows
         .iter()
         .filter(|window| {
-            unsafe { window.owningApplication() }
-                .as_deref()
-                .is_some_and(|owner| application_identity_matches(target, owner))
+            screen_capture_eligible_window(window, surfaces)
+                && unsafe { window.owningApplication() }
+                    .as_deref()
+                    .is_some_and(|owner| application_identity_matches(target, owner))
         })
         .collect::<Vec<_>>();
     let observed_ids = observed
@@ -1032,6 +1047,26 @@ fn resolve_application(
         native_width,
         native_height,
     })
+}
+
+fn screen_capture_eligible_window(
+    window: &SCWindow,
+    surfaces: &MacosWindowSurfaceSnapshot,
+) -> bool {
+    let frame = unsafe { window.frame() };
+    let width = frame.size.width.round().clamp(0.0, f64::from(u32::MAX)) as u32;
+    let height = frame.size.height.round().clamp(0.0, f64::from(u32::MAX)) as u32;
+    let Some(alpha) = surfaces.alpha_for(unsafe { window.windowID() }) else {
+        return false;
+    };
+    CaptureEligibleSurface::macos(
+        width,
+        height,
+        unsafe { window.windowLayer() } as i64,
+        alpha,
+        unsafe { window.isOnScreen() },
+    )
+    .is_eligible()
 }
 
 fn validate_application_identity(

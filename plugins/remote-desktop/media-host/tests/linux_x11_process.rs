@@ -19,6 +19,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use easynet_remoteapp_native_platform::{PlatformWindowProcessIdentityProvider, ProcessInstance};
 use easynet_remoteapp_native_protocol::media_session::{
     binary_media_frame_capacity, decode_binary_media_event_frame_compact, generation_nonce_bytes,
     read_event_frame, write_command_frame, ApplicationSurface, ApplicationWindowSet,
@@ -604,6 +605,7 @@ fn start_sentinel() -> anyhow::Result<(Sentinel, String, Vec<X11WindowProof>)> {
         .spawn()?;
     let sentinel = Sentinel { child, state };
     let pid = sentinel.child.id();
+    let process_identity_provider = PlatformWindowProcessIdentityProvider::connect()?;
     let deadline = Instant::now() + EVENT_DEADLINE;
     let mut last_inventory: Vec<String>;
     let windows = loop {
@@ -622,7 +624,16 @@ fn start_sentinel() -> anyhow::Result<(Sentinel, String, Vec<X11WindowProof>)> {
             .collect();
         let observed = all_windows
             .into_iter()
-            .filter(|window| window.pid().ok() == Some(pid))
+            .filter(|window| {
+                let Ok(window_id) = window.id().map(u64::from) else {
+                    return false;
+                };
+                process_identity_provider
+                    .resolve_window(window_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|instance| instance.pid() == pid)
+            })
             .filter(|window| {
                 window
                     .title()
@@ -662,16 +673,7 @@ fn start_sentinel() -> anyhow::Result<(Sentinel, String, Vec<X11WindowProof>)> {
 }
 
 fn linux_process_instance(pid: u32) -> anyhow::Result<String> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
-    let command_end = stat
-        .rfind(')')
-        .ok_or_else(|| anyhow::anyhow!("sentinel process stat is malformed"))?;
-    let start_ticks = stat[command_end + 1..]
-        .split_whitespace()
-        .nth(19)
-        .ok_or_else(|| anyhow::anyhow!("sentinel process stat has no starttime"))?;
-    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
-    Ok(format!("linux:{}:{pid}:{start_ticks}", boot_id.trim()))
+    Ok(ProcessInstance::resolve(pid)?.stable_id().to_string())
 }
 
 fn spawn_control_lane_reader(

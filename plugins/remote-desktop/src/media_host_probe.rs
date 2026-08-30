@@ -5,30 +5,47 @@
 // contract. The helper performs native proof/capture; this module only owns
 // bounded process supervision and projection back into daemon domain types.
 
+#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
+#[cfg(all(target_os = "macos", not(test)))]
 use base64::Engine;
+#[cfg(target_os = "macos")]
 use easynet_remoteapp_native_protocol::capture_probe::{Operation, Outcome, Request, Response};
+#[cfg(target_os = "macos")]
+use easynet_remoteapp_native_protocol::media_session::FailureReason;
 use easynet_remoteapp_native_protocol::media_session::{
-    ApplicationSurface, ApplicationWindowSet, CaptureBackend, CaptureProof, FailureReason,
-    NativeTargetPlan, TargetKind,
+    ApplicationSurface, ApplicationWindowSet, CaptureBackend, CaptureProof, NativeTargetPlan,
+    TargetKind,
 };
 
+#[cfg(all(target_os = "macos", not(test)))]
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     EncodedFrame, ScreenCaptureOptions,
 };
+#[cfg(target_os = "macos")]
 use crate::daemon::plugins::remote_desktop::native_host_process::execute_one_shot_native_host;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
-    ResolvedCaptureTargetProof, TargetResolutionError,
+    RemoteAppTargetBinding, RemoteDesktopTargetKind, ResolvedCaptureTargetProof,
 };
+#[cfg(target_os = "macos")]
+use crate::daemon::plugins::remote_desktop::target::{RemoteAppTargetError, TargetResolutionError};
+#[cfg(target_os = "macos")]
 use crate::daemon::plugins::remote_desktop::MEDIA_HOST_EXECUTABLE;
 
+// The probe entry points below serve the macOS verify/diagnostic paths;
+// Linux and Windows native builds compile this module only for the
+// cross-platform plan/proof projection helpers.
+#[cfg(target_os = "macos")]
 const VERIFY_DEADLINE: Duration = Duration::from_secs(15);
+#[cfg(all(target_os = "macos", not(test)))]
 const DIAGNOSTIC_DEADLINE: Duration = Duration::from_secs(20);
+#[cfg(target_os = "macos")]
 static NEXT_CAPTURE_PROBE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(target_os = "macos")]
 pub(super) fn verify_binding(
     ability: &'static str,
     binding: &RemoteAppTargetBinding,
@@ -68,6 +85,7 @@ pub(super) fn verify_binding(
     }
 }
 
+#[cfg(all(target_os = "macos", not(test)))]
 pub(super) fn capture_diagnostic_jpeg(
     ability: &'static str,
     binding: &RemoteAppTargetBinding,
@@ -117,6 +135,7 @@ pub(super) fn capture_diagnostic_jpeg(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn execute_probe(
     target: NativeTargetPlan,
     operation: Operation,
@@ -176,6 +195,7 @@ pub(super) fn project_capture_proof(
     Ok(projected)
 }
 
+#[cfg(target_os = "macos")]
 fn probe_transport_error(ability: &'static str, detail: String) -> RemoteAppTargetError {
     RemoteAppTargetError::new(
         ability,
@@ -184,6 +204,7 @@ fn probe_transport_error(ability: &'static str, detail: String) -> RemoteAppTarg
     )
 }
 
+#[cfg(target_os = "macos")]
 fn probe_failure(
     ability: &'static str,
     reason: FailureReason,

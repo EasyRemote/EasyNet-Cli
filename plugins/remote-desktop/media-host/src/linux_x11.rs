@@ -8,6 +8,9 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use easynet_remoteapp_native_platform::{
+    CaptureEligibleSurface, PlatformWindowProcessIdentityProvider,
+};
 use easynet_remoteapp_native_protocol::media_session::{
     ApplicationSurface, CaptureBackend, CaptureProof, EventBody, FailureReason, MediaStats,
     NativeTargetPlan, StartContract, TargetKind, VideoConfig,
@@ -22,6 +25,7 @@ use openh264::{OpenH264API, Timestamp};
 use super::{now_ms, BackendEvent, BackendFailure, SessionBackend};
 
 pub(super) struct XcapOpenH264SessionBackend {
+    process_identity_provider: Option<PlatformWindowProcessIdentityProvider>,
     contract: Option<StartContract>,
     encoder: Option<Encoder>,
     active: bool,
@@ -41,6 +45,7 @@ impl Default for XcapOpenH264SessionBackend {
     fn default() -> Self {
         let now = Instant::now();
         Self {
+            process_identity_provider: None,
             contract: None,
             encoder: None,
             active: false,
@@ -70,8 +75,13 @@ impl SessionBackend for XcapOpenH264SessionBackend {
                 ),
             ));
         }
-        let captured = capture_exact_target(&contract.target)?;
+        let process_identity_provider =
+            PlatformWindowProcessIdentityProvider::connect().map_err(|error| {
+                target_invalidated(format!("initialize process identity provider: {error}"))
+            })?;
+        let captured = capture_exact_target(&process_identity_provider, &contract.target)?;
         let encoder = build_encoder(&contract.video)?;
+        self.process_identity_provider = Some(process_identity_provider);
         self.contract = Some(contract.clone());
         self.encoder = Some(encoder);
         self.stats_started_at = Instant::now();
@@ -188,7 +198,11 @@ impl SessionBackend for XcapOpenH264SessionBackend {
             .as_ref()
             .ok_or_else(|| internal("xcap poll has no media contract"))?;
         let submitted_at_ms = now_ms();
-        let captured = capture_exact_target(&contract.target)?;
+        let process_identity_provider = self
+            .process_identity_provider
+            .as_ref()
+            .ok_or_else(|| internal("xcap poll has no process identity provider"))?;
+        let captured = capture_exact_target(process_identity_provider, &contract.target)?;
         self.capture_frames = self.capture_frames.saturating_add(1);
         let rgb = resize_rgba_to_rgb(
             &captured.rgba,
@@ -254,6 +268,7 @@ impl SessionBackend for XcapOpenH264SessionBackend {
         self.next_frame_at = None;
         self.encoder.take();
         self.contract.take();
+        self.process_identity_provider.take();
         Ok(())
     }
 }
@@ -299,11 +314,14 @@ fn platform_capture_backend() -> CaptureBackend {
     CaptureBackend::WindowsGraphicsCapture
 }
 
-fn capture_exact_target(target: &NativeTargetPlan) -> Result<CapturedRgba, BackendFailure> {
+fn capture_exact_target(
+    process_identity_provider: &PlatformWindowProcessIdentityProvider,
+    target: &NativeTargetPlan,
+) -> Result<CapturedRgba, BackendFailure> {
     match target.kind {
         TargetKind::Display => capture_display(target),
-        TargetKind::Window => capture_window(target),
-        TargetKind::Application => capture_application(target),
+        TargetKind::Window => capture_window(process_identity_provider, target),
+        TargetKind::Application => capture_application(process_identity_provider, target),
     }
 }
 
@@ -322,7 +340,10 @@ fn capture_display(target: &NativeTargetPlan) -> Result<CapturedRgba, BackendFai
     rgba_image(image)
 }
 
-fn capture_window(target: &NativeTargetPlan) -> Result<CapturedRgba, BackendFailure> {
+fn capture_window(
+    process_identity_provider: &PlatformWindowProcessIdentityProvider,
+    target: &NativeTargetPlan,
+) -> Result<CapturedRgba, BackendFailure> {
     let expected_id = target
         .window_id
         .ok_or_else(|| internal("window target lost its exact id"))?;
@@ -330,42 +351,60 @@ fn capture_window(target: &NativeTargetPlan) -> Result<CapturedRgba, BackendFail
         .pid
         .and_then(|pid| u32::try_from(pid).ok())
         .ok_or_else(|| internal("window target lost its owner pid"))?;
-    verify_process_instance(expected_pid, target.process_instance_id.as_deref())?;
-    let window = exact_window(expected_id, expected_pid)?;
-    verify_window_identity(&window, target, None)?;
+    verify_process_instance(
+        process_identity_provider,
+        expected_pid,
+        target.process_instance_id.as_deref(),
+    )?;
+    let window = exact_window(
+        process_identity_provider,
+        expected_id,
+        expected_pid,
+        target.process_instance_id.as_deref(),
+    )?;
+    verify_window_identity(process_identity_provider, &window, target, None)?;
     let image = window.capture_image().map_err(capture_unavailable)?;
-    verify_process_instance(expected_pid, target.process_instance_id.as_deref())?;
+    verify_process_instance(
+        process_identity_provider,
+        expected_pid,
+        target.process_instance_id.as_deref(),
+    )?;
     rgba_image(image)
 }
 
-fn capture_application(target: &NativeTargetPlan) -> Result<CapturedRgba, BackendFailure> {
+fn capture_application(
+    process_identity_provider: &PlatformWindowProcessIdentityProvider,
+    target: &NativeTargetPlan,
+) -> Result<CapturedRgba, BackendFailure> {
     let application = target
         .application
         .as_ref()
         .ok_or_else(|| internal("application target lost its window-set proof"))?;
     let pid = u32::try_from(application.primary_pid)
         .map_err(|_| internal("application target has an invalid pid"))?;
-    verify_process_instance(pid, application.process_instance_id.as_deref())?;
+    let expected_process_instance_id = application.process_instance_id.as_deref();
+    verify_process_instance(process_identity_provider, pid, expected_process_instance_id)?;
     let windows = xcap::Window::all().map_err(capture_unavailable)?;
-    let expected_identity = target
-        .app_identity
-        .as_deref()
-        .or(application.bundle_id.as_deref());
     let mut actual_front_to_back = Vec::new();
     for window in &windows {
-        if window.pid().ok() != Some(pid)
-            || window.width().ok().is_none_or(|width| width == 0)
-            || window.height().ok().is_none_or(|height| height == 0)
-        {
+        let Ok(window_id) = window.id().map(u64::from) else {
+            continue;
+        };
+        if !xcap_surface_eligible(window)? {
             continue;
         }
-        if let Some(expected) = expected_identity {
-            let actual = window.app_name().map_err(capture_unavailable)?;
-            if !actual.eq_ignore_ascii_case(expected) {
-                continue;
-            }
+        let Some(instance) = process_identity_provider
+            .resolve_window(window_id)
+            .map_err(|error| {
+                target_invalidated(format!("resolve window {window_id} owner: {error}"))
+            })?
+        else {
+            continue;
+        };
+        if instance.pid() != pid || expected_process_instance_id != Some(instance.stable_id()) {
+            continue;
         }
-        actual_front_to_back.push(u64::from(window.id().map_err(capture_unavailable)?));
+        actual_front_to_back.push(window_id);
     }
     let mut actual_membership = actual_front_to_back.clone();
     actual_membership.sort_unstable();
@@ -400,7 +439,7 @@ fn capture_application(target: &NativeTargetPlan) -> Result<CapturedRgba, Backen
                 surface.window_id
             ))
         })?;
-        verify_window_identity(window, target, Some(surface))?;
+        verify_window_identity(process_identity_provider, window, target, Some(surface))?;
         let image = window.capture_image().map_err(capture_unavailable)?;
         if image.width() != surface.width || image.height() != surface.height {
             return Err(target_invalidated(format!(
@@ -414,21 +453,37 @@ fn capture_application(target: &NativeTargetPlan) -> Result<CapturedRgba, Backen
         }
         captured.insert(surface.window_id, image);
     }
-    verify_process_instance(pid, application.process_instance_id.as_deref())?;
+    verify_process_instance(process_identity_provider, pid, expected_process_instance_id)?;
     compose_application(&application.front_to_back_surfaces, &captured)
 }
 
-fn exact_window(id: u64, pid: u32) -> Result<xcap::Window, BackendFailure> {
-    xcap::Window::all()
+fn exact_window(
+    process_identity_provider: &PlatformWindowProcessIdentityProvider,
+    id: u64,
+    pid: u32,
+    expected_process_instance_id: Option<&str>,
+) -> Result<xcap::Window, BackendFailure> {
+    let window = xcap::Window::all()
         .map_err(capture_unavailable)?
         .into_iter()
-        .find(|window| {
-            window.id().ok().map(u64::from) == Some(id) && window.pid().ok() == Some(pid)
-        })
-        .ok_or_else(|| target_invalidated(format!("xcap window {id} for pid {pid} is gone")))
+        .find(|window| window.id().ok().map(u64::from) == Some(id))
+        .ok_or_else(|| target_invalidated(format!("xcap window {id} is gone")))?;
+    verify_window_process_instance(
+        process_identity_provider,
+        id,
+        pid,
+        expected_process_instance_id,
+    )?;
+    if !xcap_surface_eligible(&window)? {
+        return Err(target_invalidated(format!(
+            "xcap window {id} is no longer capture eligible"
+        )));
+    }
+    Ok(window)
 }
 
 fn verify_window_identity(
+    process_identity_provider: &PlatformWindowProcessIdentityProvider,
     window: &xcap::Window,
     target: &NativeTargetPlan,
     surface: Option<&ApplicationSurface>,
@@ -437,16 +492,17 @@ fn verify_window_identity(
         .pid
         .and_then(|pid| u32::try_from(pid).ok())
         .ok_or_else(|| internal("target owner pid is invalid"))?;
-    if window.pid().ok() != Some(expected_pid) {
-        return Err(target_invalidated("xcap window owner pid changed"));
-    }
-    if let Some(expected) = target.app_identity.as_deref() {
-        let actual = window.app_name().map_err(capture_unavailable)?;
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(target_invalidated(format!(
-                "xcap application identity changed from {expected:?} to {actual:?}"
-            )));
-        }
+    let window_id = window.id().map(u64::from).map_err(capture_unavailable)?;
+    verify_window_process_instance(
+        process_identity_provider,
+        window_id,
+        expected_pid,
+        target.process_instance_id.as_deref(),
+    )?;
+    if !xcap_surface_eligible(window)? {
+        return Err(target_invalidated(format!(
+            "xcap window {window_id} is no longer capture eligible"
+        )));
     }
     if let Some(surface) = surface {
         let actual = (
@@ -464,6 +520,36 @@ fn verify_window_identity(
         }
     }
     Ok(())
+}
+
+fn verify_window_process_instance(
+    process_identity_provider: &PlatformWindowProcessIdentityProvider,
+    window_id: u64,
+    expected_pid: u32,
+    expected_process_instance_id: Option<&str>,
+) -> Result<(), BackendFailure> {
+    let expected_process_instance_id = expected_process_instance_id.ok_or_else(|| {
+        target_invalidated("window/application target lacks process-instance identity")
+    })?;
+    let observed = process_identity_provider
+        .resolve_window(window_id)
+        .map_err(|error| target_invalidated(format!("resolve window {window_id} owner: {error}")))?
+        .ok_or_else(|| target_invalidated(format!("window {window_id} has no native owner")))?;
+    if observed.pid() != expected_pid || observed.stable_id() != expected_process_instance_id {
+        return Err(target_invalidated(format!(
+            "window {window_id} process instance changed: expected pid={expected_pid} instance={expected_process_instance_id:?}, observed pid={} instance={:?}",
+            observed.pid(),
+            observed.stable_id()
+        )));
+    }
+    Ok(())
+}
+
+fn xcap_surface_eligible(window: &xcap::Window) -> Result<bool, BackendFailure> {
+    let width = window.width().map_err(capture_unavailable)?;
+    let height = window.height().map_err(capture_unavailable)?;
+    let minimized = window.is_minimized().map_err(capture_unavailable)?;
+    Ok(CaptureEligibleSurface::xcap(width, height, minimized).is_eligible())
 }
 
 fn compose_application(
@@ -651,81 +737,18 @@ fn inspect_annex_b(payload: &[u8]) -> (bool, bool) {
     (has_idr, has_sps && has_pps)
 }
 
-#[cfg(target_os = "linux")]
-fn verify_process_instance(pid: u32, expected: Option<&str>) -> Result<(), BackendFailure> {
+fn verify_process_instance(
+    process_identity_provider: &PlatformWindowProcessIdentityProvider,
+    pid: u32,
+    expected: Option<&str>,
+) -> Result<(), BackendFailure> {
     let expected = expected.ok_or_else(|| {
-        target_invalidated("Linux window/application target lacks process-instance identity")
+        target_invalidated("window/application target lacks process-instance identity")
     })?;
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map_err(|error| target_invalidated(format!("read /proc/{pid}/stat: {error}")))?;
-    let end = stat
-        .rfind(')')
-        .ok_or_else(|| target_invalidated("Linux process stat has no command terminator"))?;
-    let start_ticks = stat[end + 1..]
-        .split_whitespace()
-        .nth(19)
-        .ok_or_else(|| target_invalidated("Linux process stat has no starttime"))?
-        .parse::<u64>()
-        .map_err(|error| target_invalidated(format!("parse Linux starttime: {error}")))?;
-    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
-        .map_err(|error| target_invalidated(format!("read Linux boot id: {error}")))?;
-    let observed = format!("linux:{}:{pid}:{start_ticks}", boot_id.trim());
-    if observed != expected {
-        return Err(target_invalidated(format!(
-            "Linux process instance changed: expected {expected:?}, observed {observed:?}"
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn verify_process_instance(pid: u32, expected: Option<&str>) -> Result<(), BackendFailure> {
-    let expected = expected.ok_or_else(|| {
-        target_invalidated("Windows window/application target lacks process-instance identity")
-    })?;
-    let observed = windows_process_instance_id(pid)?;
-    if observed != expected {
-        return Err(target_invalidated(format!(
-            "Windows process instance changed: expected {expected:?}, observed {observed:?}"
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn windows_process_instance_id(pid: u32) -> Result<String, BackendFailure> {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
-    use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return Err(target_invalidated(format!(
-            "open Windows process {pid} for creation-time proof: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    let mut created = FILETIME::default();
-    let mut exited = FILETIME::default();
-    let mut kernel = FILETIME::default();
-    let mut user = FILETIME::default();
-    let succeeded =
-        unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
-    unsafe { CloseHandle(process) };
-    if succeeded == 0 {
-        return Err(target_invalidated(format!(
-            "read Windows process {pid} creation time: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    let ticks = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
-    if ticks == 0 {
-        return Err(target_invalidated(format!(
-            "Windows process {pid} returned a zero creation time"
-        )));
-    }
-    Ok(format!("windows:{pid}:{ticks}"))
+    let observed = process_identity_provider
+        .resolve_process(pid)
+        .map_err(|error| target_invalidated(format!("resolve process {pid} identity: {error}")))?;
+    observed.verify(expected).map_err(target_invalidated)
 }
 
 fn capture_unavailable(error: impl std::fmt::Display) -> BackendFailure {

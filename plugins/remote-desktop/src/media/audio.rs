@@ -21,42 +21,59 @@
 // - RemoteDesktop plugin media codec layer, shared by macOS ScreenCaptureKit
 //   and Windows/Linux host-audio adapters.
 
+#[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration;
 
+#[cfg(test)]
 use opus::{Application, Bitrate, Channels, Encoder};
 
 pub(crate) const REMOTEAPP_AUDIO_SAMPLE_RATE_HZ: u32 = 48_000;
 pub(crate) const REMOTEAPP_AUDIO_CHANNELS: usize = 2;
 pub(crate) const REMOTEAPP_AUDIO_CODEC: &str = "opus";
 pub(crate) const REMOTEAPP_AUDIO_PAYLOAD_CONTENT_TYPE: &str = "audio/opus";
+// The in-process capture/encode pipeline below is superseded by the
+// remoteapp media host for every production media profile; only the
+// webrtc_audio pipeline tests still exercise it.
+#[cfg(test)]
 pub(crate) const REMOTEAPP_AUDIO_FRAME_DURATION_MS: u64 = 20;
+#[cfg(test)]
 pub(crate) const REMOTEAPP_AUDIO_SAMPLES_PER_CHANNEL: usize =
     REMOTEAPP_AUDIO_SAMPLE_RATE_HZ as usize * REMOTEAPP_AUDIO_FRAME_DURATION_MS as usize / 1_000;
+#[cfg(test)]
 pub(crate) const REMOTEAPP_AUDIO_INTERLEAVED_SAMPLES: usize =
     REMOTEAPP_AUDIO_SAMPLES_PER_CHANNEL * REMOTEAPP_AUDIO_CHANNELS;
+#[cfg(test)]
 const MAX_OPUS_PACKET_BYTES: usize = 1_275;
+#[cfg(test)]
 const REMOTEAPP_AUDIO_BITRATE_BPS: i32 = 128_000;
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct CapturedAudioChunk {
     pub(crate) samples: Vec<f32>,
 }
 
+#[cfg(test)]
 pub(crate) type AudioCaptureEvent = Result<CapturedAudioChunk, String>;
+#[cfg(test)]
 pub(crate) type AudioSink = Arc<dyn Fn(AudioCaptureEvent) + Send + Sync>;
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct EncodedOpusPacket {
     pub(crate) payload: Vec<u8>,
     pub(crate) duration: Duration,
 }
 
+#[cfg(test)]
 pub(crate) struct RemoteAppOpusEncoder {
     encoder: Encoder,
     pending_samples: Vec<f32>,
 }
 
+#[cfg(test)]
 impl RemoteAppOpusEncoder {
     pub(crate) fn new() -> anyhow::Result<Self> {
         let mut encoder = Encoder::new(

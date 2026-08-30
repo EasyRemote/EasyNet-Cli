@@ -1,6 +1,6 @@
 [package]
 name = "easynet-remoteapp-native-protocol"
-version = "0.139.14"
+version = "0.148.60"
 edition = "2021"
 publish = false
 description = "Private bounded IPC contract shared by the EasyNet RemoteApp daemon client and native host."

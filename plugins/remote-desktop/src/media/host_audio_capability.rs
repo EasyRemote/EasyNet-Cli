@@ -57,6 +57,13 @@ const HOST_AUDIO_SUPERVISOR_SHUTDOWN_DEADLINE: Duration = Duration::from_millis(
 
 pub(in crate::daemon::plugins::remote_desktop) const REASON_HOST_AUDIO_PROBE_PENDING: &str =
     "host_audio_runtime_probe_pending";
+#[cfg(any(
+    test,
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "windows")
+    ))
+))]
 pub(in crate::daemon::plugins::remote_desktop) const REASON_HOST_AUDIO_SNAPSHOT_EXPIRED: &str =
     "host_audio_runtime_snapshot_expired";
 pub(in crate::daemon::plugins::remote_desktop) const REASON_HOST_AUDIO_PROBE_TIMEOUT: &str =
@@ -73,15 +80,6 @@ pub(in crate::daemon::plugins::remote_desktop) const REASON_ACTIVE_MEDIA_SESSION
 const REASON_HOST_AUDIO_SUPERVISOR_SHUTDOWN_TIMEOUT: &str =
     "host_audio_runtime_supervisor_shutdown_timed_out";
 const REASON_HOST_AUDIO_NATIVE_PROCESS_FAILED: &str = "host_audio_native_process_failed";
-#[cfg(all(
-    not(target_os = "macos"),
-    not(all(
-        feature = "native-media",
-        any(target_os = "windows", target_os = "linux")
-    ))
-))]
-pub(in crate::daemon::plugins::remote_desktop) const REASON_NATIVE_MEDIA_DISABLED: &str =
-    "native_media_disabled";
 #[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) const REASON_PIPEWIRE_RUNTIME_UNAVAILABLE: &str =
     "pipewire_runtime_unavailable";
@@ -146,10 +144,27 @@ impl HostAudioSourceReadiness {
         }
     }
 
+    // The readiness/admission accessors below serve the host-audio offer
+    // paths, which Linux/Windows native builds route through the media host
+    // instead.
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) const fn is_ready(&self) -> bool {
         self.ready
     }
 
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn blocker(&self) -> Option<&str> {
         self.blocker.as_deref()
     }
@@ -254,10 +269,24 @@ impl HostAudioRuntimeSnapshot {
         self.expires_at_ms
     }
 
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) const fn compiled_supported(&self) -> bool {
         self.compiled_supported
     }
 
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) const fn runtime_reachable(&self) -> bool {
         self.runtime_reachable
     }
@@ -272,10 +301,24 @@ impl HostAudioRuntimeSnapshot {
         self.expires_at_ms = self.observed_at_ms;
     }
 
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn runtime_blocker(&self) -> Option<&str> {
         self.runtime_blocker.as_deref()
     }
 
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn source(
         &self,
         source: HostAudioSourceClass,
@@ -286,6 +329,13 @@ impl HostAudioRuntimeSnapshot {
         }
     }
 
+    #[cfg(any(
+        test,
+        not(all(
+            feature = "native-media",
+            any(target_os = "linux", target_os = "windows")
+        ))
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn admission_blocker(
         &self,
         source: HostAudioSourceClass,

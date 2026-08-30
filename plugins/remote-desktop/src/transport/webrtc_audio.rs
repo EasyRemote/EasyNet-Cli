@@ -22,23 +22,32 @@
 // Architectural Position:
 // - RemoteDesktop plugin transport strategy shared by every host-audio adapter.
 
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
+#[cfg(test)]
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
+#[cfg(test)]
 use webrtc::media_stream::Track;
 
+#[cfg(test)]
 use crate::daemon::plugins::remote_desktop::media::audio::{
     AudioCaptureEvent, AudioSink, CapturedAudioChunk, RemoteAppOpusEncoder,
+};
+use crate::daemon::plugins::remote_desktop::media::audio::{
     REMOTEAPP_AUDIO_CHANNELS, REMOTEAPP_AUDIO_CODEC, REMOTEAPP_AUDIO_PAYLOAD_CONTENT_TYPE,
     REMOTEAPP_AUDIO_SAMPLE_RATE_HZ,
 };
+#[cfg(test)]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_encoded_audio::{
     BoundedPendingWrites, EncodedAudioPacket, EncodedAudioWriter, EncodedAudioWriterSnapshot,
     ENCODED_AUDIO_QUEUE_DEPTH,
 };
 
+#[cfg(test)]
 pub(super) const AUDIO_CAPTURE_QUEUE_DEPTH: usize = 4;
 
 #[derive(Debug, Clone)]
@@ -67,6 +76,7 @@ impl RemoteAppAudioStats {
     /// Return the first non-recoverable failure for an accepted audio track.
     /// A non-negotiated track may carry a diagnostic blocker, but it is not a
     /// failure of the active media contract.
+    #[cfg(test)]
     pub(super) fn terminal_failure(&self) -> Option<&str> {
         self.negotiated.then_some(())?;
         self.blocker.as_deref()
@@ -203,6 +213,9 @@ impl RemoteAppAudioStats {
     }
 }
 
+// In-process audio pipeline, superseded by the remoteapp media host for all
+// production media profiles; retained for the webrtc_audio pipeline tests.
+#[cfg(test)]
 pub(super) struct RemoteAppAudioPipeline {
     track: Arc<TrackLocalStaticSample>,
     ssrc: u32,
@@ -217,6 +230,7 @@ pub(super) struct RemoteAppAudioPipeline {
     capture_source: Option<&'static str>,
 }
 
+#[cfg(test)]
 impl RemoteAppAudioPipeline {
     pub(super) async fn new(
         track: &Arc<TrackLocalStaticSample>,

@@ -10,6 +10,7 @@ MEDIA_HOST_MAC_MULTIAPP="$ROOT/plugins/remote-desktop/media-host/src/macos_multi
 MEDIA_SESSION_PROTOCOL="$ROOT/plugins/remote-desktop/native-protocol/src/media_session.rs"
 MEDIA="$REMOTE_ROOT/media/mod.rs"
 TARGET_DOMAIN="$REMOTE_ROOT/target.rs"
+TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
 SESSION="$REMOTE_ROOT/session.rs"
 SESSION_IDENTITY="$REMOTE_ROOT/session_identity.rs"
 MEDIA_SOURCE_FACTORY="$REMOTE_ROOT/transport/media_source.rs"
@@ -57,7 +58,7 @@ reject() {
 
 [[ -d "$REMOTE_ROOT" ]] || fail "missing remote desktop source root"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
-for source in "$MEDIA_HOST_PROBE" "$MEDIA_HOST_MAC_SCK" "$MEDIA_HOST_MAC_MULTIAPP" "$MEDIA_SESSION_PROTOCOL" "$WEBRTC_HOSTED"; do
+for source in "$MEDIA_HOST_PROBE" "$MEDIA_HOST_MAC_SCK" "$MEDIA_HOST_MAC_MULTIAPP" "$MEDIA_SESSION_PROTOCOL" "$WEBRTC_HOSTED" "$TARGET_OBSERVER"; do
   [[ -f "$source" ]] || fail "missing canonical hosted-media source ${source#"$ROOT/"}"
 done
 for obsolete in \
@@ -208,9 +209,12 @@ reject 'exceptingWindows' "$MEDIA_HOST_MAC_SCK" \
 require 'fn contains_window_id\(' \
   "$TARGET_DOMAIN" \
   'AppWindowSetProof must expose a read-only committed-window membership helper'
-require 'fn missing_window_ids\(' \
-  "$TARGET_DOMAIN" \
-  'AppWindowSetProof must expose committed-window disappearance evidence'
+require_multiline '/&current_window_set != committed_window_set[\s\S]*TargetObservation::ApplicationSurfaceChanged/s' \
+  "$TARGET_OBSERVER" \
+  'application observation must turn any committed window-set drift into a rebind event'
+require 'application_observer_reports_committed_window_set_drift_as_rebind' \
+  "$TARGET_OBSERVER" \
+  'application observer tests must cover both committed-window expansion and disappearance'
 require 'struct AppSurfaceLayoutProof\b' \
   "$TARGET_DOMAIN" \
   'application composition must commit an ordered surface-layout proof distinct from window identity'

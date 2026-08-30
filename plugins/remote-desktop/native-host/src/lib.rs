@@ -11,6 +11,11 @@ use std::io::{self, Read};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
+use easynet_remoteapp_native_platform::PlatformWindowProcessIdentityProvider;
 #[cfg(unix)]
 use easynet_remoteapp_native_protocol::PARENT_LIVENESS_FD_ENV;
 use easynet_remoteapp_native_protocol::{
@@ -140,8 +145,8 @@ fn sample_xcap_target_observations() -> anyhow::Result<TargetObservationSample> 
 
     use easynet_remoteapp_native_protocol::{Geometry, ObservedWindow, VisibilityState};
 
-    #[cfg(target_os = "linux")]
-    let x11_owner_resolver = linux::LinuxX11WindowOwnerResolver::connect().ok();
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let process_identity_provider = PlatformWindowProcessIdentityProvider::connect()?;
     let windows = xcap::Window::all()
         .map_err(|error| anyhow::anyhow!("xcap Window::all failed: {error}"))?
         .into_iter()
@@ -152,49 +157,29 @@ fn sample_xcap_target_observations() -> anyhow::Result<TargetObservationSample> 
             if window_id == 0 || width == 0 || height == 0 {
                 return None;
             }
-            let pid = {
-                #[cfg(target_os = "linux")]
-                {
-                    x11_owner_resolver
-                        .as_ref()
-                        .and_then(|resolver| {
-                            resolver
-                                .resolve_local_client_pid(window_id as u32)
-                                .ok()
-                                .flatten()
-                        })
-                        .or_else(|| window.pid().ok())
-                        .map(i64::from)
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    window.pid().ok().map(i64::from)
-                }
-            };
-            #[cfg(target_os = "linux")]
-            let process_instance_id = pid.and_then(|pid| {
-                u32::try_from(pid)
-                    .ok()
-                    .and_then(|pid| linux::LinuxProcessInstance::resolve(pid).ok())
-                    .map(|instance| instance.stable_id())
-            });
-            #[cfg(target_os = "windows")]
-            let process_instance_id = pid.and_then(|pid| {
-                u32::try_from(pid)
-                    .ok()
-                    .and_then(|pid| windows_process_instance_id(pid).ok())
-            });
-            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            let process_instance = process_identity_provider
+                .resolve_window(window_id)
+                .ok()
+                .flatten()?;
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            let pid = Some(i64::from(process_instance.pid()));
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            let process_instance_id = Some(process_instance.stable_id().to_string());
+            #[cfg(target_os = "macos")]
+            let pid = window.pid().ok().map(i64::from);
+            #[cfg(target_os = "macos")]
+            let process_instance_id = None;
+            #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+            let pid = window.pid().ok().map(i64::from);
+            #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
             let process_instance_id = None;
             #[cfg(target_os = "macos")]
             let bundle_id = pid
                 .and_then(|pid| u32::try_from(pid).ok())
                 .and_then(bundle_id_for_pid);
             #[cfg(not(target_os = "macos"))]
-            let bundle_id = window
-                .app_name()
-                .ok()
-                .filter(|name| !name.trim().is_empty());
+            let bundle_id = None;
             #[cfg(target_os = "macos")]
             let display_id = window
                 .current_monitor()
@@ -233,41 +218,6 @@ fn sample_xcap_target_observations() -> anyhow::Result<TargetObservationSample> 
     Ok(TargetObservationSample::host_snapshot(windows, display_ids))
 }
 
-#[cfg(all(feature = "native-media", target_os = "windows"))]
-fn windows_process_instance_id(pid: u32) -> anyhow::Result<String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
-    use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return Err(anyhow::anyhow!(
-            "open Windows process {pid} for creation-time proof: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    let mut created = FILETIME::default();
-    let mut exited = FILETIME::default();
-    let mut kernel = FILETIME::default();
-    let mut user = FILETIME::default();
-    let succeeded =
-        unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
-    unsafe { CloseHandle(process) };
-    if succeeded == 0 {
-        return Err(anyhow::anyhow!(
-            "read Windows process {pid} creation time: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    let ticks = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
-    anyhow::ensure!(
-        ticks != 0,
-        "Windows process {pid} returned a zero creation time"
-    );
-    Ok(format!("windows:{pid}:{ticks}"))
-}
-
 #[cfg(all(target_os = "macos", feature = "native-media"))]
 fn screen_capture_permission_granted() -> bool {
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -286,102 +236,4 @@ fn bundle_id_for_pid(pid: u32) -> Option<String> {
         .map(|bundle_id| bundle_id.to_string())
         .map(|bundle_id| bundle_id.trim().to_string())
         .filter(|bundle_id| !bundle_id.is_empty())
-}
-
-#[cfg(all(target_os = "linux", feature = "native-media"))]
-mod linux {
-    use xcb::res;
-
-    pub(super) struct LinuxProcessInstance {
-        pid: u32,
-        start_ticks: u64,
-        boot_id: String,
-    }
-
-    impl LinuxProcessInstance {
-        pub(super) fn resolve(pid: u32) -> anyhow::Result<Self> {
-            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .map_err(|error| anyhow::anyhow!("read /proc/{pid}/stat: {error}"))?;
-            let start_ticks = parse_linux_process_start_ticks(&stat)?;
-            let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
-                .map_err(|error| anyhow::anyhow!("read Linux boot id: {error}"))?
-                .trim()
-                .to_string();
-            anyhow::ensure!(!boot_id.is_empty(), "Linux boot id is empty");
-            Ok(Self {
-                pid,
-                start_ticks,
-                boot_id,
-            })
-        }
-
-        pub(super) fn stable_id(&self) -> String {
-            format!("linux:{}:{}:{}", self.boot_id, self.pid, self.start_ticks)
-        }
-    }
-
-    fn parse_linux_process_start_ticks(stat: &str) -> anyhow::Result<u64> {
-        let command_end = stat
-            .rfind(')')
-            .ok_or_else(|| anyhow::anyhow!("Linux process stat is missing command terminator"))?;
-        let fields = stat[command_end + 1..]
-            .split_whitespace()
-            .collect::<Vec<_>>();
-        let start_ticks = fields
-            .get(19)
-            .ok_or_else(|| anyhow::anyhow!("Linux process stat is missing starttime field"))?
-            .parse::<u64>()
-            .map_err(|error| anyhow::anyhow!("parse Linux process starttime: {error}"))?;
-        anyhow::ensure!(start_ticks > 0, "Linux process starttime must be positive");
-        Ok(start_ticks)
-    }
-
-    pub(super) struct LinuxX11WindowOwnerResolver {
-        connection: xcb::Connection,
-    }
-
-    impl LinuxX11WindowOwnerResolver {
-        pub(super) fn connect() -> anyhow::Result<Self> {
-            let (connection, _) =
-                xcb::Connection::connect_with_extensions(None, &[xcb::Extension::Res], &[])
-                    .map_err(|error| {
-                        anyhow::anyhow!("connect to X server with X-Resource: {error}")
-                    })?;
-            let version = connection
-                .wait_for_reply(connection.send_request(&res::QueryVersion {
-                    client_major: 1,
-                    client_minor: 2,
-                }))
-                .map_err(|error| anyhow::anyhow!("query X-Resource version: {error}"))?;
-            if (version.server_major(), version.server_minor()) < (1, 2) {
-                anyhow::bail!("X-Resource 1.2 is required for local client PID resolution");
-            }
-            Ok(Self { connection })
-        }
-
-        pub(super) fn resolve_local_client_pid(
-            &self,
-            window_id: u32,
-        ) -> anyhow::Result<Option<u32>> {
-            let specs = [res::ClientIdSpec {
-                client: window_id,
-                mask: res::ClientIdMask::LOCAL_CLIENT_PID,
-            }];
-            let reply = self
-                .connection
-                .wait_for_reply(
-                    self.connection
-                        .send_request(&res::QueryClientIds { specs: &specs }),
-                )
-                .map_err(|error| anyhow::anyhow!("query X-Resource PID: {error}"))?;
-            Ok(reply.ids().find_map(|client_id| {
-                client_id
-                    .spec()
-                    .mask
-                    .contains(res::ClientIdMask::LOCAL_CLIENT_PID)
-                    .then(|| client_id.value().first().copied())
-                    .flatten()
-            }))
-        }
-    }
 }

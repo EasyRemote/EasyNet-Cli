@@ -1,6 +1,6 @@
 [package]
 name = "easynet-remoteapp-media-host"
-version = "0.139.14"
+version = "0.148.60"
 edition = "2021"
 publish = false
 description = "Private killable native media process for EasyNet RemoteApp."
@@ -27,6 +27,7 @@ path = "src/main.rs"
 anyhow = "1"
 base64 = "0.22"
 easynet-remoteapp-native-protocol = { path = "../native-protocol" }
+easynet-remoteapp-native-platform = { path = "../native-platform" }
 sha2 = "0.10"
 
 [dev-dependencies]
@@ -45,7 +46,6 @@ xcap = { version = "0.9", optional = true }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Console",
-    "Win32_System_Threading",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

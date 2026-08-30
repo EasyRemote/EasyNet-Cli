@@ -7,7 +7,13 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(any(test, not(all(feature = "native-media", target_os = "linux"))))]
+#[cfg(any(
+    test,
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
 use bytes::Bytes;
 use openh264::encoder::{
     BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod,
@@ -19,7 +25,13 @@ use serde_json::json;
 #[cfg(feature = "native-media")]
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use tokio::sync::{mpsc, watch};
-#[cfg(any(test, not(all(feature = "native-media", target_os = "linux"))))]
+#[cfg(any(
+    test,
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
 #[cfg(feature = "native-media")]
@@ -602,7 +614,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn even_rgb_frame(
     }
 }
 
-#[cfg(any(test, not(all(feature = "native-media", target_os = "linux"))))]
+#[cfg(any(
+    test,
+    not(all(
+        feature = "native-media",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))
+))]
 pub(in crate::daemon::plugins::remote_desktop) async fn write_h264_sample(
     track: &TrackLocalStaticSample,
     ssrc: u32,

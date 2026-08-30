@@ -11,7 +11,11 @@ use std::sync::{Mutex, OnceLock};
 use libloading::Library;
 
 #[cfg(feature = "native-media")]
-use xcb::{res, x, xtest, Extension, Xid, XidNew};
+use easynet_remoteapp_native_platform::{
+    require_xres_1_2, resolve_x11_local_client_pid, ProcessInstance,
+};
+#[cfg(feature = "native-media")]
+use xcb::{x, xtest, Extension, Xid, XidNew};
 
 use super::keyboard::PhysicalKey;
 use super::wheel::x11_detent_steps;
@@ -167,6 +171,7 @@ struct X11TargetInputExecutor {
     root: x::Window,
     keymap_display: *mut c_void,
     x_close_display: XCloseDisplay,
+    #[cfg_attr(not(feature = "native-media"), allow(dead_code))]
     x_keysym_to_keycode: XKeysymToKeycode,
     _x11: Library,
 }
@@ -175,6 +180,11 @@ struct X11TargetInputExecutor {
 unsafe impl Send for X11TargetInputExecutor {}
 
 impl X11TargetInputExecutor {
+    // Without native-media the connect sequence still runs the environment
+    // checks (Wayland/DISPLAY/libX11) so their errors surface first, then
+    // fails closed before constructing the executor; the tail is unreachable
+    // there by design.
+    #[cfg_attr(not(feature = "native-media"), allow(unreachable_code))]
     fn connect() -> Result<Self, &'static str> {
         // DISPLAY may point at XWayland, but the selected Resource currently
         // carries no proof that it belongs to an XWayland client. Injecting
@@ -192,6 +202,7 @@ impl X11TargetInputExecutor {
         let x_init_threads: XInitThreads = unsafe { load_symbol(&x11, b"XInitThreads\0")? };
         let x_open_display: XOpenDisplay = unsafe { load_symbol(&x11, b"XOpenDisplay\0")? };
         let x_close_display: XCloseDisplay = unsafe { load_symbol(&x11, b"XCloseDisplay\0")? };
+        #[cfg_attr(not(feature = "native-media"), allow(unused_variables))]
         let x_keysym_to_keycode: XKeysymToKeycode =
             unsafe { load_symbol(&x11, b"XKeysymToKeycode\0")? };
 
@@ -228,12 +239,7 @@ impl X11TargetInputExecutor {
             }))
             .map_err(|_| "linux_xtest_extension_unavailable")?;
         #[cfg(feature = "native-media")]
-        connection
-            .wait_for_reply(connection.send_request(&res::QueryVersion {
-                client_major: 1,
-                client_minor: 2,
-            }))
-            .map_err(|_| "linux_xres_extension_unavailable")?;
+        require_xres_1_2(&connection).map_err(|_| "linux_xres_extension_unavailable")?;
 
         Ok(Self {
             #[cfg(feature = "native-media")]
@@ -353,9 +359,10 @@ impl X11TargetInputExecutor {
         let expected_process_instance_id = proof
             .expected_process_instance_id()
             .ok_or("linux_target_process_instance_identity_unavailable")?;
-        let current_process_instance_id = crate::daemon::ability::builtins::resources::media::linux_x11_window_owner::LinuxProcessInstance::resolve(expected_pid)
+        let current_process_instance_id = ProcessInstance::resolve(expected_pid)
             .map_err(|_| "linux_target_process_instance_unavailable")?
-            .stable_id();
+            .stable_id()
+            .to_string();
         if current_process_instance_id != expected_process_instance_id {
             return Err("linux_target_process_instance_identity_mismatch");
         }
@@ -441,25 +448,8 @@ impl X11TargetInputExecutor {
 
     #[cfg(feature = "native-media")]
     fn local_client_pid(&self, window: x::Window) -> Result<Option<u32>, &'static str> {
-        let specs = [res::ClientIdSpec {
-            client: window.resource_id(),
-            mask: res::ClientIdMask::LOCAL_CLIENT_PID,
-        }];
-        let reply = self
-            .connection
-            .wait_for_reply(
-                self.connection
-                    .send_request(&res::QueryClientIds { specs: &specs }),
-            )
-            .map_err(|_| "linux_target_owner_query_failed")?;
-        Ok(reply.ids().find_map(|client_id| {
-            client_id
-                .spec()
-                .mask
-                .contains(res::ClientIdMask::LOCAL_CLIENT_PID)
-                .then(|| client_id.value().first().copied())
-                .flatten()
-        }))
+        resolve_x11_local_client_pid(&self.connection, window.resource_id())
+            .map_err(|_| "linux_target_owner_query_failed")
     }
 
     #[cfg(feature = "native-media")]
@@ -660,6 +650,7 @@ fn apply_wheel(
         })
 }
 
+#[cfg(any(test, feature = "native-media"))]
 fn wheel_buttons(steps: i32, negative_button: u8, positive_button: u8) -> impl Iterator<Item = u8> {
     let button = if steps.is_negative() {
         negative_button

@@ -8,12 +8,15 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 write_fixture() {
   rm -rf "$SANDBOX/plugins" "$SANDBOX/Cargo.toml"
-  mkdir -p "$SANDBOX/plugins/remote-desktop/src/input"
+  mkdir -p \
+    "$SANDBOX/plugins/remote-desktop/src/input" \
+    "$SANDBOX/plugins/remote-desktop/native-platform/src"
   cp "$REPO_ROOT/Cargo.toml" "$SANDBOX/Cargo.toml"
   cp "$REPO_ROOT/plugins/remote-desktop/plugin.toml" "$SANDBOX/plugins/remote-desktop/plugin.toml"
   cp "$REPO_ROOT/plugins/remote-desktop/src/input.rs" "$SANDBOX/plugins/remote-desktop/src/input.rs"
   cp "$REPO_ROOT/plugins/remote-desktop/src/input/windows.rs" "$SANDBOX/plugins/remote-desktop/src/input/windows.rs"
   cp "$REPO_ROOT/plugins/remote-desktop/src/input/linux.rs" "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+  cp "$REPO_ROOT/plugins/remote-desktop/native-platform/src/lib.rs" "$SANDBOX/plugins/remote-desktop/native-platform/src/lib.rs"
   cp "$REPO_ROOT/plugins/remote-desktop/src/input/wheel.rs" "$SANDBOX/plugins/remote-desktop/src/input/wheel.rs"
   cp "$REPO_ROOT/plugins/remote-desktop/src/view_device.rs" "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 }
@@ -79,8 +82,12 @@ perl -0pi -e 's/X11ServerGrab::begin/X11ServerGrab::assume/g' "$SANDBOX/plugins/
 run_fail 'Linux target-local input must acquire one checked X11 server transaction'
 
 write_fixture
-perl -0pi -e 's/LinuxProcessInstance::resolve/LinuxProcessInstance::from_pid_only/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
-run_fail 'Linux target-local input must reject PID reuse with a boot-scoped process identity'
+perl -0pi -e 's/ProcessInstance::resolve/ProcessInstance::from_pid_only/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"
+run_fail 'Linux target-local input must consume the canonical boot-scoped process identity'
+
+write_fixture
+perl -0pi -e 's/res::QueryClientIds/res::QueryClientsWithoutIdentity/g' "$SANDBOX/plugins/remote-desktop/native-platform/src/lib.rs"
+run_fail 'native platform authority must resolve authoritative X-Resource owner PIDs'
 
 write_fixture
 perl -0pi -e 's/WAYLAND_DISPLAY/WAYLAND_IGNORED/g' "$SANDBOX/plugins/remote-desktop/src/input/linux.rs"

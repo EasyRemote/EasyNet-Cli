@@ -8,6 +8,7 @@
 use std::ffi::{c_char, c_int, c_ulong, c_void};
 use std::sync::OnceLock;
 
+use easynet_remoteapp_native_platform::PlatformWindowProcessIdentityProvider;
 use libloading::Library;
 
 use super::{
@@ -82,7 +83,7 @@ struct XcbFocusConnection {
 }
 
 pub(super) fn request_focus(
-    _binding: &RemoteAppTargetBinding,
+    binding: &RemoteAppTargetBinding,
     _snapshot: &TargetTrackerSnapshot,
     window_id: u64,
 ) -> Result<&'static str, RemoteAppTargetFocusError> {
@@ -104,6 +105,26 @@ pub(super) fn request_focus(
             format!("selected X11 window id {window_id} is out of range"),
         )
     })?;
+    let provider = PlatformWindowProcessIdentityProvider::connect()
+        .map_err(|error| stale(format!("initialize Linux process identity: {error}")))?;
+    let observed = provider
+        .resolve_window(window_id)
+        .map_err(|error| stale(format!("resolve selected X11 window owner: {error}")))?
+        .ok_or_else(|| stale(format!("selected X11 window {window_id} has no XRes owner")))?;
+    let expected_pid = binding
+        .native_locator()
+        .pid()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(|| stale("selected X11 window has no committed owner pid"))?;
+    let expected_process_instance_id = binding
+        .native_locator()
+        .process_instance_id()
+        .ok_or_else(|| stale("selected X11 window has no committed process instance"))?;
+    if observed.pid() != expected_pid || observed.stable_id() != expected_process_instance_id {
+        return Err(stale(format!(
+            "selected X11 window {window_id} changed owner process instance"
+        )));
+    }
     let server_target = X11ServerTarget::discover()?;
     let transport = XcbFocusConnection::connect()?;
 
@@ -263,4 +284,8 @@ unsafe fn load_symbol<T: Copy>(
 
 fn focus_failed(detail: impl Into<String>) -> RemoteAppTargetFocusError {
     RemoteAppTargetFocusError::new(TargetFocusFailureReason::TargetFocusFailed, detail)
+}
+
+fn stale(detail: impl Into<String>) -> RemoteAppTargetFocusError {
+    RemoteAppTargetFocusError::new(TargetFocusFailureReason::TargetFocusStale, detail)
 }

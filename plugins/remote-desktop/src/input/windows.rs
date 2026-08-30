@@ -6,6 +6,8 @@
 
 use std::mem::size_of;
 
+use easynet_remoteapp_native_platform::PlatformWindowProcessIdentityProvider;
+use windows_sys::Win32::Foundation::{HWND, POINT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, VkKeyScanW, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE,
@@ -19,7 +21,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SNAPSHOT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetForegroundWindow, GetSystemMetrics, IsChild, IsIconic, IsWindow, IsWindowVisible,
+    WindowFromPoint, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
 use super::keyboard::PhysicalKey;
@@ -50,12 +53,16 @@ pub(super) fn request_input_injection_permission() -> bool {
 pub(super) fn apply_pointer_frame(
     frame: &PointerInputFrame,
     target: Option<PointerTargetGeometry>,
-    _target_guard: Option<&TargetInputGuardProof>,
+    target_guard: Option<&TargetInputGuardProof>,
 ) -> InputApplyOutcome {
     let Some(desktop) = virtual_desktop() else {
         return InputApplyOutcome::rejected("windows_virtual_desktop_unavailable");
     };
     let point = map_pointer_point(frame, target);
+    let target_guard_validation = match validate_target(target_guard, Some((point.x, point.y))) {
+        Ok(validation) => validation,
+        Err(reason) => return InputApplyOutcome::rejected(reason),
+    };
     let (absolute_x, absolute_y) = desktop.absolute_point(point.x, point.y);
     let movement = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
 
@@ -99,7 +106,7 @@ pub(super) fn apply_pointer_frame(
         }
         _ => return InputApplyOutcome::rejected("unsupported_pointer_action"),
     }
-    send_inputs(&inputs)
+    send_inputs(&inputs).with_target_guard_validation(target_guard_validation)
 }
 
 pub(super) fn release_pointer_button(button: u8) -> InputApplyOutcome {
@@ -111,7 +118,7 @@ pub(super) fn release_pointer_button(button: u8) -> InputApplyOutcome {
 
 pub(super) fn apply_key_frame(
     frame: &KeyInputFrame,
-    _target_guard: Option<&TargetInputGuardProof>,
+    target_guard: Option<&TargetInputGuardProof>,
 ) -> InputApplyOutcome {
     let Some(key) = windows_key(frame) else {
         return InputApplyOutcome::rejected("unsupported_key");
@@ -121,6 +128,10 @@ pub(super) fn apply_key_frame(
         "up" if !frame.repeat => true,
         "up" => return InputApplyOutcome::rejected("invalid_key_repeat"),
         _ => return InputApplyOutcome::rejected("unsupported_key_action"),
+    };
+    let target_guard_validation = match validate_target(target_guard, None) {
+        Ok(validation) => validation,
+        Err(reason) => return InputApplyOutcome::rejected(reason),
     };
     let mut flags = if key_up { KEYEVENTF_KEYUP } else { 0 };
     if key.extended {
@@ -140,7 +151,7 @@ pub(super) fn apply_key_frame(
             },
         },
     };
-    send_inputs(&[input])
+    send_inputs(&[input]).with_target_guard_validation(target_guard_validation)
 }
 
 pub(super) fn release_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
@@ -160,6 +171,82 @@ fn send_inputs(inputs: &[INPUT]) -> InputApplyOutcome {
     } else {
         InputApplyOutcome::rejected(WINDOWS_SEND_INPUT_DENIED)
     }
+}
+
+fn validate_target(
+    proof: Option<&TargetInputGuardProof>,
+    pointer: Option<(f64, f64)>,
+) -> Result<Option<TargetInputGuardProof>, &'static str> {
+    let Some(proof) = proof else {
+        return Ok(None);
+    };
+    let authorized = proof.authorized_window_ids();
+    if authorized.is_empty() || authorized.len() > 32 {
+        return Err("windows_target_window_set_invalid");
+    }
+    let expected_pid = proof
+        .expected_pid()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or("windows_target_owner_identity_unavailable")?;
+    let expected_process_instance_id = proof
+        .expected_process_instance_id()
+        .ok_or("windows_target_process_instance_identity_unavailable")?;
+    let provider = PlatformWindowProcessIdentityProvider::connect()
+        .map_err(|_| "windows_target_process_identity_provider_unavailable")?;
+
+    for window_id in authorized {
+        let hwnd = hwnd(*window_id).ok_or("windows_target_window_id_invalid")?;
+        if unsafe { IsWindow(hwnd) } == 0
+            || unsafe { IsWindowVisible(hwnd) } == 0
+            || unsafe { IsIconic(hwnd) } != 0
+        {
+            return Err("windows_target_window_not_visible");
+        }
+        let observed = provider
+            .resolve_window(*window_id)
+            .map_err(|_| "windows_target_process_instance_unavailable")?
+            .ok_or("windows_target_owner_identity_unavailable")?;
+        if observed.pid() != expected_pid || observed.stable_id() != expected_process_instance_id {
+            return Err("windows_target_process_instance_identity_mismatch");
+        }
+    }
+
+    let receiver = if let Some((x, y)) = pointer {
+        unsafe {
+            WindowFromPoint(POINT {
+                x: x.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32,
+                y: y.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32,
+            })
+        }
+    } else {
+        unsafe { GetForegroundWindow() }
+    };
+    if receiver.is_null() {
+        return Err(if pointer.is_some() {
+            "target_input_guard_pointer_outside_target_surface"
+        } else {
+            "target_input_guard_not_focused"
+        });
+    }
+    if !authorized.iter().any(|window_id| {
+        hwnd(*window_id).is_some_and(|authorized| {
+            authorized == receiver
+                || unsafe { IsChild(authorized, receiver) } != 0
+                || unsafe { IsChild(receiver, authorized) } != 0
+        })
+    }) {
+        return Err(if pointer.is_some() {
+            "target_input_guard_pointer_occluded"
+        } else {
+            "target_input_guard_not_focused"
+        });
+    }
+    Ok(Some(proof.clone()))
+}
+
+fn hwnd(window_id: u64) -> Option<HWND> {
+    let hwnd = window_id as usize as HWND;
+    (!hwnd.is_null()).then_some(hwnd)
 }
 
 fn mouse_input(dx: i32, dy: i32, mouse_data: u32, flags: u32) -> INPUT {

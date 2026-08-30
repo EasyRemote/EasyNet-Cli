@@ -23,19 +23,45 @@ type = "object"
 required = ["session_id", "session_token", "transport_epoch", "state"]
 additionalProperties = false
 
-[input_schema.properties.session_id]
-type = "string"
+[input_schema.properties.browser_stats]
+type = "object"
+additionalProperties = false
 
-[input_schema.properties.session_token]
-type = "string"
+[input_schema.properties.browser_stats.properties.decode_avg_ms]
+type = "number"
 
-[input_schema.properties.state]
-type = "string"
-enum = ["presenting", "stalled", "detached"]
+[input_schema.properties.browser_stats.properties.frame_height]
+type = "number"
 
-[input_schema.properties.transport_epoch]
-type = "integer"
-minimum = 1
+[input_schema.properties.browser_stats.properties.frame_width]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.frames_decoded]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.frames_dropped]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.frames_received]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.freeze_count]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.jitter_buffer_avg_ms]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.jitter_buffer_target_avg_ms]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.pause_count]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.processing_avg_ms]
+type = "number"
+
+[input_schema.properties.browser_stats.properties.sampled_at_ms]
+type = "number"
 
 [input_schema.properties.client_transport]
 type = "object"
@@ -63,12 +89,24 @@ type = "number"
 type = "object"
 additionalProperties = false
 
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.id]
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.available_incoming_bitrate_bps]
+type = "number"
+
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.available_outgoing_bitrate_bps]
+type = "number"
+
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.bytes_discarded_on_send]
+type = "number"
+
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.candidate_pair_id]
 type = "string"
 minLength = 1
 maxLength = 256
 
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.candidate_pair_id]
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.current_round_trip_time_ms]
+type = "number"
+
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.id]
 type = "string"
 minLength = 1
 maxLength = 256
@@ -78,12 +116,23 @@ type = "string"
 minLength = 1
 maxLength = 256
 
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.remote_candidate_id]
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.local_candidate_type]
 type = "string"
 minLength = 1
 maxLength = 256
 
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.local_candidate_type]
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.nominated]
+type = "boolean"
+
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.packets_discarded_on_send]
+type = "number"
+
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.protocol]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.remote_candidate_id]
 type = "string"
 minLength = 1
 maxLength = 256
@@ -93,12 +142,10 @@ type = "string"
 minLength = 1
 maxLength = 256
 
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.selected_route_class]
-type = "string"
-minLength = 1
-maxLength = 256
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.selected]
+type = "boolean"
 
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.protocol]
+[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.selected_route_class]
 type = "string"
 minLength = 1
 maxLength = 256
@@ -108,71 +155,62 @@ type = "string"
 minLength = 1
 maxLength = 256
 
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.selected]
-type = "boolean"
-
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.nominated]
-type = "boolean"
-
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.current_round_trip_time_ms]
-type = "number"
-
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.available_outgoing_bitrate_bps]
-type = "number"
-
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.available_incoming_bitrate_bps]
-type = "number"
-
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.packets_discarded_on_send]
-type = "number"
-
-[input_schema.properties.client_transport.properties.selected_candidate_pair.properties.bytes_discarded_on_send]
-type = "number"
-
-[input_schema.properties.browser_stats]
-type = "object"
-additionalProperties = false
-
-[input_schema.properties.browser_stats.properties.sampled_at_ms]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.frames_decoded]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.frames_dropped]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.frames_received]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.frame_width]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.frame_height]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.jitter_buffer_avg_ms]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.jitter_buffer_target_avg_ms]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.decode_avg_ms]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.processing_avg_ms]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.freeze_count]
-type = "number"
-
-[input_schema.properties.browser_stats.properties.pause_count]
-type = "number"
-
 [input_schema.properties.render_probe]
 type = "object"
 required = ["probe_source", "selected_resource_ura", "session_id", "transport_epoch", "binding_id", "binding_epoch", "media_source_epoch", "media_pipeline_id", "video_codec", "video_transport", "observed_at_ms", "decoded_video_frames", "frame_width", "frame_height"]
 additionalProperties = false
+
+[input_schema.properties.render_probe.properties.audio_codec]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.audio_payload_hash]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.binding_epoch]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.binding_id]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.decoded_audio_packets]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.render_probe.properties.decoded_audio_samples]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.render_probe.properties.decoded_video_frames]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.frame_height]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.frame_width]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.media_pipeline_id]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.media_source_epoch]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.render_probe.properties.observed_at_ms]
+type = "integer"
+minimum = 1
 
 [input_schema.properties.render_probe.properties.probe_source]
 type = "string"
@@ -193,25 +231,12 @@ maxLength = 256
 type = "integer"
 minimum = 1
 
-[input_schema.properties.render_probe.properties.binding_id]
-type = "string"
-minLength = 1
-maxLength = 256
-
-[input_schema.properties.render_probe.properties.binding_epoch]
-type = "integer"
-minimum = 1
-
-[input_schema.properties.render_probe.properties.media_source_epoch]
-type = "integer"
-minimum = 1
-
-[input_schema.properties.render_probe.properties.media_pipeline_id]
-type = "string"
-minLength = 1
-maxLength = 256
-
 [input_schema.properties.render_probe.properties.video_codec]
+type = "string"
+minLength = 1
+maxLength = 256
+
+[input_schema.properties.render_probe.properties.video_payload_hash]
 type = "string"
 minLength = 1
 maxLength = 256
@@ -221,41 +246,16 @@ type = "string"
 minLength = 1
 maxLength = 256
 
-[input_schema.properties.render_probe.properties.audio_codec]
+[input_schema.properties.session_id]
 type = "string"
-minLength = 1
-maxLength = 256
 
-[input_schema.properties.render_probe.properties.observed_at_ms]
-type = "integer"
-minimum = 1
-
-[input_schema.properties.render_probe.properties.decoded_video_frames]
-type = "integer"
-minimum = 1
-
-[input_schema.properties.render_probe.properties.decoded_audio_packets]
-type = "integer"
-minimum = 0
-
-[input_schema.properties.render_probe.properties.decoded_audio_samples]
-type = "integer"
-minimum = 0
-
-[input_schema.properties.render_probe.properties.video_payload_hash]
+[input_schema.properties.session_token]
 type = "string"
-minLength = 1
-maxLength = 256
 
-[input_schema.properties.render_probe.properties.audio_payload_hash]
+[input_schema.properties.state]
 type = "string"
-minLength = 1
-maxLength = 256
+enum = ["presenting", "stalled", "detached"]
 
-[input_schema.properties.render_probe.properties.frame_width]
-type = "integer"
-minimum = 1
-
-[input_schema.properties.render_probe.properties.frame_height]
+[input_schema.properties.transport_epoch]
 type = "integer"
 minimum = 1

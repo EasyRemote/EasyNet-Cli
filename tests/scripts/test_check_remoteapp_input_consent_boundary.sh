@@ -35,10 +35,21 @@ RS
 cat >"$REMOTE_ROOT/src/handlers/grant_consent.rs" <<'RS'
 fn handle(args: Value) {
     let input_control = optional_bool(&args, "input_control", ABILITY_GRANT_CONSENT)?;
-    plugin.consent_registry().issue_with_grants(env.caller(), &entry.resource_ura, intent, input_control,)?;
+    let allow_remote_focus = optional_bool(&args, "allow_remote_focus", ABILITY_GRANT_CONSENT)?;
+    if allow_remote_focus && !input_control {
+        return Err("remote focus requires input control");
+    }
+    plugin.consent_registry().issue_with_grants(
+        env.caller(),
+        &entry.resource_ura,
+        intent,
+        input_control,
+        allow_remote_focus,
+    )?;
     json!({
         "grant_scope": {
             "input_control": input_control,
+            "remote_focus": allow_remote_focus,
         }
     });
 }
@@ -104,8 +115,10 @@ cat >"$REMOTE_ROOT/src/view.rs" <<'RS'
 fn session_view_blocks_input_readiness_when_target_tracking_disables_input() {}
 
 fn input_readiness_view() {
-    let blocked_reason = if !session.target_snapshot().input_enabled() {
-        json!("target_input_not_ready")
+    let blocked_reason = if !session.input_policy().allows_input() {
+        json!("input_policy_disabled")
+    } else if let Some(reason) = session.target_snapshot().input_blocked_reason() {
+        json!(reason)
     } else {
         json!("input_injection_unavailable")
     };
@@ -136,13 +149,13 @@ fi
 perl -0pi -e 's/\[input_schema\.properties\.input_ignored\]/[input_schema.properties.input_control]/' \
   "$REMOTE_ROOT/abilities/remote_desktop.grant_consent.ability.toml"
 
-perl -0pi -e 's/issue_with_grants\(env\.caller\(\), &entry\.resource_ura, intent, input_control,\)/issue_with_grants(env.caller(), &entry.resource_ura, intent, false,)/' \
+perl -0pi -e 's/        input_control,\n        allow_remote_focus,/        false,\n        allow_remote_focus,/' \
   "$REMOTE_ROOT/src/handlers/grant_consent.rs"
 if CHECK_REMOTEAPP_INPUT_CONSENT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp input consent checker accepted grant_consent that drops input_control" >&2
   exit 1
 fi
-perl -0pi -e 's/issue_with_grants\(env\.caller\(\), &entry\.resource_ura, intent, false,\)/issue_with_grants(env.caller(), &entry.resource_ura, intent, input_control,)/' \
+perl -0pi -e 's/        false,\n        allow_remote_focus,/        input_control,\n        allow_remote_focus,/' \
   "$REMOTE_ROOT/src/handlers/grant_consent.rs"
 
 perl -0pi -e 's/InputScope::DisplayGlobal/InputScope::ViewOnly/' \
@@ -160,7 +173,7 @@ if CHECK_REMOTEAPP_INPUT_CONSENT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1;
   echo "remoteapp input consent checker accepted unconditional interactive effective mode" >&2
   exit 1
 fi
-perl -0pi -e 's/    let blocked_reason = if !session\.target_snapshot\(\)\.input_enabled\(\) \{\n        json!\("target_input_not_ready"\)\n    \} else \{\n        json!\("input_injection_unavailable"\)\n    \};/    let blocked_reason = json!("input_injection_unavailable");/s' \
+perl -0pi -e 's/    \} else if let Some\(reason\) = session\.target_snapshot\(\)\.input_blocked_reason\(\) \{\n        json!\(reason\)\n/    } else if !session.target_snapshot().input_enabled() {\n        json!("target_input_not_ready")\n/' \
   "$REMOTE_ROOT/src/view.rs"
 if CHECK_REMOTEAPP_INPUT_CONSENT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp input consent checker accepted input readiness that ignores target tracker input_enabled" >&2

@@ -62,6 +62,9 @@ impl RemoteAppTargetFocusProof {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) enum TargetFocusFailureReason {
     RemoteFocusNotConsented,
+    // Only the macOS Accessibility gate constructs this today; other
+    // platforms keep the variant so the failure contract stays uniform.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     TargetFocusPermissionMissing,
     TargetFocusUnsupported,
     TargetFocusFailed,
@@ -729,10 +732,10 @@ mod tests {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use easynet_remoteapp_native_platform::PlatformWindowProcessIdentityProvider;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        SetForegroundWindow,
+        GetForegroundWindow, IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow,
     };
 
     use super::{
@@ -751,20 +754,28 @@ mod platform {
                 "selected native window {window_id} is no longer valid"
             )));
         }
-        let mut observed_pid = 0_u32;
-        if unsafe { GetWindowThreadProcessId(hwnd, &mut observed_pid) } == 0 {
-            return Err(stale(format!(
-                "selected native window {window_id} has no owning process"
-            )));
-        }
-        if binding
+        let provider = PlatformWindowProcessIdentityProvider::connect()
+            .map_err(|error| stale(format!("initialize Windows process identity: {error}")))?;
+        let observed = provider
+            .resolve_window(window_id)
+            .map_err(|error| stale(format!("resolve selected window process identity: {error}")))?
+            .ok_or_else(|| {
+                stale(format!(
+                    "selected native window {window_id} has no owning process"
+                ))
+            })?;
+        let expected_pid = binding
             .native_locator()
             .pid()
             .and_then(|pid| u32::try_from(pid).ok())
-            .is_some_and(|expected_pid| expected_pid != observed_pid)
-        {
+            .ok_or_else(|| stale("selected native window has no committed owner pid"))?;
+        let expected_process_instance_id = binding
+            .native_locator()
+            .process_instance_id()
+            .ok_or_else(|| stale("selected native window has no committed process instance"))?;
+        if observed.pid() != expected_pid || observed.stable_id() != expected_process_instance_id {
             return Err(stale(format!(
-                "selected native window {window_id} changed owner process"
+                "selected native window {window_id} changed owner process instance"
             )));
         }
         if unsafe { IsWindowVisible(hwnd) } == 0 || unsafe { IsIconic(hwnd) } != 0 {

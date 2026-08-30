@@ -35,6 +35,11 @@ use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
+use easynet_remoteapp_native_platform::PlatformWindowProcessIdentityProvider;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
@@ -804,14 +809,16 @@ fn select_window_by_exact_identity(
     Ok(window)
 }
 
-#[cfg(all(feature = "native-media", target_os = "linux"))]
+#[cfg(all(
+    feature = "native-media",
+    any(target_os = "linux", target_os = "windows")
+))]
 fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> anyhow::Result<()> {
     let expected_pid = entry
         .metadata
         .get("pid")
         .or_else(|| entry.metadata.get("primary_pid"))
         .and_then(Value::as_u64);
-    let actual_pid = observed_xcap_window_pid(window)?;
     let expected_process_instance_id = entry
         .metadata
         .get("process_instance_id")
@@ -820,35 +827,45 @@ fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> any
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "{ABILITY_SCREEN_SNAPSHOT}: Linux window/application resource has no process_instance_id; reason={REASON_RESOURCE_UNAVAILABLE}"
+                "{ABILITY_SCREEN_SNAPSHOT}: window/application resource has no process_instance_id; reason={REASON_RESOURCE_UNAVAILABLE}"
             )
         })?;
-    let actual_pid_u32 = actual_pid
-        .and_then(|pid| u32::try_from(pid).ok())
+    let window_id = window.id().map(u64::from).map_err(|error| {
+        anyhow::anyhow!(
+            "{ABILITY_SCREEN_SNAPSHOT}: read native window id: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
+        )
+    })?;
+    let provider = PlatformWindowProcessIdentityProvider::connect().map_err(|error| {
+        anyhow::anyhow!(
+            "{ABILITY_SCREEN_SNAPSHOT}: initialize platform process identity provider: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
+        )
+    })?;
+    let actual = provider
+        .resolve_window(window_id)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{ABILITY_SCREEN_SNAPSHOT}: resolve native window owner for {window_id}: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "{ABILITY_SCREEN_SNAPSHOT}: X-Resource owner PID is unavailable; reason={REASON_RESOURCE_UNAVAILABLE}"
+                "{ABILITY_SCREEN_SNAPSHOT}: native window owner is unavailable; reason={REASON_RESOURCE_UNAVAILABLE}"
             )
         })?;
-    let actual_process_instance_id =
-        super::linux_x11_window_owner::LinuxProcessInstance::resolve(actual_pid_u32)
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "{ABILITY_SCREEN_SNAPSHOT}: resolve Linux process instance for X11 owner {actual_pid_u32}: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
-                )
-            })?
-            .stable_id();
-    if expected_pid != Some(u64::from(actual_pid_u32))
-        || actual_process_instance_id != expected_process_instance_id
+    if expected_pid != Some(u64::from(actual.pid()))
+        || actual.stable_id() != expected_process_instance_id
     {
         anyhow::bail!(
-            "{ABILITY_SCREEN_SNAPSHOT}: Linux X11 owner process instance no longer matches the committed resource; reason={REASON_RESOURCE_UNAVAILABLE}"
+            "{ABILITY_SCREEN_SNAPSHOT}: native owner process instance no longer matches the committed resource; reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }
     Ok(())
 }
 
-#[cfg(all(feature = "native-media", not(target_os = "linux")))]
+#[cfg(all(
+    feature = "native-media",
+    not(any(target_os = "linux", target_os = "windows"))
+))]
 fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> anyhow::Result<()> {
     let expected_pid = entry
         .metadata
@@ -880,7 +897,10 @@ fn ensure_xcap_window_owner(entry: &ResourceEntry, window: &xcap::Window) -> any
     Ok(())
 }
 
-#[cfg(all(feature = "native-media", any(test, not(target_os = "linux"))))]
+#[cfg(all(
+    feature = "native-media",
+    any(test, not(any(target_os = "linux", target_os = "windows")))
+))]
 fn native_window_owner_matches(
     expected_pid: Option<u64>,
     expected_app: Option<&str>,
@@ -898,25 +918,11 @@ fn native_window_owner_matches(
     }
 }
 
-#[cfg(feature = "native-media")]
+#[cfg(all(
+    feature = "native-media",
+    not(any(target_os = "linux", target_os = "windows"))
+))]
 fn observed_xcap_window_pid(window: &xcap::Window) -> anyhow::Result<Option<u64>> {
-    #[cfg(target_os = "linux")]
-    {
-        let window_id = window.id().map_err(|error| {
-            anyhow::anyhow!(
-                "{ABILITY_SCREEN_SNAPSHOT}: read native window id for X-Resource owner resolution: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
-            )
-        })?;
-        return super::linux_x11_window_owner::LinuxX11WindowOwnerResolver::connect()
-            .and_then(|resolver| resolver.resolve_local_client_pid(window_id))
-            .map(|pid| pid.map(u64::from))
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "{ABILITY_SCREEN_SNAPSHOT}: resolve X11 window owner for window {window_id}: {error}; reason={REASON_RESOURCE_UNAVAILABLE}"
-                )
-            });
-    }
-    #[cfg(not(target_os = "linux"))]
     Ok(window.pid().ok().map(u64::from))
 }
 

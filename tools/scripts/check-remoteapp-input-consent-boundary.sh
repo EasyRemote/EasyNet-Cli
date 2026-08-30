@@ -57,10 +57,14 @@ require 'consent_ticket_preserves_explicit_input_control_grant' "$CONSENT_REGIST
 
 require '\[input_schema\.properties\.input_control\]' "$GRANT_DESCRIPTOR" \
   'grant_consent descriptor must expose optional input_control'
-require_multiline '/input_control = optional_bool\(&args, "input_control", ABILITY_GRANT_CONSENT\)\?[\s\S]*issue_with_grants\(\s*env\.caller\(\),\s*&entry\.resource_ura,\s*intent,\s*input_control,\s*\)/s' "$GRANT_HANDLER" \
+require_multiline '/input_control = optional_bool\(&args, "input_control", ABILITY_GRANT_CONSENT\)\?[\s\S]*allow_remote_focus = optional_bool\(&args, "allow_remote_focus", ABILITY_GRANT_CONSENT\)\?[\s\S]*issue_with_grants\(\s*env\.caller\(\),\s*&entry\.resource_ura,\s*intent,\s*input_control,\s*allow_remote_focus,\s*\)/s' "$GRANT_HANDLER" \
   'grant_consent handler must bind input_control into the minted ticket'
 require '"input_control": input_control' "$GRANT_HANDLER" \
   'grant_consent response must project the granted input_control scope'
+require 'allow_remote_focus && !input_control' "$GRANT_HANDLER" \
+  'grant_consent must reject remote-focus scope without input-control consent'
+require '"remote_focus": allow_remote_focus' "$GRANT_HANDLER" \
+  'grant_consent response must project the granted remote-focus scope'
 require 'grant_consent_projects_explicit_input_control_scope' "$HANDLERS_MOD" \
   'handler tests must cover explicit input-control consent projection'
 
@@ -95,10 +99,10 @@ require 'display_interactive_downgrades_until_input_consent_exists' "$TARGET" \
 
 require 'effective_mode": if interactive_ready \{ "interactive" \} else \{ "view_only" \}' "$VIEW" \
   'session view must not report interactive effective mode until runtime input is truly ready'
-require 'session\.target_snapshot\(\)\.input_enabled\(\)' "$VIEW" \
-  'session view input_readiness must consume target tracker input_enabled state'
-require 'target_input_not_ready' "$VIEW" \
-  'session view must expose target tracker input-disabled state as target_input_not_ready'
+require 'session\.target_snapshot\(\)\.input_blocked_reason\(\)' "$VIEW" \
+  'session view input_readiness must consume the target tracker typed blocker state'
+require_multiline '/else if let Some\(reason\) = session\.target_snapshot\(\)\.input_blocked_reason\(\) \{\s*json!\(reason\)/s' "$VIEW" \
+  'session view must project the exact target tracker blocker instead of a generic input state'
 require 'input_injection_unavailable' "$VIEW" \
   'session view must expose OS input-permission blockage separately from consent scope'
 require 'session_view_blocks_input_readiness_when_target_tracking_disables_input' "$VIEW" \

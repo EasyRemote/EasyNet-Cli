@@ -211,24 +211,33 @@ impl TargetInputGuardProof {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(
+        all(target_os = "linux", feature = "native-media"),
+        target_os = "windows"
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn authorized_window_ids(&self) -> &[u64] {
         &self.authorized_window_ids
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(
+        all(target_os = "linux", feature = "native-media"),
+        target_os = "windows"
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) const fn expected_pid(&self) -> Option<i64> {
         self.expected_pid
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(
+        all(target_os = "linux", feature = "native-media"),
+        target_os = "windows"
+    ))]
     pub(in crate::daemon::plugins::remote_desktop) fn expected_process_instance_id(
         &self,
     ) -> Option<&str> {
         self.expected_process_instance_id.as_deref()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "native-media"))]
     pub(in crate::daemon::plugins::remote_desktop) fn with_x11_atomicity(
         mut self,
         guard_acquired_at_ms: u64,

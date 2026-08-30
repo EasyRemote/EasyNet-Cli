@@ -5,6 +5,7 @@ ROOT="${CHECK_REMOTEAPP_PLATFORM_INPUT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}"
 INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
 WINDOWS="$ROOT/plugins/remote-desktop/src/input/windows.rs"
 LINUX="$ROOT/plugins/remote-desktop/src/input/linux.rs"
+NATIVE_PLATFORM="$ROOT/plugins/remote-desktop/native-platform/src/lib.rs"
 WHEEL="$ROOT/plugins/remote-desktop/src/input/wheel.rs"
 VIEW_DEVICE="$ROOT/plugins/remote-desktop/src/view_device.rs"
 MANIFEST="$ROOT/plugins/remote-desktop/plugin.toml"
@@ -31,7 +32,7 @@ reject() {
   fi
 }
 
-for path in "$INPUT" "$WINDOWS" "$LINUX" "$WHEEL" "$VIEW_DEVICE" "$MANIFEST" "$CARGO_MANIFEST"; do
+for path in "$INPUT" "$WINDOWS" "$LINUX" "$NATIVE_PLATFORM" "$WHEEL" "$VIEW_DEVICE" "$MANIFEST" "$CARGO_MANIFEST"; do
   [[ -f "$path" ]] || fail "missing required source ${path#"$ROOT/"}"
 done
 
@@ -107,10 +108,16 @@ require 'x::GrabServer' "$LINUX" \
   'Linux target-local input must use X11 GrabServer before final validation'
 require 'x::UngrabServer' "$LINUX" \
   'Linux target-local input must release the X11 server on every path'
-require 'res::QueryClientIds' "$LINUX" \
-  'Linux target-local input must resolve authoritative X-Resource owner PIDs'
-require 'LinuxProcessInstance::resolve' "$LINUX" \
-  'Linux target-local input must reject PID reuse with a boot-scoped process identity'
+require 'resolve_x11_local_client_pid' "$LINUX" \
+  'Linux target-local input must consume the canonical X-Resource owner provider'
+require 'ProcessInstance::resolve' "$LINUX" \
+  'Linux target-local input must consume the canonical boot-scoped process identity'
+require 'res::QueryClientIds' "$NATIVE_PLATFORM" \
+  'native platform authority must resolve authoritative X-Resource owner PIDs'
+require 'format!\("linux:\{boot_id\}:\{pid\}:\{start_ticks\}"\)' "$NATIVE_PLATFORM" \
+  'native platform authority must bind Linux PID identity to boot and process start time'
+reject 'res::QueryClientIds' "$LINUX" \
+  'Linux input must not duplicate X-Resource PID resolution owned by native platform authority'
 require 'map_pointer_point\(frame, target\)' "$LINUX" \
   'Linux input must consume the committed target-local coordinate mapping'
 require 'x11_detent_steps' "$LINUX" \
