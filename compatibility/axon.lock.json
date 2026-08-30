@@ -1,0 +1,32 @@
+{
+  "axon": {
+    "contract_sha256": "600e29eb39a47f66eecfba4fa455e64ab4f2421740cc18a32a2a1abdf64254e6",
+    "ffi": {
+      "dendrite_abi_version": 1,
+      "public_header_sha256": "924a94f3643bcd773574cd4e76721659085c3c1fd3299111a1f22a39da56b705"
+    },
+    "git_revision": "bf94445547fe50cb76f891bb53c748b8af2c815d",
+    "protocol": {
+      "descriptor_set_sha256": "af5a0f92d89b9e7ac61bbc8d79952ddb3d21700a1f71f1110101df7fc17880f2"
+    },
+    "release_version": "0.192.3",
+    "repository": "EasyRemote/EasyNet-Axon",
+    "sdks": {
+      "go": "0.192.3",
+      "java": "0.192.3",
+      "node": "0.192.3",
+      "python": "0.192.3",
+      "react": "0.192.3",
+      "rust": "0.192.3",
+      "swift": "0.192.3"
+    }
+  },
+  "cli": {
+    "runtime_version": "0.149.10",
+    "sdks": {
+      "node": "0.0.0-seam",
+      "python": "0.142.22"
+    }
+  },
+  "schema_version": "easynet.cli.axon-lock.v1"
+}

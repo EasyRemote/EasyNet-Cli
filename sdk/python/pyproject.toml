@@ -34,7 +34,7 @@ classifiers = [
 ]
 dependencies = [
     "cryptography>=41",
-    "axon-runtime-sdk>=0.183.3,<0.184",
+    "axon-runtime-sdk>=0.192.3,<0.193",
     "grpcio>=1.60",
     "protobuf>=4.25",
 ]

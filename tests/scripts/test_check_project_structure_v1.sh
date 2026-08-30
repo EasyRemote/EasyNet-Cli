@@ -15,6 +15,8 @@ mkfinal() {
   mkdir -p "$dir"
   touch "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/README.md" "$dir/PROJECT_STRUCTURE.md" "$dir/build.rs"
   touch "$dir/README.pdf" "$dir/VERSION"
+  mkdir -p "$dir/compatibility"
+  touch "$dir/compatibility/axon.lock.json"
   mkdir -p "$dir/include"
   touch "$dir/include/easynet_cli.h" "$dir/include/easynet_cli.exports.v7" "$dir/include/easynet_cli.exports.v8" "$dir/include/easynet_cli.exports.v9"
 
@@ -23,6 +25,7 @@ mkfinal() {
     "$dir/src/bin/easynet.rs" \
     "$dir/src/bin/easynet-daemon.rs" \
     "$dir/src/bin/easynet-keyring.rs" \
+    "$dir/src/bin/easynet-session-supervisor.rs" \
     "$dir/src/bin/gen-ability-tomls.rs" \
     "$dir/src/bin/real-user-smoke.rs" \
     "$dir/src/bin/verify-voice-contract.rs"

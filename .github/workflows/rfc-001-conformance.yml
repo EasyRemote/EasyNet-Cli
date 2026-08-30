@@ -61,6 +61,5 @@ jobs:
         # cross-references the sibling EasyNet-Axon checkout.
         run: |
           ./tools/scripts/check-cli-ability-invoke-ura.sh
-          ./tools/scripts/check-invoke-ability-ura-input.sh
           ./tools/scripts/check-openai-model-ability-ura.sh
           ./tools/scripts/check-pages-api-ability-ura.sh

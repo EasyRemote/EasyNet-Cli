@@ -1,7 +1,4 @@
-name: Tests
-
-env:
-  EASYNET_AXON_COMPAT_REV: 25a97cc5e32610c3c81f26d085cb34deb50d7230
+name: Main Admission
 
 # Compiles ALL test targets and runs the lib suite. This is the CI
 # that would have caught the five test-construction breaks the
@@ -24,7 +21,28 @@ on:
     branches: [main]
 
 jobs:
-  tests:
+  compatibility-coordinate:
+    runs-on: ubuntu-latest
+    outputs:
+      axon_revision: ${{ steps.coordinate.outputs.axon_revision }}
+      axon_contract_sha256: ${{ steps.coordinate.outputs.axon_contract_sha256 }}
+    steps:
+      - name: Checkout EasyNet-Cli
+        uses: actions/checkout@v4
+        with:
+          path: EasyNet-Cli
+
+      - name: Verify compatibility tooling and expose pinned coordinate
+        id: coordinate
+        working-directory: EasyNet-Cli
+        run: |
+          python3 tools/scripts/test_check_axon_lock.py
+          python3 tools/scripts/test_check_workflow_integrity.py
+          python3 tools/scripts/check-workflow-integrity.py
+          python3 tools/scripts/check-axon-lock.py --lock-only --github-output
+
+  pinned:
+    needs: compatibility-coordinate
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -44,14 +62,11 @@ jobs:
           repository: EasyRemote/EasyNet-Axon
           path: EasyNet-Axon
           token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
-          ref: ${{ env.EASYNET_AXON_COMPAT_REV }}
+          ref: ${{ needs.compatibility-coordinate.outputs.axon_revision }}
 
       - name: Verify EasyNet-Axon dependency contract
         working-directory: EasyNet-Cli
-        run: |
-          test "$(git -C ../EasyNet-Axon rev-parse HEAD)" = "$EASYNET_AXON_COMPAT_REV"
-          grep -Fq 'version = "0.183.3"' ../EasyNet-Axon/sdk/rust/Cargo.toml
-          grep -Fq 'version = "0.183.3"' ../EasyNet-Axon/sdk/python/pyproject.toml
+        run: python3 tools/scripts/check-axon-lock.py
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
@@ -126,6 +141,12 @@ jobs:
         working-directory: EasyNet-Cli
         run: cargo test --features axon-pb --no-run
 
+      - name: Format and clippy admission
+        working-directory: EasyNet-Cli
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --lib --features axon-pb
+
       # Run the unit suite — catches runtime regressions. Integration
       # bodies needing infra are excluded (--lib only).
       - name: Run the lib test suite
@@ -150,7 +171,7 @@ jobs:
         working-directory: EasyNet-Cli/sdk/java
         run: |
           mvn --batch-mode test
-          java -cp target/test-classes:target/classes run.easynet.daemon.RuntimeCoreSeamTest
+          java -cp target/test-classes:target/classes run.runtime.sdk.RuntimeCoreSeamTest
 
       - name: Run Swift SDK suite
         working-directory: EasyNet-Cli/sdk/swift
@@ -198,3 +219,28 @@ jobs:
           EASYNET_FFI_REQUIRE_DYLIB=1 bash tools/scripts/check-ffi-abi-v9-header.sh
           bash tests/scripts/test_check_ffi_abi_v8_header.sh
           bash tests/scripts/test_check_ffi_abi_v9_header.sh
+
+  main-admission:
+    name: main-admission
+    if: always()
+    needs: [compatibility-coordinate, pinned]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the complete pinned CLI admission
+        env:
+          ADMISSION_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          results = {
+              name: detail["result"]
+              for name, detail in json.loads(os.environ["ADMISSION_RESULTS"]).items()
+          }
+          failed = {name: result for name, result in results.items() if result != "success"}
+          if failed:
+              raise SystemExit(f"CLI main admission failed: {failed}")
+          print("CLI main admission passed")
+          PY

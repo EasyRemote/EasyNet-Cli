@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    name: Validate and build easynet-sdk
+    name: artifact
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,6 +33,9 @@ jobs:
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
+
+      - name: Validate artifact compatibility coordinate
+        run: python3 tools/scripts/check-axon-lock.py --lock-only
 
       - name: Resolve package metadata
         id: metadata
@@ -104,6 +107,7 @@ jobs:
           uvx --from twine twine check dist/easynet-sdk/*
           python - <<'PY'
           import email
+          import json
           import os
           import pathlib
           import zipfile
@@ -114,10 +118,17 @@ jobs:
               raise SystemExit("expected exactly one wheel and one sdist")
 
           with zipfile.ZipFile(wheels[0]) as archive:
+              if any(name.endswith("direct_url.json") for name in archive.namelist()):
+                  raise SystemExit("artifact must not contain an editable/path dependency origin")
               metadata_path = next(
                   name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
               )
               metadata = email.message_from_bytes(archive.read(metadata_path))
+
+          coordinate = json.loads(
+              pathlib.Path("compatibility/axon.lock.json").read_text(encoding="utf-8")
+          )
+          axon_python = coordinate["axon"]["sdks"]["python"]
 
           expected = {
               "Name": "easynet-sdk",
@@ -132,8 +143,13 @@ jobs:
           if "Silan Hu <silan.hu@u.nus.edu>" not in metadata.get("Author-email", ""):
               raise SystemExit("missing canonical author metadata")
           requires = metadata.get_all("Requires-Dist", [])
-          if not any(item.startswith("axon-runtime-sdk") for item in requires):
-              raise SystemExit("missing canonical axon-runtime-sdk dependency")
+          axon_requires = [item.replace(" ", "") for item in requires if item.startswith("axon-runtime-sdk")]
+          if len(axon_requires) != 1:
+              raise SystemExit("artifact must contain exactly one axon-runtime-sdk dependency")
+          if f">={axon_python}" not in axon_requires[0] or "<0.193" not in axon_requires[0]:
+              raise SystemExit(
+                  f"artifact Axon dependency does not match compatibility lock: {axon_requires[0]}"
+              )
           PY
 
       - name: Upload distributions

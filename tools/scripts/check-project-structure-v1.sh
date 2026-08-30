@@ -53,17 +53,23 @@ check_root_contract() {
   local allowed_files=(
     .dockerignore
     .gitignore
+    AGENTS.md
+    Agent.md
     Cargo.toml
     Cargo.lock
+    LICENSE
+    NOTICE
     README.md
     README.pdf
     PROJECT_STRUCTURE.md
+    SOURCE_RELEASE_SCOPE.md
     VERSION
     build.rs
   )
   local allowed_dirs=(
     .github
     ability-descriptors
+    compatibility
     docs
     examples
     gallery
@@ -181,6 +187,7 @@ require_file README.pdf
 require_file PROJECT_STRUCTURE.md
 require_file VERSION
 require_file build.rs
+require_file compatibility/axon.lock.json
 require_file include/easynet_cli.h
 require_file include/easynet_cli.exports.v7
 require_file include/easynet_cli.exports.v8
@@ -191,6 +198,7 @@ require_only_files src/bin \
   easynet.rs \
   easynet-daemon.rs \
   easynet-keyring.rs \
+  easynet-session-supervisor.rs \
   gen-ability-tomls.rs \
   real-user-smoke.rs \
   verify-voice-contract.rs

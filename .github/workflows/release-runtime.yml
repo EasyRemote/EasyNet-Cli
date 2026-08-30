@@ -14,12 +14,24 @@ concurrency:
   group: release-easynet-runtime-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  EASYNET_AXON_COMPAT_REV: 25a97cc5e32610c3c81f26d085cb34deb50d7230
-
 jobs:
+  compatibility-coordinate:
+    runs-on: ubuntu-latest
+    outputs:
+      axon_revision: ${{ steps.coordinate.outputs.axon_revision }}
+    steps:
+      - name: Checkout EasyNet-Cli
+        uses: actions/checkout@v4
+        with:
+          path: EasyNet-Cli
+      - name: Expose pinned artifact coordinate
+        id: coordinate
+        working-directory: EasyNet-Cli
+        run: python3 tools/scripts/check-axon-lock.py --lock-only --github-output
+
   build:
     name: Build ${{ matrix.target }}
+    needs: compatibility-coordinate
     strategy:
       fail-fast: false
       matrix:
@@ -48,7 +60,11 @@ jobs:
           repository: EasyRemote/EasyNet-Axon
           path: EasyNet-Axon
           token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
-          ref: ${{ env.EASYNET_AXON_COMPAT_REV }}
+          ref: ${{ needs.compatibility-coordinate.outputs.axon_revision }}
+
+      - name: Validate pinned artifact source coordinate
+        working-directory: EasyNet-Cli
+        run: python3 tools/scripts/check-axon-lock.py
 
       - name: Validate runtime version and tag
         working-directory: EasyNet-Cli
@@ -140,6 +156,7 @@ jobs:
 
   build-windows:
     name: Build x86_64-pc-windows-gnu
+    needs: compatibility-coordinate
     runs-on: windows-2025
     timeout-minutes: 120
     permissions:
@@ -156,7 +173,16 @@ jobs:
           repository: EasyRemote/EasyNet-Axon
           path: EasyNet-Axon
           token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
-          ref: ${{ env.EASYNET_AXON_COMPAT_REV }}
+          ref: ${{ needs.compatibility-coordinate.outputs.axon_revision }}
+
+      - name: Setup Python for compatibility verification
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate pinned artifact source coordinate
+        working-directory: EasyNet-Cli
+        run: python tools/scripts/check-axon-lock.py
 
       - name: Validate runtime version and tag
         working-directory: EasyNet-Cli

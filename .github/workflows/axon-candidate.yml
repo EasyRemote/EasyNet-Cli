@@ -1,0 +1,63 @@
+name: Axon Candidate Compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      axon_revision:
+        description: Exact EasyNet-Axon candidate commit
+        required: true
+        type: string
+      axon_contract_sha256:
+        description: SHA-256 of the candidate compatibility/contract.json
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout EasyNet-Cli candidate
+        uses: actions/checkout@v4
+        with:
+          path: EasyNet-Cli
+
+      - name: Checkout EasyNet-Axon candidate
+        uses: actions/checkout@v4
+        with:
+          repository: EasyRemote/EasyNet-Axon
+          path: EasyNet-Axon
+          token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
+          ref: ${{ inputs.axon_revision }}
+
+      - name: Verify candidate identity and self-declared contract
+        env:
+          EXPECTED_REVISION: ${{ inputs.axon_revision }}
+          EXPECTED_CONTRACT_SHA256: ${{ inputs.axon_contract_sha256 }}
+        run: |
+          test "$(git -C EasyNet-Axon rev-parse HEAD)" = "$EXPECTED_REVISION"
+          test "$(sha256sum EasyNet-Axon/compatibility/contract.json | cut -d' ' -f1)" = "$EXPECTED_CONTRACT_SHA256"
+          python3 EasyNet-Cli/tools/scripts/check-workflow-integrity.py
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.3"
+
+      - name: Verify candidate contract derivation
+        working-directory: EasyNet-Axon
+        run: python3 scripts/checks/check_compatibility_contract.py
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Compile and test CLI against candidate
+        working-directory: EasyNet-Cli
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --features axon-pb --no-run
+          cargo test --locked --features axon-pb --lib
