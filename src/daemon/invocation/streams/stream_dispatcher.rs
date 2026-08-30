@@ -1583,8 +1583,23 @@ mod tests {
         assert!(!chunk.terminal);
     }
 
+    fn forwarded_test_callee() -> String {
+        crate::core::ura::device_agent_ura("test", "target", "test-runtime")
+    }
+
     fn forwarded_request_for_timeout_test() -> InvokeRequest {
-        let descriptor_ref = "easynet:///r/test/ability/device.target.media.synthetic_stream@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        let callee = forwarded_test_callee();
+        let binding = crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
+            "1.0.0", [0xaa; 32], "read",
+        )
+        .expect("test descriptor binding");
+        let descriptor_ref =
+            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                &callee,
+                "media.synthetic_stream",
+                &binding,
+            )
+            .expect("test descriptor ref");
         InvokeRequest {
             envelope: Some(Envelope {
                 caller: Some(AgentIdentity {
@@ -1592,7 +1607,7 @@ mod tests {
                     profile: "axon-strict-v2".to_string(),
                 }),
                 callee: Some(AgentIdentity {
-                    ura: "easynet:///r/test/device/target".to_string(),
+                    ura: callee,
                     profile: "axon-strict-v2".to_string(),
                 }),
                 subject: Some(SubjectIdentity {
@@ -1607,7 +1622,7 @@ mod tests {
             }),
             target: Some(
                 crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
-                    descriptor_ref,
+                    &descriptor_ref,
                     "media.synthetic_stream",
                 )
                 .expect("descriptor target"),
@@ -1620,7 +1635,7 @@ mod tests {
     #[tokio::test]
     async fn forwarded_remote_stream_times_out_without_terminal_event() {
         let pending = PendingStreamDispatchMap::new();
-        let handle = pending.register_pending_for("easynet:///r/test/device/target");
+        let handle = pending.register_pending_for(&forwarded_test_callee());
         let binding = ForwardedInvocationBinding::for_delegated_request(
             &forwarded_request_for_timeout_test(),
         )
@@ -1657,7 +1672,7 @@ mod tests {
         use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 
         let pending = PendingStreamDispatchMap::new();
-        let handle = pending.register_pending_for("easynet:///r/test/device/target");
+        let handle = pending.register_pending_for(&forwarded_test_callee());
         let call_id = handle.call_id();
         let (carrier_tx, mut carrier_rx) = mpsc::channel(2);
         let binding = ForwardedInvocationBinding::for_delegated_request(

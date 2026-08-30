@@ -8217,11 +8217,8 @@ mod tests {
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
         assert!(!catalog.has_dynamic("device.dynamic"));
 
-        let runtime_key = local_runtime_ability_key_for_authority(
-            &crate::core::ura::device_ura("hub-only", "local"),
-            "device.dynamic",
-        )
-        .expect("hypothetical Device runtime key");
+        let runtime_key =
+            crate::core::ura::device_ability_ura("hub-only", "local", "device.dynamic");
         assert!(block_on_runtime_sync(runtime.ability_options(&runtime_key)).is_none());
 
         let device_ura = crate::core::ura::device_ura("device-only", "dev-1");
@@ -9518,14 +9515,10 @@ mod tests {
     }
 
     #[test]
-    fn execute_bidi_handler_failure_propagates_no_session_artifacts() {
-        // §I3 atomicity: a handler whose construction fails must
-        // surface as Err from execute_bidi, with no half-open
-        // BidiSource leaking out. There is no "partial source" to
-        // assert against — the success type is `BidiSource`, so the
-        // type system prevents that — but we do pin that the error
-        // message preserves the handler's reason rather than being
-        // swallowed by a generic dispatcher message.
+    fn execute_bidi_handler_failure_closes_the_runtime_source() {
+        // LocalRuntime admits the bidi carrier before it executes the handler.
+        // A construction failure therefore terminalizes the Invocation and
+        // closes the source instead of turning carrier admission into Err.
         let mut reg = combined_catalog();
         register_test_bidi(
             &mut reg,
@@ -9540,8 +9533,23 @@ mod tests {
                 json!({}),
                 CallMode::Bidi,
             );
-        let err = dispatcher.execute_bidi(target).unwrap_err();
-        assert!(format!("{err}").contains("precondition foo missing"));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut source = dispatcher
+                .execute_bidi(target)
+                .expect("carrier admission precedes handler execution");
+            let terminal =
+                tokio::time::timeout(std::time::Duration::from_secs(1), source.from_client.recv())
+                    .await
+                    .expect("failed handler must terminalize promptly")
+                    .expect("runtime adapter emits one terminal error frame");
+            assert!(terminal.terminal);
+            let failure = terminal.into_json_value().expect("terminal error JSON");
+            assert!(failure.to_string().contains("precondition foo missing"));
+        });
     }
 
     #[test]

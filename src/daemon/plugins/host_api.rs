@@ -1070,7 +1070,11 @@ quick_add = true
         .expect("manifest");
         fs::write(
             root.join("abilities/test.camera.ability.toml"),
-            test_descriptor("test.camera"),
+            test_descriptor("test.camera").replacen(
+                "[input_schema]",
+                "bidi_wire_kind = \"json_frames\"\n\n[input_schema]",
+                1,
+            ),
         )
         .expect("descriptor");
         let sidecar = root.join("bin/sidecar");

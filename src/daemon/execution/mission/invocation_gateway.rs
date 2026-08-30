@@ -1425,7 +1425,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn child_is_receipt_anchored_and_derives_subject_while_inheriting_trace_and_deadline() {
         let root_caller = identity("easynet:///r/mission-test/agent/root.caller");
-        let parent_callee = identity("easynet:///r/mission-test/device/parent-device");
+        let parent_callee =
+            identity("easynet:///r/mission-test/agent/parent-device.mission-runtime");
         let child_callee = identity("easynet:///r/mission-test/agent/worker.child");
         let root_key = SigningKey::from_bytes(&[0x11; 32]);
         let runtime = runtime_with_parent_authority(
@@ -1599,7 +1600,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn cancelling_parent_cancels_gateway_child() {
         let root_caller = identity("easynet:///r/mission-test/agent/cancel.root");
-        let parent_callee = identity("easynet:///r/mission-test/device/cancel-parent");
+        let parent_callee =
+            identity("easynet:///r/mission-test/agent/cancel-parent.mission-runtime");
         let child_callee = identity("easynet:///r/mission-test/agent/cancel.child");
         let root_key = SigningKey::from_bytes(&[0x33; 32]);
         let runtime = runtime_with_parent_authority(

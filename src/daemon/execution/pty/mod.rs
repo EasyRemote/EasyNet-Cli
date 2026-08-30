@@ -215,7 +215,7 @@ impl PtyService {
     pub fn create(&self, spec: PtyCreateSpec) -> anyhow::Result<PtySessionId> {
         #[cfg(not(test))]
         {
-            return self.supervisor.create(spec);
+            self.supervisor.create(spec)
         }
         #[cfg(test)]
         {
@@ -282,7 +282,7 @@ impl PtyService {
         #[cfg(not(test))]
         {
             let _ = id;
-            return None;
+            None
         }
         #[cfg(test)]
         {
@@ -298,7 +298,7 @@ impl PtyService {
     pub fn try_list(&self) -> anyhow::Result<Vec<PtySessionSnapshot>> {
         #[cfg(not(test))]
         {
-            return self.supervisor.list();
+            self.supervisor.list()
         }
         #[cfg(test)]
         {
@@ -346,7 +346,7 @@ impl PtyService {
     pub fn try_close(&self, id: &PtySessionId) -> anyhow::Result<PtyCloseOutcome> {
         #[cfg(not(test))]
         {
-            return self.supervisor.close(id);
+            self.supervisor.close(id)
         }
         #[cfg(test)]
         {
@@ -387,7 +387,7 @@ impl PtyService {
     pub fn live_count(&self) -> usize {
         #[cfg(not(test))]
         {
-            return self.supervisor.list().map(|rows| rows.len()).unwrap_or(0);
+            self.supervisor.list().map(|rows| rows.len()).unwrap_or(0)
         }
         #[cfg(test)]
         {

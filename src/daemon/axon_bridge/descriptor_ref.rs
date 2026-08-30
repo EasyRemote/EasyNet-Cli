@@ -284,6 +284,11 @@ pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<St
                     "Authority descriptor-bound ability must not use retired hub.* ability aliases",
                 ));
             }
+            if callee.kind == crate::core::ura::URAKind::Device {
+                return Err(AxonError::invalid_argument(
+                    "Device is execution substrate, not an Ability owner; use a device-sponsored SystemAgent callee",
+                ));
+            }
             let public_ability = public_ability_name_for_wire(callee_ura, ability);
             crate::core::ura::owner_ability_ura(callee_ura, &public_ability).ok_or_else(|| {
                 AxonError::invalid_argument(format!(
@@ -453,8 +458,8 @@ mod tests {
 
     #[test]
     fn descriptor_ref_requires_callee_to_own_ability() {
-        let callee = crate::core::ura::device_ura("acme", "host-a");
-        let other = crate::core::ura::device_ura("acme", "host-b");
+        let callee = crate::core::ura::device_agent_ura("acme", "host-a", "test-runtime");
+        let other = crate::core::ura::device_agent_ura("acme", "host-b", "test-runtime");
         let ability_ura = crate::core::ura::owner_ability_ura(&other, "fs.read").unwrap();
         let ability_ref = format!("{ability_ura}@{TEST_BINDING}");
 
@@ -465,7 +470,7 @@ mod tests {
 
     #[test]
     fn descriptor_ref_round_trips_when_callee_owns_ability() {
-        let callee = crate::core::ura::device_ura("acme", "host-a");
+        let callee = crate::core::ura::device_agent_ura("acme", "host-a", "test-runtime");
         let ability_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
         let ability_ref = format!("{ability_ura}@{TEST_BINDING}");
 
@@ -487,7 +492,7 @@ mod tests {
 
     #[test]
     fn explicit_descriptor_ref_rejects_a_different_runtime_digest() {
-        let callee = crate::core::ura::device_ura("acme", "host-a");
+        let callee = crate::core::ura::device_agent_ura("acme", "host-a", "test-runtime");
         let ability_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
         let ability_ref = format!("{ability_ura}@1.0.0#{}!read", "11".repeat(32));
 
@@ -581,7 +586,7 @@ mod tests {
     /// loop (commit 22187b3f tightened ingress, left this egress site behind).
     #[test]
     fn builder_constructs_ref_from_bare_ability_name_where_validator_rejects() {
-        let callee = crate::core::ura::device_ura("acme", "host-a");
+        let callee = crate::core::ura::device_agent_ura("acme", "host-a", "test-runtime");
 
         // Validator rejects the bare name (this is the failing path the prelude hit).
         assert!(require_descriptor_ref_for_wire(&callee, "fs.read").is_err());
@@ -667,15 +672,12 @@ mod tests {
     }
 
     #[test]
-    fn bare_device_domain_name_is_not_duplicated_in_ability_ura() {
+    fn bare_device_domain_name_does_not_restore_device_ability_ownership() {
         let callee = crate::core::ura::device_ura("localhost", "dev-a");
-        let ability_ura = ability_ura_for_wire(&callee, "device.inspect")
-            .expect("device-domain ability should remain explicit");
+        let error = ability_ura_for_wire(&callee, "device.inspect")
+            .expect_err("Device execution hosts must not become Ability owners");
 
-        assert_eq!(
-            ability_ura,
-            "easynet:///r/localhost/ability/device.dev-a.inspect"
-        );
+        assert!(error.reason.contains("Device is execution substrate"));
     }
 
     #[test]

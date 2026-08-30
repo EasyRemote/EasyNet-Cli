@@ -39,7 +39,7 @@ pub(crate) fn descriptor_bound_from_wire_parts(
 mod tests {
     use super::*;
 
-    const CALLEE_URA: &str = "easynet:///r/acme/device/edge-1";
+    const CALLEE_URA: &str = "easynet:///r/acme/agent/edge-1.test-runtime";
 
     fn complete_envelope() -> pb::Envelope {
         pb::Envelope {

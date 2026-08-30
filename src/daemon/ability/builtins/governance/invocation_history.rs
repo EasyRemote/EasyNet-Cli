@@ -1963,7 +1963,7 @@ mod tests {
 
         let err = reader
             .list_history(json!({
-                "exclude_ability_uras": ["easynet:///r/test/ability/device.ok.ok", 7]
+                "exclude_ability_uras": [crate::core::ura::hub_ability_ura("test", "ok.ok"), 7]
             }))
             .unwrap_err()
             .to_string();

@@ -581,13 +581,14 @@ impl AbilityDeploymentStore {
             if row.state != AbilityDeploymentRecordState::Installed {
                 continue;
             }
-            let Ok(selector) = crate::core::ura::AbilitySelector::parse(row.ability_ura()) else {
-                continue;
-            };
-            if ability_management_system_agent_owner_is_hosted_by_device(
-                selector.owner_ura(),
-                hosted_device_authority_root,
-            ) {
+            let owner_is_hosted = crate::core::ura::AbilitySelector::parse(row.ability_ura())
+                .is_ok_and(|selector| {
+                    ability_management_system_agent_owner_is_hosted_by_device(
+                        selector.owner_ura(),
+                        hosted_device_authority_root,
+                    )
+                });
+            if owner_is_hosted {
                 continue;
             }
             quarantined.push(row.clone());
@@ -812,17 +813,12 @@ mod tests {
         manifest_marker: &str,
         installed_at_unix_ms: u64,
     ) -> AbilityDeploymentRecord {
-        let owner_ura = crate::core::ura::device_ura("localhost", device_id);
-        let manifest_bytes = format!(r#"{{"name":"{name}","marker":"{manifest_marker}"}}"#);
-        AbilityDeploymentRecord::new_with_manifest_bytes(
-            name.to_string(),
-            "er".to_string(),
-            crate::core::ura::owner_ability_ura(&owner_ura, name).expect("ability ura"),
-            format!("/bundles/{name}/ability.json"),
-            manifest_bytes.as_bytes(),
+        record_with_specific_system_agent_owner(
+            name,
+            device_id,
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+            manifest_marker,
             installed_at_unix_ms,
-            "easynet:///r/localhost/user/test-user",
-            "test-deploy-invocation",
         )
     }
 
@@ -839,6 +835,18 @@ mod tests {
             manifest_marker,
             installed_at_unix_ms,
         )
+    }
+
+    fn legacy_direct_device_record(
+        name: &str,
+        device_id: &str,
+        manifest_marker: &str,
+    ) -> AbilityDeploymentRecord {
+        let mut record = record_with_owner(name, device_id, manifest_marker, 0);
+        record.ability_ura = crate::core::ura::device_ability_ura("localhost", device_id, name);
+        record.install_id =
+            AbilityDeploymentRecord::derive_install_id(&record.ability_ura, &record.manifest_hash);
+        record
     }
 
     fn record_with_specific_system_agent_owner(
@@ -1006,8 +1014,8 @@ mod tests {
     #[test]
     fn quarantine_unhosted_device_authority_hides_direct_device_rows_from_replay() {
         let (store, _d) = tmp_store();
-        let current = record_with_owner("current", "current-device", "sha256:a", 0);
-        let previous = record_with_owner("previous", "old-device", "sha256:b", 0);
+        let current = legacy_direct_device_record("current", "current-device", "sha256:a");
+        let previous = legacy_direct_device_record("previous", "old-device", "sha256:b");
         let current_id = current.install_id().to_string();
         let previous_id = previous.install_id().to_string();
         store.upsert(current.clone()).unwrap();

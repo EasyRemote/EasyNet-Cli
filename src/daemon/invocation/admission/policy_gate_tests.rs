@@ -19,6 +19,15 @@ fn identity(ura: &str) -> AgentIdentity {
     }
 }
 
+fn system_agent_callee(realm: &str, device_id: &str, public_ability: &str) -> String {
+    let device = crate::core::ura::device_ura(realm, device_id);
+    crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+        &device,
+        public_ability,
+    )
+    .unwrap_or_else(|_| panic!("{public_ability} must have a declared SystemAgent owner"))
+}
+
 fn verified_device_path(
     caller_ura: &str,
     callee_ura: &str,
@@ -445,8 +454,7 @@ fn paired_device_ability_does_not_project_credentials_owner() {
 fn device_owned_ability_subject_does_not_project_device_owner() {
     let anchor = anchor_with_device_owner();
     let device_owned_ability =
-        crate::core::ura::owner_ability_ura("easynet:///r/test/device/dev-1", "node.describe")
-            .expect("direct Device-owned Ability URA");
+        crate::core::ura::device_ability_ura("test", "dev-1", "node.describe");
     let owner = resolve_owner(
         &device_owned_ability,
         "easynet:///r/test/authority",
@@ -929,9 +937,10 @@ fn realm_authority_can_read_descriptor_safe_device_metadata_before_owner_binding
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let stores = AccessControlStoreRegistry::ephemeral();
     let device = "easynet:///r/test/device/dev-1";
+    let callee = system_agent_callee("test", "dev-1", "node.describe");
     let envelope = Envelope {
         caller: Some(identity("easynet:///r/test/authority")),
-        callee: Some(identity(device)),
+        callee: Some(identity(&callee)),
         subject: Some(SubjectIdentity {
             ura: device.to_string(),
             profile: String::new(),
@@ -961,7 +970,7 @@ fn realm_authority_can_read_descriptor_safe_device_metadata_before_owner_binding
     assert_eq!(decision.owner_source, OwnerSource::Unresolved);
     assert!(decision.owner_user_ura.is_none());
     assert_eq!(decision.caller_ura, "easynet:///r/test/authority");
-    assert_eq!(decision.callee_ura, device);
+    assert_eq!(decision.callee_ura, callee);
 }
 
 #[test]
@@ -970,7 +979,7 @@ fn realm_authority_public_read_does_not_admit_device_owned_ability_subject() {
     let stores = AccessControlStoreRegistry::ephemeral();
     let device = "easynet:///r/test/device/dev-1";
     let device_owned_ability =
-        crate::core::ura::owner_ability_ura(device, "node.describe").expect("Device ability URA");
+        crate::core::ura::device_ability_ura("test", "dev-1", "node.describe");
     let envelope = Envelope {
         caller: Some(identity("easynet:///r/test/authority")),
         callee: Some(identity(device)),
@@ -998,10 +1007,10 @@ fn realm_authority_public_read_does_not_admit_device_owned_ability_subject() {
     })
     .expect_err("Device-owned ability URAs are migration facts, not public read subjects");
 
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(
-        err.message().contains("\"reason\":\"OWNER_UNRESOLVED\""),
-        "expected owner resolution denial instead of Device-owned ability policy allow, got: {}",
+        err.message().contains("Device is execution substrate"),
+        "expected protocol validation to reject a Device-owned Ability subject, got: {}",
         err.message()
     );
 }
@@ -1012,9 +1021,10 @@ fn realm_authority_public_device_read_stays_bound_to_local_device() {
     let stores = AccessControlStoreRegistry::ephemeral();
     let local_device = "easynet:///r/test/device/local-dev";
     let other_device = "easynet:///r/test/device/other-dev";
+    let other_callee = system_agent_callee("test", "other-dev", "node.describe");
     let envelope = Envelope {
         caller: Some(identity("easynet:///r/test/authority")),
-        callee: Some(identity(other_device)),
+        callee: Some(identity(&other_callee)),
         subject: Some(SubjectIdentity {
             ura: other_device.to_string(),
             profile: String::new(),
@@ -1753,9 +1763,14 @@ fn hub_link_can_submit_exact_invocation_lifecycle_cancel_without_product_grant()
     let stores = AccessControlStoreRegistry::ephemeral();
     let authority = "easynet:///r/test/authority";
     let device = "easynet:///r/test/device/dev-1";
+    let callee = system_agent_callee(
+        "test",
+        "dev-1",
+        crate::daemon::ability::names::governance::INVOCATION_CANCEL,
+    );
     let envelope = Envelope {
         caller: Some(identity(authority)),
-        callee: Some(identity(device)),
+        callee: Some(identity(&callee)),
         subject: Some(SubjectIdentity {
             ura: "easynet:///r/test/resource/user.alice/invoke/terminal.attach".to_string(),
             profile: String::new(),
@@ -1788,7 +1803,11 @@ fn hub_link_can_submit_exact_invocation_lifecycle_cancel_without_product_grant()
     );
     assert_eq!(
         decision.ability_ura,
-        "easynet:///r/test/ability/device.dev-1.invocation.cancel"
+        crate::core::ura::owner_ability_ura(
+            &callee,
+            crate::daemon::ability::names::governance::INVOCATION_CANCEL,
+        )
+        .expect("SystemAgent lifecycle Ability URA")
     );
 }
 
@@ -1796,9 +1815,14 @@ fn hub_link_can_submit_exact_invocation_lifecycle_cancel_without_product_grant()
 fn lifecycle_control_classifier_rejects_lookalike_ability() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let stores = AccessControlStoreRegistry::ephemeral();
+    let callee = system_agent_callee(
+        "test",
+        "dev-1",
+        crate::daemon::ability::names::governance::INVOCATION_CANCEL,
+    );
     let envelope = Envelope {
         caller: Some(identity("easynet:///r/test/authority")),
-        callee: Some(identity("easynet:///r/test/device/dev-1")),
+        callee: Some(identity(&callee)),
         subject: Some(SubjectIdentity {
             ura: "easynet:///r/test/resource/user.alice/invoke/terminal.attach".to_string(),
             profile: String::new(),
@@ -1831,9 +1855,10 @@ fn lifecycle_control_classifier_rejects_lookalike_ability() {
 fn local_hub_allows_forwarding_to_trusted_remote_owner_realm() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let stores = AccessControlStoreRegistry::ephemeral();
+    let callee = system_agent_callee("peer", "callee", "shell.run");
     let envelope = Envelope {
         caller: Some(identity("easynet:///r/local/user/alice")),
-        callee: Some(identity("easynet:///r/peer/device/callee")),
+        callee: Some(identity(&callee)),
         subject: Some(SubjectIdentity {
             ura: "easynet:///r/peer/resource/user.bob/invoke/shell.run".to_string(),
             profile: String::new(),
@@ -1877,9 +1902,10 @@ fn local_hub_allows_forwarding_to_trusted_remote_owner_realm() {
 fn local_hub_does_not_forward_to_untrusted_remote_owner_realm() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let stores = AccessControlStoreRegistry::ephemeral();
+    let callee = system_agent_callee("peer", "callee", "shell.run");
     let envelope = Envelope {
         caller: Some(identity("easynet:///r/local/user/alice")),
-        callee: Some(identity("easynet:///r/peer/device/callee")),
+        callee: Some(identity(&callee)),
         subject: Some(SubjectIdentity {
             ura: "easynet:///r/peer/resource/user.bob/invoke/shell.run".to_string(),
             profile: String::new(),

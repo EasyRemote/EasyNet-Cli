@@ -4151,6 +4151,7 @@ mod tests {
                 json!({
                     "name": "hot-worker",
                     "agent_type": "claude-code",
+                    "materialize_directory": true,
                 }),
                 &fixture.cell,
             )
@@ -4264,6 +4265,7 @@ mod tests {
                 json!({
                     "name": "ephemeral",
                     "agent_type": "claude-code",
+                    "materialize_directory": true,
                 }),
                 &fixture.cell,
             )

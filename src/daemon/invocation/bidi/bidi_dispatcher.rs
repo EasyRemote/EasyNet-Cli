@@ -5043,9 +5043,7 @@ mod tests {
 
     #[test]
     fn json_session_request_rejects_product_ability_bypass() {
-        let device_ability =
-            crate::core::ura::owner_ability_ura("easynet:///r/test/device/d1", "shell.run")
-                .expect("device ability URA");
+        let device_ability = crate::core::ura::device_ability_ura("test", "d1", "shell.run");
         let err = session_control_kind_for_hub(Some("test"), &device_ability)
             .expect_err("device-owned product ability must not route as JSON session control");
         assert!(

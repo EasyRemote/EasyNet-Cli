@@ -1670,11 +1670,12 @@ mod tests {
 
     #[test]
     fn application_focus_candidate_preserves_focused_member_of_exact_surface() {
-        let binding = application_binding();
-        let tracker = RemoteAppTargetBindingStateMachine::from_binding(binding.clone());
+        let mut binding = application_binding();
         let first = app_window(10, 10.0, 100.0);
         let mut second = app_window(11, 110.0, 90.0);
         second.focused = true;
+        commit_application_surface_layout(&mut binding, &[first.clone(), second.clone()]);
+        let tracker = RemoteAppTargetBindingStateMachine::from_binding(binding.clone());
         let observation = PlatformTargetObservationSample {
             state: PlatformTargetObservationSampleState::HostSnapshot(HostTargetSnapshot {
                 windows: vec![first, second],
@@ -1705,14 +1706,15 @@ mod tests {
 
     #[test]
     fn target_input_guard_binds_application_to_exact_focused_window_set() {
-        let binding = application_binding();
-        let snapshot = focused_snapshot(&binding);
+        let mut binding = application_binding();
         let mut first = app_window(10, 10.0, 100.0);
         first.focused = true;
         let host = HostTargetSnapshot {
             windows: vec![first, app_window(11, 110.0, 90.0)],
             display_ids: BTreeSet::from([42]),
         };
+        commit_application_surface_layout(&mut binding, &host.windows);
+        let snapshot = focused_snapshot(&binding);
 
         assert_eq!(
             validate_target_input_against_host_snapshot(&binding, &snapshot, &host),

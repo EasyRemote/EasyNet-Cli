@@ -297,6 +297,7 @@ impl AdmissionPolicyGate {
                 &verified_caller.caller_ura,
                 &callee_ura,
                 &subject_ura,
+                context.ability,
                 context.daemon_ura,
                 verified_caller.trust_path,
                 context.action,
@@ -940,6 +941,7 @@ fn realm_authority_public_read_scope(
     caller_ura: &str,
     callee_ura: &str,
     subject_ura: &str,
+    public_ability: &str,
     daemon_ura: Option<&str>,
     trusted_path: TrustedCallerPath,
     action: AccessAction,
@@ -948,25 +950,31 @@ fn realm_authority_public_read_scope(
     if trusted_path != TrustedCallerPath::Hub || action != AccessAction::Read || !safe_read {
         return false;
     }
-    if Some(callee_ura) != daemon_ura {
-        return false;
-    }
     let Ok(caller) = parse_ura(caller_ura) else {
         return false;
     };
     if caller.kind != URAKind::Authority {
         return false;
     }
-    let Ok(callee) = parse_ura(callee_ura) else {
+    let Some(daemon_ura) = daemon_ura else {
         return false;
     };
-    if callee.kind != URAKind::Device || callee.realm != caller.realm {
+    let Ok(daemon) = parse_ura(daemon_ura) else {
+        return false;
+    };
+    if daemon.kind != URAKind::Device || daemon.realm != caller.realm || subject_ura != daemon_ura {
         return false;
     }
+
     // The only pre-owner-binding Hub read exception is the local
-    // DeviceProfileProjection itself. Direct Device-owned Ability URAs are
+    // DeviceProfileProjection through the exact registry-declared SystemAgent
+    // that owns the requested ability. Direct Device-owned Ability URAs are
     // migration read-model facts, not public policy subjects or callees.
-    subject_ura == callee_ura
+    crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+        daemon_ura,
+        public_ability,
+    )
+    .is_ok_and(|expected_callee| expected_callee == callee_ura)
 }
 
 fn device_publication_custody_manage_scope(

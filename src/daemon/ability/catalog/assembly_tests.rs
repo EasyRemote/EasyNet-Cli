@@ -106,11 +106,22 @@ fn canonical_test_agent_registry_key(name: &str) -> String {
 }
 
 fn test_agent_entry(name: &str) -> crate::daemon::persistence::agent_registry::AgentEntry {
+    let root = crate::daemon::persistence::config::agents_root().join(name);
+    if !root.join("agent.toml").exists() {
+        crate::daemon::execution::mission::directory::AgentDirectory::create(
+            &crate::daemon::execution::mission::directory::Location::Local { root: root.clone() },
+            crate::core::agent::spec::AgentSpec::new(
+                name,
+                crate::core::agent::spec::RuntimeKind::ClaudeCode,
+            ),
+        )
+        .expect("materialize test Agent directory with default chat manifest");
+    }
     let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
         crate::core::agent::spec::RuntimeKind::ClaudeCode,
         None,
     );
-    entry.root_path = Some(crate::daemon::persistence::config::agents_root().join(name));
+    entry.root_path = Some(root);
     entry
 }
 
@@ -1479,12 +1490,8 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
         "RealmAuthority LocalRuntime must not expose voice.list_calls without a realm provider"
     );
 
-    let former_synthetic_device = crate::core::ura::device_ura("hub-only", "local");
-    let device_observe = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-        &former_synthetic_device,
-        "observe.health",
-    )
-    .expect("hypothetical Device runtime key");
+    let device_observe =
+        crate::core::ura::device_ability_ura("hub-only", "local", "observe.health");
     assert!(
         crate::support::async_bridge::run_blocking(
             runtime.ability_options(&device_observe),

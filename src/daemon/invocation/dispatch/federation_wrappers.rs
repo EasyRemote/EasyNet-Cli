@@ -2186,10 +2186,11 @@ mod tests {
         let registry = PresenceRegistry::new();
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
-        let owner_ura = "easynet:///r/realm/device/a";
-        insert_presence(&registry, owner_ura.to_string());
+        let host_device_ura = crate::core::ura::device_ura("realm", "a");
+        let owner_ura = crate::core::ura::device_agent_ura("realm", "a", "test-runtime");
+        insert_presence(&registry, host_device_ura.clone());
 
-        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, "device_profile.cursor")
+        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "device_profile.cursor")
             .expect("ability ura");
         let publish_at = 1_000_i64;
         let lease = crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(
@@ -2197,15 +2198,15 @@ mod tests {
         );
         catalog.upsert_projection(
             crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
-                owner_ura.to_string(),
-                owner_ura.to_string(),
+                owner_ura.clone(),
+                host_device_ura,
                 1,
                 1,
                 "sha256:digest".to_string(),
                 lease,
                 vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
                     ability_ura: ability_ura.clone(),
-                    owner_ura: owner_ura.to_string(),
+                    owner_ura: owner_ura.clone(),
                     namespace: "device_profile".to_string(),
                     local_name: "cursor".to_string(),
                     descriptor_revision: "sha256:desc".to_string(),
@@ -2224,12 +2225,12 @@ mod tests {
 
         // After the lease expires, the projection is filtered out.
         let after_expiry = lease + 1;
-        assert!(catalog.get_at(owner_ura, after_expiry).is_none());
+        assert!(catalog.get_at(&owner_ura, after_expiry).is_none());
 
         // A heartbeat at that moment renews the lease...
         let req = HeartbeatRequest {
             since_abilities_revision: 11,
-            refresh_owner_uras: vec![owner_ura.to_string()],
+            refresh_owner_uras: vec![owner_ura.clone()],
         };
         let resp = handle_heartbeat(&req, &registry, &catalog, after_expiry);
         assert_eq!(resp.authority_abilities_diff.revision, 11);
@@ -2237,11 +2238,11 @@ mod tests {
         // ...and the DeviceProfileProjection ability is resolvable again, with
         // its contents and revision unchanged (lease-only refresh).
         let got = catalog
-            .get_at(owner_ura, after_expiry)
+            .get_at(&owner_ura, after_expiry)
             .expect("lease renewed");
         assert_eq!(got.len(), 1);
         assert_eq!(got[0]["local_name"], "cursor");
-        let row = catalog.projection_for_owner(owner_ura).unwrap();
+        let row = catalog.projection_for_owner(&owner_ura).unwrap();
         assert_eq!(row.projection_revision(), 1);
         assert_eq!(row.projection_digest(), "sha256:digest");
     }
@@ -2692,15 +2693,21 @@ mod tests {
     #[test]
     fn namespace_resolve_rejects_missing_qtype_without_guessing_route_shape() {
         let registry = PresenceRegistry::new();
-        let owner_ura = "easynet:///r/realm/device/dev-1";
-        insert_presence(&registry, owner_ura.to_string());
+        let host_device_ura = crate::core::ura::device_ura("realm", "dev-1");
+        let owner_ura = crate::core::ura::device_agent_ura("realm", "dev-1", "test-runtime");
+        insert_presence(&registry, host_device_ura.clone());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
-        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, "agent.list")
+        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "agent.list")
             .expect("device ability ura");
         catalog.upsert_projection(projection_row_for(
-            owner_ura,
-            vec![projection_summary(owner_ura, &ability_ura, "agent", "list")],
+            &owner_ura,
+            vec![projection_summary(
+                &owner_ura,
+                &ability_ura,
+                "agent",
+                "list",
+            )],
         ));
 
         let answer = handle_namespace_resolve_at(

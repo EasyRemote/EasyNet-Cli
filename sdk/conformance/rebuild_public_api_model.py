@@ -148,7 +148,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
         "runtime_lifecycle",
     ),
     (
-        r"(abilitycall|abilitytarget|childcontext|invocationobjectadapter|wireprojector|makeability)",
+        r"(abilitycall|abilityoutput|abilitytarget|childcontext|invocationobjectadapter|wireprojector|makeability|maketypedability)",
         "ability_invocation_facade",
     ),
     (

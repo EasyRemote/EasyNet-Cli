@@ -12,7 +12,8 @@ use std::sync::{
 };
 
 use axon_sdk::invocation::{
-    make_ability, AbilityCallModes, AbilityOptions, AxonError, KeyResolver, LocalRuntime,
+    make_typed_ability, AbilityCallModes, AbilityOptions, AbilityOutput, AxonError, KeyResolver,
+    LocalRuntime,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::VerifyingKey;
@@ -278,9 +279,9 @@ pub(crate) async fn register_runtime_bootstrap_identity_ability(
     })?;
     let options = runtime_admin_options(catalog, authority_ura)?;
     runtime
-        .register_ability_with_options(
+        .register_typed_ability_with_options(
             runtime_key.clone(),
-            make_ability(move |context| {
+            make_typed_ability(move |context| {
                 let provider = Arc::clone(&provider);
                 async move {
                     let args =
@@ -291,11 +292,12 @@ pub(crate) async fn register_runtime_bootstrap_identity_ability(
                                 ))
                             })?;
                     let receipt = provider.bootstrap(args)?;
-                    serde_json::to_vec(&receipt).map_err(|error| {
+                    let payload = serde_json::to_vec(&receipt).map_err(|error| {
                         AxonError::internal(format!(
                             "runtime_bootstrap_self_identity_receipt:{error}"
                         ))
-                    })
+                    })?;
+                    AbilityOutput::new(payload, "application/json")
                 }
             }),
             options,

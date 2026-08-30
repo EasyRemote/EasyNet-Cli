@@ -325,7 +325,9 @@ pub async fn drain_local_stream_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon_sdk::invocation::{make_ability, AbilityCallModes, AbilityOptions};
+    use axon_sdk::invocation::{
+        make_typed_ability, AbilityCallModes, AbilityOptions, AbilityOutput,
+    };
 
     use crate::daemon::invocation::routing::target::{CallMode, PublicInvocationTargetIssuer};
     use serde_json::json;
@@ -397,9 +399,11 @@ mod tests {
         let runtime_ability =
             ability_ura_for_wire(callee_ura, ability).expect("runtime ability URA");
         runtime
-            .register_ability_with_options(
+            .register_typed_ability_with_options(
                 runtime_ability,
-                make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+                make_typed_ability(|ctx| async move {
+                    AbilityOutput::new(ctx.payload.clone(), "application/json")
+                }),
                 AbilityOptions::default()
                     .with_modes(AbilityCallModes::RPC)
                     .with_descriptor_proof(
@@ -417,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_ability_ura_projects_owner_as_callee() {
-        let owner = crate::core::ura::device_ura("acme", "dev-a");
+        let owner = crate::core::ura::device_agent_ura("acme", "dev-a", "locomotion");
         let ability = crate::core::ura::owner_ability_ura(&owner, "fs.read").unwrap();
         let runtime = runtime_with_descriptor_bound_ability(&owner, &ability).await;
         let request = local_system_request(
@@ -439,26 +443,27 @@ mod tests {
 
     #[tokio::test]
     async fn resource_subject_does_not_become_callee() {
-        let (_home, local_device_ura) = provision_test_local_device_ura();
+        let (_home, _local_device_ura) = provision_test_local_device_ura();
+        let callee = crate::core::ura::device_agent_ura("acme", "dev-a", "locomotion");
         let subject =
             crate::core::ura::resource_dot_ura("acme", "device.dev-a.files", "tmp/report.txt");
-        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura, "fs.read").await;
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&callee, "fs.read").expect("SystemAgent ability");
+        let runtime = runtime_with_descriptor_bound_ability(&callee, "fs.read").await;
         let request = local_system_request(
             &runtime,
             AxonInvocationCallMode::Rpc,
-            &target("fs.read".to_string(), Some(subject.clone())),
+            &target(ability_ura.clone(), Some(subject.clone())),
             b"{}".to_vec(),
         )
         .await
         .expect("descriptor-bound request");
 
-        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura);
+        assert_eq!(request.envelope().envelope().callee.ura, callee);
         assert_eq!(request.envelope().envelope().subject.ura, subject);
         assert_eq!(
             request.envelope().envelope().ability,
-            expected_descriptor_ref(
-                &crate::core::ura::owner_ability_ura(&local_device_ura, "fs.read").unwrap()
-            )
+            expected_descriptor_ref(&ability_ura)
         );
     }
 
@@ -533,9 +538,11 @@ mod tests {
 
     #[tokio::test]
     async fn local_rpc_projects_finalized_output() {
-        let (_home, local_device_ura) = provision_test_local_device_ura();
-        let ability = "device.inspect".to_string();
-        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura, &ability).await;
+        let (_home, _local_device_ura) = provision_test_local_device_ura();
+        let callee = crate::core::ura::device_agent_ura("acme", "dev-a", "test-runtime");
+        let ability = crate::core::ura::owner_ability_ura(&callee, "device.inspect")
+            .expect("SystemAgent ability");
+        let runtime = runtime_with_descriptor_bound_ability(&callee, "device.inspect").await;
         let args = json!({"ok": true, "source": "finalized"});
 
         let output = invoke_local_rpc(runtime, target_with_args(ability, None, args.clone()))

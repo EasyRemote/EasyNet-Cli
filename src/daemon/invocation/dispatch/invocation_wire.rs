@@ -1265,7 +1265,7 @@ mod tests {
     fn signed_request_signs_descriptor_bound_canonical_bytes() {
         let signer = TestSigner(SigningKey::from_bytes(&[0x37; 32]));
         let payload = br#"{"x":1}"#.to_vec();
-        let callee = "easynet:///r/acme/device/dev-a";
+        let callee = "easynet:///r/acme/agent/dev-a.test-runtime";
         let descriptor_ref = format!(
             "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             crate::core::ura::owner_ability_ura(callee, "demo.echo").unwrap()
@@ -1318,7 +1318,7 @@ mod tests {
     fn descriptor_ref_signed_request_keeps_route_name_separate_from_signature_target() {
         let signer = TestSigner(SigningKey::from_bytes(&[0x38; 32]));
         let payload = br#"{"message":"hi"}"#.to_vec();
-        let callee = "easynet:///r/acme/device/dev-a";
+        let callee = "easynet:///r/acme/agent/dev-a.test-runtime";
         let descriptor_ref = format!(
             "{}@2.3.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
             crate::core::ura::owner_ability_ura(callee, "echo").unwrap()

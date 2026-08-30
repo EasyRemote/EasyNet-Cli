@@ -525,7 +525,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view(
             && runtime
                 .source(HostAudioSourceClass::SystemLoopback)
                 .is_ready();
-        return json!({
+        json!({
             "supported": runtime.compiled_supported(),
             "offer_ready": ready,
             "capture_ready": ready,
@@ -558,7 +558,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn audio_support_view(
             "runtime_probe_detail": runtime.diagnostic_detail(),
             "transport": "webrtc",
             "non_claim": "offer readiness does not claim sender packets or browser-decoded host audio",
-        });
+        })
     }
     #[cfg(not(target_os = "macos"))]
     {

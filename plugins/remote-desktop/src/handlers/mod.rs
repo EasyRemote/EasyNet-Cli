@@ -31,9 +31,7 @@ mod tests {
     use crate::daemon::persistence::resources::{self, ResourcesFile};
     use crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT;
     use crate::daemon::plugins::remote_desktop::constants::MAX_ATTACH_FPS;
-    use crate::daemon::plugins::remote_desktop::media::{
-        REMOTE_DESKTOP_MEDIA_SDK_ID, XCAP_MACOS_RECORDER_MAX_FPS,
-    };
+    use crate::daemon::plugins::remote_desktop::media::REMOTE_DESKTOP_MEDIA_SDK_ID;
     use crate::daemon::plugins::remote_desktop::target::TargetGeometry;
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::{
@@ -79,7 +77,7 @@ mod tests {
         );
         assert_eq!(
             created["device_capabilities"]["max_fps"],
-            json!(XCAP_MACOS_RECORDER_MAX_FPS)
+            created["quality"]["target_fps"]
         );
         assert_eq!(
             created["device_capabilities"]["requested_fps_ceiling"],

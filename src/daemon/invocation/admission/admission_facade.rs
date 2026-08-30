@@ -5113,7 +5113,10 @@ mod tests {
         assert_eq!(authority.binding.form(), "delegated_by+delegation");
     }
 
-    fn assert_realm_trust_delegation_rejects_alice_subject(subject: &str, message: &str) {
+    fn realm_trust_delegation_error_for_alice_subject(
+        subject: &str,
+        message: &str,
+    ) -> tonic::Status {
         let now_ms = current_unix_ms();
         let issuer = "easynet:///r/example/user/alice";
         let caller = "easynet:///r/example/user/alice";
@@ -5132,7 +5135,7 @@ mod tests {
         let envelope = authority_wire_envelope(Some(caller), Some(callee), Some(subject));
         let resolver = issuer_key_resolver(issuer, &signing_key);
 
-        let err = require_authority_metadata_error(
+        require_authority_metadata_error(
             verify_authority_metadata_with_issuer_key(
                 &envelope,
                 "run",
@@ -5143,8 +5146,11 @@ mod tests {
                 &resolver,
             ),
             message,
-        );
+        )
+    }
 
+    fn assert_realm_trust_delegation_rejects_alice_subject(subject: &str, message: &str) {
+        let err = realm_trust_delegation_error_for_alice_subject(subject, message);
         assert_eq!(err.code(), Code::PermissionDenied);
         assert!(
             err.message().contains(REASON_AUTHORITY_ISSUER_DENIED),
@@ -5218,10 +5224,12 @@ mod tests {
 
     #[test]
     fn realm_trust_delegation_rejects_user_issuer_for_device_owned_ability_subject() {
-        assert_realm_trust_delegation_rejects_alice_subject(
+        let error = realm_trust_delegation_error_for_alice_subject(
             "easynet:///r/example/ability/device.dev-a.observe.health",
             "User issuer must not self-issue delegation over a Device-owned Ability subject",
         );
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("Device is execution substrate"));
     }
 
     #[test]

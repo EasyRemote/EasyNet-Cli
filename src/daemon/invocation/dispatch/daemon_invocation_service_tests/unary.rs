@@ -2298,19 +2298,24 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
     }]));
     let runtime_cell = SharedTrustAnchor::new(anchor.clone());
     let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
-    let owner_ura = "easynet:///r/peer-realm/device/dev-peer";
+    let host_ura = "easynet:///r/peer-realm/device/dev-peer";
+    let owner_ura = crate::core::ura::device_agent_ura(
+        "peer-realm",
+        "dev-peer",
+        crate::daemon::ability::names::device_control::NODE_MANAGEMENT_SYSTEM_AGENT_ID,
+    );
     let ability_ura =
-        crate::core::ura::owner_ability_ura(owner_ura, "agent.list").expect("ability ura");
+        crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
     let canned = InvokeResponse {
         result: serde_json::to_vec(&serde_json::json!({
             "answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
             "records": [
                 {
-                    "name": owner_ura,
+                    "name": host_ura,
                     "record_type": "RECORD_TYPE_ID",
                     "value": {
                         "id": {
-                            "ura": owner_ura,
+                            "ura": host_ura,
                             "kind": "URA_KIND_DEVICE"
                         }
                     }
@@ -3008,7 +3013,9 @@ async fn invoke_unknown_ability_without_projection_returns_resolver_negative() {
 /// and returns the handler's JSON output.
 #[tokio::test]
 async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
-    use axon_sdk::invocation::{make_ability, AbilityCallModes, AbilityOptions};
+    use axon_sdk::invocation::{
+        make_typed_ability, AbilityCallModes, AbilityOptions, AbilityOutput,
+    };
 
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
@@ -3017,9 +3024,11 @@ async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
     let subject_ura =
         crate::core::ura::resource_dot_ura("test-realm", "user.test-user", "fallback-echo");
     let ability_ura = crate::core::ura::owner_ability_ura(&system_agent_ura, ability).unwrap();
-    rt.register_ability_with_options(
+    rt.register_typed_ability_with_options(
         ability_ura,
-        make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        make_typed_ability(|ctx| async move {
+            AbilityOutput::new(ctx.payload.clone(), "application/json")
+        }),
         AbilityOptions::default()
             .with_modes(AbilityCallModes::RPC)
             .with_descriptor_proof(

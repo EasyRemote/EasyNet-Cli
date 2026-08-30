@@ -73,11 +73,12 @@ fn forwarded_binary_chunk(frame: LocalBidiHandlerFrame) -> BinaryChunk {
 }
 
 #[test]
-fn remote_bidi_target_ura_preserves_canonical_device_ura() {
-    let open = make_envelope_open_with_callee("  easynet:///r/test-realm/device/dev-B  ");
+fn remote_bidi_target_ura_preserves_canonical_system_agent_callee() {
+    let callee = crate::core::ura::device_agent_ura("test-realm", "dev-B", "test-runtime");
+    let open = make_envelope_open_with_callee(&format!("  {callee}  "));
     assert_eq!(
         remote_bidi_target_ura(&open).as_deref(),
-        Some("easynet:///r/test-realm/device/dev-B")
+        Some(callee.as_str())
     );
 }
 

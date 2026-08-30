@@ -3192,13 +3192,25 @@ fn real_browser_plugin_abilities_reach_handlers_without_launching_chrome() {
 
     let mut attach = target_for_subject("browser.attach_session", json!({}), missing_session);
     attach.call_mode = CallMode::Bidi;
-    let attach = d
+    let mut attach = d
         .execute_bidi(attach)
-        .expect_err("browser.attach_session with a missing session must reach session gate");
-    assert!(
-        attach.to_string().contains("browser_session_not_found"),
-        "browser.attach_session must route to browser session gate; got {attach}"
-    );
+        .expect("bidi carrier admits before the browser session handler runs");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let frame =
+            tokio::time::timeout(std::time::Duration::from_secs(1), attach.from_client.recv())
+                .await
+                .expect("missing browser session must terminalize promptly")
+                .expect("runtime adapter emits one terminal error frame");
+        let error = frame.into_json_value().expect("terminal error JSON");
+        assert!(
+            error.to_string().contains("browser_session_not_found"),
+            "browser.attach_session must route to browser session gate; got {error}"
+        );
+    });
 
     let close = d
         .execute_rpc(target_for_subject(
@@ -3822,6 +3834,23 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     );
     let d = dispatcher_for(reg);
     let session_id = unique_call_id("remote-desktop");
+    let focus_error = d
+        .execute_rpc(explicit_target(
+            "remote_desktop.focus_target",
+            json!({
+                "session_id": "missing-focus-session",
+                "session_token": "missing-token",
+                "expected_consent_epoch": 1,
+                "expected_binding_epoch": 1,
+                "expected_target_identity_epoch": 1,
+                "expected_target_geometry_revision": 1,
+                "expected_target_focus_epoch": 1,
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
+        .expect_err("remote_desktop.focus_target must reach the session gate");
+    assert!(focus_error.to_string().contains("session_not_found"));
     let granted = d
         .execute_rpc(explicit_target(
             "remote_desktop.grant_consent",

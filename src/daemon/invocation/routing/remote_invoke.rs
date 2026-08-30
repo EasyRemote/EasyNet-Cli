@@ -2865,19 +2865,15 @@ mod tests {
     }
 
     #[test]
-    fn remote_execution_validation_rejects_direct_device_owned_ability_on_device_target() {
-        let selector = crate::core::ura::AbilitySelector::parse(
+    fn remote_execution_validation_cannot_construct_direct_device_owned_selector() {
+        let error = crate::core::ura::AbilitySelector::parse(
             "easynet:///r/realm/ability/device.node-a.fs.read",
         )
-        .expect("legacy device-owned selector");
-
-        let error = validate_remote_execution_target("easynet:///r/realm/device/node-a", &selector)
-            .expect_err("direct Device-owned ability must not be a remote callee");
+        .expect_err("direct Device-owned ability must fail at the canonical selector boundary");
 
         let message = error.to_string();
         assert!(
-            message.contains("direct Device-owned ability URA")
-                && message.contains("migration-only")
+            message.contains("Device is execution substrate")
                 && message.contains("device-sponsored SystemAgent"),
             "wrong error: {message}"
         );

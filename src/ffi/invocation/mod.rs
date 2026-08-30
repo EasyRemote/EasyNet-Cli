@@ -1655,6 +1655,11 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
 ) -> i32 {
+    if let Err(code) = unsafe {
+        initialize_invocation_stream_output(out_stream_id, "runtime_invocation_stream_open")
+    } {
+        return code;
+    }
     let Some(on_chunk) = on_chunk else {
         return record_invocation_error(
             ERR_NULL_POINTER,
@@ -1677,6 +1682,12 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
 /// carries sequence/lifecycle state, raw views carry content type and payload,
 /// and JSON appears only in sparse receipt/error sidecars. Raw payload bytes
 /// never bypass Runtime Core stream validation.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `runtime_init`.
+/// - `invocation_json` must be a valid UTF-8 C string.
+/// - `on_chunk` must remain callable for the lifetime of the stream.
+/// - `out_stream_id` must be a non-null pointer owned by the caller.
 #[no_mangle]
 pub unsafe extern "C" fn runtime_invocation_stream_open_v8(
     handle: RuntimeHandle,
@@ -1685,6 +1696,11 @@ pub unsafe extern "C" fn runtime_invocation_stream_open_v8(
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
 ) -> i32 {
+    if let Err(code) = unsafe {
+        initialize_invocation_stream_output(out_stream_id, "runtime_invocation_stream_open_v8")
+    } {
+        return code;
+    }
     let Some(on_chunk) = on_chunk else {
         return record_invocation_error(
             ERR_NULL_POINTER,
@@ -1705,6 +1721,12 @@ pub unsafe extern "C" fn runtime_invocation_stream_open_v8(
 /// payload lease. The callback receives one owning reference for every
 /// non-empty payload and must release it with
 /// `runtime_buffer_lease_release_v9`.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `runtime_init`.
+/// - `invocation_json` must be a valid UTF-8 C string.
+/// - `on_chunk` must remain callable for the lifetime of the stream.
+/// - `out_stream_id` must be a non-null pointer owned by the caller.
 #[no_mangle]
 pub unsafe extern "C" fn runtime_invocation_stream_open_v9(
     handle: RuntimeHandle,
@@ -1713,6 +1735,11 @@ pub unsafe extern "C" fn runtime_invocation_stream_open_v9(
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
 ) -> i32 {
+    if let Err(code) = unsafe {
+        initialize_invocation_stream_output(out_stream_id, "runtime_invocation_stream_open_v9")
+    } {
+        return code;
+    }
     let Some(on_chunk) = on_chunk else {
         return record_invocation_error(
             ERR_NULL_POINTER,
@@ -1800,6 +1827,20 @@ pub extern "C" fn runtime_buffer_lease_release_v9(
     }
 }
 
+unsafe fn initialize_invocation_stream_output(
+    out_stream_id: *mut InvocationStreamId,
+    operation: &'static str,
+) -> Result<(), i32> {
+    if out_stream_id.is_null() {
+        return Err(record_invocation_error(
+            ERR_NULL_POINTER,
+            format!("{operation}: out_stream_id pointer is null"),
+        ));
+    }
+    unsafe { *out_stream_id = 0 };
+    Ok(())
+}
+
 unsafe fn runtime_invocation_stream_open_inner(
     handle: RuntimeHandle,
     invocation_json: *const c_char,
@@ -1808,14 +1849,6 @@ unsafe fn runtime_invocation_stream_open_inner(
     out_stream_id: *mut InvocationStreamId,
     operation: &'static str,
 ) -> i32 {
-    if out_stream_id.is_null() {
-        return record_invocation_error(
-            ERR_NULL_POINTER,
-            format!("{operation}: out_stream_id pointer is null"),
-        );
-    }
-    unsafe { *out_stream_id = 0 };
-
     let session = match get(handle) {
         Some(session) => session,
         None => {
@@ -10187,7 +10220,7 @@ mod tests {
         let history_descriptor_ref = CString::new(format!(
             "{}@1.0.0#{}!read",
             crate::core::ura::owner_ability_ura(
-                "easynet:///r/acme/device/dev-a",
+                test_system_agent_callee_ura(),
                 crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
             )
             .expect("history ability URA"),
@@ -11999,8 +12032,10 @@ mod tests {
     fn runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing_control_path = dir.path().join("missing-control.json");
-        let callee_ura = crate::core::ura::device_ura("localhost", "callee-device");
-        let other_ura = crate::core::ura::device_ura("localhost", "other-device");
+        let callee_ura =
+            crate::core::ura::device_agent_ura("localhost", "callee-device", "test-runtime");
+        let other_ura =
+            crate::core::ura::device_agent_ura("localhost", "other-device", "test-runtime");
         let other_ability = crate::core::ura::owner_ability_ura(&other_ura, "meta.list_abilities")
             .expect("other ability URA");
         let session = crate::ffi::client::handle::ClientSession::with_control_path_only(

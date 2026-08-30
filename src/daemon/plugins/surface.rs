@@ -654,7 +654,7 @@ quick_add = true
         .expect("manifest");
         std::fs::write(
             root.join("abilities/test.camera.ability.toml"),
-            crate::daemon::plugins::package::tests::test_descriptor("test.camera"),
+            bidi_test_descriptor("test.camera", "json_frames"),
         )
         .expect("descriptor");
     }
@@ -688,9 +688,17 @@ bidi_wire_kind = "metadata_json_plus_binary"
         .expect("manifest");
         std::fs::write(
             root.join("abilities/test.remoteapp.attach.ability.toml"),
-            crate::daemon::plugins::package::tests::test_descriptor("test.remoteapp.attach"),
+            bidi_test_descriptor("test.remoteapp.attach", "metadata_json_plus_binary"),
         )
         .expect("descriptor");
+    }
+
+    fn bidi_test_descriptor(ability: &str, wire_kind: &str) -> String {
+        crate::daemon::plugins::package::tests::test_descriptor(ability).replacen(
+            "[input_schema]",
+            &format!("bidi_wire_kind = \"{wire_kind}\"\n\n[input_schema]"),
+            1,
+        )
     }
 
     fn write_companion_package(root: &std::path::Path) {

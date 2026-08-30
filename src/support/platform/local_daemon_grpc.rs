@@ -2770,10 +2770,11 @@ mod tests {
         };
         use axon_sdk::pb::axon::v1::InvokeResponse;
 
+        let callee_ura = crate::core::ura::device_agent_ura("acme", "edge-1", "test-runtime");
         let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
             "job.run",
             serde_json::json!({"job": 1}),
-            "easynet:///r/acme/device/edge-1",
+            &callee_ura,
             "easynet:///r/acme/resource/user.jobs/job-1",
             Duration::from_secs(5),
         )

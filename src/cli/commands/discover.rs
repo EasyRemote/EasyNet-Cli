@@ -1123,9 +1123,15 @@ mod tests {
     }
 
     fn device_row(realm: &str) -> Value {
+        let owner_ura = crate::core::ura::device_agent_ura(
+            realm,
+            "device-9",
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
         json!({
-            "qualified_name": crate::core::ura::device_ability_ura(realm, "device-9", "fs.read"),
-            "owner": "device-9",
+            "qualified_name": crate::core::ura::owner_ability_ura(&owner_ura, "fs.read")
+                .expect("SystemAgent ability URA"),
+            "owner": crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
             "ability": "fs.read",
             "description": "read a file from disk",
             "scope_matched": "device",
@@ -1146,7 +1152,7 @@ mod tests {
         let c = Candidate::from_ladder_row(&device_row("acme"), &toks)
             .unwrap()
             .expect("scores > 0");
-        assert_eq!(c.owner_kind, "device");
+        assert_eq!(c.owner_kind, "system-agent");
     }
 
     #[test]

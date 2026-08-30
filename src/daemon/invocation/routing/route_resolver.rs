@@ -4283,12 +4283,29 @@ mod tests {
     #[test]
     fn canonical_policy_rejects_owner_target_mismatch_identically_for_every_carrier() {
         let registry = PresenceRegistry::new();
-        let owner_ura = crate::core::ura::device_ura("test-realm", "owner-a");
-        let other_target = crate::core::ura::device_ura("test-realm", "owner-b");
+        let owner_ura = crate::core::ura::device_agent_ura(
+            "test-realm",
+            "owner-a",
+            crate::daemon::ability::names::device_control::NODE_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let other_target = crate::core::ura::device_agent_ura(
+            "test-realm",
+            "owner-b",
+            crate::daemon::ability::names::device_control::NODE_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let catalog = AbilityCatalogStore::new();
-        let resolver = DaemonRouteResolver::new(&registry, None, &catalog).at(TEST_NOW_MS);
+        let host_device_ura = crate::core::ura::device_ura("test-realm", "owner-a");
+        mark_online(&registry, &host_device_ura);
+        let authority = FakeLocalRuntimeAuthority::with_owner_key_modes(
+            &owner_ura,
+            "agent.list",
+            &[CallMode::Rpc, CallMode::Stream, CallMode::Bidi],
+        );
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
+            .with_local_catalog_authority(host_device_ura, authority)
+            .at(TEST_NOW_MS);
 
         let failures = [CallMode::Rpc, CallMode::Stream, CallMode::Bidi]
             .into_iter()
@@ -4399,7 +4416,7 @@ mod tests {
     fn descriptor_ref_query_without_owner_is_rejected() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
         mark_online(&registry, &owner_ura);
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
@@ -4450,9 +4467,8 @@ mod tests {
 
     #[test]
     fn route_selector_carries_owner_kind_from_ability_selector() {
-        let device_ura = device_owner_ura();
         let device_ability =
-            crate::core::ura::owner_ability_ura(&device_ura, "agent.list").expect("device ability");
+            crate::core::ura::device_ability_ura("test-realm", "test-daemon", "agent.list");
         let device_failure = route_selector_from_query(&device_ability, "")
             .expect_err("explicit Device-owned Ability URA must fail closed");
         assert_eq!(device_failure.reason, NegativeReason::Refused);
@@ -4561,8 +4577,9 @@ mod tests {
     fn malformed_descriptor_ref_does_not_fall_through_as_public_name() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let old_short_descriptor_ref = format!("{ability_ura}@1.0.0");
@@ -4571,7 +4588,7 @@ mod tests {
             &["agent.list"],
         );
         let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
-            .with_local_catalog_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(host_device_ura, authority)
             .at(TEST_NOW_MS);
 
         let target_bound_failure = resolver
@@ -5786,9 +5803,8 @@ mod tests {
     fn explicit_device_owned_ability_ura_remains_non_dispatchable() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let device_ura = device_owner_ura();
-        let ability_ura = crate::core::ura::owner_ability_ura(&device_ura, "agent.list")
-            .expect("legacy Device ability URA");
+        let ability_ura =
+            crate::core::ura::device_ability_ura("test-realm", "test-daemon", "agent.list");
 
         let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
@@ -5851,9 +5867,10 @@ mod tests {
     fn directory_listing_rejects_incomplete_ability_summary_before_empty_descriptor_default() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
-        publish_ability_with_descriptor_revision(&catalog, &owner_ura, &owner_ura, "");
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
+        publish_ability_with_descriptor_revision(&catalog, &owner_ura, &host_device_ura, "");
 
         let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
@@ -5900,9 +5917,10 @@ mod tests {
     fn resolve_query_json_ignores_retired_camel_case_input_aliases() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
-        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
+        publish_ability(&catalog, &owner_ura, &host_device_ura, "agent", "list");
 
         let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
@@ -5925,9 +5943,10 @@ mod tests {
     fn resolve_query_json_rejects_missing_qtype_instead_of_shape_guessing() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
-        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
+        publish_ability(&catalog, &owner_ura, &host_device_ura, "agent", "list");
 
         let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
@@ -5956,9 +5975,10 @@ mod tests {
     fn resolve_query_json_rejects_missing_query_name_before_empty_selector_default() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
-        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
+        publish_ability(&catalog, &owner_ura, &host_device_ura, "agent", "list");
 
         let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
@@ -5988,9 +6008,10 @@ mod tests {
     fn resolve_query_json_rejects_short_qtype_aliases() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
-        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
+        publish_ability(&catalog, &owner_ura, &host_device_ura, "agent", "list");
 
         for qtype in [json!("ROUTE"), json!("route"), json!(2)] {
             let answer = DaemonRouteResolver::new(&registry, None, &catalog)
@@ -6035,7 +6056,7 @@ mod tests {
 
     #[test]
     fn authority_projection_uses_route_ref_embedded_ability_realm() {
-        let owner_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let authority = authority_for_query(&format!("route-ref::{ability_ura}"));
@@ -6050,7 +6071,7 @@ mod tests {
 
     #[test]
     fn authority_projection_uses_descriptor_ref_embedded_ability_realm() {
-        let owner_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let descriptor_ref = descriptor_ref_for_test(&ability_ura);
@@ -6357,15 +6378,16 @@ mod tests {
     fn directory_listing_records_carry_canonical_kind() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
-        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
+        publish_ability(&catalog, &owner_ura, &host_device_ura, "agent", "list");
 
         let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": ResolveType::DirectoryListing.as_str_name(),
-                "query_name": owner_ura,
+                "query_name": host_device_ura,
             }));
 
         let records = answer["records"].as_array().expect("records array");
@@ -6398,8 +6420,8 @@ mod tests {
             .iter()
             .find(|record| record["kind"] == "device")
             .expect("device directory listing must expose a device record");
-        assert_eq!(device["ura"], owner_ura);
-        assert_eq!(device["agent_ura"], owner_ura);
+        assert_eq!(device["ura"], host_device_ura);
+        assert_eq!(device["agent_ura"], host_device_ura);
         assert_eq!(device["node_id"], "test-daemon");
         assert_eq!(device["status"], "active");
     }
@@ -6410,10 +6432,16 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
         let owner_a = device_owner_ura();
         let owner_b = "easynet:///r/test-realm/device/dev-b";
+        let ability_owner_a = system_agent_owner_ura_for("agent.list");
+        let ability_owner_b = crate::core::ura::device_agent_ura(
+            "test-realm",
+            "dev-b",
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
         mark_online(&registry, &owner_a);
         mark_online(&registry, owner_b);
-        publish_ability(&catalog, &owner_a, &owner_a, "agent", "list");
-        publish_ability(&catalog, owner_b, owner_b, "fs", "read");
+        publish_ability(&catalog, &ability_owner_a, &owner_a, "agent", "list");
+        publish_ability(&catalog, &ability_owner_b, owner_b, "fs", "read");
 
         let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
@@ -6541,9 +6569,10 @@ mod tests {
     fn directory_listing_rejects_cursor_outside_current_query() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let owner_ura = device_owner_ura();
-        mark_online(&registry, &owner_ura);
-        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("agent.list");
+        mark_online(&registry, &host_device_ura);
+        publish_ability(&catalog, &owner_ura, &host_device_ura, "agent", "list");
 
         let missing_cursor = directory_cursor_for(&json!({
             "record_type": RecordType::Route.as_str_name(),
@@ -6554,7 +6583,7 @@ mod tests {
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": ResolveType::DirectoryListing.as_str_name(),
-                "query_name": owner_ura,
+                "query_name": host_device_ura,
                 "cursor": missing_cursor,
             }));
         assert_eq!(

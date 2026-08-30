@@ -420,7 +420,7 @@ pub(crate) fn register_agent(
             let result = registration_result(RegistrationOutcome::Inserted, &record);
             file.records.push(record);
             file.records
-                .sort_by(|a, b| inventory_key(a).cmp(&inventory_key(b)));
+                .sort_by(|a, b| inventory_key(a).cmp(inventory_key(b)));
             return Ok(result);
         };
 

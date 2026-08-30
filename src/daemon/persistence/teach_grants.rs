@@ -1495,8 +1495,15 @@ mod tests {
     #[test]
     fn admission_snapshot_accepts_versioned_teach_ability_ura() {
         let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
-        grant.admission_snapshot.envelope_ability =
-            "easynet:///r/cli/ability/device.local.meta.teach@1.0.0".to_string();
+        let owner = crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+            &crate::core::ura::device_ura("cli", "local"),
+            "meta.teach",
+        )
+        .expect("meta.teach SystemAgent owner");
+        grant.admission_snapshot.envelope_ability = format!(
+            "{}@1.0.0",
+            crate::core::ura::owner_ability_ura(&owner, "meta.teach").expect("teach Ability URA")
+        );
 
         grant
             .validate_stored()
@@ -1506,8 +1513,16 @@ mod tests {
     #[test]
     fn admission_snapshot_rejects_versioned_non_teach_ability_ura() {
         let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
-        grant.admission_snapshot.envelope_ability =
-            "easynet:///r/cli/ability/device.local.meta.acquire@1.0.0".to_string();
+        let owner = crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+            &crate::core::ura::device_ura("cli", "local"),
+            "meta.acquire",
+        )
+        .expect("meta.acquire SystemAgent owner");
+        grant.admission_snapshot.envelope_ability = format!(
+            "{}@1.0.0",
+            crate::core::ura::owner_ability_ura(&owner, "meta.acquire")
+                .expect("acquire Ability URA")
+        );
 
         let err = grant
             .validate_stored()

@@ -742,6 +742,10 @@ mod tests {
     use axon_sdk::invocation::{make_ability, AbilityCallModes, AbilityOptions};
     use serde_json::json;
 
+    fn test_system_agent_callee(realm: &str, device_id: &str) -> String {
+        crate::core::ura::device_agent_ura(realm, device_id, "kernel-test-runtime")
+    }
+
     fn test_system_request(
         callee_ura: &str,
         ability: &str,
@@ -810,7 +814,7 @@ mod tests {
     #[test]
     fn kernel_invoke_without_runtime_returns_error_without_receipt() {
         let k = Kernel::new();
-        let callee = crate::core::ura::device_ura("localhost", "b");
+        let callee = test_system_agent_callee("localhost", "b");
         let request = test_system_request(
             &callee,
             "observe.health",
@@ -867,10 +871,11 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let k = Arc::new(Kernel::new_interactive());
         let device_ura = crate::core::ura::device_ura("localhost", "a");
-        install_echo_runtime(&k, &device_ura, "ghost-agent.chat");
+        let callee_ura = test_system_agent_callee("localhost", "a");
+        install_echo_runtime(&k, &callee_ura, "ghost-agent.chat");
         let request = k
             .prepare_local_system_rpc(
-                &device_ura,
+                &callee_ura,
                 "ghost-agent.chat",
                 &device_ura,
                 serde_json::to_vec(&json!({"prompt": "do the thing"})).unwrap(),
@@ -914,8 +919,9 @@ mod tests {
         );
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let device_ura = crate::core::ura::device_ura("localhost", "a");
+        let callee_ura = test_system_agent_callee("localhost", "a");
         let request = test_system_request(
-            &device_ura,
+            &callee_ura,
             "ghost-agent.chat",
             &device_ura,
             serde_json::to_vec(&json!({"prompt": "hi"})).unwrap(),
@@ -934,13 +940,14 @@ mod tests {
     fn invoke_success_returns_axon_finalization_and_indexes_canonical_session() {
         let k = Kernel::new();
         let device_ura = crate::core::ura::device_ura("tenant-a", "device-a");
+        let callee_ura = test_system_agent_callee("tenant-a", "device-a");
         k.session_service()
             .bind_runtime(NodeId::new("device-a"), TenantId::new("tenant-a"))
             .expect("bind kernel test session runtime");
-        install_echo_runtime(&k, &device_ura, "observe.health");
+        install_echo_runtime(&k, &callee_ura, "observe.health");
         let request = k
             .prepare_local_system_rpc(
-                &device_ura,
+                &callee_ura,
                 "observe.health",
                 &device_ura,
                 serde_json::to_vec(&json!({"ok": true})).unwrap(),

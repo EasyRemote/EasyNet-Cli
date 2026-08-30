@@ -726,7 +726,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
     const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/default/agent/device.local.locomotion";
     const LOCAL_AGENT_URA: &str = "easynet:///r/default/agent/user.assistant";
 
@@ -803,7 +802,7 @@ mod tests {
                 CallMode::Rpc,
                 AdmissionAction::Read,
                 None,
-                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
                 AbilityImplSource::NativeDaemon,
             ))

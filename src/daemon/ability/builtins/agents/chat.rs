@@ -2778,11 +2778,36 @@ mod tests {
         // Register under the canonical owner ability URA the kernel
         // resolves (`device.a.alice.chat`), not the bare handler name — a
         // raw LocalRuntime has no catalog to mirror the bare key.
-        let chat_runtime_ability = crate::core::ura::owner_ability_ura(
-            &crate::core::ura::device_ura("localhost", "a"),
-            "alice.chat",
+        let chat_owner = crate::core::ura::agent_ura("localhost", "user-dev", "alice");
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "a".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.test:50051".to_string(),
+                realm: "localhost".to_string(),
+                username: Some("dev".to_string()),
+                user_id: Some("user-dev".to_string()),
+                ..Default::default()
+            },
         )
-        .expect("derive alice.chat runtime URA");
+        .expect("seed test Device credentials");
+        let mut hosted_agents = crate::daemon::persistence::local_agents::LocalAgentsFile {
+            host_device_ura: crate::core::ura::device_ura("localhost", "a"),
+            ..Default::default()
+        };
+        crate::daemon::persistence::local_agents::upsert_hosted_agent(
+            &mut hosted_agents,
+            "llm",
+            "alice",
+            &chat_owner,
+        );
+        crate::daemon::persistence::local_agents::save(&hosted_agents)
+            .expect("seed hosted Agent placement");
+        let chat_public_name =
+            crate::core::ura::owner_local_ability_name(&chat_owner, "alice.chat");
+        let chat_runtime_ability =
+            crate::core::ura::owner_ability_ura(&chat_owner, &chat_public_name)
+                .expect("derive alice.chat runtime URA");
         crate::support::async_bridge::run_blocking(
             rt.register_ability_with_options(
                 chat_runtime_ability,
@@ -2808,7 +2833,7 @@ mod tests {
         let device_ura = crate::core::ura::device_ura("localhost", "a");
         let request = kernel
             .prepare_local_system_rpc(
-                &device_ura,
+                &chat_owner,
                 "alice.chat",
                 &device_ura,
                 serde_json::to_vec(&json!({"prompt": "hi"})).unwrap(),

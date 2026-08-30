@@ -732,6 +732,10 @@ mod tests {
         (rt, ledger, sk, temp)
     }
 
+    fn test_runtime_callee_ura() -> String {
+        crate::core::ura::device_agent_ura("t", "host", "test-runtime")
+    }
+
     fn build_wire_envelope(
         sk: &SigningKey,
         ability: &str,
@@ -742,7 +746,7 @@ mod tests {
         // form. This mirrors the shape an upstream client would have
         // produced.
         let caller_sdk = AgentIdentity::new("easynet:///r/t/agent/u.alice", UraProfile::StrictV2);
-        let callee_sdk = AgentIdentity::new("easynet:///r/t/device/host", UraProfile::StrictV2);
+        let callee_sdk = AgentIdentity::new(test_runtime_callee_ura(), UraProfile::StrictV2);
         let subject_sdk = SubjectIdentity::from_callee(&callee_sdk);
         let nonce = fresh_nonce();
         let ability_ref = ability_descriptor_ref_for_wire(
@@ -813,8 +817,8 @@ mod tests {
     #[tokio::test]
     async fn dispatch_rpc_completes_through_axon_runtime_and_persists() {
         let (rt, ledger, sk, _temp) = build_test_runtime();
-        let callee_ura = "easynet:///r/t/device/host";
-        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, "test.echo").unwrap();
+        let callee_ura = test_runtime_callee_ura();
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, "test.echo").unwrap();
         rt.register_ability_with_options(
             ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -859,8 +863,8 @@ mod tests {
         );
         assert_eq!(records[0].state, "completed");
         assert_eq!(records[0].caller_ura, "easynet:///r/t/agent/u.alice");
-        assert_eq!(records[0].callee_ura, "easynet:///r/t/device/host");
-        assert_eq!(records[0].subject_ura, "easynet:///r/t/device/host");
+        assert_eq!(records[0].callee_ura, callee_ura);
+        assert_eq!(records[0].subject_ura, callee_ura);
         assert_eq!(
             outcome.invocation_id.as_deref(),
             Some(records[0].request_id.as_str())
@@ -875,8 +879,8 @@ mod tests {
         };
 
         let (runtime, _ledger, signing_key, _temp) = build_test_runtime();
-        let callee_ura = "easynet:///r/t/device/host";
-        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, "test.pending").unwrap();
+        let callee_ura = test_runtime_callee_ura();
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, "test.pending").unwrap();
         runtime
             .register_ability_with_options(
                 ability_ura,
@@ -915,7 +919,7 @@ mod tests {
             .request_cancel(
                 command.clone(),
                 "easynet:///r/t/agent/u.mallory",
-                callee_ura,
+                &callee_ura,
             )
             .await
             .expect_err("a different caller cannot cancel the target");
@@ -944,7 +948,11 @@ mod tests {
         )
         .expect("valid cancel command");
         let mismatch = cancellations
-            .request_cancel(wrong_invocation, "easynet:///r/t/agent/u.alice", callee_ura)
+            .request_cancel(
+                wrong_invocation,
+                "easynet:///r/t/agent/u.alice",
+                &callee_ura,
+            )
             .await
             .expect_err("a mismatched invocation id cannot cancel the target");
         assert!(matches!(
@@ -953,7 +961,7 @@ mod tests {
         ));
 
         let accepted = cancellations
-            .request_cancel(command.clone(), "easynet:///r/t/agent/u.alice", callee_ura)
+            .request_cancel(command.clone(), "easynet:///r/t/agent/u.alice", &callee_ura)
             .await
             .expect("target owner can request cancellation");
         assert!(accepted.accepted);
@@ -979,7 +987,7 @@ mod tests {
         assert!(outcome.admission_receipt.is_some());
 
         let replay = cancellations
-            .request_cancel(command, "easynet:///r/t/agent/u.alice", callee_ura)
+            .request_cancel(command, "easynet:///r/t/agent/u.alice", &callee_ura)
             .await
             .expect("terminal cancellation replay is idempotent");
         assert!(replay.accepted);
@@ -998,9 +1006,12 @@ mod tests {
             Some(Arc::clone(&ledger)),
         );
 
-        let callee_ura =
-            "easynet:///r/authority-a.local/device/be2146d3-2afe-4977-9f9a-245982b79db4";
-        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, "shell.run").unwrap();
+        let callee_ura = crate::core::ura::device_agent_ura(
+            "authority-a.local",
+            "be2146d3-2afe-4977-9f9a-245982b79db4",
+            "test-runtime",
+        );
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, "shell.run").unwrap();
         rt.register_ability_with_options(
             ability_ura,
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -1173,9 +1184,9 @@ mod tests {
 
     #[tokio::test]
     async fn external_wire_rejects_missing_or_unprojectable_subject() {
-        let callee_ura = "easynet:///r/t/device/h";
+        let callee_ura = crate::core::ura::device_agent_ura("t", "h", "test-runtime");
         let ability = ability_descriptor_ref_for_wire(
-            callee_ura,
+            &callee_ura,
             "x",
             &descriptor_binding_for_wire(WIRE_TEST_DESCRIPTOR_VERSION, [0x33; 32], "invoke")
                 .expect("descriptor binding"),
@@ -1232,9 +1243,9 @@ mod tests {
     #[tokio::test]
     async fn dispatch_rpc_local_explicit_subject_runs_handler_with_system_signature() {
         let (rt, ledger, _sk, _temp) = build_test_runtime();
-        let callee_ura = "easynet:///r/t/device/host";
+        let callee_ura = test_runtime_callee_ura();
         let ability_ura =
-            crate::core::ura::owner_ability_ura(callee_ura, "demo.daemon_internal").unwrap();
+            crate::core::ura::owner_ability_ura(&callee_ura, "demo.daemon_internal").unwrap();
         rt.register_ability_with_options(
             ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -1246,8 +1257,8 @@ mod tests {
         let payload = b"\"hello-from-daemon\"".to_vec();
         let outcome = dispatch_rpc_local_explicit_subject(
             &rt,
-            callee_ura,
-            callee_ura,
+            &callee_ura,
+            &callee_ura,
             "demo.daemon_internal",
             payload.clone(),
         )
@@ -1285,10 +1296,11 @@ mod tests {
     #[tokio::test]
     async fn dispatch_rpc_local_explicit_subject_unknown_ability_returns_in_band_error() {
         let (rt, _ledger, _sk, _temp) = build_test_runtime();
+        let callee_ura = test_runtime_callee_ura();
         let outcome = dispatch_rpc_local_explicit_subject(
             &rt,
-            "easynet:///r/t/device/host",
-            "easynet:///r/t/device/host",
+            &callee_ura,
+            &callee_ura,
             "no.such.thing",
             b"{}".to_vec(),
         )
