@@ -38,6 +38,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 mod backpressure;
 #[cfg(feature = "axon-pb")]
 mod buffer_lease;
+#[cfg(feature = "axon-pb")]
+mod state_machine;
 
 #[cfg(feature = "axon-pb")]
 use self::backpressure::bidi_callback_backpressure_frame;
@@ -50,6 +52,10 @@ use self::buffer_lease::{
     register_stream as register_buffer_lease_stream, release as release_buffer_lease,
     retain as retain_buffer_lease, BufferLeaseAccessError, BufferLeaseAllocationError,
     STREAM_V9_MAX_OUTSTANDING_BYTES,
+};
+#[cfg(feature = "axon-pb")]
+use self::state_machine::{
+    InvocationHandleCancelOutcome, InvocationHandleMachine, InvocationHandlePhase,
 };
 #[cfg(feature = "axon-pb")]
 use crate::daemon::ability::AbilityCatalogQuery;
@@ -4900,33 +4906,11 @@ impl InvocationHandleShared {
 
     fn request_cancel(&self, reason: String) -> InvocationHandleCancelOutcome {
         let mut state = self.lock();
-        if state.phase.is_terminal() {
-            return InvocationHandleCancelOutcome {
-                request_accepted: false,
-                deduplicated: true,
-                dispatch_request: false,
-                cancelled: state.phase == InvocationHandlePhase::Cancelled,
-                state: state.phase,
-                terminal: true,
-                rejection: None,
-            };
-        }
-        let deduplicated = state.phase == InvocationHandlePhase::CancelRequested;
-        let dispatch_request = !state.cancel_request_in_flight;
-        state.cancel_request_in_flight = true;
-        if !deduplicated {
-            state.phase = InvocationHandlePhase::CancelRequested;
+        let outcome = state.machine.request_cancel();
+        if outcome.request_accepted && !outcome.deduplicated {
             state.push_event("cancel_requested", Some(reason), None);
         }
-        InvocationHandleCancelOutcome {
-            request_accepted: true,
-            deduplicated,
-            dispatch_request,
-            cancelled: false,
-            state: InvocationHandlePhase::CancelRequested,
-            terminal: false,
-            rejection: None,
-        }
+        outcome
     }
 
     fn reject_cancel_unavailable(
@@ -4935,7 +4919,7 @@ impl InvocationHandleShared {
         unavailable: String,
     ) -> InvocationHandleCancelOutcome {
         let mut state = self.lock();
-        if !state.phase.is_terminal() && !state.has_event_kind("cancel_unavailable") {
+        if !state.machine.phase().is_terminal() && !state.has_event_kind("cancel_unavailable") {
             state.push_event(
                 "cancel_unavailable",
                 Some(format!("{reason}: {unavailable}")),
@@ -4946,9 +4930,9 @@ impl InvocationHandleShared {
             request_accepted: false,
             deduplicated: true,
             dispatch_request: false,
-            cancelled: state.phase == InvocationHandlePhase::Cancelled,
-            state: state.phase,
-            terminal: state.phase.is_terminal(),
+            cancelled: state.machine.phase() == InvocationHandlePhase::Cancelled,
+            state: state.machine.phase(),
+            terminal: state.machine.phase().is_terminal(),
             rejection: Some(unavailable),
         }
     }
@@ -4963,7 +4947,7 @@ impl InvocationHandleShared {
                 message,
             })?;
         let mut state = self.lock();
-        if state.phase.is_terminal() {
+        if !state.machine.observe_terminal(phase) {
             return Ok(false);
         }
         state.push_terminal(phase, phase.event_kind(), None, outcome);
@@ -4991,8 +4975,7 @@ impl InvocationHandleShared {
         }
 
         let mut state = self.lock();
-        if !state.phase.is_terminal() {
-            state.cancel_request_in_flight = false;
+        if state.machine.complete_cancel_request() {
             state.push_event("cancel_command_completed", None, None);
         }
         Ok(())
@@ -5000,19 +4983,18 @@ impl InvocationHandleShared {
 
     fn mark_cancel_request_failed(&self, failure: InvocationObservationFailure) {
         let mut state = self.lock();
-        if state.phase.is_terminal() {
+        if !state.machine.complete_cancel_request() {
             return;
         }
-        state.cancel_request_in_flight = false;
         state.push_event("cancel_request_failed", Some(failure.message), None);
     }
 
     fn mark_observation_failed(&self, failure: InvocationObservationFailure) {
         let mut state = self.lock();
-        if state.phase.is_terminal() || state.observation_failure.is_some() {
+        if state.machine.phase().is_terminal() || state.observation_failure.is_some() {
             return;
         }
-        state.cancel_request_in_flight = false;
+        state.machine.complete_cancel_request();
         state.push_event("observation_failed", Some(failure.message.clone()), None);
         state.observation_failure = Some(failure);
         self.terminal.notify_all();
@@ -5031,12 +5013,11 @@ impl InvocationHandleShared {
 #[cfg(feature = "axon-pb")]
 struct InvocationHandleState {
     tuple_json: serde_json::Value,
-    phase: InvocationHandlePhase,
+    machine: InvocationHandleMachine,
     next_sequence: u64,
     events: Vec<InvocationHandleEvent>,
     terminal_outcome: Option<crate::daemon::InvocationOutcome>,
     observation_failure: Option<InvocationObservationFailure>,
-    cancel_request_in_flight: bool,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5044,7 +5025,7 @@ impl InvocationHandleState {
     fn submitted(tuple_json: serde_json::Value) -> Self {
         Self {
             tuple_json,
-            phase: InvocationHandlePhase::Submitted,
+            machine: InvocationHandleMachine::submitted(),
             next_sequence: 2,
             events: vec![InvocationHandleEvent {
                 sequence: 1,
@@ -5056,7 +5037,6 @@ impl InvocationHandleState {
             }],
             terminal_outcome: None,
             observation_failure: None,
-            cancel_request_in_flight: false,
         }
     }
 
@@ -5068,7 +5048,7 @@ impl InvocationHandleState {
     ) {
         self.events.push(InvocationHandleEvent {
             sequence: self.next_sequence,
-            state: self.phase,
+            state: self.machine.phase(),
             kind: kind.to_string(),
             terminal: false,
             reason,
@@ -5084,7 +5064,6 @@ impl InvocationHandleState {
         reason: Option<String>,
         outcome: crate::daemon::InvocationOutcome,
     ) {
-        self.phase = phase;
         self.events.push(InvocationHandleEvent {
             sequence: self.next_sequence,
             state: phase,
@@ -5122,8 +5101,8 @@ impl InvocationHandleState {
             })?;
         Ok(serde_json::json!({
             "handle_id": invocation_handle_id,
-            "state": self.phase.as_str(),
-            "terminal": self.phase.is_terminal(),
+            "state": self.machine.phase().as_str(),
+            "terminal": self.machine.phase().is_terminal(),
             "events": events,
             "result": result,
             "cancellation_authority": cancellation_gate.to_json(),
@@ -5170,60 +5149,6 @@ impl InvocationHandleEvent {
             "result": result,
         }))
     }
-}
-
-#[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InvocationHandlePhase {
-    Submitted,
-    CancelRequested,
-    Completed,
-    Failed,
-    TimedOut,
-    Cancelled,
-}
-
-#[cfg(feature = "axon-pb")]
-impl InvocationHandlePhase {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Submitted => "Submitted",
-            Self::CancelRequested => "CancelRequested",
-            Self::Completed => "Completed",
-            Self::Failed => "Failed",
-            Self::TimedOut => "TimedOut",
-            Self::Cancelled => "Cancelled",
-        }
-    }
-
-    fn event_kind(self) -> &'static str {
-        match self {
-            Self::Submitted => "submitted",
-            Self::CancelRequested => "cancel_requested",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::TimedOut => "timed_out",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled
-        )
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-struct InvocationHandleCancelOutcome {
-    request_accepted: bool,
-    deduplicated: bool,
-    dispatch_request: bool,
-    cancelled: bool,
-    state: InvocationHandlePhase,
-    terminal: bool,
-    rejection: Option<String>,
 }
 
 #[cfg(feature = "axon-pb")]
