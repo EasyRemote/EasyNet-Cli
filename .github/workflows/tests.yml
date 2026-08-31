@@ -51,6 +51,12 @@ jobs:
         with:
           path: EasyNet-Cli
 
+      - name: README Fact Check
+        working-directory: EasyNet-Cli
+        run: |
+          python3 tools/scripts/check_readme_facts.py --self-test
+          python3 tools/scripts/check_readme_facts.py
+
       # Sibling path dependency (easynet-axon = { path =
       # "../EasyNet-Axon/sdk/rust" }). Private repo: needs an
       # AXON_CHECKOUT_TOKEN secret with read access, same as the clippy

@@ -5,6 +5,10 @@
 <h1 align="center">EasyNet Runtime</h1>
 
 <p align="center">
+  <strong>Capability-native network:</strong> the network's basic unit is no longer a host, service, or file, but an Ability that can be authorized, invoked, and verified.
+</p>
+
+<p align="center">
   Open capability runtime for AI agents: publish, invoke, audit, and orchestrate governed abilities across owners, devices, models, tools, and services.
 </p>
 
@@ -49,7 +53,7 @@ not the underlying model, code, credential, or data source.
 > A research workflow needs protein-folding inference but has no local GPU. A
 > remote owner publishes a fold capability from their own GPU box. The workflow
 > discovers the capability, invokes it through EasyNet, receives the result, and
-> keeps a receipt for audit and settlement. The model weights never leave the
+> keeps a receipt for verification and audit. The model weights never leave the
 > owner's machine.
 
 **In open-world agent execution, the missing layer is a capability runtime:**
@@ -58,7 +62,7 @@ not the underlying model, code, credential, or data source.
 |---|---|
 | Capabilities are trapped inside one runtime, API, account, or framework | **Ability** gives each capability a stable network contract |
 | Callers cannot safely invoke capabilities owned by others | **Invocation** carries caller, callee, ability, subject, nonce, causal context, and args as a signed object |
-| Execution is hard to audit, replay, or settle | **Receipt** records the verifiable terminal fact of the call |
+| Execution is hard to audit or replay safely | **Receipt** records the verifiable terminal fact of the call |
 | Similar workflows repeatedly re-plan from scratch | Execution traces become reusable optimization material |
 | Private models and devices sit behind NAT or local trust boundaries | The capability stays with its owner; EasyNet routes the call |
 
@@ -88,7 +92,7 @@ Admission, and Receipt.
 Abilities, dispatches complete signed Invocations, and records execution facts
 as receipts.
 
-**Four things in one binary:**
+**Four product surfaces, one installed Runtime:**
 
 1. **Daemon runtime**: `easynet runtime start` launches `easynet-daemon`, the
    product runtime that owns device lifecycle, local policy, plugins, ability
@@ -107,6 +111,12 @@ as receipts.
    a co-located AI development environment can call governed EasyNet abilities
    through the daemon.
 
+These surfaces are not literally one binary. A complete install includes the
+`easynet` CLI, `easynet-daemon`, `easynet-keyring`,
+`easynet-remoteapp-native-host`, `easynet-remoteapp-media-host` (or its signed
+macOS app), `libeasynet_cli`, and `libaxon_dendrite_bridge`. The helpers keep
+key custody and killable native workloads outside the CLI process.
+
 **Why this matters:** EasyNet does not treat a capability as a local tool
 hidden inside one agent session. It treats the capability as a runtime object:
 addressable by URA, invoked through Axon, governed by daemon policy, and closed
@@ -119,6 +129,7 @@ by a receipt.
 | Protocol | [EasyNet-Axon](https://github.com/EasyRemote/EasyNet-Axon) | URA, Ability, Invocation, Receipt, stream/bidi, runtime semantics, SDK conformance |
 | Runtime | [EasyNet-Cli](https://github.com/EasyRemote/EasyNet-Cli) | EasyNet Runtime: `easynet-daemon`, device lifecycle, plugins, local execution, EAL/Mission, CLI, MCP |
 | Product | [EasyNet](https://github.com/EasyRemote/EasyNet) | Web platform, federation backend, operator console, dashboards, product workflows |
+| Python facade | [EasyRemote](https://github.com/EasyRemote/EasyRemote) | Python decorators, schema derivation, Ability packaging, and resident provider host |
 | Optimization | IntentDB (research direction) | Learn reusable hybrid execution plans from receipt-backed traces |
 
 ## Network architecture roadmap
@@ -160,9 +171,20 @@ repository.
 
 ## Install
 
+Production release:
+
 ```bash
-cargo install --path .
+curl -sSf https://easynet.run/install | sudo sh
 ```
+
+Developer checkout (with `EasyNet-Axon` beside this repository):
+
+```bash
+packaging/release/dev-install-local.sh --debug
+```
+
+`cargo install --path .` is not the complete Runtime install: it omits the
+native Axon bridge and the helper process set installed by the release scripts.
 
 > **Note:** `easynet runtime start` launches `easynet-daemon`, which embeds the Axon Invocation runtime and joins the Hub. Product/device paths should target the daemon, not a standalone Axon reference runtime.
 
@@ -262,27 +284,15 @@ easynet mission run examples/daily-report.eal --trace
 
 ## CLI Reference
 
-```
-easynet login
-easynet device join <pairing-token>
-easynet runtime start [--hub ENDPOINT] [--tenant T] [--label L] [--foreground]
-easynet runtime stop | status | logs
-easynet status
-easynet device list | show <node-id> | remove <node-id>
-easynet ability list | search <intent> | show <ability-ura>
-easynet ability deploy <path> --node <node-id>
-easynet ability invoke <ability-ura> --subject <resource-ura> --nonce-hex <32-hex> --causal-root [--args JSON]
-easynet ability invoke <ability-ura> --node <device-ura> --subject <resource-ura> --nonce-hex <32-hex> --causal-root [--args JSON]
-easynet ability stream <ability-ura> [--args JSON]
-easynet ability bidi <ability-ura> [--args JSON]
-easynet ability exec <node-id> -- <command...>
-easynet plugin init <path> [--language python|node|go|rust|java]
-easynet plugin install <path> | update <path> | remove <package-id> <version>
-easynet mission compile <file.eal> [--emit-ir]
-easynet mission run <file.eal> [--trace]
-easynet mission list | show <run-id> | cancel <run-id>
-easynet mcp status | install <claude|codex> | serve
-easynet invocation list | show <request-id> | trace <request-id>
+The command tree is generated by Clap and changes faster than this overview.
+Use the installed binary as the command source of truth:
+
+```bash
+easynet --help
+easynet runtime --help
+easynet ability --help
+easynet mission --help
+easynet mcp --help
 ```
 
 ## License
