@@ -154,6 +154,22 @@ SDK_VERSION="$(tide mark --local-only)"
 uv lock --project sdk/python --check
 ```
 
+The Runtime/Axon release-coordinate transaction keeps those independent
+version lines intact while preparing a Runtime release branch:
+
+```bash
+# First check out the exact committed Axon release coordinate in ../EasyNet-Axon.
+git switch -c release/runtime-v"$(tide mark --local-only)"
+python3 tools/scripts/release-coordinate.py --check
+python3 tools/scripts/release-coordinate.py --push
+```
+
+The command runs in isolated CLI/Axon worktrees, derives `axon.lock.json`,
+regenerates Runtime and dependency locks, and commits only admitted metadata.
+It never changes the Python SDK version or private Node seam. `--push` is
+non-force and rejects `main`/`master`; use `--push-only` after a network-only
+push failure. It does not tag or publish.
+
 `.github/workflows/release-runtime.yml` and
 `.github/workflows/publish-python-sdk.yml` validate exact tag/metadata equality.
 Manual dispatch validates and builds but does not publish. A tag push publishes;
@@ -171,6 +187,10 @@ never create or push one without explicit authorization.
 Local path sources are allowed for development and locks, but a publish job must
 use `--no-sources`/registry-only resolution so unpublished siblings cannot be
 mistaken for releasable dependencies.
+
+The Go SDK follows the same split: `sdk/go/go.mod` contains the released Axon
+module version, while root `go.work` owns the sibling replacement used by local
+development. Registry-only checks set `GOWORK=off`.
 
 ## Change SOP
 
