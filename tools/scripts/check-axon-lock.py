@@ -43,7 +43,9 @@ def load_json_object(path: Path, label: str) -> dict[str, object]:
     return value
 
 
-def require_exact_keys(value: dict[str, object], expected: set[str], label: str) -> None:
+def require_exact_keys(
+    value: dict[str, object], expected: set[str], label: str
+) -> None:
     actual = set(value)
     if actual != expected:
         raise LockError(
@@ -81,12 +83,17 @@ def validate_lock(lock: dict[str, object]) -> dict[str, object]:
         "axon",
     )
     require_exact_keys(cli, {"runtime_version", "sdks"}, "cli")
-    if require_string(axon["repository"], "axon.repository") != "EasyRemote/EasyNet-Axon":
+    if (
+        require_string(axon["repository"], "axon.repository")
+        != "EasyRemote/EasyNet-Axon"
+    ):
         raise LockError("axon.repository must be EasyRemote/EasyNet-Axon")
     revision = require_string(axon["git_revision"], "axon.git_revision")
     contract_hash = require_string(axon["contract_sha256"], "axon.contract_sha256")
     if not HEX_40.fullmatch(revision):
-        raise LockError("axon.git_revision must be a lowercase 40-character Git object id")
+        raise LockError(
+            "axon.git_revision must be a lowercase 40-character Git object id"
+        )
     if not HEX_64.fullmatch(contract_hash):
         raise LockError("axon.contract_sha256 must be a lowercase SHA-256 digest")
 
@@ -94,14 +101,18 @@ def validate_lock(lock: dict[str, object]) -> dict[str, object]:
     ffi = axon["ffi"]
     axon_sdks = axon["sdks"]
     cli_sdks = cli["sdks"]
-    if not all(isinstance(value, dict) for value in (protocol, ffi, axon_sdks, cli_sdks)):
+    if not all(
+        isinstance(value, dict) for value in (protocol, ffi, axon_sdks, cli_sdks)
+    ):
         raise LockError("protocol, ffi, and sdk projections must be JSON objects")
     require_exact_keys(protocol, {"descriptor_set_sha256"}, "axon.protocol")
     require_exact_keys(
         ffi, {"dendrite_abi_version", "public_header_sha256"}, "axon.ffi"
     )
     require_exact_keys(
-        axon_sdks, {"rust", "python", "go", "node", "react", "java", "swift"}, "axon.sdks"
+        axon_sdks,
+        {"rust", "python", "go", "node", "react", "java", "swift"},
+        "axon.sdks",
     )
     require_exact_keys(cli_sdks, {"python", "node"}, "cli.sdks")
     for label, digest in (
@@ -110,7 +121,10 @@ def validate_lock(lock: dict[str, object]) -> dict[str, object]:
     ):
         if not isinstance(digest, str) or not HEX_64.fullmatch(digest):
             raise LockError(f"{label} must be a lowercase SHA-256 digest")
-    if not isinstance(ffi["dendrite_abi_version"], int) or ffi["dendrite_abi_version"] < 1:
+    if (
+        not isinstance(ffi["dendrite_abi_version"], int)
+        or ffi["dendrite_abi_version"] < 1
+    ):
         raise LockError("axon.ffi.dendrite_abi_version must be a positive integer")
     for label, value in (
         ("axon.release_version", axon["release_version"]),
@@ -132,7 +146,9 @@ def git_head(root: Path) -> str:
         timeout=30,
     )
     if completed.returncode != 0:
-        raise LockError(f"cannot resolve Axon checkout HEAD: {completed.stderr.strip()}")
+        raise LockError(
+            f"cannot resolve Axon checkout HEAD: {completed.stderr.strip()}"
+        )
     return completed.stdout.strip()
 
 
@@ -156,6 +172,13 @@ def read_toml(path: Path) -> dict[str, object]:
         return tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise LockError(f"cannot parse {path}: {error}") from error
+
+
+def next_minor(version: str) -> str:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[.+-].*)?", version)
+    if match is None:
+        raise LockError(f"SDK version is not semver-like: {version!r}")
+    return f"{match.group(1)}.{int(match.group(2)) + 1}"
 
 
 def verify_axon_checkout(axon_root: Path, axon: dict[str, object]) -> None:
@@ -219,10 +242,19 @@ def verify_cli_sources(root: Path, lock: dict[str, object]) -> None:
     if python_metadata.get("version") != cli["sdks"]["python"]:
         raise LockError("CLI Python SDK version differs from axon.lock.json")
     dependencies = python_metadata.get("dependencies", [])
-    matching = [item for item in dependencies if isinstance(item, str) and item.startswith("axon-runtime-sdk")]
+    matching = [
+        item
+        for item in dependencies
+        if isinstance(item, str) and item.startswith("axon-runtime-sdk")
+    ]
     if len(matching) != 1:
-        raise LockError("CLI Python SDK must declare exactly one axon-runtime-sdk dependency")
-    expected_prefix = f"axon-runtime-sdk>={axon['sdks']['python']},<0.193"
+        raise LockError(
+            "CLI Python SDK must declare exactly one axon-runtime-sdk dependency"
+        )
+    expected_prefix = (
+        f"axon-runtime-sdk>={axon['sdks']['python']},"
+        f"<{next_minor(str(axon['sdks']['python']))}"
+    )
     if matching[0].replace(" ", "") != expected_prefix:
         raise LockError(
             f"CLI Python Axon constraint mismatch: expected={expected_prefix} actual={matching[0]}"
@@ -255,6 +287,19 @@ def verify_cli_sources(root: Path, lock: dict[str, object]) -> None:
             f"uv.lock Axon package mismatch: expected={[axon['sdks']['python']]} actual={versions}"
         )
 
+    go_mod = (root / "sdk/go/go.mod").read_text(encoding="utf-8")
+    go_match = re.search(r"(?m)^\s*axon\.run/sdk/go\s+(v\S+)", go_mod)
+    expected_go = f"v{axon['sdks']['go']}"
+    actual_go = None if go_match is None else go_match.group(1)
+    if actual_go != expected_go:
+        raise LockError(
+            f"CLI Go Axon dependency mismatch: expected={expected_go} actual={actual_go}"
+        )
+    if re.search(r"(?m)^replace\s+axon\.run/sdk/go\s+=>", go_mod):
+        raise LockError(
+            "CLI Go module must keep local Axon replacement in root go.work"
+        )
+
 
 def repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -262,10 +307,22 @@ def repository_root() -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=repository_root(), help=argparse.SUPPRESS)
-    parser.add_argument("--axon-root", type=Path, help="Axon checkout (default: sibling EasyNet-Axon)")
-    parser.add_argument("--lock-only", action="store_true", help="validate and emit the coordinate before checkout")
-    parser.add_argument("--github-output", action="store_true", help="write coordinate outputs to GITHUB_OUTPUT")
+    parser.add_argument(
+        "--root", type=Path, default=repository_root(), help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--axon-root", type=Path, help="Axon checkout (default: sibling EasyNet-Axon)"
+    )
+    parser.add_argument(
+        "--lock-only",
+        action="store_true",
+        help="validate and emit the coordinate before checkout",
+    )
+    parser.add_argument(
+        "--github-output",
+        action="store_true",
+        help="write coordinate outputs to GITHUB_OUTPUT",
+    )
     arguments = parser.parse_args(argv)
     root = arguments.root.resolve()
     try:
